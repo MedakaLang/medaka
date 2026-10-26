@@ -45,7 +45,6 @@ containsI : Int -> List Int -> Bool
 declaredOblArgId : List Int -> Mono -> List Int
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
-distinctIdentsIn2 : List (Ident, String) -> Bool
 domainIsTupleOfArity : Mono -> Int -> Bool
 effectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRoots : Mono -> Map Int Unit -> Map Int Unit
@@ -160,12 +159,10 @@ sigStandIn : Ref Tyvar -> String
 sigTvarIds : List Mono -> List Int
 spineHead : Mono -> Mono
 spineHeadMono : Mono -> Mono
-spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 stripArrows : Mono -> Mono
 stripEff : Ty -> Ty
 stripTyConstraints : Ty -> Ty
 stripTyWrap : Ty -> Ty
-substAliasArgs : List (String, Ty) -> Ty -> Ty
 substAtom : List (Int, Authority) -> Atom -> Atom
 substAtoms : List (Int, Authority) -> List Atom -> List Atom
 substAuth : List (Int, Authority) -> Authority -> Authority
@@ -175,8 +172,6 @@ substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
 substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
 substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
 substRow : GraphCtx -> List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
-substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
-substTyVars : List (String, Ty) -> Ty -> Ty
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
 tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)

@@ -1,8 +1,6 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
-ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
-ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
 anyArgMentions : List String -> List Ty -> Bool
 anyKRow : List Kind -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
@@ -73,18 +71,11 @@ classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option Kind
 constraintSlotDispatchVar : List String -> Constraint -> List String
 ctorExportsIndex : GraphCtx -> Unit -> Map String (List (String, String, Ident))
 declEnvDeclsOf : List DeclEnvModule -> List Decl
-declEnvDefinerIndex : Map String (List (String, (String, String))) -> Map String (List (String, List String)) -> List DeclEnvModule -> (Map String (List (String, (String, String))), Map String (List (String, List String)))
 declEnvDirectImports : Map String (List String) -> String -> List String
-declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
 declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
-declEnvModulesFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
-declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
-declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
-declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
-declEnvReachSeed : String -> Map String Unit
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
@@ -95,7 +86,6 @@ declMethodIdents : List Decl -> List (String, Ident)
 declMethodIdentsOf : Decl -> List (String, Ident)
 declParamKinds : GraphCtx -> List String -> List (Option KindAnn) -> List Kind
 declTopFnNames : List Decl -> List String
-definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
 depExportsStandalone : GraphCtx -> String -> String -> Bool
 depExportsUnknown : GraphCtx -> String -> Bool
@@ -120,12 +110,10 @@ extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendTermBindings : TcEnv -> List (String, Scheme) -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
-firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 funClausePair : FunClause -> (List Pat, Expr)
 funDefs : List Decl -> List (String, (List Pat, Expr))
 graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
-groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 headBucketKey : Option HeadKey -> RegKey
 headTabEq : Option HeadKey -> Option TabKey -> Bool
@@ -270,7 +258,6 @@ methodRowsByIdentity : Bool -> List MethodSchemeRow -> Registry MethodSchemeRow 
 methodRowsInto : GraphCtx -> Int -> List Decl -> Map String (List MethodRow) -> Map String (List MethodRow)
 methodRowsOfIface : Int -> IfaceRef -> RegKey -> List String -> List (String, List Kind) -> List IfaceMethod -> Map String (List MethodRow) -> Map String (List MethodRow)
 methodSlotKey : IfaceRef -> String -> String
-modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 namesToSet : List String -> Map String Unit -> Map String Unit
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 nthKindList : Int -> List (List Kind) -> Option (List Kind)
@@ -282,13 +269,10 @@ ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : ModuleCtx -> String -> String
 ownMethodIdent : List Decl -> String -> Option Ident
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
-pubTopFnNames : List Decl -> List String
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
-publicStandaloneNames : List Decl -> List String
 rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
-reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
 reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)

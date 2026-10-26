@@ -13,5 +13,5 @@ visibility.tools.prop_plan	3
 visibility.tools.refindex	8
 visibility.types.interface_sexp	2
 visibility.types.private_mangle	1
-visibility.types.tc_env	10
-visibility.types.typecheck	40
+visibility.types.tc_env	7
+visibility.types.typecheck	43
