@@ -675,9 +675,19 @@ class = "draft"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_unify.mdk"
+class = "history"
+count = 5
+
+[[entry]]
+file = "compiler/types/tc_unify.mdk"
+class = "draft"
+count = 1
+
+[[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 73
+count = 68
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -692,12 +702,12 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 338
+count = 327
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 13
+count = 12
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -707,7 +717,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 310
+count = 300
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"
