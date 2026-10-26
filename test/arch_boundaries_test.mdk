@@ -395,6 +395,18 @@ test "arch_boundaries: types.repr closure matches its golden" =
 test "arch_boundaries: types.tc_types closure matches its golden" =
   closurePin "types.tc_types"
 
+test "arch_boundaries: types.tc_mono closure matches its golden" =
+  closurePin "types.tc_mono"
+
+test "arch_boundaries: types.tc_state closure matches its golden" =
+  closurePin "types.tc_state"
+
+test "arch_boundaries: types.tc_env closure matches its golden" =
+  closurePin "types.tc_env"
+
+test "arch_boundaries: types.tc_diag closure matches its golden" =
+  closurePin "types.tc_diag"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 

@@ -1,0 +1,304 @@
+addCtor : TcEnv -> String -> Scheme -> TcEnv
+ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
+ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+anyArgMentions : List String -> List Ty -> Bool
+anyKRow : List Kind -> Bool
+anySlotIsRow : Int -> List (List Ty, List String) -> Bool
+bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
+buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
+buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
+buildFlatImplEnv : List Decl -> ImplEnv
+buildImplEnv : List DeclEnvModule -> ImplEnv
+buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
+buildImplUniverse : List Decl -> ImplUniverse
+ceAddRows : List CeRow -> ClassEnv -> ClassEnv
+ceFunctorEnv : GraphCtx -> ClassEnv
+ceFunctorIface : Decl
+ceFunctorKey : RegKey
+ceFunctorMethod : IfaceMethod
+ceGradedEnv : GraphCtx -> ClassEnv
+ceGradedIface : Decl
+ceGradedKey : RegKey
+ceGradedMethod : IfaceMethod
+ceInsertRow : CeRow -> ClassEnv -> ClassEnv
+ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
+ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
+ceMethodBar : IfaceMethod
+ceMethodFoo : IfaceMethod
+ceMethodName : (String, Ty, List (String, List Kind)) -> String
+ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
+ceMethodTyAt : IfaceRef -> String -> Int -> ClassEnv -> Option (List String, Ty, List (String, List Kind))
+ceMethodTyIn : List String -> String -> List (String, Ty, List (String, List Kind)) -> Option (List String, Ty, List (String, List Kind))
+ceMethodTyStr : (String, Ty, List (String, List Kind)) -> String
+ceProbeEnv : GraphCtx -> ClassEnv
+ceProbeKey : String -> RegKey
+ceRequiredAt : RegKey -> Int -> ClassEnv -> Option (List String)
+ceRowDoneKey : CeRow -> String
+ceRowIface : CeRow -> IfaceRef
+ceRowIfaceName : CeRow -> String
+ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
+ceRowKey : CeRow -> RegKey
+ceRowLoc : CeRow -> Option Loc
+ceRowMethodNames : CeRow -> List String
+ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
+ceRowMethodTysAt : String -> Int -> ClassEnv -> List String
+ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
+ceRowOrd : CeRow -> Int
+ceRowOriginTag : CeRow -> String
+ceRowParamKindNamesAt : RegKey -> Int -> ClassEnv -> List (List String)
+ceRowParamKinds : CeRow -> List (List Kind)
+ceRowRequired : CeRow -> List String
+ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
+ceRowSuperOriginAt : String -> Int -> ClassEnv -> String
+ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
+ceRowSupers : CeRow -> List Super
+ceRowTyparams : CeRow -> List String
+ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
+ceRowsOwnedBy : Int -> ClassEnv -> List CeRow
+ceRowsVisibleAt : Int -> ClassEnv -> List CeRow
+ceSameDeclIn : String -> List IfaceMethod -> Decl
+ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
+ceSuperEq : Super
+ceSuperHead : Super -> String
+ceSuperOrigin : Super -> String
+ceSuperParams : Super -> List String
+classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
+classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
+classEnvFinish : ClassEnv -> ClassEnv
+classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
+constraintSlotDispatchVar : List String -> Constraint -> List String
+ctorExportsIndex : GraphCtx -> Unit -> Map String (List (String, String, Ident))
+declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvDefinerIndex : Map String (List (String, (String, String))) -> Map String (List (String, List String)) -> List DeclEnvModule -> (Map String (List (String, (String, String))), Map String (List (String, List String)))
+declEnvDirectImports : Map String (List String) -> String -> List String
+declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
+declEnvMarkReached : List String -> Map String Unit -> Map String Unit
+declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
+declEnvModulesFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
+declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
+declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
+declEnvReachSeed : String -> Map String Unit
+declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvVisibleAt : Int -> Int -> Bool
+declEnvVisibleTo : Int -> Int -> Bool -> Bool
+declEnvsOrdOf : String -> DeclEnvs -> Int
+declGradedScope : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
+declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
+declMethodIdents : List Decl -> List (String, Ident)
+declMethodIdentsOf : Decl -> List (String, Ident)
+declParamKinds : GraphCtx -> List String -> List (Option KindAnn) -> List Kind
+declTopFnNames : List Decl -> List String
+definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
+definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
+dispHeadTab : HeadKey -> TabKey
+dispatchTyparams : List String -> List String
+domainHasPatterns : Param -> Bool
+dtopFor : GraphCtx -> EffLabel -> Param
+effTailNames : Ty -> List String
+emptyDeclEnvAcc : DeclEnvAcc
+emptyImplAcc : ImplAcc
+emptyMethodModulePredicateSlot : String -> IfaceRef -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
+emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String), List MethodPredicateSlot)
+endsWithStr : String -> String -> Bool
+envAlphaLets : TcEnv -> List (String, AlphaBinder)
+envFor : ModuleCtx -> TcEnv
+envVarType : TcEnv -> String -> Option Mono
+exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
+extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
+extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
+extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
+extendMethodRow : TcEnv -> String -> MethodSchemeRow -> TcEnv
+extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
+extendTermBindings : TcEnv -> List (String, Scheme) -> TcEnv
+extendVar : TcEnv -> String -> Scheme -> TcEnv
+extendVars : TcEnv -> List (String, Scheme) -> TcEnv
+firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
+funClausePair : FunClause -> (List Pat, Expr)
+funDefs : List Decl -> List (String, (List Pat, Expr))
+graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
+groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
+growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
+headBucketKey : Option HeadKey -> RegKey
+headTabEq : Option HeadKey -> Option TabKey -> Bool
+headTabIs : Option HeadKey -> TabKey -> Bool
+headTabOf : Option HeadKey -> Option TabKey
+headlessBucketKey : RegKey
+ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
+ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
+ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
+ieBuildSnapsGo : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
+ieCandidacyVisibleAt : Int -> Int -> Bool
+ieCandidatesForIface : ImplEnv -> HeadKey -> IfaceRef -> List Mono -> List KeyEntry
+ieCandidatesForMethod : GraphCtx -> ImplEnv -> HeadKey -> String -> Option (List IfaceRef) -> List Mono -> List KeyEntry
+ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
+ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
+ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
+ieEntriesForMethod : GraphCtx -> List ImplRow -> String -> Option (List IfaceRef) -> List Mono -> List KeyEntry
+ieFileRow : ImplRow -> ImplEnv -> ImplEnv
+ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
+ieGenImplIn : String -> Decl
+ieHeadCandidateExists : ImplEnv -> IfaceRef -> HeadKey -> Bool
+ieHeadProbeAmod : List Decl
+ieHeadProbeDecls : List Decl
+ieHeadProbeEnv : GraphCtx -> ImplEnv
+ieHeadProbeZmod : List Decl
+ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
+ieImplExistsForHeadGo : GraphCtx -> List ImplRow -> String -> TabKey -> Option (List IfaceRef) -> Bool
+ieImplExistsForHeadOf : ModuleCtx -> ImplEnv -> String -> HeadKey -> Option (List IfaceRef) -> Bool
+ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
+ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieLooseImplIn : String -> Decl
+ieOtherImplIn : String -> Decl
+ieProbeBareKey : RegKey
+ieProbeBlobHead : HeadKey
+ieProbeEnv : GraphCtx -> ImplEnv
+ieProbeKey : String -> RegKey
+ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
+ieRowAnswersMethod : GraphCtx -> ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
+ieRowHeadMatches : List Ty -> List Mono -> Bool
+ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
+ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
+ieRowInheritsDefault : GraphCtx -> ImplRow -> String -> Bool
+ieRowInst : ImplRow -> InstRef
+ieRowLoc : ImplRow -> Option Loc
+ieRowMethodNames : ImplRow -> List String
+ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
+ieRowOfIface : IfaceRef -> ImplRow -> Bool
+ieRowOrd : ImplRow -> Int
+ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
+ieRowTys : ImplRow -> List Ty
+ieRowWithSeq : List ImplRow -> Int -> Option ImplRow
+ieRowsAll : ImplEnv -> List ImplRow
+ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
+ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
+ieSameImplIn : String -> Decl
+ieSameOrdRun : Int -> List ImplRow -> List ImplRow -> (List ImplRow, List ImplRow)
+ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
+ieSnapStep : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
+ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
+ieTyBlob : Ty
+ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
+ieUniverseAt : Int -> ImplEnv -> ImplUniverse
+ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
+ifaceMethodNames : List IfaceMethod -> List String
+ifaceMethodRowOf : Decl -> List (String, List String)
+ifaceMethodRows : List Decl -> List (String, List String)
+ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
+ifaceParamKindsDecl : GraphCtx -> Option KindAnn -> String -> List IfaceMethod -> List Kind
+ifaceParamKindsDeclAll : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> List (List Kind)
+ifaceParamKindsFor : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> String -> List Kind
+ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
+ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
+ifaceSortKey : IfaceRef -> String
+ifaceTabKey : TyConOrigin -> String -> TabKey
+implAccFinish : ImplAcc -> ImplEnv
+implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
+implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
+implKeyTc : String -> List Ty -> String
+implMethodNameTc : ImplMethod -> String
+implRowHasReqs : List Require -> Bool
+implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String, Option Loc) -> List ImplRow
+importFormRows : UsePath -> List (String, a) -> List (String, a)
+importTableMid : UsePath -> String
+importedBindings : UsePath -> Option (List (String, String))
+insertUnivImpl : ImplUniverse -> (IfaceRef, List Ty, List Require) -> ImplUniverse
+insertUnivImplAt : TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
+insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
+instRefMid : InstRef -> String
+instRefSeq : InstRef -> Int
+keyEntryIdx : KeyEntry -> Int
+keyEntryOfRow : ImplRow -> List KeyEntry
+kindAnnAtom : GraphCtx -> KindAnn -> Kind
+kindAnnSlots : GraphCtx -> KindAnn -> List Kind
+kindName : Kind -> String
+kindOfAnn : GraphCtx -> Option KindAnn -> Kind
+kindPublicDataDecl : Decl -> Bool
+lastComponent : List String -> String
+legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
+letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
+lookupBinding : TcEnv -> String -> Option EnvBinding
+lookupCtor : TcEnv -> String -> Option Scheme
+lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
+lookupLocalFlag : TcEnv -> String -> Bool
+lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
+lookupMethodRowById : IfaceRef -> String -> Registry MethodSchemeRow -> Option MethodSchemeRow
+lookupRecordByName : ModuleCtx -> String -> Option RecordInfo
+lookupSchemeById : IfaceRef -> String -> Registry MethodSchemeRow -> Option Scheme
+lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
+lookupStandaloneVar : TcEnv -> String -> Option Scheme
+lookupVar : TcEnv -> String -> Option Scheme
+memberBinding : UseMember -> (String, String)
+memberSuffix : String -> String
+mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
+methodArgs : Ty -> List Ty
+methodEnvBinding : MethodSchemeRow -> EnvBinding
+methodEnvGo : GraphCtx -> List DeclEnvModule -> MethodEnv -> MethodEnv
+methodExportsIndex : GraphCtx -> Unit -> Map String (List (String, Ident))
+methodLevelConstraintVarNames : List String -> Ty -> List String
+methodPreludeRow : String -> List MethodRow -> Option MethodRow
+methodRowById : Ident -> List MethodRow -> Option MethodRow
+methodRowCanCarry : MethodSchemeRow -> Bool
+methodRowCand : MethodRow -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
+methodRowIface : MethodRow -> IfaceRef
+methodRowKey : IfaceRef -> String -> RegKey
+methodRowSameNameView : List MethodSchemeRow -> List (String, String, Int, Int)
+methodRowTestConstantDecl : Decl
+methodRowTestConstraint : String -> String -> List Ty -> Constraint
+methodRowTestFoldMapDecl : Decl
+methodRowTestIface : String -> String -> List String -> List IfaceMethod -> Decl
+methodRowTestNum : String -> Ty -> Decl
+methodRowTestSameA : Decl
+methodRowTestSameB : Decl
+methodRowTestUserFromInt : Decl
+methodRowsByIdentity : Bool -> List MethodSchemeRow -> Registry MethodSchemeRow -> Registry MethodSchemeRow
+methodRowsInto : GraphCtx -> Int -> List Decl -> Map String (List MethodRow) -> Map String (List MethodRow)
+methodRowsOfIface : Int -> IfaceRef -> RegKey -> List String -> List (String, List Kind) -> List IfaceMethod -> Map String (List MethodRow) -> Map String (List MethodRow)
+methodSlotKey : IfaceRef -> String -> String
+modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
+namesToSet : List String -> Map String Unit -> Map String Unit
+narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
+nthKindList : Int -> List (List Kind) -> Option (List Kind)
+oblIfaceKey : IfaceRef -> TabKey
+oblIfaceKeys : IfaceRef -> List TabKey
+ordOfIndex : String -> Map String Int -> Int
+ordinaryEnvBinding : Scheme -> EnvBinding
+ordinaryValueScheme : Scheme -> ValueScheme
+originMethodName : ModuleCtx -> String -> String
+ownMethodIdent : List Decl -> String -> Option Ident
+padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
+pubTopFnNames : List Decl -> List String
+publicDataDecl : Decl -> Bool
+publicDataDecls : List Decl -> List Decl
+publicStandaloneNames : List Decl -> List String
+rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
+recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
+reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
+reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
+reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
+reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)
+reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
+reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
+removeAllS : List String -> List String -> List String
+requiredMethodNames : List IfaceMethod -> List String
+resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
+sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
+seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
+selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
+sortIfaceRefs : List IfaceRef -> List IfaceRef
+sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
+sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
+tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
+tyTabKey : TyConOrigin -> String -> TabKey
+univReceiverTag : List Ty -> Option HeadKey
+useModuleId : Decl -> List String
+usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
+usePathBindsName : UsePath -> String -> Bool
+varHeadApps : String -> Ty -> List (List Ty)
+varHeadHere : String -> Ty -> List Ty -> List (List Ty)
+variantNamed : String -> List Variant -> Bool
+withCtors : ModuleCtx -> Map String Scheme -> TcEnv
