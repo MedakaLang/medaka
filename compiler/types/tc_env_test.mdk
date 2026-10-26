@@ -25,18 +25,17 @@ import types.tc_env.{
   addCtor,
   buildClassEnvGo,
   buildImplEnvGo,
-  classEnvFinish,
-  emptyDeclEnvAcc,
-  implAccFinish,
   ceLookupAt,
   ceLookupGraph,
   ceRowIfaceName,
   ceRowOrd,
   ceRowsOwnedBy,
   ceRowsVisibleAt,
+  classEnvFinish,
   declEnvModule,
   declEnvVisibleAt,
   declEnvVisibleTo,
+  emptyDeclEnvAcc,
   envFor,
   extendLocalVar,
   extendTermBindings,
@@ -47,8 +46,8 @@ import types.tc_env.{
   ieRowsAll,
   ieRowsOwnedBy,
   ieRowsVisibleAt,
-  ifaceSortKey,
   ifaceTabKey,
+  implAccFinish,
   instRefMid,
   lastComponent,
   lookupCtor,
@@ -57,7 +56,6 @@ import types.tc_env.{
   lookupVar,
   ordOfIndex,
   removeAllS,
-  sortIfaceRefs,
   tyTabKey,
 }
 import types.tc_mono.{monoScheme, tconBuiltin}
@@ -66,6 +64,7 @@ import types.tc_types.{
   ClassEnv, DeclEnvAcc(..), DeclEnvModule, GraphCtx, ImplEnv, TcEnv
 }
 import support.ordmap.{omEmpty, omInsert}
+import types.tc_scope.{ifaceSortKey, sortIfaceRefs}
 
 blobTy : Ty
 blobTy = TyCon {
