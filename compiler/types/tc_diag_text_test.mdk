@@ -1,0 +1,138 @@
+-- Tests of `types.tc_diag_text`: the context-free message builders.  Every test applies a
+-- builder to plain operands (names, counts, kinds, spans) and pins the text it returns, so
+-- none needs a minted `ModuleCtx`.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{Loc(..)}
+import types.tc_diag_text.{
+  aliasArityMsg, allDigits, ambiguousFieldMsg, backticked, bangOnBoolHelp,
+  bangOnBoolMsg, derivableIface, discardedValueFix, discardedValueMsg,
+  elselessIfHelp, i64RangeText, kindName, locGoalKey, missingFieldMsg,
+  noImplFoundMsg, nonExhaustiveMatchWarning, ordinalWord, overAppliedMsg,
+  quotedNames, renderKindArrow, starSpelling, u64RangeText, unboundVarMsg,
+  unknownCtorMsg, unknownFieldMsg, wideAnnotateHelp
+}
+import types.tc_mono.{tconBuiltin}
+import types.tc_types.{Kind(..)}
+
+siteA : Option Loc
+siteA = Some (Loc "probe.mdk" 3 1 3 9)
+
+test "backticked wraps one name and quotedNames joins a list, empty for none" = expectAll
+  [
+    expectEqual "`a`" (backticked "a"),
+    expectEqual "`a`, `b`" (quotedNames ["a", "b"]),
+    expectEqual "" (quotedNames []),
+  ]
+
+test "locGoalKey spells the whole span and is empty without one" = expectAll [
+  expectEqual "probe.mdk:3:1:3:9" (locGoalKey siteA),
+  expectEqual "" (locGoalKey None),
+]
+
+test "ordinalWord names the first five positions and numbers the rest" =
+  expectEqual
+    ["first", "second", "third", "fourth", "fifth", "7th"]
+    (map ordinalWord [0, 1, 2, 3, 4, 6])
+
+test "derivableIface admits the derivable interfaces and no other" = expectAll [
+  expectTrue (derivableIface "Eq"),
+  expectTrue (derivableIface "Generic"),
+  expectFalse (derivableIface "Semigroup"),
+]
+
+test "allDigits accepts digit runs and rejects empty or mixed text" = expectAll
+  [
+    expectTrue (allDigits "0123"),
+    expectFalse (allDigits ""),
+    expectFalse (allDigits "12a"),
+  ]
+
+test "kindName and renderKindArrow spell kinds, the arrow ending in Type" = expectAll
+  [
+    expectEqual "Type" (kindName KType),
+    expectEqual "Effect" (kindName KRow),
+    expectEqual "Effect -> Type" (renderKindArrow [KRow]),
+    expectEqual "Type" (renderKindArrow []),
+  ]
+
+test "unbound variable, unknown constructor and field messages quote the name" = expectAll
+  [
+    expectEqual "unbound variable `x`" (unboundVarMsg "x"),
+    expectEqual "unknown constructor `Foo`" (unknownCtorMsg "Foo"),
+    expectEqual "no field `f` in `R`" (unknownFieldMsg "f" "R"),
+    expectEqual "missing field `f` in `R`" (missingFieldMsg "f" "R"),
+  ]
+
+test "an ambiguous field message names every owner and the annotation to add" =
+  expectEqual
+    "ambiguous field `.x`: it is declared by `A` and `B` and the record type is undetermined; annotate the record, as in `(r : A).x`"
+    (ambiguousFieldMsg "x" ["A", "B"])
+
+test "argument counts agree in number: one argument, many arguments" = expectAll
+  [
+    expectEqual
+      "type alias `T` takes 1 argument but is applied to 3"
+      (aliasArityMsg "T" 1 3),
+    expectEqual
+      "`f` takes 2 arguments but is applied to 3"
+      (overAppliedMsg "f" 2 3),
+  ]
+
+test "noImplFoundMsg names the interface and the instance type" =
+  expectEqual
+    "no impl of Display for Int"
+    (noImplFoundMsg "Display" [tconBuiltin "Int"])
+
+test "the wide-literal help and range texts name U64 or I64 by sign" = expectAll
+  [
+    expectEqual "0..18446744073709551615" u64RangeText,
+    expectEqual "-9223372036854775808..9223372036854775807" i64RangeText,
+    expectEqual
+      "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(5 : U64)`"
+      (wideAnnotateHelp "5" False),
+    expectEqual
+      "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(-5 : I64)`"
+      (wideAnnotateHelp "-5" True),
+  ]
+
+test "the bang-on-Bool message and help point at `not`" = expectAll [
+  expectEqual
+    "`!` dereferences a `Ref` and does not negate a `Bool`; use `not x`"
+    bangOnBoolMsg,
+  expectEqual
+    "use `not x`; `!x` reads a `Ref` cell, so it needs a `Ref a`, not a `Bool`"
+    bangOnBoolHelp,
+]
+
+test "a discarded statement value gets a `let _ = ` fix at its start" = expectAll
+  [
+    expectEqual
+      "this statement's value (an Int) is discarded; only a `Unit` expression may stand alone as a statement"
+      (discardedValueMsg "an Int"),
+    expectEqual
+      (Some ("probe.mdk:3:1:3:1", "let _ = "))
+      (map
+        (fix => (locGoalKey (Some (fst fix)), snd fix))
+        (discardedValueFix siteA)),
+    expectEqual 0 (length (discardedValueFix None)),
+  ]
+
+test "the fixed warning and help texts keep their wording" = expectAll [
+  expectEqual
+    "Warning: non-exhaustive match; not every case is covered"
+    nonExhaustiveMatchWarning,
+  expectEqual
+    "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit"
+    elselessIfHelp,
+]
+
+test "starSpelling names the pattern-ranging binder with or without a label" = expectAll
+  [
+    expectEqual
+      "`n` pattern-ranging, `@L*` or `Authority L*`"
+      (starSpelling "n" None),
+    expectEqual
+      "`n` pattern-ranging, `(n : String @L*)` or `(n : Authority L*)`"
+      (starSpelling "n" (Some "L")),
+  ]
