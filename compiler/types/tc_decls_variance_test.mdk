@@ -1,0 +1,181 @@
+-- Tests of `types.tc_decls_variance`'s own API: the polarity join table (read through
+-- `inferParamPolarities`, since the join itself is private), the `DeclEnvs` polarity
+-- fixpoint (`declEnvPolarityChain`) on recursive and mutually recursive datatypes and across
+-- modules, and the per-run record (`recordParamPolarities`).  The declarations are parsed
+-- from source so each row states the datatype it relies on.  A phantom parameter is
+-- published as covariant, so no chain row can observe `PPhantom`.  The chain publishes what
+-- a LATER module reads, so its declarations are `export data` (a private one is dropped).
+
+import list.{lookup}
+import test.{expectAll, expectEqual}
+import frontend.ast.{Decl(..), tabKeyName}
+import frontend.parser.{parse}
+import support.ordmap.{omEmpty}
+import types.tc_decls_variance.{
+  declEnvPolarityChain,
+  inferParamPolarities,
+  recordParamPolarities,
+}
+import types.tc_state.{blankModuleCtx, probeGraphCtx}
+import types.tc_types.{DeclEnvModule(..), ModuleCtx(..), Polarity(..)}
+
+polName : Polarity -> String
+polName PCo = "co"
+polName PContra = "contra"
+polName PInv = "inv"
+polName PPhantom = "phantom"
+
+moduleOf : Int -> String -> DeclEnvModule
+moduleOf ord src = DeclEnvModule {
+  demOrd = ord,
+  demId = "m\{intToString ord}",
+  demDecls = parse src,
+  demPubDecls = parse src,
+  demKindEntries = [],
+}
+
+-- The published polarities of every declared type, by bare name, after the chain over [mods].
+chainRows : List DeclEnvModule -> List (String, List String)
+chainRows mods =
+  let (entries, _) = declEnvPolarityChain mods ([], omEmpty)
+  map (e => (tabKeyName (fst e), map polName (snd e))) entries
+
+-- The published polarities of [name] in one module whose source is [src].
+polsOf : String -> String -> List String
+polsOf src name =
+  optionOr ["<absent>"] (lookup name (chainRows [moduleOf 1 src]))
+
+test "a parameter used only as a field is covariant, and a repeat keeps it covariant" = expectAll
+  [
+    expectEqual ["co"] (polsOf "export data Box a = Box a" "Box"),
+    expectEqual ["co"] (polsOf "export data Two a = A a | B a a" "Two"),
+  ]
+
+test "a parameter used only as an argument is contravariant" = expectAll [
+  expectEqual ["contra"] (polsOf "export data Sink a = Sink (a -> Int)" "Sink"),
+  expectEqual
+    ["contra"]
+    (polsOf "export data Sink a = S1 (a -> Int) | S2 (a -> Bool)" "Sink"),
+]
+
+test "covariant joined with contravariant is invariant, in either field order" = expectAll
+  [
+    expectEqual
+      ["inv"]
+      (polsOf "export data Both a = Both a (a -> Int)" "Both"),
+    expectEqual
+      ["inv"]
+      (polsOf "export data Both a = Both (a -> Int) a" "Both"),
+    expectEqual
+      ["inv"]
+      (polsOf "export data Both a = L a | R (a -> Int)" "Both"),
+  ]
+
+test "an argument of an argument is covariant again, and a phantom parameter publishes as covariant" = expectAll
+  [
+    expectEqual
+      ["co"]
+      (polsOf "export data Cc a = Cc ((a -> Int) -> Int)" "Cc"),
+    expectEqual ["co"] (polsOf "export data Ph a = Ph Int" "Ph"),
+  ]
+
+test "a head variable and its argument are both invariant, and each parameter gets its own row" = expectAll
+  [
+    expectEqual ["inv", "inv"] (polsOf "export data F f a = F (f a)" "F"),
+    expectEqual
+      ["co", "contra"]
+      (polsOf "export data Mix a b = Mix a (b -> Int)" "Mix"),
+  ]
+
+test "a recursive datatype keeps the polarity its own occurrences agree on" = expectAll
+  [
+    expectEqual ["co"] (polsOf "export data L a = Nil | Cons a (L a)" "L"),
+    expectEqual
+      ["contra"]
+      (polsOf
+        "export data Pred a = Pred (a -> Bool) | And (Pred a) (Pred a)"
+        "Pred"),
+    expectEqual
+      ["inv"]
+      (polsOf "export data Bad a = Bad a (a -> Int) (Bad a)" "Bad"),
+  ]
+
+test "a mutually recursive pair settles to one polarity whichever is declared first" =
+  let evOd =
+    """
+    export data Ev a = EvNil | EvCons (a -> Int) (Od a)
+    export data Od a = OdCons (Ev a)
+    """
+  let odEv =
+    """
+    export data Od a = OdCons (Ev a)
+    export data Ev a = EvNil | EvCons (a -> Int) (Od a)
+    """
+  let rows1 = chainRows [moduleOf 1 evOd]
+  let rows2 = chainRows [moduleOf 1 odEv]
+  expectAll [
+    expectEqual (Some ["contra"]) (lookup "Ev" rows1),
+    expectEqual (Some ["contra"]) (lookup "Od" rows1),
+    expectEqual (Some ["contra"]) (lookup "Ev" rows2),
+    expectEqual (Some ["contra"]) (lookup "Od" rows2),
+  ]
+
+test "a mutually recursive pair whose members disagree is invariant in both" =
+  let src =
+    """
+    export data P a = P1 a (Q a)
+    export data Q a = Q1 (a -> Int) (P a)
+    """
+  let rows = chainRows [moduleOf 1 src]
+  expectAll [
+    expectEqual (Some ["inv"]) (lookup "P" rows),
+    expectEqual (Some ["inv"]) (lookup "Q" rows),
+  ]
+
+test "a mutually recursive covariant pair stays covariant" =
+  let src =
+    """
+    export data Ev a = EvNil | EvCons a (Od a)
+    export data Od a = OdCons a (Ev a)
+    """
+  let rows = chainRows [moduleOf 1 src]
+  expectAll [
+    expectEqual (Some ["co"]) (lookup "Ev" rows),
+    expectEqual (Some ["co"]) (lookup "Od" rows),
+  ]
+
+test "a later module reads an earlier module's polarity through the chain" =
+  let first = moduleOf 1 "export data Sink a = Sink (a -> Int)"
+  let second = moduleOf 2 "export data Wrap a = Wrap (Sink a)"
+  let rows = chainRows [first, second]
+  expectAll [
+    expectEqual (Some ["contra"]) (lookup "Sink" rows),
+    expectEqual (Some ["contra"]) (lookup "Wrap" rows),
+  ]
+
+test "inferParamPolarities reads each parameter against the given variants with an empty table" =
+  let rows = match parse "export data Mix a b = Mix a (b -> Int)"
+    (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs }) :: _ =>
+      map polName (inferParamPolarities [] ps ks vs)
+    _ => ["<no data decl>"]
+  expectEqual ["co", "contra"] rows
+
+test "recordParamPolarities publishes phantom as covariant and keeps the newest push first" =
+  let m = blankModuleCtx (probeGraphCtx ()) "probe"
+  let pushed = match parse "export data Ph a = Ph Int"
+    (DData { dataName = n, dataOrigin = o }) :: _ =>
+      recordParamPolarities m o n [PPhantom]
+      recordParamPolarities m o n [PInv]
+      map (e => map polName (snd e)) m.mcCells.dataParamPolarityRef.value
+    _ => []
+  expectEqual [["inv"], ["co"]] pushed
+
+test "a private datatype never reaches a later reader's table" =
+  let rows = chainRows [
+    moduleOf 1 "data Hidden a = Hidden (a -> Int)",
+    moduleOf 2 "export data Shown a = Shown (Hidden a)",
+  ]
+  expectAll [
+    expectEqual None (lookup "Hidden" rows),
+    expectEqual (Some ["co"]) (lookup "Shown" rows),
+  ]

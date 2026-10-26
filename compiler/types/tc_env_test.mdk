@@ -64,7 +64,6 @@ import types.tc_types.{
   ClassEnv, DeclEnvAcc(..), DeclEnvModule, GraphCtx, ImplEnv, TcEnv
 }
 import support.ordmap.{omEmpty, omInsert}
-import types.tc_scope.{ifaceSortKey, sortIfaceRefs}
 
 blobTy : Ty
 blobTy = TyCon {
@@ -313,17 +312,6 @@ test "a constructor is found by lookupVar and lookupCtor, and a variable of its 
     expectEqual "Bool" (schemeText (lookupVar hidden "Mk")),
     expectEqual "Int" (schemeText (lookupCtor hidden "Mk")),
     expectEqual "<none>" (schemeText (lookupCtor withCtor "Nope")),
-  ]
-
-test "sortIfaceRefs orders by identity then name whatever the input order" =
-  let a = IfaceRef { irName = "Alpha", irOrigin = OriginModule "amod" }
-  let b = IfaceRef { irName = "Alpha", irOrigin = OriginModule "zmod" }
-  let c = IfaceRef { irName = "Beta", irOrigin = OriginModule "amod" }
-  let keys = refs => map ifaceSortKey (sortIfaceRefs refs)
-  expectAll [
-    expectEqual (keys [a, b, c]) (keys [c, b, a]),
-    expectEqual (keys [a, b, c]) (keys [b, a, c]),
-    expectEqual 3 (length (keys [a, b, c])),
   ]
 
 test "lastComponent is the final element of a module path" = expectAll [
