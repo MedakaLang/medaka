@@ -682,7 +682,7 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 369
+count = 361
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -697,7 +697,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 334
+count = 328
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"
