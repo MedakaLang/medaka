@@ -1,9 +1,13 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
+aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasVisibleTo : Int -> AliasDecl -> Bool
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
 ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
 anyArgMentions : List String -> List Ty -> Bool
 anyKRow : List Kind -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
+attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
+bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
 buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
@@ -93,6 +97,8 @@ declParamKinds : GraphCtx -> List String -> List (Option KindAnn) -> List Kind
 declTopFnNames : List Decl -> List String
 definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
+depExportsStandalone : GraphCtx -> String -> String -> Bool
+depExportsUnknown : GraphCtx -> String -> Bool
 dispHeadTab : HeadKey -> TabKey
 dispatchTyparams : List String -> List String
 domainHasPatterns : Param -> Bool
@@ -117,6 +123,7 @@ extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 funClausePair : FunClause -> (List Pat, Expr)
 funDefs : List Decl -> List (String, (List Pat, Expr))
+graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
@@ -183,6 +190,7 @@ ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
 ieTyBlob : Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
+ifaceExportsIndex : GraphCtx -> Unit -> Map String (List (String, List String))
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodRowOf : Decl -> List (String, List String)
@@ -205,12 +213,16 @@ implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importTableMid : UsePath -> String
 importedBindings : UsePath -> Option (List (String, String))
+importerEdgeIndex : List (String, List Decl) -> Map String (List String) -> Map String (List String)
+importerReachGo : Map String (List String) -> List (String, List Decl) -> Map String (Map String Unit) -> Map String (Map String Unit)
+importerReachIndex : List (String, List Decl) -> Map String (Map String Unit)
 insertUnivImpl : ImplUniverse -> (IfaceRef, List Ty, List Require) -> ImplUniverse
 insertUnivImplAt : TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 keyEntryIdx : KeyEntry -> Int
+keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
 kindAnnAtom : GraphCtx -> KindAnn -> Kind
 kindAnnSlots : GraphCtx -> KindAnn -> List Kind
@@ -291,6 +303,8 @@ selectIfaceRows : UsePath -> List (String, List String) -> List (String, List St
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
+standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
+superLookup : GraphCtx -> IfaceRef -> Option (List String, List Super)
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tyTabKey : TyConOrigin -> String -> TabKey
 univReceiverTag : List Ty -> Option HeadKey

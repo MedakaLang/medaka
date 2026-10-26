@@ -1,17 +1,29 @@
+allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
 anyConcreteHead : List Mono -> Bool
 anyListM : (a -> Bool) -> List a -> Bool
 anyMember : List String -> List String -> Bool
+applyParams : Mono -> List Mono -> Mono
 argMentions : List String -> Ty -> Bool
 arrowArity : Mono -> Int
 atomsSame : List Atom -> List Atom -> Bool
 authCellsIn : Mono -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authIdsIn : Mono -> Map Int Unit -> Map Int Unit
+authOrderIn : Mono -> List Int -> List Int
+authOrderRow : EffRow -> List Int -> List Int
+authOrderTerm : Authority -> List Int -> List Int
 authRoots : Mono -> Map Int Unit -> Map Int Unit
 authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
 authSame : Authority -> Authority -> Bool
 authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authTermIds : Authority -> Map Int Unit -> Map Int Unit
+authvarIdOf : (String, Ref Authvar) -> Int
+boundTvarId : List Int -> Mono -> List Int
+boundTyvarIds : List Int -> List Mono -> Option (List Int)
+cellIdSet : List (Ref Effvar) -> Map Int Unit
+cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
 cohApply : Ref (List (Int, Mono)) -> Mono -> Mono
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohEqMono : Mono -> Mono -> Bool
@@ -28,30 +40,52 @@ collectAuthvarIds : List Mono -> List Int
 collectRowEffvarIds : List Mono -> List Int
 collectTyIds : List Mono -> List Int
 concreteHeadVarIds : Mono -> List Int
+containerParamScalarArg : Mono -> Mono -> Option String
+containsI : Int -> List Int -> Bool
+declaredOblArgId : List Int -> Mono -> List Int
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 distinctIdentsIn2 : List (Ident, String) -> Bool
+domainIsTupleOfArity : Mono -> Int -> Bool
+effectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRoots : Mono -> Map Int Unit -> Map Int Unit
+effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
 exactReturnRequestOfGoal : Obligation -> Option MethodReturnRequest
+expectedParamTypes : Mono -> Int -> List Mono
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarInMonos : List Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
+firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstOrZero : List Int -> Int
 firstTvar : Mono -> Mono -> Int -> Option Mono
+foldrFun : List Mono -> Mono -> Mono
+funArity : Mono -> Int
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 headMonoNode : Mono -> Mono
 headTyNode : Ty -> Ty
 headTySpineNode : Ty -> Ty
 headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
 headTyconTy : Ty -> Option HeadKey
+headVarRootOf : Mono -> Option HeadVarRoot
+headsUnifier : GraphCtx -> Map String Unit -> List Mono -> List Mono -> Option (Ref (List (Int, Mono)))
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
+instantiateFields : GraphCtx -> List Mono -> (List Mono, List Mono) -> List Mono
+instantiateNamedMonos : GraphCtx -> List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
+invocationHeadKey : Mono -> String
 isBareTyvarMono : Mono -> Bool
+isMonoScheme : Scheme -> Bool
+isPreludeOrigin : TyConOrigin -> Bool
+isUnboundTvar : Mono -> Bool
+isUnshaped : Mono -> Bool
 joinCellOf : GraphCtx -> List (Ref Effvar) -> Ref Effvar
+litType : Lit -> Mono
 locEq : Loc -> Loc -> Bool
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 matchCol0Type : Mono -> Option TabKey
@@ -89,7 +123,10 @@ monoUnboundIds : Mono -> List Int
 monoVarCells : Mono -> List (Ref Tyvar)
 monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
+monosTvarIds : List Int -> List Mono -> List Int
 newEffvarId : GraphCtx -> Unit -> Int
+nthArgMono : Int -> Mono -> Option Mono
+nthFunDomain : Int -> Mono -> Option Mono
 nthMono : Int -> List Mono -> Option Mono
 nthTy : Int -> List Ty -> Option Ty
 patVarsListTc : List Pat -> List String
@@ -98,13 +135,16 @@ peelArrows : Int -> Mono -> List Mono
 peelQual : Mono -> Mono
 preferConcrete : Mono -> Mono -> Mono
 propParamNamesTc : List PropParam -> List String
+qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 recPatFieldVarsTc : RecPatField -> List String
+recordAuthCells : List Int -> Mono -> List (String, Mono) -> Map Int (Ref Authvar)
 recordOwnerModule : RecordInfo -> Option String
 recordResultMono : RecordInfo -> Mono
 resultAfterArrows : Int -> Mono -> Option Mono
 rigidSigPairs : GraphCtx -> Map String Unit -> List (Mono, Mono) -> List (Mono, Mono)
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
+rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
 rowMintedBefore : Int -> EffRow -> Bool
 rowOfMembers : GraphCtx -> List Atom -> List (Ref Effvar) -> EffRow
 rowSame : EffRow -> EffRow -> Bool
@@ -117,6 +157,8 @@ schemeMono : Scheme -> Mono
 sigCellsOf : Map String Unit -> List (Ref Tyvar) -> List (Ref Tyvar)
 sigRigidBindings : Map String Unit -> List (Ref Tyvar) -> List (Int, Mono)
 sigStandIn : Ref Tyvar -> String
+sigTvarIds : List Mono -> List Int
+spineHead : Mono -> Mono
 spineHeadMono : Mono -> Mono
 spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 stripArrows : Mono -> Mono
@@ -129,15 +171,20 @@ substAtoms : List (Int, Authority) -> List Atom -> List Atom
 substAuth : List (Int, Authority) -> Authority -> Authority
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
 substMono : GraphCtx -> List (Int, Mono) -> List (Int, Ref Effvar) -> List (Int, Authority) -> Mono -> Mono
+substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
+substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
+substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
 substRow : GraphCtx -> List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
 substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
 substTyVars : List (String, Ty) -> Ty -> Ty
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
+tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 tupleMono : List Mono -> Mono
 tupleSpineOf : Mono -> List Mono -> Mono
+tupleUnifyClash : Mono -> Mono -> Bool
 tyAppSpine : Ty -> (Ty, List Ty)
 tyArrowCount : Ty -> Int
 tyHeadEqV : List Ty -> List Ty -> Bool
@@ -148,5 +195,7 @@ tyStructEqList : List Ty -> List Ty -> Bool
 tySubsumesV : List Ty -> List Ty -> Bool
 tyVarNames : Ty -> List String
 tyvarId : Ref Tyvar -> Int
+unquantifiedAuthIds : Scheme -> Map Int Unit
 walkMonoSame : Mono -> Mono -> Bool
 walkMonosSame : List Mono -> List Mono -> Bool
+xmodOblArgId : Mono -> List Int

@@ -1,5 +1,6 @@
 frontend.ast
 frontend.exhaust
+frontend.visibility
 support.opcount
 support.ordmap
 support.path
@@ -19,6 +20,7 @@ types.effect_solver
 types.evidence
 types.evidence_complete
 types.evidence_coverage
+types.invocation_basis
 types.manifest_publish
 types.publish
 types.registry
@@ -27,6 +29,7 @@ types.route_key
 types.runtime_types
 types.scopes
 types.solver_contract
+types.tc_env
 types.tc_mono
 types.tc_state
 types.tc_types
