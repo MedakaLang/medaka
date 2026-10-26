@@ -7,7 +7,7 @@ import test_process.{
   expectSpawnOk, expectSpawnOkLine, expectSpawnFailsAll
 }
 import fs.{mkdirAll}
-import string.{contains, startsWith, lines, join, stripPrefix}
+import string.{contains, startsWith, lines, join, stripPrefix, split}
 
 data ValueCase = ValueCase String String String
 
@@ -20,6 +20,41 @@ valueCases = [
   ValueCase "short-or" "main = (1 < 2) || (9 / 0 == 3)" "True",
   ValueCase "short-if" "main = if 1 > 2 then 9 / 0 else 9" "9",
   ValueCase "division" "main = 12 / 3" "4",
+  ValueCase
+    "parameter-offsets"
+    """
+probe : Int -> Int -> Int -> Int
+probe a b c = let x = a * 100 in let y = b * 10 in x + y + c
+main = probe 1 2 3
+"""
+    "123",
+  ValueCase
+    "scratch-collision-L1"
+    """
+probe : Int -> Int -> Int
+probe __sdivr n = let __sc_b899 = __sdivr + n in let u____sc_b899 = __sc_b899 + 1 in u____sc_b899 / 2
+main = probe 3 4
+"""
+    "4",
+  ValueCase
+    "block"
+    """
+probe : Int -> Int
+probe n =
+  let a = n + 1
+  let b = a + 2
+  a + b
+main = probe 3
+"""
+    "10",
+  ValueCase
+    "non-tail"
+    """
+fib : Int -> Int
+fib n = if n < 2 then n else fib (n - 1) + fib (n - 2)
+main = fib 10
+"""
+    "55",
   ValueCase
     "shadow"
     """
@@ -71,6 +106,35 @@ main = probe 0 1000000
 """
     "1000000",
   ValueCase "float" "main = 1.25 + 2.5" "3.75",
+  ValueCase
+    "annotated-Float"
+    """
+probe : Int -> Float
+probe n = if n > 0 then 1.25 else 2.5
+main = probe 0 + probe 1
+"""
+    "3.75",
+  ValueCase
+    "boxed-ADT"
+    """
+data Box = Box Int
+unbox : Box -> Int
+unbox (Box x) = x
+main = unbox (Box 9)
+"""
+    "9",
+  ValueCase
+    "boxed-TRMC"
+    """
+upto : Int -> Int -> List Int
+upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+count : Int -> List Int -> Int
+count acc xs = match xs
+  [] => acc
+  _ :: rest => count (acc + 1) rest
+main = count 0 (upto 1 100000)
+"""
+    "100000",
   ValueCase
     "capture"
     """
@@ -268,7 +332,8 @@ abiRow dir route boxed =
     Err e => fail e
     Ok _ => match emit dir route (path ++ ".mdk")
       Err e => fail e
-      Ok (code, wat, err) =>
+      Ok (code, out, err) =>
+        let wat = watPayload route out
         let headers =
           filter
             (line => startsWith "  (func $" line && contains "probe " line)
@@ -277,13 +342,39 @@ abiRow dir route boxed =
           expectEqual (0, "") (code, err),
           expectEqual 1 (length headers),
           expectTextContainsAll
-            (if boxed then
+            (if boxed || route == "modules" || route == "playground" then
               ["(param", "(ref eq)", "(result (ref eq))"]
             else
               ["(param", "i64)", "(result i64)"])
             (join "\n" headers),
           runWat path wat "9" "",
         ]
+
+slotFunctionRow : String -> String -> Int -> List String -> Expectation
+slotFunctionRow wat name localCount needles =
+  let chunks = filter (startsWith (name ++ " ")) (split "  (func $" wat)
+  expectAll [
+    expectEqual 1 (length chunks),
+    expectEqual
+      localCount
+      (length (filter (== "  (local i64)") (lines (join "" chunks)))),
+    expectTextContainsAll needles (join "" chunks),
+  ]
+
+slotLifetimeRow : String -> String -> <IO, Exec, FileWrite> Expectation
+slotLifetimeRow dir route =
+  let path = "\{dir}/\{route}-function-reset.wat"
+  let prefix = if route == "typed" then "__user____" else ""
+  match readFile path
+    Err e => fail e
+    Ok wat => expectAll [
+      slotFunctionRow wat (prefix ++ "probe") 1 [
+        "(param i64) (param i64)", "local.get 0", "local.get 1", "local.set 2"
+      ],
+      slotFunctionRow wat (prefix ++ "other") 1 [
+        "(param i64)", "local.get 0", "local.set 1"
+      ],
+    ]
 
 trapRow : String ->
   String ->
@@ -440,6 +531,8 @@ runJudges dir =
               valueCases)
           ["raw", "typed"]),
       baseline dir,
+      expectEach
+        (map (route => (route, slotLifetimeRow dir route)) ["raw", "typed"]),
       refusalRow
         dir
         "typed"
@@ -447,8 +540,21 @@ runJudges dir =
         dictionaryBaseline
         "dictionary slot with no route",
       trapRow dir "raw" "unannotated-Float" floatBaseline "illegal cast",
+      refusalRow
+        dir
+        "typed"
+        "unannotated-Float"
+        floatBaseline
+        "dictionary slot with no route",
       valueRow dir "modules" (ValueCase "product" "main = 6 * 7" "42"),
       valueRow dir "playground" (ValueCase "product" "main = 6 * 7" "42"),
+      expectEach
+        (flatMap
+          (route => [
+            (route ++ "/plain-ABI", abiRow dir route False),
+            (route ++ "/ref-ABI", abiRow dir route True),
+          ])
+          ["modules", "playground"]),
       expectSpawnOkLine
         "env"
         (strictArgs (dir ++ "/playground_main") [

@@ -63,6 +63,12 @@ has_plan_pin() {
   grep -F -q -- "$1" "$PLAN_SRC" || printf '%s' "$PLAN_FLAT" | grep -F -q -- "$1"
 }
 
+retired_scanner='emitScalarProgram|emitScalarInit|emitScalarValInit|emitScalarMain|emitScalarFnBind|emitScalarTail|emitScalarAppTail|emitScalarExpr|emitBinI32|emitUnI32|emitIfI32|emitLetI32|emitBlockI32|emitAppI32|emitVarI32|paramDeclI32|localDeclI32|emitIfRef|emitLetWith'
+if grep -E "^($retired_scanner)[[:space:]]*[:= ]" "$WASM_SRC" >/dev/null; then
+  echo "FAIL WASM-SINGLE-TRAVERSAL: retired recursive scanner restored"
+  exit 1
+fi
+
 # X-W.H2a structural ratchet. Keep this before every toolchain/binary skip: the
 # private program index is source structure, not a capability of wasm-tools.
 legacy_state='fnNameSetW|valNameSetW|fnArMapW|implsByMethodW|lazyGlobalMapRef|recFieldsRef|fnsUsedAsValuesRef|fnsUsedAsValuesSetW|ctorArMapW|ctorTyMapW|ctorOrdMapW|typeCtorsMapW'
@@ -115,9 +121,9 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, }' \
-  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
-  'progInFn prog = progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }' \
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
+  'progInFn prog = progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding }' \
   'progWithTrmc ctx prog =' \
   'progWithDisp ctx prog ='; do
   has_wasm_pin "$required" || {
@@ -199,10 +205,16 @@ done
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
-has_wasm_pin 'emitScalarProgram emit plan fnNames valNames groups' || {
-  echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
-  exit 1
-}
+for required in \
+  'emitRefProgram prog plan groups' \
+  'emitRefExpr prog env d expr = valueLines (emitValueW prog env d expr)' \
+  'emitValueW : Prog -> List String -> Int -> CExpr -> WasmValue' \
+  'emitRefTailWrap : Prog -> List String -> Int -> CExpr -> List String'; do
+  has_wasm_pin "$required" || {
+    echo "FAIL WASM-SINGLE-TRAVERSAL: missing $required"
+    exit 1
+  }
+done
 # Physical prerequisites are selected before rendering; the semantic re-emission
 # probes below still exercise strict, record and gap routes in one process.
 DEMAND_SRC="$ROOT/compiler/backend/wasm_demand.mdk"
@@ -233,11 +245,9 @@ for required in \
   'let useRef = physical.useRef' \
   'let useClos = physical.useClos' \
   'let imports = plannedImportLines physical.imports' \
-  '++ plannedImportLines (physicalPlanW plan).imports' \
   'requireHelperW : WasmEmit -> String -> Unit' \
   'let _ = seedDemandW emit physical.representation' \
-  'emitDivZeroGuard emit op "$__sdivr"' \
-  'emitDivZeroGuard (progEmit prog) op (divrLocal prog d) site' \
+  'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "$__sdivr" else divrLocal prog d) site' \
   'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
   has_wasm_pin "$required" || {
@@ -315,12 +325,12 @@ for required in \
   }
 done
 for required in \
-  'site : Int, binding : String, }' \
-  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
+  'site : Int, binding : String, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
   'progBinding : Prog -> String' \
   'progBinding prog = (progFnCtx prog).binding' \
   'progForBinding : String -> Int -> Prog -> Prog' \
-  'progForBinding name site prog = progWithFnCtx prog { freshFnCtx | site = site, binding = name }'; do
+  'progForBinding name site prog = progWithFnCtx prog { freshFnCtx () | site = site, binding = name }'; do
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B5-CARRIER: missing $required"
     exit 1
@@ -345,7 +355,7 @@ fi
 }
 has_wasm_pin 'patName emit binding _ =' &&
   has_wasm_pin '++ binding ++ "]")' &&
-  has_wasm_pin 'map (patName emit name) pats' || {
+  has_wasm_pin 'map (patName (progEmit prog) name) pats' || {
   echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through the explicit binding name"
   exit 1
 }
@@ -372,7 +382,7 @@ for required in \
   'emitProgramGaps input plan cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
-  'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
+  'WasmValue WBoxEq (emitLitRef (progEmit prog) l)'; do
   has_wasm_pin "$required" || {
     echo "FAIL wasm typed string-state ratchet: missing $required"
     exit 1
