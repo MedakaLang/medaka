@@ -1,0 +1,200 @@
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
+addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
+addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
+addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
+addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
+addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
+addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
+addVariants : TcEnv -> List (String, Mono) -> SigVars -> List Int -> List Int -> List Int -> Mono -> List Variant -> List (List (String, KindAnn)) -> TcEnv
+aliasDeclaredBy : String -> TabKey -> Bool
+aliasDfsVisit : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> String -> Unit
+aliasDfsVisitAll : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
+aliasDfsVisitNeighbors : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
+aliasExpansionStep : List (TabKey, (List String, Ty)) -> Ty -> Option (TabKey, Ty)
+aliasFixtureAttribCore : Decl
+aliasFixtureEnv : GraphCtx -> DataEnv
+aliasFixturePrivCore : Decl
+aliasFixturePubCore : Decl
+aliasFixturePubM : Decl
+aliasNamesAt : Int -> List String
+ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
+ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
+atSignature : ModuleCtx -> Ty -> (ModuleCtx -> a) -> a
+binderIsPattern : GraphCtx -> List (String, Option EffAtomTy) -> List String -> String -> Bool
+buildAliasGraphEntry : Map String Unit -> (TabKey, (List String, Ty)) -> (String, List String)
+buildDataEnv : List DeclEnvModule -> DataEnv
+buildDeclEnvs : GraphCtx -> DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
+builtinClassName : BuiltinClass -> String
+builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
+builtinClassSet : String -> TyConOrigin -> Bool -> BuiltinClasses -> BuiltinClasses
+builtinClassesGo : List Decl -> BuiltinClasses -> BuiltinClasses
+builtinClassesOf : List Decl -> BuiltinClasses
+builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
+constraintArgVarNames : Constraint -> List String
+constraintIface : Constraint -> String
+constraintIsMethodLevel : List String -> Constraint -> Bool
+constraintMethodPredicateSlot : ModuleCtx -> List String -> List (String, Mono) -> List Int -> Constraint -> List MethodPredicateSlot
+constraintNameMonos : List String -> List (String, Mono) -> List Mono
+constraintVarNames : Constraint -> List String
+constraintVarNamesTy : Ty -> List String
+ctorExportsInto : DeclEnvModule -> Map String (List (String, String, Ident)) -> Map String (List (String, String, Ident))
+ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
+dataEnvFinish : DataEnv -> DataEnv
+dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
+dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
+deFieldOwnerCollisionEnv : GraphCtx -> DataEnv
+deFieldOwnerFixtureA : Decl
+deFieldOwnerFixtureB : Decl
+deFieldOwnerFixtureC : Decl
+deFieldOwnerSameNameEnv : GraphCtx -> DataEnv
+deFieldOwnerSingleEnv : GraphCtx -> DataEnv
+deKindAbstractFixture : Decl
+deKindFixtureDecls : List Decl
+deKindNewtypeFixture : Decl
+deKindPrivateFixture : Decl
+deKindRow0 : GraphCtx -> DeclEnvModule
+deKindRow1 : GraphCtx -> DeclEnvModule
+deNameIdxAlpha : Decl
+deNameIdxAt : Map String (Map String Unit) -> String -> List String
+deNameIdxBeta : Decl
+deNameIdxChain : GraphCtx -> Map String (Map String Unit)
+deNameIdxChainNoUnrelated : GraphCtx -> Map String (Map String Unit)
+deNameIdxModA : GraphCtx -> DeclEnvModule
+deNameIdxModB : GraphCtx -> DeclEnvModule
+deNameIdxModC : GraphCtx -> DeclEnvModule
+deNameIdxModD : GraphCtx -> DeclEnvModule
+deNameIdxSharedA : Decl
+deNameIdxSharedB : Decl
+deRecordIdentTyNames : List (Ident, String, List Field) -> List String
+deRecordOrderEnv : GraphCtx -> DataEnv
+deRecordOrderFixtureA : Decl
+deRecordOrderFixtureB : Decl
+deSeedChainKinds : GraphCtx -> Map String (List (TabKey, List Kind))
+deSeedChainNames : GraphCtx -> Map String (Map String Unit)
+deSeedChainOwners : GraphCtx -> Map String (Map String (List String))
+deSeedChainProbe : GraphCtx -> DeclEnvSeedAcc
+deSeedChainProbeZero : DeclEnvSeedAcc
+deSeedNameParity : String -> Bool
+deSeedRowN : GraphCtx -> DeclEnvModule
+declCtorIdents : List Decl -> List (String, String, Ident)
+declCtorIdentsOf : Decl -> List (String, String, Ident)
+declEnvAccOf : GraphCtx -> List DeclEnvModule -> DeclEnvAcc -> DeclEnvAcc
+declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
+declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
+declEnvDefinerIndex : Map String (List (String, (String, String))) -> Map String (List (String, List String)) -> List DeclEnvModule -> (Map String (List (String, (String, String))), Map String (List (String, List String)))
+declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvModulesFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
+declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
+declEnvReachSeed : String -> Map String Unit
+declEnvRowAtomEntries : GraphCtx -> List Decl -> List (TabKey, List (List Atom))
+declEnvRowAtomsChain : GraphCtx -> List DeclEnvModule -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom)))) -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom))))
+declEnvRowAtomsEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List (List Atom))
+declEnvRowKindEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List Kind)
+declEnvSeedChain : GraphCtx -> List DeclEnvModule -> DeclEnvSeedAcc -> DeclEnvSeedAcc
+declEnvSeedDataUniverse : ModuleCtx -> String -> DeclEnvs -> Unit
+declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
+declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
+declKindEntry : GraphCtx -> Decl -> Option (TyConOrigin, String, List Kind)
+dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
+definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
+directIfaceSchemeRows : ModuleCtx -> Decl -> List MethodSchemeRow
+directInterfaceDecls : List Decl -> List Decl
+distinctIdentsIn2 : List (Ident, String) -> Bool
+emitCyclicAliasErrors : ModuleCtx -> List Decl -> List (TabKey, (List String, Ty)) -> List String -> Unit
+existentialCells : ModuleCtx -> List (String, KindAnn) -> List (String, Ref Authvar)
+expandAliasHeadTy : ModuleCtx -> Ty -> Ty
+expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
+fieldNameOf : Field -> String
+firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
+graphAliasRow : Decl -> List (TabKey, (List String, Ty))
+groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
+headAtomsOr : List (List Atom) -> List Atom
+ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
+implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
+importLocFor : Map String (Map String Unit) -> List Decl -> String -> Option Loc
+importLocOf : String -> Decl -> Option Loc
+importLocReaching : Map String (Map String Unit) -> String -> Decl -> Option Loc
+indexOfInt : Int -> List Int -> Int
+indexOfIntGo : Int -> List Int -> Int -> Int
+inferParamRowAtoms : GraphCtx -> List String -> List Variant -> List (List Atom)
+installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
+instantiateSigTracked : ModuleCtx -> Ty -> (Mono, List (String, Mono), Option EffRow)
+intersectDeclAtoms : GraphCtx -> List (List Atom) -> List Atom
+isAliasDecl : Decl -> Bool
+isDirectInterfaceDecl : Decl -> Bool
+kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
+kindIsDeclared : Kind -> Bool
+krowArgVarAtoms : GraphCtx -> List Kind -> List (List Atom) -> List Ty -> List (String, List Atom)
+krowRows : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
+ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
+loadDataUniverse : ModuleCtx -> Int -> Unit
+locateTyAt : Option Loc -> Ty -> Ty
+lookupMethodPredicateSlots : String -> List (String, List MethodPredicateSlot) -> Option (List MethodPredicateSlot)
+methodDictArityOf : ModuleCtx -> String -> Int
+methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
+methodPredicateSlotsOfType : ModuleCtx -> List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
+methodRowNumObservation : ModuleCtx -> String -> List Decl -> List Decl -> NumAnchorTestObservation
+methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List String -> List IfaceMethod -> List MethodSchemeRow
+methodSchemesPure : ModuleCtx -> List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
+mintParamReprs : ModuleCtx -> List String -> List Kind -> List Mono
+modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
+padCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
+paramEtbl : List String -> List Kind -> List Mono -> SigVars
+paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
+paramRowAtomsFor : GraphCtx -> String -> List String -> List EffAtomTy -> List (List Atom)
+paramRowAtomsOf : ModuleCtx -> TabKey -> Option (List (List Atom))
+pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
+pubTopFnNames : List Decl -> List String
+publicStandaloneNames : List Decl -> List String
+recordCtors : GraphCtx -> TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
+recordDeclKinds : ModuleCtx -> Decl -> Unit
+recordDeclParamKinds : ModuleCtx -> Decl -> Unit
+recordDeclaredKinds : ModuleCtx -> Decl -> Unit
+recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
+recordParamKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
+recordParamRowAtoms : ModuleCtx -> TyConOrigin -> String -> List (List Atom) -> Unit
+reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
+reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
+reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
+reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
+registerAllData : TcEnv -> List Decl -> TcEnv
+registerAllDataGo : TcEnv -> List Decl -> TcEnv
+registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
+registerData : TcEnv -> Decl -> TcEnv
+registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
+registerNamedFieldVariants : ModuleCtx -> TyConOrigin -> String -> List String -> List Kind -> List Variant -> List (List (String, KindAnn)) -> Unit
+registerNamedFieldVariantsGo : ModuleCtx -> TyConOrigin -> String -> List String -> List Kind -> List Variant -> List (List (String, KindAnn)) -> Unit
+registerRecordInfoKeyed : ModuleCtx -> TyConOrigin -> String -> String -> List String -> List Kind -> List (String, KindAnn) -> List Field -> Unit
+registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> List (List (String, KindAnn)) -> TcEnv
+rejectCyclicAliases : ModuleCtx -> List Decl -> Unit
+restAtoms : List (List Atom) -> List (List Atom)
+rowArgAtomsApp : ModuleCtx -> List (String, List Kind) -> TyConOrigin -> String -> List Ty -> Option (List (String, List Atom))
+rowArgAtomsIn : ModuleCtx -> List (String, List Kind) -> Ty -> List (String, List Atom)
+rowArgAtomsVarApp : ModuleCtx -> List (String, List Kind) -> String -> List Ty -> Option (List (String, List Atom))
+rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
+seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
+setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
+sigToScheme : ModuleCtx -> Ty -> Scheme
+sigToSchemeTvs : ModuleCtx -> Ty -> (Scheme, List (String, Mono))
+sigToSchemeTvsIn : ModuleCtx -> List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
+sigTyVarNames : Ty -> List String -> List String -> List String
+sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
+sigVarsForWith : ModuleCtx -> Ty -> List String -> List (String, Param) -> SigVars
+spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
+substAliasArgs : List (String, Ty) -> Ty -> Ty
+substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
+substTyVars : List (String, Ty) -> Ty -> Ty
+tabKeyModule : TabKey -> Option String
+takeUntilInclusiveS : String -> List String -> List String
+tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
+tyAliasNormalFormKids : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
+tyConNamesInConstraint : Constraint -> List String
+tyConNamesInTy : Ty -> List String
+tyVarNamesWithConstraints : Ty -> List String
+variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
+withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
