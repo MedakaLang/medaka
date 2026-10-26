@@ -655,6 +655,11 @@ class = "history"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_solve.mdk"
+class = "history"
+count = 3
+
+[[entry]]
 file = "compiler/types/tc_solve_entail.mdk"
 class = "history"
 count = 3
@@ -697,7 +702,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 56
+count = 54
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -712,7 +717,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 241
+count = 224
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -727,7 +732,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 213
+count = 202
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

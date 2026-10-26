@@ -40,12 +40,24 @@ import types.tc_types.{
   MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..)
 }
 import types.typecheck.{
-  defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
-  checkModulesAllLines, elaborateModulesReport, checkModules,
-  methodReturnMemoCurrentViews, tcCode, tcMsg, checkModulesChainReportFor,
-  checkModulesChainReportForGraph, chainArgs, checkOneReportK,
-  checkModulesPartialK, elaborateModulesWithReport, driveInputsFor, tcConfigOf
+  chainArgs,
+  checkModules,
+  checkModulesAllLines,
+  checkModulesChainReportFor,
+  checkModulesChainReportForGraph,
+  checkModulesDiagsChain,
+  checkModulesPartialK,
+  checkOneReportK,
+  checkOneSchemeFullK,
+  defaultDriveInputs,
+  driveInputsFor,
+  elaborateModulesReport,
+  elaborateModulesWithReport,
+  tcCode,
+  tcConfigOf,
+  tcMsg,
 }
+import types.tc_solve.{methodReturnMemoCurrentViews}
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}

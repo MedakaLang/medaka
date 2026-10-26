@@ -100,15 +100,10 @@ import types.tc_state.{
   scopeTraceContext,
 }
 import types.typecheck.{
-  defaultDriveInputs,
-  driveInputsFor,
-  ModDiags,
   TcDiag(..),
   cellGoalInnerAliasing,
   cellStoreMisses,
-  checkModulesChainReportForGraph,
   chainArgs,
-  driveArgs,
   checkModulesChainReportFor,
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
@@ -120,21 +115,21 @@ import types.typecheck.{
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
   constrainedSigNames,
+  defaultDriveInputs,
+  driveArgs,
+  driveInputsFor,
   elaborateModules,
   elaborateModulesGraph,
   elaborateOne,
   elaborateOneFacts,
-  finishMethodReturnTrace,
   isLiveSpan,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
-  methodReturnMemoCurrentViews,
   methodReturnTemplatePresenceProbe,
-  spanKeys,
+  ModDiags,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
-  walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
@@ -145,6 +140,12 @@ import support.util.{
   splitOnChar, startsWith
 }
 import list.{last, nub, sort}
+import types.tc_solve.{
+  finishMethodReturnTrace,
+  methodReturnMemoCurrentViews,
+  spanKeys,
+  walkGoalSameProbe,
+}
 
 -- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
 -- profile, the sink as the trace.
