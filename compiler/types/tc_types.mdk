@@ -106,6 +106,7 @@ import frontend.exhaust.{
 import types.capability_manifest.{
   EntryKey(..), ManifestSelector, ManifestRequest, CapabilityManifest
 }
+import types.route_key.{EvIndex}
 
 -- Where an obligation the scoped solver holds was recorded, for its report:
 -- the location, the binding, and whether an authority obligation is an index
@@ -3524,3 +3525,50 @@ public export data ModuleMarking = ModuleMarking {
   -- the externs among the names the module declares or imports
   mmExterns : OrdMap Unit,
 }
+
+-- What one `dictPass` call reads a method occurrence's published entry from: the
+-- drive's index, and then, by ordinal, the occurrences the call itself mints
+-- (`mintMethodCellWith`) after the index was taken.
+public export data PassEvidence = PassEvidence EvIndex (Ref (OrdMap EvVal))
+
+-- What a method occurrence's published entry says: its interface word, dispatch
+-- route and dict routes (impl dicts first).
+public export data PassMethod = PassMethod String Route (List Route)
+
+-- ── UNIFIED per-module fold ───────────────────────────────────────────────────
+-- The single home for the identical per-module skeleton the four module drivers
+-- (checkModules / checkModulesDiagsChain / checkModulesEntryFull / elaborateModules)
+-- share, so the next import-scoped-seed-style fix touches ONE place instead of
+-- four (the miss would otherwise be path-specific — LSP-only or emit-only).  It
+-- owns: the IMPORT-SCOPED seed (`baseSeed ++ importSeed prog depEnv` — a flat
+-- union let `string.reverse` shadow the `list.reverse` a module imports), the
+-- per-module PUBLIC accumulator (`pubV = pickSchemes (publicValNames prog) schemes
+-- ++ reexportSeed coreV prog depEnv`), and the DEPENDENCY-FIRST threading of
+-- depEnv (PREPEND `(mid,pubV)::depEnv`, so importSeed's first-match picks the
+-- nearest dependency), accData (`++ publicDataDecls prog`) and accAll (`++ prog`,
+-- the cumulative impl-body universe).  Each driver supplies:
+--   * worker  : prev mid seed accData accAll prog -> (schemes, extra, mctx) — runs
+--               the per-module pass; MUST surface `schemes` (pubV needs it for the
+--               next depEnv) plus its driver-specific payload `extra`.  [prev] is the
+--               record current before the module; [mctx] the one it was checked in,
+--               which the next module starts from and the fold returns last.
+--   * collect : isLast mid extra restResult -> result — a foldr combiner, where
+--               restResult is the fold over the REMAINING modules (`base` for []).
+--               `isLast` is True only for the terminal (entry) module — the one
+--               place checkModulesEntryFull keeps the module's OWN schemes/warns
+--               rather than the recursion's.
+--   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
+--               checks every module.  It is consulted once for each module before the
+--               entry; a module it serves skips the worker, and the policy supplies
+--               its own export bindings and its payload.  The policy comes back last.
+-- foldModules owns ONLY the loop and performs NO mintGraphCtx: the reset
+-- boundary stays in each driver's preamble (a reset leaking in here would hand the
+-- `check*` drivers a reset they must not have).
+-- `Accumulate` is the per-worker "needs" signal gating the two accumulator
+-- concats.  Each worker declares which accumulator it reads; under
+-- `AccumulateNone` neither is read, so both are threaded unchanged (no copy of the
+-- growing left operand, which would make the graph O(modules^2) in allocation) and
+-- a path that consumes neither does O(|prog|) per module.  Under `AccumulateBoth`
+-- each is extended (`accData ++ publicDataDecls prog`, `accAll ++ prog`).  No
+-- worker reads one accumulator without the other.
+public export data Accumulate = AccumulateNone | AccumulateBoth

@@ -39,7 +39,7 @@ count = 1
 [[entry]]
 file = "compiler/driver/loader.mdk"
 rule = "rule-stdlib-reimpl"
-count = 4
+count = 3
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
@@ -107,6 +107,11 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_mono.mdk"
+rule = "rule-clause-map"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_types.mdk"
 rule = "rule-clone-type"
 count = 2
@@ -114,7 +119,7 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 rule = "rule-clause-map"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -139,4 +144,5 @@ count = 1
 [[entry]]
 file = "stdlib/string.mdk"
 rule = "rule-stdlib-reimpl"
-count = 2
+count = 1
+
