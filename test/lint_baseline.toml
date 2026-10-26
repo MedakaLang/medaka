@@ -107,6 +107,11 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_env.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_mono.mdk"
 rule = "rule-clause-map"
 count = 1
@@ -134,7 +139,7 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 rule = "rule-stdlib-reimpl"
-count = 3
+count = 2
 
 [[entry]]
 file = "stdlib/http.mdk"
