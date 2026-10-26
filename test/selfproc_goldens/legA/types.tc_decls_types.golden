@@ -51,6 +51,8 @@ declaredAuthority : GraphCtx -> (String, Option KindAnn) -> List (String, Param)
 dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
 domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
+expandAliasHeadTy : ModuleCtx -> Ty -> Ty
+expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 fieldTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Field -> Mono
 findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
 firstIfaceMethodLoc : List IfaceMethod -> Option Loc
@@ -110,6 +112,10 @@ sigConstraintsOf : Ty -> List Constraint
 sigVarsUnion : SigVars -> SigVars -> SigVars
 sigVarsWithAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
+spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
+substAliasArgs : List (String, Ty) -> Ty -> Ty
+substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
+substTyVars : List (String, Ty) -> Ty -> Ty
 tailCell : GraphCtx -> SigVars -> List String -> Option (Ref Effvar)
 tailCellsOf : SigVars -> List String -> List (Ref Effvar)
 tyCarries : GraphCtx -> List TabKey -> String -> Ty -> Bool

@@ -1,5 +1,5 @@
 # META
-source_lines=905
+source_lines=908
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
@@ -24,8 +24,11 @@ import types.tc_types.{
 import types.tc_diag_text.{ffiArrowNote}
 import types.tc_diag.{pushTypeErrorAt}
 import types.tc_unify.{atomsEscape, freshAuthvar}
-import types.tc_decls_types.{atomsOfWrittenIn}
-import types.tc_decls.{expandAliasHeadTy, expandAliasHeadTyWith}
+import types.tc_decls_types.{
+  atomsOfWrittenIn,
+  expandAliasHeadTy,
+  expandAliasHeadTyWith,
+}
 import types.effect_authority.{Authvar(..)}
 import frontend.ast.{
   Decl(..),
@@ -912,8 +915,7 @@ externDecls (_ :: rest) = externDecls rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ffiArrowNote" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorAt" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthvar" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWrittenIn" false))))
-(DUse false (UseGroup ("types" "tc_decls") ((mem "expandAliasHeadTy" false) (mem "expandAliasHeadTyWith" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWrittenIn" false) (mem "expandAliasHeadTy" false) (mem "expandAliasHeadTyWith" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authvar" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "effParamNames" false) (mem "externRowCons" false) (mem "firstTyLoc" false) (mem "isFixedIntHead" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
@@ -1074,8 +1076,7 @@ externDecls (_ :: rest) = externDecls rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ffiArrowNote" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorAt" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthvar" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWrittenIn" false))))
-(DUse false (UseGroup ("types" "tc_decls") ((mem "expandAliasHeadTy" false) (mem "expandAliasHeadTyWith" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWrittenIn" false) (mem "expandAliasHeadTy" false) (mem "expandAliasHeadTyWith" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authvar" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "effParamNames" false) (mem "externRowCons" false) (mem "firstTyLoc" false) (mem "isFixedIntHead" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))

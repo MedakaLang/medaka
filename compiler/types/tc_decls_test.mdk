@@ -32,6 +32,7 @@ import types.tc_types.{
   ModuleCtx(..),
 }
 import types.tc_env.{
+  builtinClassName,
   declEnvKindEntries,
   declEnvModule,
   emptyDeclEnvAcc,
@@ -40,21 +41,21 @@ import types.tc_env.{
   lookupRecordByName,
 }
 import types.tc_state.{blankModuleCtx, probeGraphCtx, wAll}
-import types.tc_decls_types.{sigConstraintsOf}
+import types.tc_decls_types.{
+  expandAliasHeadTy,
+  sigConstraintsOf,
+}
 import types.tc_mono.{tconBuiltin}
 import types.tc_decls.{
   addFieldOwners,
   buildDeclEnvs,
-  builtinClassName,
   constraintIface,
   constraintIsMethodLevel,
   constraintNameMonos,
   constraintVarNames,
   dataEnvFromDeclsGo,
-  expandAliasHeadTy,
   graphAliasRow,
   isAliasDecl,
-  lookupMethodPredicateSlots,
   pubTopFnNames,
   registerAllData,
   rejectCyclicAliases,
@@ -405,12 +406,3 @@ test "constraintNameMonos keeps the monos of the names that have one, in the nam
       (constraintNameMonos
         ["a", "z", "b"]
         [("b", tconBuiltin "Bool"), ("a", tconBuiltin "Int")]))
-
-test "lookupMethodPredicateSlots finds a row by key and is None for an absent key" = expectAll
-  [
-    expectEqual None (map length (lookupMethodPredicateSlots "k" [])),
-    expectEqual
-      (Some 0)
-      (map length (lookupMethodPredicateSlots "k" [("k", [])])),
-    expectEqual None (map length (lookupMethodPredicateSlots "j" [("k", [])])),
-  ]

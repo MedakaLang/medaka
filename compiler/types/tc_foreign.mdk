@@ -20,8 +20,11 @@ import types.tc_types.{
 import types.tc_diag_text.{ffiArrowNote}
 import types.tc_diag.{pushTypeErrorAt}
 import types.tc_unify.{atomsEscape, freshAuthvar}
-import types.tc_decls_types.{atomsOfWrittenIn}
-import types.tc_decls.{expandAliasHeadTy, expandAliasHeadTyWith}
+import types.tc_decls_types.{
+  atomsOfWrittenIn,
+  expandAliasHeadTy,
+  expandAliasHeadTyWith,
+}
 import types.effect_authority.{Authvar(..)}
 import frontend.ast.{
   Decl(..),

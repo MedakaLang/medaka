@@ -815,6 +815,9 @@ import types.tc_env.{
   bindingWithStandalone,
   buildFlatImplEnv,
   buildImplUniverse,
+  builtinClassName,
+  builtinClassOrigin,
+  builtinIfaceRef,
   ceLookupAt,
   ceMethodTyAt,
   ceRequiredAt,
@@ -887,6 +890,7 @@ import types.tc_env.{
   ifaceTabKey,
   importedBindings,
   importerReachIndex,
+  importLocFor,
   importTableMid,
   instRefMid,
   instRefSeq,
@@ -1163,6 +1167,7 @@ import types.tc_decls_types.{
   checkDeclaredKinds,
   checkDeclAuthorityUses,
   checkEffectParams,
+  expandAliasHeadTy,
   fromAstType,
   fromAstTypeE,
   kindsEq,
@@ -1180,9 +1185,6 @@ import types.tc_decls.{
   buildDeclEnvs,
   builtinClassesGo,
   builtinClassesOf,
-  builtinClassName,
-  builtinClassOrigin,
-  builtinIfaceRef,
   constraintIface,
   constraintIsMethodLevel,
   constraintNameMonos,
@@ -1192,16 +1194,13 @@ import types.tc_decls.{
   declEnvModulesFrom,
   declEnvSeedDataUniverse,
   dedupBinders,
-  expandAliasHeadTy,
   graphAliasRow,
   ifaceMethodSchemeRows,
   implHeadNormalDecl,
-  importLocFor,
   instantiateSigTracked,
   isAliasDecl,
   krowArgVarAtoms,
   loadDataUniverse,
-  lookupMethodPredicateSlots,
   methodDictArityOf,
   methodRowNumObservation,
   methodSchemesPure,
@@ -5727,13 +5726,17 @@ recordMethodDicts mctx name methodRef innerRef subst =
   match methodIfaceHere mctx name
     None => ()
     Some iface =>
-      match (lookupMethodPredicateSlots
+      match (lookupAssoc
         (methodSlotKey iface (originMethodName mctx name))
         mctx.mcCells.methodPredicateSlotsRef.value)
         None => ()
         Some slots =>
           recordMethodDictsFromSlots mctx slots methodRef innerRef subst
 
+-- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
+-- stable positions index the occurrence's ordered substitution, avoiding any reliance
+-- on allocation-local ids from an earlier discovery sweep.  A re-exported method keeps
+-- its original scheme order, so the same positional projection is diamond-safe.
 recordMethodDictsFromSlots : ModuleCtx ->
   List MethodPredicateSlot ->
   Ref (List Route) ->
@@ -9803,9 +9806,7 @@ admittedSelection sx env name mono =
 routableSelection : ModuleCtx -> String -> AdmittedAnswer -> AdmittedAnswer
 routableSelection mctx name (answer@(Selects iface _ _)) =
   let key = methodSlotKey iface (originMethodName mctx name)
-  match (lookupMethodPredicateSlots
-    key
-    mctx.mcCells.methodPredicateSlotsRef.value)
+  match lookupAssoc key mctx.mcCells.methodPredicateSlotsRef.value
     Some (_ :: _) => Unroutable iface
     _ => answer
 routableSelection mctx _ answer = answer
@@ -29932,9 +29933,7 @@ methodSlotArgumentIdsOne slot = match slot.mpsPredicate.psArgs
 
 methodRowRegistrySlotIds : ModuleCtx -> String -> List (List Int)
 methodRowRegistrySlotIds mctx key =
-  match (lookupMethodPredicateSlots
-    key
-    mctx.mcCells.methodPredicateSlotsRef.value)
+  match lookupAssoc key mctx.mcCells.methodPredicateSlotsRef.value
     None => []
     Some slots => methodSlotBoundIds slots
 

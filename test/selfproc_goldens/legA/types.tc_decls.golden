@@ -25,12 +25,9 @@ binderIsPattern : GraphCtx -> List (String, Option EffAtomTy) -> List String -> 
 buildAliasGraphEntry : Map String Unit -> (TabKey, (List String, Ty)) -> (String, List String)
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : GraphCtx -> DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
-builtinClassName : BuiltinClass -> String
-builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
 builtinClassSet : String -> TyConOrigin -> Bool -> BuiltinClasses -> BuiltinClasses
 builtinClassesGo : List Decl -> BuiltinClasses -> BuiltinClasses
 builtinClassesOf : List Decl -> BuiltinClasses
-builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
 constraintArgVarNames : Constraint -> List String
 constraintIface : Constraint -> String
 constraintIsMethodLevel : List String -> Constraint -> Bool
@@ -107,20 +104,12 @@ directInterfaceDecls : List Decl -> List Decl
 distinctIdentsIn2 : List (Ident, String) -> Bool
 emitCyclicAliasErrors : ModuleCtx -> List Decl -> List (TabKey, (List String, Ty)) -> List String -> Unit
 existentialCells : ModuleCtx -> List (String, KindAnn) -> List (String, Ref Authvar)
-expandAliasHeadTy : ModuleCtx -> Ty -> Ty
-expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 fieldNameOf : Field -> String
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
-headAtomsOr : List (List Atom) -> List Atom
 ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
-importLocFor : Map String (Map String Unit) -> List Decl -> String -> Option Loc
-importLocOf : String -> Decl -> Option Loc
-importLocReaching : Map String (Map String Unit) -> String -> Decl -> Option Loc
-indexOfInt : Int -> List Int -> Int
-indexOfIntGo : Int -> List Int -> Int -> Int
 inferParamRowAtoms : GraphCtx -> List String -> List Variant -> List (List Atom)
 installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
 instantiateSigTracked : ModuleCtx -> Ty -> (Mono, List (String, Mono), Option EffRow)
@@ -134,7 +123,6 @@ krowRows : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 loadDataUniverse : ModuleCtx -> Int -> Unit
 locateTyAt : Option Loc -> Ty -> Ty
-lookupMethodPredicateSlots : String -> List (String, List MethodPredicateSlot) -> Option (List MethodPredicateSlot)
 methodDictArityOf : ModuleCtx -> String -> Int
 methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
 methodPredicateSlotsOfType : ModuleCtx -> List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
@@ -185,10 +173,6 @@ sigToSchemeTvsIn : ModuleCtx -> List (String, List Kind) -> Ty -> (Scheme, List 
 sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
 sigVarsForWith : ModuleCtx -> Ty -> List String -> List (String, Param) -> SigVars
-spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
-substAliasArgs : List (String, Ty) -> Ty -> Ty
-substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
-substTyVars : List (String, Ty) -> Ty -> Ty
 tabKeyModule : TabKey -> Option String
 takeUntilInclusiveS : String -> List String -> List String
 tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
