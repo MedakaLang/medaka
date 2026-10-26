@@ -958,7 +958,7 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-cat "$predicate_slot_src" "$ROOT/compiler/types/tc_decls.mdk" "$ROOT/compiler/types/tc_solve_givens.mdk" > "$predicate_slot_rows_src"
+cat "$predicate_slot_src" "$ROOT/compiler/types/tc_decls.mdk" "$ROOT/compiler/types/tc_solve_givens.mdk" "$ROOT/compiler/types/tc_solve_entail.mdk" > "$predicate_slot_rows_src"
 predicate_slot_required='registerReqSlots : ModuleCtx ->
   List (String, Mono) ->
   Int ->
