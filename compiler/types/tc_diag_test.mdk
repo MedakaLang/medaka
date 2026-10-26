@@ -1,0 +1,248 @@
+-- Tests of `types.tc_diag`'s own API: the one funnel every pushed diagnostic goes through,
+-- its dedup families, the detection counter `erredDuring` reads, the sticky flag that
+-- aborts `build`/`run`, and the context-free renderers.  Each test mints its own module
+-- record in a fresh graph record, so none depends on another's pushes; none is a doctest
+-- because each needs a minted `ModuleCtx`.
+
+import test.{
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectTrue,
+}
+import frontend.ast.{Loc(..)}
+import list.{replicate, reverse}
+import types.publish.{TcDiag(..), tcCode, tcLoc, tcMsg}
+import types.repr.{Mono(..)}
+import types.tc_diag.{
+  backticked,
+  derivableIface,
+  erredDuring,
+  locGoalKey,
+  locKey,
+  ordinalWord,
+  prependDiagOpt,
+  pushAmbiguityAt,
+  pushNoImplError,
+  pushTypeError,
+  pushTypeErrorAt,
+  pushTypeErrorHelpFixAt,
+  pushTypeErrorOnce,
+  pushTypeErrorOnceAt,
+  pushTypeErrorOncePerSite,
+  quotedNames,
+  recordTypeError,
+  typeErrorsArmed,
+  writtenDiag,
+}
+import types.tc_mono.{tconBuiltin}
+import types.tc_state.{blankModuleCtx, mctxAt, probeGraphCtx, wAll}
+import types.tc_types.{ModuleCtx(..)}
+
+freshCtx : Unit -> ModuleCtx
+freshCtx _ = blankModuleCtx (probeGraphCtx ()) "probe"
+
+siteA : Option Loc
+siteA = Some (Loc "probe.mdk" 3 1 3 9)
+
+siteB : Option Loc
+siteB = Some (Loc "probe.mdk" 5 1 5 9)
+
+-- The stored diagnostics, oldest first, as (code, message).
+stored : ModuleCtx -> List (String, String)
+stored m = reverse (map (d => (tcCode d, tcMsg d)) (wAll m.mcCells.typeErrors))
+
+storedCount : ModuleCtx -> Int
+storedCount m = length (wAll m.mcCells.typeErrors)
+
+-- Law: a located `pushTypeErrorAt` repeated at one site with one code and text is stored
+-- once, however often it is pushed.  Precondition: the site is `Some`; an unlocated push
+-- is never folded.
+prop "a located push repeated at one site is stored once" (n : Int) =
+  let m = freshCtx ()
+  let times = 1 + abs n % 5
+  let _ =
+    map
+      (_ => pushTypeErrorAt m "T-PROBE" siteA "same text")
+      (replicate times ())
+  storedCount m == 1
+
+-- Law: a message pushed through the Once family is stored at most once whatever its code,
+-- and the second push still counts as a detection.  No precondition.
+prop "pushTypeErrorOnce stores a message once under any code" (a : String) (b : String) =
+  let m = freshCtx ()
+  let (erred, _) = erredDuring m (_ =>
+    pushTypeErrorOnce m "T-ONE" a
+    pushTypeErrorOnce m "T-TWO" a)
+  pushTypeErrorOnce m "T-ONE" b
+  erred && storedCount m == (if a == b then 1 else 2)
+
+test "pushTypeErrorOnceAt twice at one site records once and still counts both" =
+  let m = freshCtx ()
+  let (erred, _) = erredDuring m (_ =>
+    pushTypeErrorOnceAt m "T-PROBE" siteA "duplicate"
+    pushTypeErrorOnceAt m "T-PROBE" siteA "duplicate")
+  expectAll [
+    expectEqual [("T-PROBE", "duplicate")] (stored m),
+    expectTrue erred,
+    expectEqual 2 m.mcCells.errorsDetected.value,
+  ]
+
+test "pushTypeErrorAt keeps two codes at one site and one text apart" =
+  let m = freshCtx ()
+  pushTypeErrorAt m "T-FIRST" siteA "text"
+  pushTypeErrorAt m "T-SECOND" siteA "text"
+  pushTypeErrorAt m "T-FIRST" siteA "text"
+  expectEqual [("T-FIRST", "text"), ("T-SECOND", "text")] (stored m)
+
+test "pushTypeErrorAt keeps one text at two sites apart and never folds an unlocated one" =
+  let m = freshCtx ()
+  pushTypeErrorAt m "T-PROBE" siteA "text"
+  pushTypeErrorAt m "T-PROBE" siteB "text"
+  let n = freshCtx ()
+  pushTypeErrorAt n "T-PROBE" None "bare"
+  pushTypeErrorAt n "T-PROBE" None "bare"
+  expectAll [
+    expectEqual [("T-PROBE", "text"), ("T-PROBE", "text")] (stored m),
+    expectEqual [("T-PROBE", "bare"), ("T-PROBE", "bare")] (stored n),
+  ]
+
+test "pushTypeErrorOncePerSite folds the same text at one site and not across sites" =
+  let m = freshCtx ()
+  pushTypeErrorOncePerSite m "T-PROBE" siteA "text"
+  pushTypeErrorOncePerSite m "T-PROBE" siteA "text"
+  pushTypeErrorOncePerSite m "T-PROBE" siteB "text"
+  expectEqual 2 (storedCount m)
+
+test "erredDuring is False over a region that pushes nothing and True over one that does" =
+  let m = freshCtx ()
+  let (quiet, _) = erredDuring m (_ => 1)
+  let (loud, value) = erredDuring m (_ =>
+    pushTypeError m "T-PROBE" "boom"
+    7)
+  expectAll [expectFalse quiet, expectTrue loud, expectEqual 7 value]
+
+-- Precondition: the warning goes in the match-warning channel, which is the only channel a
+-- typecheck-stage warning may use; pushed through `recordTypeError` instead, a
+-- severity-2 diagnostic would arm the flag, which the last two rows pin.
+test "a warning in the warning channel never arms the sticky flag or counts as an error" =
+  let g = probeGraphCtx ()
+  let m = blankModuleCtx g "probe"
+  let _ =
+    m.mcCells.matchWarnings := [TcDiag "W-PROBE" 2 None "warned" None None]
+  let (erred, _) = erredDuring m (_ => 0)
+  let armedByWarning = typeErrorsArmed g ()
+  recordTypeError m (TcDiag "W-PROBE" 2 None "demoted" None None)
+  expectAll [
+    expectFalse erred,
+    expectFalse armedByWarning,
+    expectTrue (typeErrorsArmed g ()),
+    expectEqual [("W-PROBE", "demoted")] (stored m),
+  ]
+
+test "an error arms the sticky flag of its graph record, and a fresh record is unarmed" =
+  let g = probeGraphCtx ()
+  let m = blankModuleCtx g "probe"
+  let before = typeErrorsArmed g ()
+  pushTypeError m "T-PROBE" "boom"
+  expectAll [
+    expectFalse before,
+    expectTrue (typeErrorsArmed g ()),
+    expectEqual ["probe"] (map fst g.typeErrorsStickyDiags.value),
+  ]
+
+test "writtenDiag strips a renamed binder's suffix from message and help, and keeps the rest" =
+  let loc = siteA
+  let raw =
+    TcDiag
+      "T-PROBE"
+      1
+      loc
+      "x$m$3$lb has type Int"
+      (Some "rename y$m$12$lb")
+      None
+  let written = writtenDiag raw
+  expectAll [
+    expectEqual "x has type Int" (tcMsg written),
+    expectEqual "T-PROBE" (tcCode written),
+    expectEqual (Some "rename y") (match written
+      TcDiag _ _ _ _ help _ => help),
+    expectEqual
+      "cost$5 and $x"
+      (tcMsg (writtenDiag (TcDiag "T-PROBE" 1 None "cost$5 and $x" None None))),
+  ]
+
+test "recordTypeError stores the written form" =
+  let m = freshCtx ()
+  let _ =
+    recordTypeError m (TcDiag "T-PROBE" 1 None "z$m$1$lb unbound" None None)
+  expectEqual [("T-PROBE", "z unbound")] (stored m)
+
+test "an ambiguity is one diagnostic per span, and the goal-naming message wins" =
+  let m = freshCtx ()
+  pushAmbiguityAt m False siteA "ambiguous Tag"
+  pushAmbiguityAt m False siteA "ambiguous Tag, again"
+  pushAmbiguityAt m True siteA "ambiguous Tag for Int among a, b"
+  pushAmbiguityAt m False siteB "ambiguous Tag"
+  expectEqual
+    [
+      ("T-AMBIGUOUS-INSTANCE", "ambiguous Tag for Int among a, b"),
+      ("T-AMBIGUOUS-INSTANCE", "ambiguous Tag"),
+    ]
+    (stored m)
+
+test "a help-bearing push folds on its text and carries its help" =
+  let m = freshCtx ()
+  pushTypeErrorHelpFixAt m "T-PROBE" siteA "text" "try this" None
+  pushTypeErrorHelpFixAt m "T-PROBE" siteB "text" "or this" None
+  expectAll [
+    expectEqual 1 (storedCount m),
+    expectEqual
+      [Some "try this"]
+      (map
+        (d => match d
+          TcDiag _ _ _ _ help _ => help)
+        (wAll m.mcCells.typeErrors)),
+  ]
+
+test "a missing impl for a builtin type is a T-NO-IMPL naming the interface and type" =
+  let m = freshCtx ()
+  pushNoImplError m "Display" siteA [tconBuiltin "Int"]
+  pushNoImplError m "Display" siteA [tconBuiltin "Int"]
+  expectEqual [("T-NO-IMPL", "no impl of Display for Int")] (stored m)
+
+test "an unlocated push takes the span of the construct around it" =
+  let m = freshCtx ()
+  let inner = mctxAt siteB m
+  pushTypeError inner "T-PROBE" "inside"
+  pushTypeError m "T-PROBE" "outside"
+  expectEqual
+    [Some 5, None]
+    (map
+      (d => match tcLoc d
+        Some (Loc _ line _ _ _) => Some line
+        None => None)
+      (reverse (wAll m.mcCells.typeErrors)))
+
+test "keys and renderers have their documented shapes" = expectAll [
+  expectEqual "" (locKey None),
+  expectEqual "probe.mdk:3:1" (locKey siteA),
+  expectEqual "probe.mdk:3:1:3:9" (locGoalKey siteA),
+  expectEqual "" (locGoalKey None),
+  expectEqual "`a`" (backticked "a"),
+  expectEqual "`a`, `b`" (quotedNames ["a", "b"]),
+  expectEqual "" (quotedNames []),
+  expectEqual ["first", "fifth", "7th"] (map ordinalWord [0, 4, 6]),
+  expectTrue (derivableIface "Eq"),
+  expectFalse (derivableIface "Semigroup"),
+  expectNotEqual (locKey siteA) (locKey siteB),
+]
+
+test "prependDiagOpt adds a written diagnostic only when there is a message" =
+  let none = prependDiagOpt "T-PROBE" 1 None None []
+  let some = prependDiagOpt "T-PROBE" 1 (Some "h") (Some "q$m$1$lb is bad") []
+  expectAll [
+    expectEqual [] (map tcMsg none),
+    expectEqual ["q is bad"] (map tcMsg some),
+  ]

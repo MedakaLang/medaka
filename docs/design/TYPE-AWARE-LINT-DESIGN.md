@@ -273,7 +273,7 @@ LSP does.
 single-file checking path, which would have reintroduced a second driver after
 E-1 finished migrating consumers (§10.1).** Call the one-module graph
 wrappers instead. `docSchemes` itself has already been migrated onto them
-(`lsp.mdk:710-719` now calls `checkOneSchemeFull`), so "mirror `docSchemes`" and the
+(`lsp.mdk:710-719` now calls `checkOneSchemeFullK`), so "mirror `docSchemes`" and the
 recipe below no longer differ — but the old wording named the Flat function
 explicitly and would have been copied.
 
@@ -289,7 +289,7 @@ explicitly and would have been copied.
   `stdlib/runtime.mdk`/`core.mdk`).
 
   Use `checkOneScheme` (`:36766`) instead if the terminal module's OWN schemes
-  suffice; `checkOneSchemeFull` exists precisely for consumers that look names up
+  suffice; `checkOneSchemeFullK` exists precisely for consumers that look names up
   by bare name with no idea whether the name is the user's or the prelude's,
   which is a lint rule's situation.
 - **Project:** use the loader + diagnostics path —
@@ -610,7 +610,7 @@ migration set, so the recommendation was to wait until #1115 drained.
 The historical census included the repl, LSP, check policy, docs, playground, and
 the now-retired origin-agreement control. All surviving consumers migrated onto
 E-1's one-module Module-arm wrappers:
-`lsp.mdk`'s `docSchemes` (`:710-719`) now calls `checkOneSchemeFull`; `repl.mdk`
+`lsp.mdk`'s `docSchemes` (`:710-719`) now calls `checkOneSchemeFullK`; `repl.mdk`
 imports `checkOneDiags`/`checkOneScheme` (`:33-39`); `doc.mdk` imports
 `checkOneScheme` (`:39`); `check_policy.mdk` and `playground_main.mdk` likewise.
 

@@ -1,0 +1,334 @@
+-- Tests of `types.tc_env`'s own API: insertion into and lookup in `ImplEnv` and `ClassEnv`,
+-- the ordinal visibility predicates, and the term environment (`extendVar`, standalone
+-- lookup, shadowing).  The envelope fixtures (`ieProbeEnv`, `ceProbeEnv` and the rest) stay
+-- beside the module because its doctests call them; these tests build their own small
+-- corpora so each states what it relies on.
+
+import list.{sort}
+import test.{
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectTrue,
+}
+import frontend.ast.{
+  Decl(..),
+  IfaceMethod(..),
+  Ty(..),
+  TyConOrigin(..),
+  tyConBuiltin,
+}
+import types.registry.{RegKey, headKeyOfCon, regKeyOfTab}
+import types.repr.{IfaceRef(..), Mono(..), Scheme, ppScheme}
+import types.tc_env.{
+  addCtor,
+  buildClassEnvGo,
+  buildImplEnvGo,
+  classEnvFinish,
+  emptyDeclEnvAcc,
+  implAccFinish,
+  ceLookupAt,
+  ceLookupGraph,
+  ceRowIfaceName,
+  ceRowOrd,
+  ceRowsOwnedBy,
+  ceRowsVisibleAt,
+  declEnvModule,
+  declEnvVisibleAt,
+  declEnvVisibleTo,
+  envFor,
+  extendLocalVar,
+  extendTermBindings,
+  extendVar,
+  extendVars,
+  ieHeadRows,
+  ieRowInst,
+  ieRowsAll,
+  ieRowsOwnedBy,
+  ieRowsVisibleAt,
+  ifaceSortKey,
+  ifaceTabKey,
+  instRefMid,
+  lastComponent,
+  lookupCtor,
+  lookupLocalFlag,
+  lookupStandaloneVar,
+  lookupVar,
+  ordOfIndex,
+  removeAllS,
+  sortIfaceRefs,
+  tyTabKey,
+}
+import types.tc_mono.{monoScheme, tconBuiltin}
+import types.tc_state.{blankModuleCtx, emptyClassEnv, probeGraphCtx}
+import types.tc_types.{
+  ClassEnv, DeclEnvAcc(..), DeclEnvModule, GraphCtx, ImplEnv, TcEnv
+}
+import support.ordmap.{omEmpty, omInsert}
+
+blobTy : Ty
+blobTy = TyCon {
+  tyConName = "Blob",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "amod",
+}
+
+-- `impl Same Blob`, declared in module [m].
+sameImplIn : String -> Decl
+sameImplIn m = DImpl {
+  pub = True,
+  iface = "Same",
+  tys = [blobTy],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+  implIfaceLoc = None,
+}
+
+-- `interface Same a` with the given method names, declared in module [m].
+sameIfaceIn : String -> List String -> Decl
+sameIfaceIn m names = DInterface {
+  pub = True,
+  def = False,
+  name = "Same",
+  typarams = ["a"],
+  typaramKinds = [None],
+  supers = [],
+  methods =
+    map
+      (n =>
+        IfaceMethod n (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None None)
+      names,
+  ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
+}
+
+-- Ordinal 0 is `amod`, ordinal 1 is `zmod`; no import edge exists between them.
+-- The envelope's own builders, composed from their exported halves.
+buildImplEnv : List DeclEnvModule -> ImplEnv
+buildImplEnv mods = implAccFinish (buildImplEnvGo mods emptyDeclEnvAcc.daImpls)
+
+buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
+buildClassEnv g mods = classEnvFinish (buildClassEnvGo g mods emptyClassEnv)
+
+implEnv : Unit -> ImplEnv
+implEnv _ =
+  let g = probeGraphCtx ()
+  buildImplEnv [
+    declEnvModule g 0 "amod" [sameImplIn "amod"],
+    declEnvModule g 1 "zmod" [sameImplIn "zmod"],
+  ]
+
+classEnv : Unit -> ClassEnv
+classEnv _ =
+  let g = probeGraphCtx ()
+  buildClassEnv g [
+    declEnvModule g 0 "amod" [sameIfaceIn "amod" ["foo"]],
+    declEnvModule g 1 "zmod" [sameIfaceIn "zmod" ["bar", "baz"]],
+  ]
+
+-- The class-table key of interface [name] declared in module [m].
+ifaceKeyIn : String -> String -> RegKey
+ifaceKeyIn m name = regKeyOfTab (ifaceTabKey (OriginModule m) name)
+
+sameKey : String -> RegKey
+sameKey m = ifaceKeyIn m "Same"
+
+intScheme : Scheme
+intScheme = monoScheme (tconBuiltin "Int")
+
+boolScheme : Scheme
+boolScheme = monoScheme (tconBuiltin "Bool")
+
+freshEnv : Unit -> TcEnv
+freshEnv _ = envFor (blankModuleCtx (probeGraphCtx ()) "probe")
+
+schemeText : Option Scheme -> String
+schemeText None = "<none>"
+schemeText (Some s) = ppScheme s
+
+-- Read at ordinal 1: rows at 0 and 1 are visible, a row at 2 is not; a row other than
+-- the reader's own (ordinal 0) is seen only through its public part.
+test "declEnvVisibleAt reads the ordinal prefix and declEnvVisibleTo adds publicity" = expectAll
+  [
+    expectTrue (declEnvVisibleAt 1 0),
+    expectTrue (declEnvVisibleAt 1 1),
+    expectFalse (declEnvVisibleAt 1 2),
+    expectTrue (declEnvVisibleTo 1 0 True),
+    expectFalse (declEnvVisibleTo 1 0 False),
+    expectTrue (declEnvVisibleTo 1 1 False),
+    expectFalse (declEnvVisibleTo 1 2 True),
+  ]
+
+fourNames : List Int -> List String
+fourNames ks = map (k => "n\{intToString (abs k % 4)}") ks
+
+-- Law: removing names keeps the order of the rest, and distributes over concatenation.
+-- No precondition; the names come from a four-name alphabet so removals happen.
+prop "removeAllS keeps what is not dropped, in order, and distributes over append" (ds : List Int) (xs : List Int) (ys : List Int) =
+  let d = fourNames ds
+  let a = fourNames xs
+  let b = fourNames ys
+  removeAllS d (a ++ b) == removeAllS d a ++ removeAllS d b
+    && all (x => not (elem x d)) (removeAllS d a)
+    && removeAllS [] a == a
+
+-- Law: an absent module id reads as the `-1` miss ordinal, and a present one as the
+-- ordinal it was indexed under.  Precondition: the index maps `known` once.
+prop "ordOfIndex returns the indexed ordinal and -1 for a miss" (known : String) (other : String) (ord : Int) =
+  let index = omInsert known ord omEmpty
+  ordOfIndex known index == ord
+    && ordOfIndex other index == (if other == known then ord else 0 - 1)
+
+test "an inserted impl row is found by its head, with the identity of its module" =
+  let env = implEnv ()
+  let blob = Some (headKeyOfCon (OriginModule "amod") "Blob")
+  let other = Some (headKeyOfCon (OriginModule "amod") "Other")
+  expectAll [
+    expectEqual
+      ["amod", "zmod"]
+      (map (r => instRefMid (ieRowInst r)) (ieHeadRows blob env)),
+    expectEqual 0 (length (ieHeadRows other env)),
+    expectEqual 0 (length (ieHeadRows None env)),
+  ]
+
+test "impl rows are owned by exactly one module and the owned sets cover the graph" =
+  let env = implEnv ()
+  expectAll [
+    expectEqual
+      ["amod"]
+      (map (r => instRefMid (ieRowInst r)) (ieRowsOwnedBy 0 env)),
+    expectEqual
+      ["zmod"]
+      (map (r => instRefMid (ieRowInst r)) (ieRowsOwnedBy 1 env)),
+    expectEqual 0 (length (ieRowsOwnedBy 2 env)),
+    expectEqual
+      (length (ieRowsAll env))
+      (length (ieRowsOwnedBy 0 env) + length (ieRowsOwnedBy 1 env)),
+  ]
+
+-- Candidacy is graph-global: an instance declared anywhere is a candidate everywhere, so
+-- the reading ordinal changes nothing, the `-1` miss included.
+test "every impl row is a candidate at every reading ordinal" =
+  let env = implEnv ()
+  expectEqual
+    [2, 2, 2, 2]
+    (map (cur => length (ieRowsVisibleAt cur env)) [0 - 1, 0, 1, 9])
+
+test "two same-spelled interfaces in two modules are two class rows, found by identity" =
+  let env = classEnv ()
+  let amod = ceLookupGraph (sameKey "amod") env
+  let zmod = ceLookupGraph (sameKey "zmod") env
+  expectAll [
+    expectEqual (Some 0) (map ceRowOrd amod),
+    expectEqual (Some 1) (map ceRowOrd zmod),
+    expectEqual (Some "Same") (map ceRowIfaceName amod),
+    expectTrue (isNone (ceLookupGraph (sameKey "nomod") env)),
+  ]
+
+-- Class lookup, unlike candidacy, is scoped by the ordinal prefix: a row is seen at its
+-- own ordinal and every later one, never earlier.
+test "a class row is visible from its ordinal onward and not before" =
+  let env = classEnv ()
+  expectAll [
+    expectEqual (Some 0) (map ceRowOrd (ceLookupAt (sameKey "amod") 0 env)),
+    expectEqual (Some 0) (map ceRowOrd (ceLookupAt (sameKey "amod") 1 env)),
+    expectTrue (isNone (ceLookupAt (sameKey "zmod") 0 env)),
+    expectEqual (Some 1) (map ceRowOrd (ceLookupAt (sameKey "zmod") 1 env)),
+  ]
+
+test "the visible class rows are the ordinal prefix and the owned rows are one module's" =
+  let env = classEnv ()
+  expectAll [
+    expectEqual [0] (map ceRowOrd (ceRowsVisibleAt 0 env)),
+    expectEqual [0, 1] (sort (map ceRowOrd (ceRowsVisibleAt 1 env))),
+    expectEqual 0 (length (ceRowsVisibleAt (0 - 1) env)),
+    expectEqual [1] (map ceRowOrd (ceRowsOwnedBy 1 env)),
+  ]
+
+test "a type name and an interface name of one spelling are different table keys" =
+  let origin = OriginModule "amod"
+  expectAll [
+    expectNotEqual (tyTabKey origin "Same") (ifaceTabKey origin "Same"),
+    expectEqual (tyTabKey origin "Same") (tyTabKey origin "Same"),
+    expectNotEqual
+      (ifaceTabKey (OriginModule "amod") "Same")
+      (ifaceTabKey (OriginModule "zmod") "Same"),
+  ]
+
+test "extendVar then lookupVar finds the scheme, and a second extension shadows it" =
+  let once = extendVar (freshEnv ()) "x" intScheme
+  let twice = extendVar once "x" boolScheme
+  expectAll [
+    expectEqual "Int" (schemeText (lookupVar once "x")),
+    expectEqual "Bool" (schemeText (lookupVar twice "x")),
+    expectEqual "<none>" (schemeText (lookupVar once "y")),
+  ]
+
+test "extendVars binds each name and the later pair of a repeated name wins" =
+  let env = extendVars (freshEnv ()) [
+    ("a", intScheme),
+    ("b", boolScheme),
+    ("a", boolScheme),
+  ]
+  expectAll [
+    expectEqual "Bool" (schemeText (lookupVar env "a")),
+    expectEqual "Bool" (schemeText (lookupVar env "b")),
+  ]
+
+test "a plain extension is not a standalone binding, and a term binding is" =
+  let plain = extendVar (freshEnv ()) "f" intScheme
+  let term = extendTermBindings (freshEnv ()) [("f", intScheme)]
+  expectAll [
+    expectEqual "<none>" (schemeText (lookupStandaloneVar plain "f")),
+    expectEqual "Int" (schemeText (lookupStandaloneVar term "f")),
+    expectEqual "Int" (schemeText (lookupVar term "f")),
+  ]
+
+test "a later plain binder replaces a standalone entry whole" =
+  let term = extendTermBindings (freshEnv ()) [("f", intScheme)]
+  let shadowed = extendVar term "f" boolScheme
+  expectAll [
+    expectEqual "<none>" (schemeText (lookupStandaloneVar shadowed "f")),
+    expectEqual "Bool" (schemeText (lookupVar shadowed "f")),
+    expectEqual "Int" (schemeText (lookupStandaloneVar term "f")),
+  ]
+
+test "a local binder is flagged local, replaces the outer scheme, and leaves the outer env alone" =
+  let outer = extendVar (freshEnv ()) "n" intScheme
+  let inner = extendLocalVar outer "n" boolScheme
+  expectAll [
+    expectFalse (lookupLocalFlag outer "n"),
+    expectTrue (lookupLocalFlag inner "n"),
+    expectEqual "Bool" (schemeText (lookupVar inner "n")),
+    expectEqual "Int" (schemeText (lookupVar outer "n")),
+  ]
+
+test "a constructor is found by lookupVar and lookupCtor, and a variable of its name hides it from lookupVar only" =
+  let withCtor = addCtor (freshEnv ()) "Mk" intScheme
+  let hidden = extendVar withCtor "Mk" boolScheme
+  expectAll [
+    expectEqual "Int" (schemeText (lookupVar withCtor "Mk")),
+    expectEqual "Int" (schemeText (lookupCtor withCtor "Mk")),
+    expectEqual "Bool" (schemeText (lookupVar hidden "Mk")),
+    expectEqual "Int" (schemeText (lookupCtor hidden "Mk")),
+    expectEqual "<none>" (schemeText (lookupCtor withCtor "Nope")),
+  ]
+
+test "sortIfaceRefs orders by identity then name whatever the input order" =
+  let a = IfaceRef { irName = "Alpha", irOrigin = OriginModule "amod" }
+  let b = IfaceRef { irName = "Alpha", irOrigin = OriginModule "zmod" }
+  let c = IfaceRef { irName = "Beta", irOrigin = OriginModule "amod" }
+  let keys = refs => map ifaceSortKey (sortIfaceRefs refs)
+  expectAll [
+    expectEqual (keys [a, b, c]) (keys [c, b, a]),
+    expectEqual (keys [a, b, c]) (keys [b, a, c]),
+    expectEqual 3 (length (keys [a, b, c])),
+  ]
+
+test "lastComponent is the final element of a module path" = expectAll [
+  expectEqual "c" (lastComponent ["a", "b", "c"]),
+  expectEqual "a" (lastComponent ["a"]),
+  expectEqual "" (lastComponent []),
+]

@@ -323,6 +323,9 @@ compiler/types/interface_sexp.mdk
 compiler/types/prelude_elab_test.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
+compiler/types/tc_env.mdk
+compiler/types/tc_mono.mdk
+compiler/types/tc_state.mdk
 compiler/types/typecheck.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
@@ -618,7 +621,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 implOrigin = OriginUnresolved,
 originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"
-tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \
+tc_originun_actual=$(grep -hw 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" "$ROOT"/compiler/types/tc_*.mdk \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
   | LC_ALL=C sort)
@@ -831,7 +834,7 @@ tconUnresolved n = TCon n OriginUnresolved"
 # extraction; the declaration line is there, the mints stay in typecheck, and
 # `mainIsAsyncNow` reads its origin in entry_outcome.mdk. One set over all three
 # files, so every `TCon` mint or origin-binding pattern is graded.
-mono_tcon_actual=$(cat "$ROOT/compiler/types/typecheck.mdk" "$ROOT/compiler/types/repr.mdk" "$ROOT/compiler/types/entry_outcome.mdk" \
+mono_tcon_actual=$(cat "$ROOT/compiler/types/typecheck.mdk" "$ROOT"/compiler/types/tc_*.mdk "$ROOT/compiler/types/repr.mdk" "$ROOT/compiler/types/entry_outcome.mdk" \
   | grep -wE 'TCon' \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
@@ -891,7 +894,7 @@ echo "  ok: $mono_tcon_mints Mono.TCon mint(s) + $mono_tcon_pats origin-binding 
 # `OriginModule "core"` while `tconBuiltin "List"` still hands out `OriginBuiltin`,
 # and this gate would stay GREEN. Whoever relaxes it owes both sites.
 prim_block=$(sed -n '/^primitiveTypes : List String$/,/^$/p' "$ROOT/compiler/frontend/resolve.mdk")
-prim_names=$(grep -oE 'tconBuiltin "[A-Za-z0-9_]+"' "$ROOT/compiler/types/typecheck.mdk" \
+prim_names=$(grep -ohE 'tconBuiltin "[A-Za-z0-9_]+"' "$ROOT/compiler/types/typecheck.mdk" "$ROOT"/compiler/types/tc_*.mdk \
              | sed 's/.*"\(.*\)"/\1/' | LC_ALL=C sort -u)
 # ⚠️ COUNTED, not just checked: an empty `prim_names` would walk zero iterations and
 # print the same `ok` line as a full pass -- the "a validator that checked nothing
@@ -945,6 +948,11 @@ echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveType
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 tc_types_src="$ROOT/compiler/types/tc_types.mdk"
 eval_src="$ROOT/compiler/eval/eval.mdk"
+tc_env_src="$ROOT/compiler/types/tc_env.mdk"
+tc_state_src="$ROOT/compiler/types/tc_state.mdk"
+# Absence anchors read every declaration of the former single file: typecheck.mdk plus the tc_*.mdk layer modules.
+tc_union_src="$RESULTS/tc_union.mdk"
+cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 predicate_slot_required='registerReqSlots : ModuleCtx ->
   List (String, Mono) ->
   Int ->
@@ -1074,7 +1082,6 @@ done
 # are built in one row walk.  The Module-only driver reads its visible rows from
 # `implDecls`; positional key/scheme zips and graph-lived row state are retired.
 method_row_required='ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
-legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
   List MethodSchemeRow ->
   let currentMethodRows = ifaceMethodSchemeRows mctx prog
@@ -1086,6 +1093,11 @@ printf '%s\n' "$method_row_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+if ! grep -Fq 'legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)' "$tc_env_src"; then
+  echo "FAIL: #2549 method-row preparation is missing required source: legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)"
+  exit 1
+fi
 
 method_row_types_required='data MethodSchemeRow = MethodSchemeRow {
   msrIface : IfaceRef,
@@ -1133,7 +1145,7 @@ pickNumLitScheme
 registerMethodConstraints :'
 
 printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
-  if grep -Fq "$retired" "$predicate_slot_src"; then
+  if grep -Fq "$retired" "$tc_union_src"; then
     echo "FAIL: #2549 retired method-row authority remains: $retired"
     exit 1
   fi
@@ -1142,12 +1154,18 @@ done || exit 1
 # Numeric literals retain their fixed Num predicate from the method-row producer
 # through checking and return stamping.  Each former OblProjection reader states
 # explicitly whether the unary numeric population participates.
-numeric_predicate_required='  ClassPredicate(..),
-beginNumericPredicateTrace : Unit -> TraceSink
-finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry'
+numeric_predicate_required='  ClassPredicate(..),'
 
 printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+printf '%s\n' 'beginNumericPredicateTrace : Unit -> TraceSink
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry' | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_state_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
     exit 1
   fi
@@ -1485,12 +1503,18 @@ require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'regi
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
 require_signature_flat 'inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit'
 ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
-match ceMethodTyAt iface mname cur ce
-ceMethodTyAt : IfaceRef ->
-  match ceLookupAt key cur ce
-    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
+match ceMethodTyAt iface mname cur ce'
 printf '%s\n' "$ce_method_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+ce_method_env_required='ceMethodTyAt : IfaceRef ->
+  match ceLookupAt key cur ce
+    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
+printf '%s\n' "$ce_method_env_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_env_src"; then
     echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
     exit 1
   fi
@@ -1501,7 +1525,7 @@ ifaceMethodTyResolved
 ifaceMethodTy : List Decl ->
 methodTyOf :'
 printf '%s\n' "$ce_method_retired" | while IFS= read -r retired; do
-  if grep -Fq "$retired" "$predicate_slot_src"; then
+  if grep -Fq "$retired" "$tc_union_src"; then
     echo "FAIL: retired impl-body method lookup remains: $retired"
     exit 1
   fi
@@ -1557,7 +1581,7 @@ None => indexOfId target (enclSlotIds encl)
 entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl'
 
 printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
-  if grep -Fq "$retired" "$predicate_slot_src"; then
+  if grep -Fq "$retired" "$tc_union_src"; then
     echo "FAIL: #1318 retired predicate-slot consumer is present: $retired"
     exit 1
   fi
@@ -1666,7 +1690,7 @@ scopeMethodArities
 attributeMethodModuleConstraints'
 
 printf '%s\n' "$predicate_slot_retired" | while IFS= read -r retired; do
-  if grep -w "$retired" "$predicate_slot_src" \
+  if grep -w "$retired" "$tc_union_src" \
     | grep -vE '^[[:space:]]*--' >/dev/null; then
     echo "FAIL: #1318 retired predicate-slot authority is present in live source: $retired"
     exit 1

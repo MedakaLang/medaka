@@ -246,7 +246,7 @@ names, not the numbers."*
 | Cells written from ≥6 functions | **7 of 118** |
 | Inbound imports | 11 modules (§7.7) |
 | Modules importing this one | 31 |
-| Functions with no caller, hence unreachable | 1 (`wReset`) |
+| Functions with no caller, hence unreachable | 0 |
 
 **Growth**, from `git`: 10,483 lines (2026-06-29) → 13,717 (07-14) → 17,008 (07-21) →
 18,668 (07-29). Roughly +8,200 lines in a month, +1,660 in the last week.
@@ -301,7 +301,7 @@ most likely to desynchronize," not as a partition.
 
 Two structures deserve naming because subsystems below are defined in terms of them:
 
-- **`Windowed`** (`wNew`/`wPush`/`wMark`/`wWindow`/`wReset`/`wSnapshot`/`wRestore`) — a push-only channel with
+- **`Windowed`** (`wNew`/`wPush`/`wMark`/`wWindow`/`wSnapshot`/`wRestore`) — a push-only channel with
   mark/window bracketing, replacing the old snapshot-and-subtract idiom. Four channels use
   it: `obls`, `implObls`, `dictApps`, `absorptions`. This is *how obligations are scoped to
   a body at all*.

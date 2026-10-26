@@ -1137,7 +1137,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `stdlib/json.mdk` would not. Owed as a measurement, not taken here.
    **The owed follow-up census — fourteen accommodations that exist only because mangling
    ran first.** Twelve from the design report (`design-2809/DESIGN.md` §2(b)):
-   (1) `resolveMemberRows`' `endsWithStr (memberSuffix origin)` fallback;
+   (1) `resolveMemberRows`' `string.endsWith (memberSuffix origin)` fallback;
    (2) `aliasSchemes`' loaded-module-id mangle test (#1337/#1427/#1472);
    (3) `computeMangledShadowMap` + `mangledShadowMapRef` (P0-18);
    (4) `buildStandaloneShadowsGraph`'s `mangled` arm;

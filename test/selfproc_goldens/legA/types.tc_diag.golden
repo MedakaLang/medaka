@@ -1,0 +1,40 @@
+allDigits : String -> Bool
+allDigitsFrom : String -> Int -> Bool
+alreadyReportedAt : ModuleCtx -> String -> Option Loc -> Bool
+appSpineName : Expr -> Option String
+backticked : String -> String
+boundaryOwnsOpen : ModuleCtx -> Map String Unit -> Int -> Bool
+derivableIface : String -> Bool
+dropRenameSuffixes : List String -> String
+erredDuring : ModuleCtx -> (Unit -> a) -> (Bool, a)
+findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
+firstTupleCallHint : ModuleCtx -> List Mono -> Option (String, Option (Loc, String))
+headIsStdlibOwned : GraphCtx -> Mono -> Bool
+locGoalKey : Option Loc -> String
+locKey : Option Loc -> String
+msgAtKey : String -> Option Loc -> String
+noImplAdvice : String -> String -> String
+noImplFoundMsg : String -> List Mono -> String
+noImplFoundMsgHinted : ModuleCtx -> String -> List Mono -> (String, Option String)
+noImplHint : ModuleCtx -> String -> List Mono -> Option String
+noImplHintFor : ModuleCtx -> String -> String -> Option String
+noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
+ordinalWord : Int -> String
+prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
+pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
+pushBoundaryAmbiguity : ModuleCtx -> Map String Unit -> List Mono -> Option Loc -> String -> Unit
+pushNoImplError : ModuleCtx -> String -> Option Loc -> List Mono -> Unit
+pushTypeError : ModuleCtx -> String -> String -> Unit
+pushTypeErrorAt : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorHelpFixAt : ModuleCtx -> String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
+pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
+pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
+quotedNames : List String -> String
+recordTypeError : ModuleCtx -> TcDiag -> Unit
+recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
+replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
+tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
+typeErrorsArmed : GraphCtx -> Unit -> Bool
+writtenDiag : TcDiag -> TcDiag
+writtenNames : String -> String

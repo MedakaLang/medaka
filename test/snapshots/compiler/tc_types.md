@@ -1,5 +1,5 @@
 # META
-source_lines=3526
+source_lines=3574
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -110,6 +110,7 @@ import frontend.exhaust.{
 import types.capability_manifest.{
   EntryKey(..), ManifestSelector, ManifestRequest, CapabilityManifest
 }
+import types.route_key.{EvIndex}
 
 -- Where an obligation the scoped solver holds was recorded, for its report:
 -- the location, the binding, and whether an authority obligation is an index
@@ -1074,7 +1075,7 @@ manifestDriverFor inputs None = inputs.diExecutedMainDriver
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
 -- convention" across module reset/push/error-rollback, per-channel) as ONE value whose
--- ONLY mutators are its own six ops.  wPush/wReset/wRestore are the sole writers, so
+-- ONLY mutators are its own five ops.  wPush/wRestore are the sole writers, so
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
 -- `takeFirst (…N.value - N0) …value` bracket pattern every channel repeats.  #838 I1
 -- ports `pendingCallObligations`/`pendingCallObligationsN` onto this — see
@@ -3528,6 +3529,53 @@ public export data ModuleMarking = ModuleMarking {
   -- the externs among the names the module declares or imports
   mmExterns : OrdMap Unit,
 }
+
+-- What one `dictPass` call reads a method occurrence's published entry from: the
+-- drive's index, and then, by ordinal, the occurrences the call itself mints
+-- (`mintMethodCellWith`) after the index was taken.
+public export data PassEvidence = PassEvidence EvIndex (Ref (OrdMap EvVal))
+
+-- What a method occurrence's published entry says: its interface word, dispatch
+-- route and dict routes (impl dicts first).
+public export data PassMethod = PassMethod String Route (List Route)
+
+-- ── UNIFIED per-module fold ───────────────────────────────────────────────────
+-- The single home for the identical per-module skeleton the four module drivers
+-- (checkModules / checkModulesDiagsChain / checkModulesEntryFull / elaborateModules)
+-- share, so the next import-scoped-seed-style fix touches ONE place instead of
+-- four (the miss would otherwise be path-specific — LSP-only or emit-only).  It
+-- owns: the IMPORT-SCOPED seed (`baseSeed ++ importSeed prog depEnv` — a flat
+-- union let `string.reverse` shadow the `list.reverse` a module imports), the
+-- per-module PUBLIC accumulator (`pubV = pickSchemes (publicValNames prog) schemes
+-- ++ reexportSeed coreV prog depEnv`), and the DEPENDENCY-FIRST threading of
+-- depEnv (PREPEND `(mid,pubV)::depEnv`, so importSeed's first-match picks the
+-- nearest dependency), accData (`++ publicDataDecls prog`) and accAll (`++ prog`,
+-- the cumulative impl-body universe).  Each driver supplies:
+--   * worker  : prev mid seed accData accAll prog -> (schemes, extra, mctx) — runs
+--               the per-module pass; MUST surface `schemes` (pubV needs it for the
+--               next depEnv) plus its driver-specific payload `extra`.  [prev] is the
+--               record current before the module; [mctx] the one it was checked in,
+--               which the next module starts from and the fold returns last.
+--   * collect : isLast mid extra restResult -> result — a foldr combiner, where
+--               restResult is the fold over the REMAINING modules (`base` for []).
+--               `isLast` is True only for the terminal (entry) module — the one
+--               place checkModulesEntryFull keeps the module's OWN schemes/warns
+--               rather than the recursion's.
+--   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
+--               checks every module.  It is consulted once for each module before the
+--               entry; a module it serves skips the worker, and the policy supplies
+--               its own export bindings and its payload.  The policy comes back last.
+-- foldModules owns ONLY the loop and performs NO mintGraphCtx: the reset
+-- boundary stays in each driver's preamble (a reset leaking in here would hand the
+-- `check*` drivers a reset they must not have).
+-- `Accumulate` is the per-worker "needs" signal gating the two accumulator
+-- concats.  Each worker declares which accumulator it reads; under
+-- `AccumulateNone` neither is read, so both are threaded unchanged (no copy of the
+-- growing left operand, which would make the graph O(modules^2) in allocation) and
+-- a path that consumes neither does O(|prog|) per module.  Under `AccumulateBoth`
+-- each is extended (`accData ++ publicDataDecls prog`, `accAll ++ prog`).  No
+-- worker reads one accumulator without the other.
+public export data Accumulate = AccumulateNone | AccumulateBoth
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
@@ -3549,6 +3597,7 @@ public export data ModuleMarking = ModuleMarking {
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestSelector" false) (mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false))))
 (DData Public "ObligationSite" () ((variant "ObligationSite" (ConNamed (field "osLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "osFn" (TyCon "String")) (field "osCovering" (TyCon "Bool"))))) ())
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool")))) ())
@@ -3741,6 +3790,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
 (DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
+(DData Public "PassMethod" () ((variant "PassMethod" (ConPos (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "Accumulate" () ((variant "AccumulateNone" (ConPos)) (variant "AccumulateBoth" (ConPos))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
@@ -3762,6 +3814,7 @@ public export data ModuleMarking = ModuleMarking {
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestSelector" false) (mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false))))
 (DData Public "ObligationSite" () ((variant "ObligationSite" (ConNamed (field "osLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "osFn" (TyCon "String")) (field "osCovering" (TyCon "Bool"))))) ())
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool")))) ())
@@ -3954,3 +4007,6 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
 (DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
+(DData Public "PassMethod" () ((variant "PassMethod" (ConPos (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "Accumulate" () ((variant "AccumulateNone" (ConPos)) (variant "AccumulateBoth" (ConPos))) ())

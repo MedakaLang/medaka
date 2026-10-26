@@ -177,7 +177,7 @@ import backend.emit_plan.{buildEmitPlanReached}
 --   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
 --   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
 -- line/col are 0-based (LSP position convention).  hover/complete run a fresh
--- single-file typecheck (checkOneSchemeFull — the same env the LSP's
+-- single-file typecheck (checkOneSchemeFullK — the same env the LSP's
 -- hoverFor/completionFor use on a no-import buffer) and look up the identifier /
 -- prefix at the cursor.  ONE playground.wasm serves all four (the typecheck deps
 -- are already linked for `compile`).
@@ -825,7 +825,7 @@ isDiagError _ = False
 -- ── hover / completion (stateless single-file language queries) ───────────────
 -- These reuse the LSP's already-pure approach (compiler/tools/lsp.mdk hoverFor /
 -- completionFor on a no-import buffer) WITHOUT importing lsp.mdk: they call the
--- typecheck env builder (`checkOneSchemeFull`, the same function the
+-- typecheck env builder (`checkOneSchemeFullK`, the same function the
 -- LSP's single-file `docEnv` path calls) and the pure identifier/prefix
 -- helpers below (ported verbatim from lsp.mdk).  The playground buffer is a single
 -- file (prelude only), so no project graph is ever needed.
