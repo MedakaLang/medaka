@@ -323,7 +323,7 @@ compiler/types/interface_sexp.mdk
 compiler/types/prelude_elab_test.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
-compiler/types/tc_diag.mdk
+compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_state.mdk

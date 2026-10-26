@@ -1,5 +1,5 @@
 # META
-source_lines=1765
+source_lines=1760
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -71,13 +71,8 @@ import types.tc_env.{
   recordCandInfo,
   variantNamed,
 }
-import types.tc_diag.{
-  ambigReexportHelp,
-  ambigReexportMsg,
-  backticked,
-  pushTypeErrorHelpFixAt,
-  pushTypeErrorOnceAt,
-}
+import types.tc_diag.{pushTypeErrorHelpFixAt, pushTypeErrorOnceAt}
+import types.tc_diag_text.{ambigReexportHelp, ambigReexportMsg, backticked}
 import frontend.ast.{
   ConPayload(..),
   Decl(..),
@@ -1771,7 +1766,8 @@ withAliasMethodNames rows set =
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "MethodScope" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DeclEnvs" false) (mem "EnvBinding" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "Kind" false) (mem "MethodEntry" false) (mem "MethodEnv" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "ctorExportsIndex" false) (mem "declEnvVisibleAt" false) (mem "declTopFnNames" false) (mem "extendMethodRow" false) (mem "graphAmbigValues" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceMethodNames" false) (mem "importedBindings" false) (mem "importTableMid" false) (mem "lookupBinding" false) (mem "lookupCtor" false) (mem "lookupIdxById" false) (mem "lookupMethodRowById" false) (mem "lookupRecordByName" false) (mem "lookupSchemeById" false) (mem "methodEnvBinding" false) (mem "methodExportsIndex" false) (mem "methodPreludeRow" false) (mem "methodRowById" false) (mem "methodRowCanCarry" false) (mem "methodRowCand" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "originMethodName" false) (mem "recordCandInfo" false) (mem "variantNamed" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false) (mem "pushTypeErrorHelpFixAt" false) (mem "pushTypeErrorOnceAt" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorHelpFixAt" false) (mem "pushTypeErrorOnceAt" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
@@ -2076,7 +2072,8 @@ withAliasMethodNames rows set =
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "MethodScope" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DeclEnvs" false) (mem "EnvBinding" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "Kind" false) (mem "MethodEntry" false) (mem "MethodEnv" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "ctorExportsIndex" false) (mem "declEnvVisibleAt" false) (mem "declTopFnNames" false) (mem "extendMethodRow" false) (mem "graphAmbigValues" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceMethodNames" false) (mem "importedBindings" false) (mem "importTableMid" false) (mem "lookupBinding" false) (mem "lookupCtor" false) (mem "lookupIdxById" false) (mem "lookupMethodRowById" false) (mem "lookupRecordByName" false) (mem "lookupSchemeById" false) (mem "methodEnvBinding" false) (mem "methodExportsIndex" false) (mem "methodPreludeRow" false) (mem "methodRowById" false) (mem "methodRowCanCarry" false) (mem "methodRowCand" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "originMethodName" false) (mem "recordCandInfo" false) (mem "variantNamed" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false) (mem "pushTypeErrorHelpFixAt" false) (mem "pushTypeErrorOnceAt" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorHelpFixAt" false) (mem "pushTypeErrorOnceAt" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))

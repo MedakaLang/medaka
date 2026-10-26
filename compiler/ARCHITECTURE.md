@@ -129,7 +129,7 @@ is how a later phase justifies skipping work.
 - *Today:* the diagnostics code inside `typecheck.mdk` computes while it renders, which
   is why its extraction (#1120) needed 36 of 61 functions back-imported and was
   withdrawn.
-- *Check:* `types/tc_diag.mdk`'s import closure contains no inference module
+- *Check:* `types/tc_diag_text.mdk`'s import closure contains no inference module
   (dependency-closure golden, Phase 4).
 
 ### A6. Dependency inversion goes through one registry

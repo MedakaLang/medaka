@@ -1,0 +1,1453 @@
+-- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
+-- builder, diagnostic key (`locKey`, `msgAtKey`, `locGoalKey`) and rewrite of diagnostic text
+-- (`writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds,
+-- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
+-- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
+--
+-- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (report-ghc.md:71, a leaf that
+-- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data
+-- type, so a diagnostic's code is still passed at each emit site.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_state`, `tc_env`,
+-- `tc_diag`, `tc_scope`, `tc_unify`, `tc_decls_variance`, `tc_decls_types`, `tc_decls`,
+-- `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`,
+-- `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`,
+-- `tc_global`, `tc_module`.
+
+import types.tc_mono.{
+  cohPpPair,
+  dedupI,
+  findTvName,
+  firstIdConflict,
+  headIdConflict,
+  headTyconNameMono,
+  isPreludeOrigin,
+  recordOwnerModule,
+  recordResultMono,
+}
+import frontend.ast.{
+  authTermsSurface,
+  EffAtomTy(..),
+  EffParamTy(..),
+  Expr(..),
+  KindAnn(..),
+  kindAnnSource,
+  Lit(..),
+  Loc(..),
+  patternMark,
+  qualifierSource,
+  TabKey(..),
+  tabKeyName,
+  Ty(..),
+  TyConOrigin(..),
+}
+import types.repr.{
+  normalize,
+  IfaceRef(..),
+  Mono(..),
+  ppAuthority,
+  ppConName,
+  ppEach,
+  ppEffArgFmt,
+  ppEffInsideTy,
+  ppEffvarName,
+  ppGo,
+  ppMono,
+  ppMonosShared,
+  ppPredArgsShared,
+  ppTy,
+  ppTyAtom,
+  tupleHeadTagTc,
+}
+import types.tc_types.{
+  DeclaringBinder(..),
+  KeyEntry,
+  Kind(..),
+  MethodBodyKind(..),
+  RecordInfo,
+}
+import types.publish.{TcDiag(..)}
+import support.util.{
+  contains,
+  dedup,
+  dedupBy,
+  escStr,
+  isEmptyL,
+  isNonEmptyL,
+  joinWith,
+  listLen,
+  reverseL,
+  sortUniqS,
+  splitOnChar,
+  startsWith,
+}
+import types.effect_rows.{Atom(..), effLabelName, Effvar(..), renderAtoms}
+import types.effect_authority.{authIsTop, Authority(..)}
+
+-- The directed judgment `required <= allowed` failed against an allowed row the
+-- body cannot solve: a signature's own row variable, or a row the caller
+-- supplies through an argument or callback. The message names what escaped
+-- (concrete labels, or the caller's whole row) and the two honest repairs,
+-- because the same judgment now covers what several site-specific checks used
+-- to explain separately. [required, allowed] are rendered with one shared
+-- variable-naming context so the two rows spell a shared tail the same way.
+export
+effectInclusionMsg : String -> List Atom -> List String -> String
+effectInclusionMsg name escaping [required, allowed] =
+  if isNonEmptyL escaping then
+    let labels = renderAtoms escaping
+    "`\{name}` performs <\{labels}> on a caller-chosen row \{rowText allowed}; \{declareRemedy labels allowed}, or perform it through an argument"
+  else
+    "`\{name}` runs the caller-chosen row \{rowText required} where only \{rowText allowed} is allowed; declare it on the arrow that runs it, `-> \{rowText required} ...`"
+effectInclusionMsg name _ rows =
+  "cannot prove effect row inclusion in `\{name}`: \{joinWith ", " rows}"
+
+-- A bare tail renders without brackets; the prose reads better with them.
+rowText : String -> String
+rowText s = if stringSlice 0 1 s == "<" then s else "<\{s}>"
+
+-- The repair, spelled against the row as the message rendered it: a bare tail
+-- gains the labels beside its variable; a row that already has labels gains one.
+declareRemedy : String -> String -> String
+declareRemedy labels allowed =
+  if stringSlice 0 1 allowed == "<" then
+    "declare <\{labels}> in that row"
+  else
+    "declare it, `<\{labels} | \{allowed}>`"
+
+export
+patternIndexMsg : Authority -> String
+patternIndexMsg term =
+  let t = authorityTermTextIn (Ref []) (Ref 0) term
+  "a pattern-ranging `Authority L*` index is equated with \{t}, which is not a pattern; write a pattern there, such as `\"data/*\"` or `*`"
+
+export
+renderFlatRow : (List Atom, List (Ref Effvar)) -> String
+renderFlatRow f =
+  let ctx = Ref []
+  let cnt = Ref 0
+  ppEffArgFmt
+    (renderAtomsOrEmpty (fst f))
+    (joinWith " | " (map (m => ppEffvarName ctx cnt m) (snd f)))
+
+renderAtomsOrEmpty : List Atom -> String
+renderAtomsOrEmpty [] = ""
+renderAtomsOrEmpty ls = renderAtoms ls
+
+export
+joinMismatchMsg : String -> String -> String
+joinMismatchMsg a b =
+  "effect rows \{a} and \{b} cannot be made equal: each carries an effect variable the other has no room for; keep the method's effect variables distinct, or join them in the result index, `f (e | e2) b`"
+
+-- ERROR-QUALITY.md: deliberately NOT `effectLeakMsg`'s wording.  "Effectful value used
+-- where <> is allowed, but it performs <Stdout>" is the ARROW message and reads as a lie
+-- here — nothing is being performed at the point of mismatch; two types simply differ.
+-- Symmetric phrasing because `unify` has no expected/actual role.
+export
+indexRowMismatchMsg : List Atom -> List Atom -> String
+indexRowMismatchMsg l1 l2 =
+  "effect index mismatch: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; an effect row in a type argument is invariant, so write the same row on both sides or use a row variable, \{openRowHint l1}"
+
+-- The "make it row-polymorphic" spelling for a row that may be EMPTY: `<>` has no
+-- labels, so the naive `<\{renderAtoms l1} | e>` renders the un-writable `< | e>`.
+openRowHint : List Atom -> String
+openRowHint [] = "`e`"
+openRowHint atoms = "`<\{renderAtoms atoms} | e>`"
+
+-- ERROR-QUALITY.md: symmetric phrasing, because `unify` cannot name a culprit
+-- side here; the remedy names the seams where a purer value IS accepted.
+export
+closedRowMismatchMsg : List Atom -> List Atom -> String
+closedRowMismatchMsg l1 l2 =
+  "effect rows <\{renderAtoms l1}> and <\{renderAtoms l2}> cannot be made equal: the two values must have one type, and this position neither widens nor narrows a row; write the same row on both sides"
+
+export
+patternDomainMsg : String -> String -> String
+patternDomainMsg written l =
+  "`\{written}` ranges over patterns, but `\{l}` is not a `Prefix` domain and has none; drop the `*`"
+
+export
+authorityAtomicLabelMsg : String -> String
+authorityAtomicLabelMsg l =
+  "`Authority \{l}` needs a domain, but `\{l}` is an atomic label and declares none; declare it `effect \{l} Prefix`"
+
+export
+phantomExportMsg : String -> String -> String -> String
+phantomExportMsg tyName ctor p =
+  "constructor `\{ctor}` of public type `\{tyName}` carries its authority parameter `\{p}` in no field, so another module could invent an authority; export `\{tyName}` abstractly with `export data`, or give `\{ctor}` a field that carries `\{p}`"
+
+export
+authorityParamAsRowMsg : String -> String -> String
+authorityParamAsRowMsg name p =
+  "type `\{name}` declares `\{p}` as an authority, but a field uses it as an effect row; write a different variable for the row"
+
+export
+authorityParamAsTypeMsg : String -> String -> String
+authorityParamAsTypeMsg name p =
+  "type `\{name}` declares `\{p}` as an authority, but a field uses it as a type; write a different variable for the type"
+
+export
+ifaceParamAuthorityKindMsg : String -> String -> String
+ifaceParamAuthorityKindMsg name p =
+  "interface `\{name}` declares `\{p}` as an authority, but an interface parameter is a type or a graded constructor; index a data type with `(\{p} : Authority L)` and implement the interface for it"
+
+export
+unannotatedRowParamMsg : String -> String -> String
+unannotatedRowParamMsg name p =
+  "type parameter `\{p}` of `\{name}` is used as an effect row, but its head does not declare it one; declare the head as `\{name} (\{p} : Effect) ...`"
+
+export
+typeParamAsRowMsg : String -> String -> String
+typeParamAsRowMsg name p =
+  "type parameter `\{p}` of `\{name}` is declared `(\{p} : Type)` but is used as an effect row; declare it `(\{p} : Effect)`"
+
+export
+effectParamAsTypeMsg : String -> String -> String
+effectParamAsTypeMsg name p =
+  "type parameter `\{p}` of `\{name}` is declared `(\{p} : Effect)` but is used as an ordinary type; drop the annotation, or move `\{p}` into an effect position such as `Unit -> <\{p}> a`"
+
+export
+effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
+effectArrowOnDataHeadMsg name p k =
+  "type parameter `\{p}` of `\{name}` is declared with kind `\{kindAnnSource k}`, but an arrow kind containing `Effect` is allowed on interface heads only; declare it `Effect` or an Effect-free kind"
+
+export
+ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
+ifaceSlotDeclaredTypeMsg name p k =
+  "type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{kindAnnSource k})`, but a method uses one of its `Type` slots as an effect row; declare that slot `Effect`"
+
+export
+ifaceParamEffectKindMsg : String -> String -> String
+ifaceParamEffectKindMsg name p =
+  "type parameter `\{p}` of interface `\{name}` is declared `(\{p} : Effect)`, but an interface parameter is a type constructor; write `(\{p} : Effect -> Type -> Type)` for an effect-indexed constructor"
+
+export
+unannotatedGradedParamMsg : String -> String -> List Kind -> String
+unannotatedGradedParamMsg name p inferred =
+  "type parameter `\{p}` of interface `\{name}` is used as an effect-indexed constructor, but its head does not declare it one; declare the head as `\{name} (\{p} : \{renderKindArrow inferred}) ...`"
+
+export
+requiresKindMsg : String -> String -> String
+requiresKindMsg name sh =
+  "interface `\{name}` requires `\{sh}` at a parameter whose kind differs from `\{sh}`'s own, and there is no coercion between `Type` and `Effect`; declare both heads at the same kind"
+
+-- #1103: the UNCOVERED-ATOMS arm now covers ordinary top-level signatures as
+-- well as interface methods, and the two cases get DIFFERENT prose — a top-level
+-- function has no interface to name and no impl to blame.  The interface wording
+-- is byte-frozen (`test/typecheck_error_fixtures/iface_effvar_arg_*.tc.golden`
+-- pin it).  There is no `None` counterpart for `argOnlyEffVarMsg`: the
+-- argument-only arm is method-only, see `checkArgEffVars`.
+export
+argAtomsMsgFor : Option String -> String -> String -> List Atom -> String
+argAtomsMsgFor (Some iface) mname v esc = argAtomsUncoveredMsg iface mname v esc
+argAtomsMsgFor None fname v esc = argAtomsUncoveredFnMsg fname v esc
+
+argAtomsUncoveredFnMsg : String -> String -> List Atom -> String
+argAtomsUncoveredFnMsg fname v esc =
+  "effect variable <\{v}> in function `\{fname}` carries <\{renderAtoms esc}> at an argument position, but a row carrying <\{v}> does not include it; declare <\{renderAtoms esc}> at every row where <\{v}> appears"
+
+export
+argOnlyEffVarMsg : String -> String -> String -> String
+argOnlyEffVarMsg iface mname v =
+  "argument-only effect variable <\{v}> in method `\{mname}` of interface `\{iface}`: it rides an argument but appears in none of the method's own effect rows; thread it through the method's row, `-> <\{v}> ...`"
+
+argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
+argAtomsUncoveredMsg iface mname v esc =
+  "effect variable <\{v}> in method `\{mname}` of interface `\{iface}` carries <\{renderAtoms esc}> at an argument position, but a method row carrying <\{v}> does not include it; declare <\{renderAtoms esc}> at every row where <\{v}> appears"
+
+renderEffTailVars : List String -> String
+renderEffTailVars vs = joinWith ", " (map (v => "<\{v}>") vs)
+
+export
+effectUndeterminedMsg : String -> String -> List String -> String
+effectUndeterminedMsg iface mname vars =
+  "under-determined effect variable \{renderEffTailVars vars} in method `\{mname}` of interface `\{iface}`: it appears only in the return type, pinned by no argument; use a concrete row such as `<Stdout>`, or thread it through a callback `a -> <e> b`"
+
+export
+kindName : Kind -> String
+kindName KType = "Type"
+kindName KRow = "Effect"
+kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
+
+export
+renderKindArrow : List Kind -> String
+renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+
+-- [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
+-- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
+-- prevent.
+export
+implKindMismatchMsg : String ->
+  String ->
+  Int ->
+  List Kind ->
+  List Kind ->
+  String
+implKindMismatchMsg iface ctor nApplied want got =
+  "instance head has the wrong kind for interface `\{iface}`: its type parameter is graded, kind `\{renderKindArrow want}`, but \{implHeadKindClause ctor nApplied got}; \{implKindMismatchFix iface ctor nApplied}"
+
+-- The "but …" clause: an UNAPPLIED head states its own kind; a partially applied one
+-- (`impl I (Async e)` — the fixed-row shape a graded interface forbids) must say so,
+-- because the leftover kind is NOT the constructor's kind and reporting it as such is
+-- simply false (`Async` is `Row -> Type -> Type`; `Async e` is `Type -> Type`).
+argumentNoun : Int -> String
+argumentNoun n = if n == 1 then "argument" else "arguments"
+
+implHeadKindClause : String -> Int -> List Kind -> String
+implHeadKindClause ctor nApplied got
+  | nApplied <= 0 = "`\{ppConName ctor}` has kind `\{renderKindArrow got}`"
+  | otherwise =
+    "this head applies \{intToString nApplied} \{argumentNoun nApplied} to `\{ppConName ctor}`, leaving kind `\{renderKindArrow got}`"
+
+-- The remedy, conditioned on which mistake was actually made.  Telling an author who
+-- wrote `impl GThenable Box` to "write `impl GThenable Box`" is a tautology — that
+-- advice is only useful when the head was APPLIED, where dropping the argument is
+-- literally the fix.
+implKindMismatchFix : String -> String -> Int -> String
+implKindMismatchFix iface ctor nApplied
+  | nApplied > 0 =
+    "a graded interface binds the whole row-indexed family, so write `impl \{iface} \{ppConName ctor}` with no arguments"
+  | otherwise =
+    "give `\{ppConName ctor}` a parameter used in an effect position at each `Row` slot, such as a field `Unit -> <e> a`, or implement a non-graded interface for it"
+
+-- A saturated TUPLE head, which needs its own message: a tuple is kind `Type` and cannot
+-- be given a row parameter, so the ordinary "add a `Unit -> <e> a` field" remedy would
+-- send the author after something that does not exist.
+export
+implTupleHeadKindMsg : String -> Int -> List Kind -> String
+implTupleHeadKindMsg iface n want =
+  "instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface `\{iface}`: its type parameter is graded, kind `\{renderKindArrow want}`, but a tuple is kind `Type`; implement a non-graded interface for it, or use a row-indexed data type as the head"
+
+export
+binderDomainTypeMsg : String -> String -> String
+binderDomainTypeMsg n ty =
+  "named argument `\{n}` has type `\{ty}` but is written with a domain, and only a `String` argument has an authority; give `\{n}` the type `String` or drop the domain"
+
+export
+binderTypeMsg : String -> String -> String
+binderTypeMsg n ty =
+  "named argument `\{n}` has type `\{ty}`, but an effect atom names it as an authority, and only a `String` argument can be one; give `\{n}` the type `String` or write the label bare"
+
+export
+binderDomainMsg : String -> String
+binderDomainMsg n =
+  "authority `\{n}` is used at labels from different domains, and one authority has one domain; name a second binder for the other label"
+
+-- [diags] (newest first, as the sticky list holds them) in push order, deduplicated
+-- per goal.
+export
+stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
+stickyDiagsInPushOrder diags = dedupBy tcDiagGoalKey (reverseL diags)
+
+export
+tcDiagGoalKey : (String, TcDiag) -> String
+tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
+  "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"
+
+export
+authorityIndexMsg : Authority -> Authority -> String
+authorityIndexMsg a b =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = authorityTermTextIn ctx cnt a
+  let sb = authorityTermTextIn ctx cnt b
+  let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
+  "authority index mismatch: \{x} vs \{y}; an authority in a type argument is invariant, so write the same index on both sides or name it, `Handle p`"
+
+-- An index row's atom its other side cannot absorb must lie within that
+-- side's authority for the label: coverage, not equality.
+export
+authorityCoverMsg : Authority -> Authority -> String
+authorityCoverMsg lower upper =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let lo = authorityTermTextIn ctx cnt lower
+  let hi = authorityTermTextIn ctx cnt upper
+  "authority index mismatch: \{lo} is not covered by \{hi}; stay within \{hi}, or widen the row's authority for the label"
+
+-- An authority as a message names it: the top as the whole domain, a term
+-- as it is written, under a naming context shared by every term of one
+-- message, so two distinct variables with one binder name read apart.
+export
+authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+authorityTermTextIn ctx cnt q =
+  if authIsTop q then "the whole domain" else ppAuthority ctx cnt q
+
+-- A residual of [callee]'s inferred scheme that this use does not satisfy:
+-- the relation is the callee's, so the bound is not one this binding wrote.
+export
+residualFailureMsg : String -> String -> String -> String
+residualFailureMsg callee lo hi =
+  "`\{callee}` needs \{lo} to lie within \{hi} here, but this use does not satisfy it; pass values whose authorities do"
+
+-- The pattern-ranging spelling of binder [n], on label [l] when it is known.
+export
+starSpelling : String -> Option String -> String
+starSpelling n (Some l) =
+  "`\{n}` pattern-ranging, `(\{n} : String @\{l}*)` or `(\{n} : Authority \{l}*)`"
+starSpelling n None = "`\{n}` pattern-ranging, `@L*` or `Authority L*`"
+
+-- ERROR-QUALITY.md: a distinct surface from BOTH `effectLeakMsg` (nothing is
+-- being performed here) and `indexRowMismatchMsg` (that one is about a row
+-- WRITTEN as a type argument; this one is about an ordinary function type that
+-- happens to SIT in one, and its remedy is different — write the same row, or
+-- move the value, not "make the type row-polymorphic").  Symmetric phrasing,
+-- because `unify` has no expected/actual role to name one side the culprit.
+--
+-- #2109 (over-reject at the safe direction): the second sentence names the
+-- ETA-EXPANSION recovery, because the `this does narrow acceptance in the sound
+-- direction too` caveat on `paramVarianceGuard` (`tc_unify`) is otherwise INVISIBLE
+-- to the person who hit it.  `handler : Ref (String -> <Stdout> Unit); handler = Ref noop` is
+-- REJECTED while `handler = Ref (s => noop s)` is ACCEPTED — MEASURED, both at
+-- this commit.  The two programs have identical semantics; the second is
+-- accepted only because a lambda's latent row is still an unsolved variable, so
+-- the closed~closed row arm is never reached.  That accident is now stated
+-- as the remedy rather than left for the reader to rediscover.
+--
+-- The recovery is not A laundering hole, and that is measured, not assumed.
+-- Eta-expanding in the UNSAFE direction still rejects: `handler : Ref (String ->
+-- <> Unit); handler = Ref (s => shouty s)` fails with T-EFFECT-LEAK
+-- (`Effectful value used where <> is allowed, but it performs <Stdout>`),
+-- byte-identical to the un-expanded `Ref shouty`.  The open row the lambda
+-- restores is still bounded by the slot, so eta-expansion buys back exactly the
+-- narrowing direction and nothing else — which is why naming it here is safe.
+--
+-- No rule keyed on TYPES can separate the two directions at this seam:
+-- `handler = Ref noop` (safe narrowing, #2109) and `alias = idr box` (the #1098
+-- laundering) reach `paramVarianceGuard` with the SAME two Monos and render the
+-- SAME row pair.  What separates them is expression-level provenance — a value
+-- flowing INTO a cell being built here, versus an already-typed cell being
+-- coerced — and that is now read where it is visible: a signed clause's body
+-- is inferred RESULT-FIRST against its signature (`inferExpected`), so a fresh
+-- construction meets the declaration while its slot is still a metavariable
+-- and this guard abstains, while an already-typed cell still arrives closed
+-- and is rejected here.  The eta-expansion recovery the message names is what
+-- remains for the shapes result-first inference does not reach (an unsigned
+-- binding, a lambda-argument head).
+export
+paramVarianceMismatchMsg : List Atom -> List Atom -> String
+paramVarianceMismatchMsg l1 l2 =
+  "effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"
+
+export
+elselessIfHelp : String
+elselessIfHelp =
+  "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit"
+
+export
+constrainedApplicationText : Mono -> Mono -> List String -> String
+constrainedApplicationText app plain ifaces =
+  let names = joinWith " and " (map (i => "`\{i}`") ifaces)
+  "`\{ppMono app}` is a value whose type implements \{names}, and `\{ppMono plain}` is not"
+
+-- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
+-- Fires ONLY when the two sides RENDER identically and some head inside them
+-- carries two conflicting module identities — i.e. exactly the mismatch this
+-- unit newly reports.  Both conditions matter: the render test is what makes
+-- the hint appear where the message is otherwise unreadable, and the conflict
+-- search is what lets it name the two modules instead of hand-waving.
+--
+-- It cannot move an existing golden, and that is structural rather than
+-- lucky: `firstIdConflict` answers `Some` only where both origins are present
+-- and differ, and before this unit every such pair UNIFIED — so no diagnostic
+-- that exists today can reach this arm.  (The other in-tree source of two
+-- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
+-- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
+-- yields `None` here and its message is untouched.  That residual is #1243.)
+-- A program's own type may shadow a prelude type (#3465), so two sides whose
+-- heads share a spelling but not an identity can also differ in shape
+-- (`Result vs Result a b`): their heads are compared as well.
+export
+sameSpellingHint : Mono -> Mono -> Option String
+sameSpellingHint a b
+  | ppMono a /= ppMono b = map idConflictHelp (headIdConflict a b)
+  | otherwise = map idConflictHelp (firstIdConflict a b)
+
+idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+idConflictHelp (name, o1, o2) =
+  let remedy =
+    if isPreludeOrigin o1 || isPreludeOrigin o2 then
+      "build this value with the constructors of the type this position expects"
+    else
+      "import the one you mean instead of declaring a second type with that name"
+  "two different types share the name `\{name}`: one comes from \{originPhrase o1}, the other from \{originPhrase o2}; \{remedy}"
+
+-- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
+-- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
+-- present identities) and is answered rather than omitted so this stays total.
+originPhrase : TyConOrigin -> String
+originPhrase (OriginModule "core") = "the prelude"
+originPhrase (OriginModule "__user__") = "this program"
+originPhrase (OriginModule m) = "module `\{m}`"
+originPhrase OriginBuiltin = "the language itself"
+originPhrase OriginUnresolved = "an unknown module"
+
+export
+doRequiresMonadMsg : String
+doRequiresMonadMsg =
+  "`do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`"
+
+export
+deferRequiresMonadMsg : String
+deferRequiresMonadMsg =
+  "`defer` needs a value whose type implements `DeferredThenable`, such as `Async`; for `Option`, `Result` or `List` use `do` instead"
+
+-- SYMMETRIC complement of doRequiresMonadMsg: a `<-` bind reached a bare
+-- (non-`do`) block.  `<-` is monadic-`do`-only; a bare indented block is IO
+-- sequencing and does not allow it (language-design.md; "IO is not a monad").
+export
+bindOutsideDoMsg : String
+bindOutsideDoMsg =
+  "`<-` is only valid inside a `do` block; outside one, bind the value with `let x = ...`"
+
+export
+qualifierBinderTypeMsg : String -> String -> String
+qualifierBinderTypeMsg n ty =
+  "named argument `\{n}` has type `\{ty}`, but a qualifier names it as an authority, and only a `String` argument has one; qualify by a `String` argument or drop `\{n}` from the qualifier"
+
+export
+binderNoDomainMsg : String -> String
+binderNoDomainMsg n =
+  "the qualifier names `\{n}`, but no binder domain, effect atom or index in this signature gives it a domain; write one on the binder, `(\{n} : String @FileRead)`, or name the label it bounds, `<FileRead \{n}>`"
+
+export
+joinDomainMsg : List String -> String
+joinDomainMsg ns =
+  "the joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains; qualify by authorities of one label's domain"
+
+export
+nameNotAuthorityMsg : String -> String
+nameNotAuthorityMsg n =
+  "`\{n}` is used as an authority, but nothing binds it as one; bind it as a named argument, `(\{n} : String) ->`, or an `Authority`-kinded index"
+
+-- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
+-- visible yet at this point in the file, so render the row body directly with
+-- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
+-- forward reference, fine: this module is resolved as a whole, not top-down).
+export
+rowKindMismatchMsg : List EffAtomTy -> List String -> String
+rowKindMismatchMsg labels tail =
+  "the row <\{ppEffInsideTy labels tail}> is written at a type-argument position that is not row-kinded; write an ordinary type here"
+
+-- A type alias applied to the wrong number of arguments — over-applied,
+-- under-applied, or (got=0) used unapplied.  v1 requires a parameterized alias
+-- to be saturated; an alias is not a first-class type constructor (DESIGN §3/§9
+-- fork 2).  Deduped (pushTypeErrorOnce) since a signature's `Ty` is converted to
+-- `Mono` repeatedly during inference.
+export
+aliasArityMsg : String -> Int -> Int -> String
+aliasArityMsg n expected got =
+  "type alias `\{n}` takes \{argumentCount expected} but is applied to \{intToString got}"
+
+-- Count-correct `1 argument` / `2 arguments`.
+argumentCount : Int -> String
+argumentCount 1 = "1 argument"
+argumentCount n = "\{intToString n} arguments"
+
+-- A pattern slot (`Authority L*`) filled by a binder that ranges over the
+-- whole domain: the caller could choose an exact element for it.
+export
+ordinaryInPatternSlotMsg : String -> String -> String
+ordinaryInPatternSlotMsg n l =
+  "`\{n}` ranges over every authority of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns; declare `\{n}` pattern-ranging, `(\{n} : String @\{l}*)` or `(\{n} : Authority \{l}*)`"
+
+-- A pattern slot filled by a written exact element.
+export
+exactInPatternSlotMsg : String -> String -> String -> String
+exactInPatternSlotMsg l written closed =
+  "`\{written}` is an exact element of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns; write the pattern it begins, `\{closed}`, or `*`"
+
+export
+authorityAsTypeMsg : String -> String
+authorityAsTypeMsg n =
+  "`\{n}` is an authority binder but is used here as a type; write a different name for the type variable"
+
+export
+authorityTermAsTypeMsg : List EffParamTy -> String
+authorityTermAsTypeMsg p =
+  "the authority term `\{authTermsSurface escStr p}` is written where a type goes; it belongs in an `Authority`-kinded type argument such as `Handle \{authTermsSurface escStr p}`"
+
+export
+typeVarAsAuthorityMsg : String -> String -> String
+typeVarAsAuthorityMsg n l =
+  "`\{n}` is a type variable, but this slot is `Authority \{l}`; write an authority here: a binder's name, or a term such as `\"pattern/*\"` or `*`"
+
+export
+typeAsAuthorityMsg : String -> String -> String
+typeAsAuthorityMsg ty l =
+  "`\{ty}` is a type, but this slot is `Authority \{l}`; write an authority here: a binder's name, a literal of the label's domain, or `*`"
+
+-- Names the offending type.  The report is per site (`pushTypeErrorOncePerSite`): a
+-- signature elaborated twice folds into one diagnostic, while two bad slots holding the
+-- same offending type (`weird : Box Int Int`, `alsoWeird : Box Int Unit`) are two.
+export
+typeInRowSlotMsg : Ty -> String
+typeInRowSlotMsg ty =
+  "the type `\{ppTy ty}` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"
+
+export
+existentialScopeMsg : Option String -> String
+existentialScopeMsg name =
+  "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
+
+export
+discardedValueMsg : String -> String
+discardedValueMsg desc =
+  "this statement's value (\{desc}) is discarded; only a `Unit` expression may stand alone as a statement"
+
+export
+discardedValueFix : Option Loc -> Option (Loc, String)
+discardedValueFix (Some (Loc f sl sc _ _)) =
+  Some (Loc f sl sc sl sc, "let _ = ")
+discardedValueFix None = None
+
+export
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldNotInAllCtorsMsg fname tname sib =
+  "field `\{fname}` is not declared by every constructor of `\{tname}`: `\{sib}` has no `\{fname}`; match on the constructor instead of using `.\{fname}`"
+
+export
+fieldPositionDiffersMsg : String ->
+  String ->
+  (String, Int) ->
+  (String, Int) ->
+  String
+fieldPositionDiffersMsg fname tname (a, i) (b, j) =
+  "field `\{fname}` is at different positions in the constructors of `\{tname}`: it is field \{intToString (i + 1)} of `\{a}` but field \{intToString (j + 1)} of `\{b}`; match on the constructor instead of using `.\{fname}`"
+
+-- The two types render under one naming context, so a parameter shared by both
+-- prints as the same letter.
+export
+fieldTypeDiffersMsg : String ->
+  String ->
+  String ->
+  Mono ->
+  String ->
+  Mono ->
+  String
+fieldTypeDiffersMsg fname tname a ta b tb =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = ppGo ctx cnt 0 ta
+  let sb = ppGo ctx cnt 0 tb
+  "field `\{fname}` has different types in the constructors of `\{tname}`: it is `\{sa}` in `\{a}` but `\{sb}` in `\{b}`; match on the constructor instead of using `.\{fname}`"
+
+-- The hint rebuilds the value from the constructor's pattern rather than
+-- suggesting `Con { v | f = e }`, which does not check that `v` was built by
+-- `Con`.
+export
+updateMultiCtorMsg : String ->
+  String ->
+  String ->
+  List String ->
+  List String ->
+  String
+updateMultiCtorMsg fn tname rname others ctors =
+  let pat = if isEmptyL others then "..." else joinWith ", " others
+  let rebuilt = joinWith ", " ("\{fn} = ..." :: others)
+  "cannot update field `\{fn}` on `\{tname}`, which has more than one constructor (\{joinWith ", " (map backticked ctors)}); match on the constructor and rebuild the value in its arm, as in `\{rname} { \{pat} } => \{rname} { \{rebuilt} }`"
+
+-- Distinct owner keys keep the owner-list message.  When one key holds two of the
+-- declarations, the key alone cannot tell them apart, so each is named by its type
+-- and declaring module, sorted so the text does not depend on import-clause order.
+export
+ambiguousFieldDeclsMsg : String ->
+  List String ->
+  List (String, RecordInfo) ->
+  String
+ambiguousFieldDeclsMsg fname owners cands =
+  let keys = map fst cands
+  if listLen (dedup keys) == listLen keys then
+    ambiguousFieldMsg fname owners
+  else
+    let tys = sortUniqS (map fieldDeclTypeName cands)
+    let descrs = sortUniqS (map fieldDeclDescr cands)
+    "ambiguous field `.\{fname}`: it is declared by \{joinWith " and by " descrs} and the record type is undetermined; annotate the record, as in `(r : \{headL tys}).\{fname}`"
+
+fieldDeclTypeName : (String, RecordInfo) -> String
+fieldDeclTypeName (k, ri) = optionOr k (headTyconNameMono (recordResultMono ri))
+
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclDescr (k, ri) = match recordOwnerModule ri
+  Some mid => "`\{fieldDeclTypeName (k, ri)}` from module `\{mid}`"
+  None => "`\{fieldDeclTypeName (k, ri)}`"
+
+headL : List String -> String
+headL [] = ""
+headL (x :: _) = x
+
+-- The field name itself carries no Loc in the AST (`EFieldAccess Expr String
+-- (Ref String)` — no per-field span).  The unknown-field check is located at
+-- the RECEIVER's own span (the field access names its receiver's span) —
+-- verified empirically:
+-- `p.aeg` reports receiver span (sc, sc+1) for `p`, `somebody.aeg` reports
+-- (sc, sc+8) for `somebody`.  The field name immediately follows the
+-- receiver's end column + the `.`, so its span is computable from the
+-- receiver's end column.  Valid for the common single-level `recv.field`
+-- access; a chained `a.b.cty` receiver is itself a field access with no own
+-- ELoc, so this would misplace the fix there — accepted for now (the
+-- common-case gain is worth the narrow miss).
+-- The misspelled name's span, from the receiver's end: past the `.`, as long
+-- as the name WRITTEN (not the suggestion).  The field name carries no span
+-- of its own, so a receiver separated from its `.` by whitespace still
+-- mislocates it.
+export
+fieldFixFrom : Option Loc -> String -> String -> Option (Loc, String)
+fieldFixFrom (Some (Loc f _ _ el ec)) written sug =
+  Some (Loc f el (ec + 1) el (ec + 1 + stringLength written), sug)
+fieldFixFrom None _ _ = None
+
+export
+unknownFieldMsg : String -> String -> String
+unknownFieldMsg fname rname = "no field `\{fname}` in `\{rname}`"
+
+-- Dot-access on a type exported abstractly: byte-identical to resolve.mdk's
+-- AbstractFieldAccess ppResError, so a destructure (`Point { x }`, caught in
+-- resolve) and a dot-access (`p.x`, caught here in typecheck) read the same.
+export
+abstractFieldMsg : String -> String -> String
+abstractFieldMsg tname fname =
+  "`\{tname}` is exported abstractly, so its field `\{fname}` is not accessible; declare it `public export` to expose its fields"
+
+-- TYPECHECK-AUDIT OBS4.
+export
+missingFieldMsg : String -> String -> String
+missingFieldMsg fname rname = "missing field `\{fname}` in `\{rname}`"
+
+export
+ambiguousFieldMsg : String -> List String -> String
+ambiguousFieldMsg fname owners =
+  "ambiguous field `.\{fname}`: it is declared by \{joinAnd (map backticked owners)} and the record type is undetermined; annotate the record, as in `(r : \{headL owners}).\{fname}`"
+
+-- TYPECHECK-AUDIT D1: convert resolve-not-pre-screened error shapes (unknown
+-- record / constructor, unbound variable) from uncatchable interpreter panics
+-- into accumulated typeErrors + a fresh-var placeholder, so inference continues.
+export
+unknownRecordMsg : String -> String
+unknownRecordMsg name = "unknown record type `" ++ name ++ "`"
+
+export
+unknownCtorMsg : String -> String
+unknownCtorMsg name = "unknown constructor `" ++ name ++ "`"
+
+export
+unboundVarMsg : String -> String
+unboundVarMsg name = "unbound variable `" ++ name ++ "`"
+
+export
+u64RangeText : String
+u64RangeText = "0..18446744073709551615"
+
+export
+i64RangeText : String
+i64RangeText = "-9223372036854775808..9223372036854775807"
+
+-- A negated wide literal fits only an `I64`, so that is the annotation to suggest.
+export
+wideAnnotateHelp : String -> Bool -> String
+wideAnnotateHelp shown negated =
+  let ty = if negated then "I64" else "U64"
+  "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(\{shown} : \{ty})`"
+
+export
+bangOnBoolMsg : String
+bangOnBoolMsg =
+  "`!` dereferences a `Ref` and does not negate a `Bool`; use `not x`"
+
+export
+bangOnBoolHelp : String
+bangOnBoolHelp =
+  "use `not x`; `!x` reads a `Ref` cell, so it needs a `Ref a`, not a `Bool`"
+
+export
+contraRowMsg : List Atom -> List Atom -> List Atom -> String
+contraRowMsg le la extras =
+  "a function whose parameter admits only <\{renderAtoms la}> is used where one admitting <\{renderAtoms le}> is expected, so a caller could pass an argument performing <\{renderAtoms extras}>; declare that parameter with <\{renderAtoms le}>"
+
+-- Chunk C messages (T-NOT-A-FUNCTION): a value of a ground non-function type is
+-- being applied.  Base wording names the offending type; the context-aware
+-- form names the over-applied callee and its arity.
+export
+notAFunctionMsg : String -> String
+notAFunctionMsg tyName = notAFunctionMsgFor None tyName
+
+export
+notAFunctionMsgFor : Option String -> String -> String
+notAFunctionMsgFor (Some name) tyName =
+  "`\{name}` has type \{tyName} and is not a function; it cannot be applied to an argument"
+notAFunctionMsgFor None tyName =
+  "this expression has type \{tyName} and is not a function; it cannot be applied to an argument"
+
+-- F-dimension actionable-fix hint carried as the `help` of `notAFunctionMsg`
+-- (2026-07-04): names the offending value when the spine head is a plain
+-- variable, else falls back to a name-free phrasing.  No mechanical `fix` — the
+-- caller decides whether to drop the argument or call a different function.
+export
+notAFunctionHint : Option String -> String
+notAFunctionHint (Some name) =
+  "`\{name}` is a value, not a function; remove the argument"
+notAFunctionHint None = "this is a value, not a function; remove the argument"
+
+export
+overAppliedMsg : String -> Int -> Int -> String
+overAppliedMsg name takes applied =
+  "`\{name}` takes \{argumentCount takes} but is applied to \{intToString applied}"
+
+export
+containerArgMsg : Option String -> String -> String
+containerArgMsg fn argTy =
+  let who = match fn
+    Some n => "`\{n}`"
+    None => "this function"
+  "\{who} expects a container such as `List` here but got `\{argTy}`; \{containerArgHint argTy}"
+
+-- Actionable-fix hint appended to `containerArgMsg`.  Special-cases `String`
+-- (the most common scalar handed to `map`): a String's characters are reachable
+-- via `string.toChars`, so name that conversion rather than a generic one.
+export
+containerArgHint : String -> String
+containerArgHint "String" =
+  "to work over the string's characters, convert it with `string.toChars` first"
+containerArgHint argTy = "convert the `\{argTy}` to a `List` first"
+
+-- #894: `containerArgMsg` above hard-codes "a container (like List or Array)",
+-- which is right for a genuine container-consuming HOF (`map`, `filter`, …) but
+-- actively WRONG for the SAME reframe firing on a `do`-lowered `andThen` call —
+-- `x <- b` / a bare statement line inside `do` lowers to `andThen b (...)`
+-- (`lowerDo`, `compiler/frontend/desugar.mdk`), so a non-monadic `b` (e.g. `Bool`
+-- in a `Result` do-block) hits this same container-vs-scalar detector.  "Pass a
+-- List or Array" tells the user to convert their `Bool` into a list, which is
+-- not the fix — the fix is `let` instead of `<-`, because the value was never
+-- meant to be a container at all.  The concrete monad (`Result`) is NOT yet known
+-- here (its tyvar is still free — nothing has pinned it), so this stays honest by
+-- naming the shape ("Thenable", `do`'s own vocabulary — see `doRequiresMonadMsg`)
+-- rather than guessing a specific type.  Fires ONLY on the exact callee `lowerDo`
+-- synthesizes (`isDoLoweredAndThenCallee`, in `typecheck.mdk`) — an explicit user call to
+-- `andThen` on a scalar argument, even one textually nested inside a do-bind's
+-- own scrutinee, keeps the original List/Array message, which is the right
+-- advice there.
+export
+doBindArgMsg : String -> String
+doBindArgMsg argTy =
+  "this `do` block needs a `Thenable` value here, such as `Option` or `Result`, but got `\{argTy}`; \{doBindArgHint argTy}"
+
+export
+doBindArgHint : String -> String
+doBindArgHint argTy = "bind a plain `\{argTy}` with `let` instead of `<-`"
+
+-- render a tuple element to source-ish text for the `add 1 2` fix, for the simple
+-- literal/var/negation cases; None for anything a full printer would be needed for.
+renderCallArg : Expr -> Option String
+renderCallArg (ELoc _ e) = renderCallArg e
+renderCallArg (EAnnot e _) = renderCallArg e
+renderCallArg (ENumLit n _ _) = Some (intToString n)
+renderCallArg (EWideLit _ _ _ lx) = Some lx
+renderCallArg (ELit (LInt n)) = Some (intToString n)
+renderCallArg (ELit (LBool True)) = Some "True"
+renderCallArg (ELit (LBool False)) = Some "False"
+renderCallArg (ELit (LString s)) = Some ("\"" ++ s ++ "\"")
+renderCallArg (ELit (LChar c)) = Some ("'" ++ c ++ "'")
+renderCallArg (EVar n) = Some n
+renderCallArg (EVarId n _) = Some n
+renderCallArg (EMethodAt n _ _) = Some n
+renderCallArg (EDictAt n _) = Some n
+renderCallArg (EUnOp "-" e _) = map ("-" ++ _) (renderCallArg e)
+renderCallArg _ = None
+
+-- all-or-nothing render of every tuple element.
+export
+renderCallArgs : List Expr -> Option (List String)
+renderCallArgs [] = Some []
+renderCallArgs (e :: rest) = match renderCallArg e
+  None => None
+  Some s => map (s :: _) (renderCallArgs rest)
+
+-- The non-exhaustive-`match` warning (note the em-dash).  Coverage only; the
+-- redundancy pass has its own string, `unreachableArmWarning`.  When the witness
+-- algorithm can name the uncovered case (`nonExhaustiveMsg`) the message is
+-- specialised to name the scrutinee type + the missing constructor; this
+-- generic form is the fallback if no witness is recoverable.
+export
+nonExhaustiveMatchWarning : String
+nonExhaustiveMatchWarning =
+  "Warning: non-exhaustive match; not every case is covered"
+
+-- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
+-- An arm is unreachable when an EARLIER *unguarded* arm already covers its pattern
+-- (the detection is `patUnreachable` in `frontend.exhaust`; this module holds the
+-- text only).  The warning carries the ARM's own loc (its body span) so the caret
+-- points at the dead arm, not the match head.
+export
+unreachableArmWarning : String
+unreachableArmWarning =
+  "Warning: unreachable match arm; an earlier arm already covers this pattern"
+
+-- Name the scrutinee type (skip the synthetic tuple type names, which aren't
+-- user-facing — the witness pattern already reads as a tuple).
+-- Reads the bare NAME out of the key (`tabKeyName`) on purpose: this is
+-- witness PROSE, not a lookup, and its text must not change for any program
+-- whose diagnostic does not change.
+export
+tyOfMsg : Option TabKey -> String
+tyOfMsg None = ""
+tyOfMsg (Some k) =
+  let t = tabKeyName k
+  if isTupleTyName t then "" else " on `\{t}`"
+
+isTupleTyName : String -> Bool
+isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
+
+export
+existentialEscapeMsg : Option String -> String
+existentialEscapeMsg name =
+  "the existential authority `\{optionOr "?" name}` escapes the arm or clause that opened it; consume the value inside it, or return it repacked in its existential constructor"
+
+export
+partialExistentialUpdateMsg : String -> List String -> String
+partialExistentialUpdateMsg rname names =
+  "updating `\{rname}` replaces a field under an existential authority binder, but the binder's fields \{quotedNames names} must change together; replace them all, or rebuild the record"
+
+export
+letRecNonFunctionMsg : String -> String
+letRecNonFunctionMsg name =
+  "`"
+    ++ name
+    ++ "` is bound by `let rec` but its right-hand side is not a function"
+
+export
+ambiguousShadowHelp : String
+ambiguousShadowHelp =
+  "bring only one of those interfaces into scope by importing the other module without naming its interface, or rename one of the methods"
+
+export
+shadowIfaceLabel : IfaceRef -> String
+shadowIfaceLabel ir = match ir.irOrigin
+  OriginModule m => "`\{ir.irName}` (from `\{m}`)"
+  _ => "`\{ir.irName}`"
+
+export
+implHeadIndexMsg : String -> String -> String
+implHeadIndexMsg head written =
+  "impl head `\{head} \{written}` writes an `Authority` index, but an instance is chosen by the type's head and covers every index; write a name in the slot instead of `\{written}`"
+
+-- the coherence error string for one conflicting pair (OverlappingImpls).  Reached
+-- ONLY by the HARD class since F-3d — two mutually-⊑ (α-equal up to renaming) heads,
+-- for which "make them disjoint" really is the fix, because no third impl can rank
+-- them.  The ⊑-INCOMPARABLE class takes `cohIncomparableMsg` instead, whose remedy
+-- is the opposite one (declare the common instance).  #614 filed the old wording as
+-- an S2 precisely because it gave the disjointness advice to the incomparable class,
+-- where it is both wrong and ineffective.
+export
+cohOverlapMsg : String -> List Mono -> List Mono -> String
+cohOverlapMsg iface xs ys = match cohPpPair xs ys
+  (s1, s2) =>
+    "overlapping impls of \{iface}: \{s1} and \{s2} can match the same type; make them disjoint or wrap one type in a newtype"
+
+-- a program impl α-equal to a prelude impl.  The prelude cannot be edited, so the
+-- remedy is the newtype, not disjointness of the program's two impls.
+export
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeOverlapMsg iface xs ys = match cohPpPair xs ys
+  (s1, s2) =>
+    "overlapping impls of \{iface}: \{s1} and the prelude's \{s2} can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement \{iface} for that"
+
+-- ERROR-QUALITY dim F: the actionable half, carried as structured `help` rather than
+-- crammed into the message.  Both remedies are real and the FIRST one is the spec's
+-- (§6.1's separating case): a third impl at the pair's common instance is ⊑ both, so
+-- every goal matching both has a unique ⊑-minimum again.
+-- The second clause is CONDITIONED on closedness, and that is not pedantry: the
+-- first draft read "without one, a goal that matches both is rejected as ambiguous",
+-- which is FALSE on exactly the shape this warning newly permits.  At a goal still
+-- carrying an undetermined type the goal-site reject is gated off (§6.2 T3/T4) and
+-- the selector COMMITS to the first-declared impl — `s6-2-t4-open-goal-deferred.mdk`
+-- matches both and prints `1` at exit 0.  A reader told "is rejected" draws exactly
+-- the wrong inference about the program in front of them.
+export
+cohIncomparableHelp : String
+cohIncomparableHelp =
+  "add an impl at the two heads' common instance so it is more specific than both, or make the two heads disjoint"
+
+-- cross-module conflict wording: names the interface and BOTH owning modules.
+export
+cohCrossModuleMsg : String -> String -> String -> String
+cohCrossModuleMsg iface mid1 mid2 =
+  "conflicting `impl \{iface}`: defined in both `\{mid2}` and `\{mid1}`"
+
+export
+superContextUndeclaredMsg : String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String
+superContextUndeclaredMsg subject derived superGoal pred predBare
+  | derived =
+    "`\{subject}` (derived) must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the derived impl does not declare; a `deriving` clause takes no `requires`, so write the impl by hand with `requires \{predBare}`"
+  | otherwise =
+    "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the impl does not declare; add `requires \{predBare}` to the impl"
+
+export
+superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
+superContextNoImplMsg subject derived superGoal pred predBare
+  | derived =
+    "`\{subject}` (derived) must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{predBare}`, and write the derived impl by hand if its `requires` must change"
+  | otherwise =
+    "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{predBare}`"
+
+export
+missingImplMethodMsg : String -> List Ty -> String -> String
+missingImplMethodMsg iface tys method =
+  "`impl \{iface} \{joinWith " " (map ppTyAtom tys)}` is missing the method `\{method}`; define `\{method}` in the impl"
+
+export
+ordinalSentinelMsg : String
+ordinalSentinelMsg =
+  "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete"
+
+-- e.g. ["A", "B", "A"] → "cyclic superinterface: A requires B requires A"
+export
+cyclicSuperIfaceMsg : List String -> String
+cyclicSuperIfaceMsg path =
+  "cyclic superinterface: " ++ joinWith " requires " (map backticked path)
+
+-- #1155: names the GOAL and every competing impl head, not just the interface, so the
+-- reader can find the impls that collided (ERROR-QUALITY §1: "in the user's
+-- vocabulary", "actionable"). The goal's monos render through ONE shared naming
+-- context so a variable in two argument positions prints as the same letter, matching
+-- `cohOverlapMsg`'s declaration-time conflict rendering.
+--
+-- Wording is arity-neutral: three mutually incomparable impls are constructible
+-- (`C (T Int b c)` / `C (T a Int c)` / `C (T a b Int)`), so every count-bearing word is
+-- derived from `listLen cands`, never hardcoded to two.
+--
+-- The remedy clause suggests annotation rather than editing, because a competing impl
+-- may be prelude or imported code the reader does not own — `KeyEntry` carries no
+-- module id, so the message cannot name which impl that is.
+export
+ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
+ambiguousOverlapMsg iface goals cands =
+  "ambiguous instance for `\{iface}`: the goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}; make them disjoint, or annotate this expression with a type only one of them matches"
+
+-- "neither is more specific than the other" reads better than the general form at the
+-- overwhelmingly common arity, and presupposes exactly two, so it is gated on two.
+noMinimumClause : Int -> String
+noMinimumClause n
+  | n == 2 = "neither is more specific than the other"
+  | otherwise = "none of them is more specific than all the others"
+
+-- "A", "A and B", "A, B and C" — `joinWith " and "` gives "A and B and C" at n>=3.
+joinAnd : List String -> String
+joinAnd [] = ""
+joinAnd [x] = x
+joinAnd [x, y] = "\{x} and \{y}"
+joinAnd (x :: rest) = "\{x}, \{joinAnd rest}"
+
+implHeadLabel : String -> KeyEntry -> String
+implHeadLabel iface (KeyEntry _ _ _ _ _ itys _ _) =
+  "`impl \{iface} \{joinWith " " (map ppTyAtom itys)}`"
+
+export
+ambiguousImplMsg : String -> String
+ambiguousImplMsg iface =
+  "ambiguous instance for `"
+    ++ iface
+    ++ "`: the type here does not determine which impl applies; add a type annotation"
+
+-- An interface's name qualified by its declaring module (`mb.Sz`), for a diagnostic
+-- that must say WHICH declaration lacks an impl when two modules declare the same
+-- spelling.  An interface with no module origin renders bare, and so does one
+-- declared by the flat single-file entry: `"__user__"` is a synthetic id, not a
+-- name the user wrote (`originPhrase` treats it the same way).
+export
+qualifiedIfaceLabel : IfaceRef -> String
+qualifiedIfaceLabel ir = match ir.irOrigin
+  OriginModule "__user__" => ir.irName
+  OriginModule m => "\{m}.\{ir.irName}"
+  _ => ir.irName
+
+-- The goal is rendered with each declared variable under its declared name; the
+-- renderer names every other variable with a letter those names leave free.
+export
+sigVarGoalMsg : DeclaringBinder ->
+  List (String, Ty, List (String, Mono)) ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  String
+sigVarGoalMsg binder sigTvMaps sigVarIds iface args =
+  let owners = flatMap (sigVarOwner sigTvMaps) (dedupI sigVarIds)
+  let named = map snd owners
+  let pred =
+    "\{iface.irName} \{joinWith " " (ppEach (Ref named) (Ref 0) 3 args)}"
+  let vars = joinWith " and " (map (owner => "`\{snd (snd owner)}`") owners)
+  match binder
+    DeclaredBySignature =>
+      let member = match owners
+        (m, _) :: _ => m
+        [] => ""
+      "the body of `\{member}` requires `\{pred}`, which its signature does not declare and which only a specific \{vars} satisfies; write that type in the signature or add `\{pred} =>`"
+    DeclaredByAnnotation =>
+      let written = match sigTvMaps
+        (_, ty, _) :: _ => ppTy ty
+        [] => ""
+      "this expression requires `\{pred}`, which its annotation `\{written}` does not declare and which only a specific \{vars} satisfies; write that type in the annotation or add `\{pred} =>`"
+
+-- (member, (id, declared name)) for the signature in [sigTvMaps] that declares [id].
+sigVarOwner : List (String, Ty, List (String, Mono)) ->
+  Int ->
+  List (String, (Int, String))
+sigVarOwner [] _ = []
+sigVarOwner ((m, _, tvs) :: rest) id = match findTvName id tvs
+  Some n => [(m, (id, n))]
+  None => sigVarOwner rest id
+
+export
+methodBodySubject : MethodBodyKind -> String -> String -> String
+methodBodySubject (ImplBody _) iface mname = implSubject iface mname
+methodBodySubject DefaultBody iface mname = defaultSubject iface mname
+
+export
+methodBodyLaunderMsg : MethodBodyKind -> String -> String -> List Atom -> String
+methodBodyLaunderMsg (ImplBody _) iface mname escaping =
+  effectLaunderMsg iface mname escaping
+methodBodyLaunderMsg DefaultBody iface mname escaping =
+  defaultEffectLaunderMsg (defaultSubject iface mname) escaping
+
+effectLaunderMsg : String -> String -> List Atom -> String
+effectLaunderMsg iface mname escaping =
+  "effect laundering in impl of `\{mname}` for `\{iface}`: the body performs <\{renderAtoms escaping}>, which no argument sources and the method's row does not declare; declare <\{renderAtoms escaping}> in the method's row, or perform it through an argument"
+
+export
+aliasesHeadRowMsg : String -> Ty -> String
+aliasesHeadRowMsg subject mty =
+  "\{subject} identifies a method effect variable with the instance head's own effect-row parameter, which the declared type `\{ppTy mty}` keeps distinct; keep the method's effect variable independent of the head's"
+
+implSubject : String -> String -> String
+implSubject iface mname = "impl of `\{mname}` for `\{iface}`"
+
+defaultSubject : String -> String -> String
+defaultSubject iface mname = "default body of `\{mname}` in `\{iface}`"
+
+export
+narrowsImplHeadMsg : String -> List String -> String -> String
+narrowsImplHeadMsg subject narrowed head =
+  "\{subject} fixes the instance-head type \{tyVarNoun narrowed} \{quotedNames narrowed}, but the impl is declared for every type in their place; narrow the head to `\{head}`, or make the body parametric in \{quotedNames narrowed}"
+
+export
+indexEagerMsg : String -> String -> String
+indexEagerMsg subject evar =
+  "\{subject} performs the effect variable <\{evar}> at call time, but the signature charges <\{evar}> only in a result index, `f \{evar} ...`; defer it under the container's own <\{evar}> thunk, or charge the method's arrow, `-> <\{evar}> ...`"
+
+tyVarNoun : List String -> String
+tyVarNoun [_] = "variable"
+tyVarNoun _ = "variables"
+
+export
+pinsTyvarMsg : String -> Ty -> List String -> String
+pinsTyvarMsg subject mty pinned =
+  "\{subject} pins the method's quantified type \{tyVarNoun pinned} \{quotedNames pinned}, which the declared type `\{ppTy mty}` leaves to the caller; make the body parametric in \{quotedNames pinned}"
+
+export
+undeclaredConstraintMsg : String -> Ty -> String -> String -> String
+undeclaredConstraintMsg subject mty oiface vname =
+  "\{subject} requires `\{oiface}` on the method's quantified type variable `\{vname}`, which the declared type `\{ppTy mty}` does not; add `\{oiface} \{vname} =>` to the method's signature"
+
+export
+undeclaredImplPrerequisiteMsg : String -> String -> String -> String
+undeclaredImplPrerequisiteMsg subject oiface vname =
+  "\{subject} requires `\{oiface}` on the instance-head type variable `\{vname}`, which the impl does not declare; add `requires \{oiface} \{vname}` to the impl"
+
+export
+implGoalFixesHeadMsg : String -> String -> List String -> String
+implGoalFixesHeadMsg subject pred fixed =
+  "\{subject} requires `\{pred}`, which only a specific instance-head type \{tyVarNoun fixed} \{quotedNames fixed} satisfies, but the impl is declared for every type in their place; make the body parametric in \{quotedNames fixed}, or narrow the head"
+
+export
+undeclaredImplPredicateMsg : String -> String -> String
+undeclaredImplPredicateMsg subject pred =
+  "\{subject} requires `\{pred}` on the instance head's type variables, which the impl does not declare; add `requires \{pred}` to the impl"
+
+export
+collapsesTyvarsMsg : String -> Ty -> String
+collapsesTyvarsMsg subject mty =
+  "\{subject} identifies quantified type variables that the declared type `\{ppTy mty}` keeps distinct; keep them independent in the body"
+
+defaultEffectLaunderMsg : String -> List Atom -> String
+defaultEffectLaunderMsg subject escaping =
+  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}>, which no argument sources and the method's row does not declare; declare <\{renderAtoms escaping}> in the method's row, or perform it through an argument"
+
+export
+collapsesEffvarsMsg : String -> Ty -> String
+collapsesEffvarsMsg subject mty =
+  "\{subject} identifies effect variables that the declared type `\{ppTy mty}` keeps distinct; keep the body's effects on the variable the signature declares at each position"
+
+export
+effVarLaunderMsg : String -> String -> List Atom -> String
+effVarLaunderMsg subject evar escaping =
+  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}> inside the effect variable <\{evar}> at a position whose declared row does not include it; declare <\{renderAtoms escaping}> at that position, or perform it through an argument"
+
+-- Which arrow a spine row belongs to, for a signature with more than one: a
+-- row written on another arrow of the declaration does not cover it.
+export
+ffiArrowNote : Int -> Int -> String
+ffiArrowNote i arrows =
+  if arrows > 1 then
+    " on the result of argument \{display i} of \{display arrows}"
+  else
+    ""
+
+-- #797: [tail] renders alongside the atoms so an argument-carried open row —
+-- the one shape that still reaches this message with a tail — reports the row
+-- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
+-- A closed row passes no tail at all and renders exactly as before.
+export
+effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
+effectEscapeMsg name declared tail extras =
+  "`\{name}` performs <\{renderAtoms extras}> but its signature allows only \{renderDeclaredRow declared tail}; add <\{renderAtoms extras}> to the declared row"
+
+renderDeclaredRow : List Atom -> List String -> String
+renderDeclaredRow declared [] = "<\{renderAtoms declared}>"
+renderDeclaredRow [] tails = "<\{joinWith " | " tails}>"
+renderDeclaredRow declared tails =
+  "<\{renderAtoms declared} | \{joinWith " | " tails}>"
+
+export
+sigOverExpansiveMsg : String -> Ty -> String
+sigOverExpansiveMsg name ty =
+  "the signature of `\{name}` is polymorphic (`\{ppTy ty}`) but its body is not a value, so it cannot be generalized; give `\{name}` a parameter or declare a monomorphic type"
+
+export
+sigTooGeneralMsg : String -> Ty -> String
+sigTooGeneralMsg name ty =
+  "the signature of `\{name}` is more general than its body: `\{ppTy ty}` claims type variables that inference makes the same type"
+
+export
+annotTooGeneralMsg : Ty -> String
+annotTooGeneralMsg ty =
+  "type annotation `"
+    ++ ppTy ty
+    ++ "` is more polymorphic than the expression: a type variable in it is a specific type, or two of its variables are the same type"
+
+-- `T-REQUIRES-UNROUTED` (issue 1564).  Root-cause-honest: it must NOT say the impl is
+-- missing, because it is not — saying so would send the reader off to write an `impl`
+-- that already exists.  It names the impl as present, names the limitation as the
+-- compiler's, and gives the edit that actually works today: import the defining module
+-- (MEASURED on 1564's fixture — adding `import wrapimpl` to `nest.mdk` alone restores the
+-- dict parameter and the program prints `wrap(int)`).
+--
+-- One string, two call sites, and that sharing is load-BEARING — see
+-- `unroutedGroundReqs`.  `pushTypeErrorOnceAt` dedups on MESSAGE TEXT and a DEFERRED goal
+-- reaches both guards, so any wording that differs between them DOUBLE-REPORTS at one
+-- span (MEASURED: two `T-REQUIRES-UNROUTED` diagnostics at range 2:16-2:21, and #1564's
+-- must-fail pin flipped to DRAINED on a live bug).  Reword it here or not at all.
+--
+-- ⚖️ SA-5 (RUN-055) — two clauses were wrong, and both were measured wrong, not argued:
+--  1. *"route its evidence into the module where this binding is GENERALIZED"* is false
+--     at the ground site: nothing is generalized at a fully-concrete use site, and that
+--     site has reached this text since SA-1.  It now says "to this code".
+--  2. The remedy sent the DECLARED-GIVEN shape to a dead end.  MEASURED on
+--     `export nest : Tag (Wrap a) => a -> String`: adding the advised `import wrapimpl`
+--     to `nest.mdk` does not make the program compile — it produces a DIFFERENT error,
+--     *"Could not deduce 'Tag a' from the signature of 'nest' … add 'Tag a =>'"*.  The
+--     import is necessary and is real progress; it is just not sufficient when the
+--     signature is hand-written, because a declared context must carry every constraint
+--     the body needs.  Saying only the first half reads as "do this and it works", so the
+--     reader concludes the advice failed.  The text now says the import may not be enough
+--     for a signatured binding and that the next error names the missing constraint —
+--     which is what actually happens.
+-- Do NOT fix (2) by splitting the text per shape.  That is exactly the double-report
+-- above.  The wording must be true of the residual, ground and declared-given shapes at
+-- once, which is why it is conditional ("if this binding carries a signature") rather
+-- than shape-specific.
+export
+requiresUnroutedMsg : IfaceRef -> List Mono -> String
+requiresUnroutedMsg iface args =
+  "cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} ...` exists but is declared in a module this one does not import; import that module here, and if this binding has a signature, declare the constraint there too"
+
+export
+missingConstraintVecMsg : String -> String -> List String -> String
+missingConstraintVecMsg name iface varNames =
+  let pred = joinWith " " (iface :: varNames)
+  "the body of `\{name}` requires `\{pred}`, which its signature does not declare; add `\{pred} =>`"
+
+-- recover the sig-tyvar NAME for a constraint var id (for a readable message);
+-- falls back to "a" if the id isn't found among the member's sig tyvars.
+export
+varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
+varNameForId sigTvMaps m id = match findSigTvMap m sigTvMaps
+  None => "a"
+  Some tvMap => match findTvName id tvMap
+    None => "a"
+    Some n => n
+
+findSigTvMap : String ->
+  List (String, Ty, List (String, Mono)) ->
+  Option (List (String, Mono))
+findSigTvMap _ [] = None
+findSigTvMap m ((n, _, tvMap) :: rest)
+  | n == m = Some tvMap
+  | otherwise = findSigTvMap m rest
+
+export
+missingConstraintMsg : String -> String -> String -> String
+missingConstraintMsg name iface varName =
+  "the body of `\{name}` requires `\{iface} \{varName}`, which its signature does not declare; add `\{iface} \{varName} =>`"
+
+-- wording mirrors `cohCrossModuleMsg`'s shape — name the thing, then name BOTH owners —
+-- without reusing its sentence, which is about a conflicting `impl` and would misname
+-- this cause.
+export
+ambigReexportMsg : String -> String -> List String -> String
+ambigReexportMsg n depId mids =
+  "ambiguous `\{n}` imported from `\{depId}`: defined in both \{joinAnd (map backticked mids)}"
+
+export
+ambigReexportHelp : String -> String -> List String -> String
+ambigReexportHelp n depId mids =
+  "`\{depId}` re-exports more than one `\{n}`; import the definition you mean directly, as in `import \{firstMid mids}.{\{n}}`"
+
+firstMid : List String -> String
+firstMid (m :: _) = m
+firstMid [] = "<module>"
+
+export
+locGoalKey : Option Loc -> String
+locGoalKey None = ""
+locGoalKey (Some (Loc file sl sc el ec)) =
+  "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
+
+allDigits : String -> Bool
+allDigits n = stringLength n > 0 && allDigitsFrom n 0
+
+allDigitsFrom : String -> Int -> Bool
+allDigitsFrom n i
+  | i >= stringLength n = True
+  | otherwise =
+    let c = stringSlice i (i + 1) n
+    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+
+export
+backticked : String -> String
+backticked s = "`\{s}`"
+
+-- Chunk C: recover the ultimate callee name of an application spine (the
+-- leftmost head), stripping transparent wrappers.  `None` when the head is not
+-- a plain variable (so no name to blame in an over-application message).
+export
+appSpineName : Expr -> Option String
+appSpineName (ELoc _ e) = appSpineName e
+appSpineName (EDoOrigin _ e) = appSpineName e
+appSpineName (EAnnot e _) = appSpineName e
+appSpineName (EApp f _) = appSpineName f
+appSpineName (EVar n) = Some n
+appSpineName (EVarId n _) = Some n
+appSpineName (EVarAt n _) = Some n
+-- #2705: every driver marks now, so a callee can arrive as the marked occurrence
+-- shape; it still has the name a message wants.
+appSpineName (EMethodAt n _ _) = Some n
+appSpineName (EDictAt n _) = Some n
+appSpineName _ = None
+
+-- The ordinal of the zero-based position [i].
+export
+ordinalWord : Int -> String
+ordinalWord 0 = "first"
+ordinalWord 1 = "second"
+ordinalWord 2 = "third"
+ordinalWord 3 = "fourth"
+ordinalWord 4 = "fifth"
+ordinalWord i = "\{intToString (i + 1)}th"
+
+-- #1952: a MULTI-ARGUMENT goal names its arguments at ARGUMENT precedence, so
+-- `Conv (Wrap a) Int` no longer prints as `Conv for Wrap a Int` — which reads as a
+-- three-argument predicate and cannot be matched against the impl heads printed beside
+-- it.  The length gate is the whole disambiguation and is not a hedge: with exactly
+-- ONE argument the entire remainder of the message IS that argument, so there is nothing
+-- to mis-group, and `ppMonosShared` is kept there so every existing single-argument
+-- reject (`No impl of Eq for List Int`) renders byte-identically.  This message is prose,
+-- not source — `renderConstraintCtx` is the surface that owes parens unconditionally.
+export
+noImplFoundMsg : String -> List Mono -> String
+noImplFoundMsg iface [arg] = "no impl of \{iface} for \{ppMonosShared [arg]}"
+noImplFoundMsg iface args = "no impl of \{iface} for \{ppPredArgsShared args}"
+
+-- Roadmap #18a: only a DERIVABLE interface may be suggested via `deriving`.  A
+-- `deriving <iface>` for anything outside that set is silently DROPPED by desugar's
+-- `deriveImpls` (its `deriveForData`/`deriveForNewtype` return None), so the old
+-- unconditional "add 'deriving X'" sent the user down a dead end for every other
+-- interface — including the `Semigroup` reject `a ++ b` now raises, and the
+-- pre-existing user-interface case (`No impl of Printable for Foo`).  For those the
+-- only real fix is to write the impl, so that is all we advise.
+export
+noImplAdvice : String -> String -> String
+noImplAdvice iface n
+  | derivableIface iface =
+    "add `deriving \{iface}` to `\{n}` or write `impl \{iface} \{n}`"
+  | otherwise = "write `impl \{iface} \{n}`"
+
+-- The interfaces desugar.mdk can actually synthesize an impl for (deriveForData /
+-- deriveForNewtype).  `Generic` is data-only; the other four cover both.
+export
+derivableIface : String -> Bool
+derivableIface iface =
+  contains iface ["Eq", "Ord", "Debug", "Display", "Generic"]
+
+export
+quotedNames : List String -> String
+quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
+
+export
+locKey : Option Loc -> String
+locKey None = ""
+locKey (Some (Loc file line col _ _)) =
+  "\{file}:\{intToString line}:\{intToString col}"
+
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+export
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+-- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
+writtenNames : String -> String
+writtenNames text = match splitOnChar '$' text
+  [only] => only
+  parts => dropRenameSuffixes parts
+
+dropRenameSuffixes : List String -> String
+dropRenameSuffixes [] = ""
+dropRenameSuffixes [a] = a
+dropRenameSuffixes (a :: _ :: n :: lb :: more)
+  | allDigits n && startsWith "lb" lb =
+    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
+dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
+
+-- A diagnostic as the user reads it: binder names as written.
+export
+writtenDiag : TcDiag -> TcDiag
+writtenDiag (TcDiag code sev loc msg help fix) =
+  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
+
+export
+findTupleCand : String ->
+  List (Mono, String, Option (Loc, String)) ->
+  Option (String, Option (Loc, String))
+findTupleCand _ [] = None
+findTupleCand key ((res, help, fix) :: rest)
+  | ppMono (normalize res) == key = Some (help, fix)
+  | otherwise = findTupleCand key rest
+
+-- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
+export
+prependDiagOpt : String ->
+  Int ->
+  Option String ->
+  Option String ->
+  List TcDiag ->
+  List TcDiag
+prependDiagOpt _ _ _ None ds = ds
+prependDiagOpt code sev help (Some msg) ds =
+  writtenDiag (TcDiag code sev None msg help None) :: ds

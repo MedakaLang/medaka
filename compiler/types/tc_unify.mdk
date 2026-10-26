@@ -7,7 +7,7 @@
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
 -- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
 -- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
--- message text is `tc_diag`'s.
+-- message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
 -- 6.6-6.8.
@@ -79,28 +79,16 @@ import types.tc_mono.{
 import types.tc_state.{dynAtIfSome, wAll, wPush, wRestore, wSnapshot}
 import types.tc_env.{domainHasPatterns, tyTabKey}
 import types.tc_diag.{
-  authorityCoverMsg,
-  authorityIndexMsg,
-  authorityTermTextIn,
-  closedRowMismatchMsg,
-  constrainedApplicationText,
-  contraRowMsg,
-  deferRequiresMonadMsg,
-  doRequiresMonadMsg,
-  elselessIfHelp,
-  firstTupleCallHint,
-  indexRowMismatchMsg,
-  joinMismatchMsg,
-  paramVarianceMismatchMsg,
-  patternIndexMsg,
-  pushTypeError,
-  pushTypeErrorAt,
-  pushTypeErrorHelpFixAt,
-  recordTypeError,
-  renderFlatRow,
-  residualFailureMsg,
-  sameSpellingHint,
-  starSpelling,
+  firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
+  recordTypeError
+}
+import types.tc_diag_text.{
+  authorityCoverMsg, authorityIndexMsg, authorityTermTextIn,
+  closedRowMismatchMsg, constrainedApplicationText, contraRowMsg,
+  deferRequiresMonadMsg, doRequiresMonadMsg, elselessIfHelp,
+  indexRowMismatchMsg, joinMismatchMsg, paramVarianceMismatchMsg,
+  patternIndexMsg, renderFlatRow, residualFailureMsg, sameSpellingHint,
+  starSpelling
 }
 import types.effect_authority.{
   Authority(..),

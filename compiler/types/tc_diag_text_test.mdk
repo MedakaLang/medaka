@@ -1,0 +1,153 @@
+-- Tests of `types.tc_diag_text`: the context-free message builders and keys.  Every test applies a
+-- builder to plain operands (names, counts, kinds, spans) and pins the text it returns, so
+-- none needs a minted `ModuleCtx`.
+
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import types.publish.{TcDiag(..), tcCode, tcMsg}
+import frontend.ast.{Loc(..)}
+import types.tc_diag_text.{
+  aliasArityMsg, ambiguousFieldMsg, backticked, derivableIface,
+  discardedValueFix, discardedValueMsg, kindName, locGoalKey, locKey,
+  missingFieldMsg, noImplFoundMsg, ordinalWord, overAppliedMsg, prependDiagOpt,
+  quotedNames, renderKindArrow, starSpelling, unboundVarMsg, unknownCtorMsg,
+  unknownFieldMsg, wideAnnotateHelp, writtenDiag
+}
+import types.tc_mono.{tconBuiltin}
+import types.tc_types.{Kind(..)}
+
+siteA : Option Loc
+siteA = Some (Loc "probe.mdk" 3 1 3 9)
+
+siteB : Option Loc
+siteB = Some (Loc "probe.mdk" 5 1 5 9)
+
+test "backticked wraps one name and quotedNames joins a list, empty for none" = expectAll
+  [
+    expectEqual "`a`" (backticked "a"),
+    expectEqual "`a`, `b`" (quotedNames ["a", "b"]),
+    expectEqual "" (quotedNames []),
+  ]
+
+test "locGoalKey spells the whole span and is empty without one" = expectAll [
+  expectEqual "probe.mdk:3:1:3:9" (locGoalKey siteA),
+  expectEqual "" (locGoalKey None),
+]
+
+test "ordinalWord names the first five positions and numbers the rest" =
+  expectEqual
+    ["first", "second", "third", "fourth", "fifth", "7th"]
+    (map ordinalWord [0, 1, 2, 3, 4, 6])
+
+test "derivableIface admits the derivable interfaces and no other" = expectAll [
+  expectTrue (derivableIface "Eq"),
+  expectTrue (derivableIface "Generic"),
+  expectFalse (derivableIface "Semigroup"),
+]
+
+test "kindName and renderKindArrow spell kinds, the arrow ending in Type" = expectAll
+  [
+    expectEqual "Type" (kindName KType),
+    expectEqual "Effect" (kindName KRow),
+    expectEqual "Effect -> Type" (renderKindArrow [KRow]),
+    expectEqual "Type" (renderKindArrow []),
+  ]
+
+test "unbound variable, unknown constructor and field messages quote the name" = expectAll
+  [
+    expectEqual "unbound variable `x`" (unboundVarMsg "x"),
+    expectEqual "unknown constructor `Foo`" (unknownCtorMsg "Foo"),
+    expectEqual "no field `f` in `R`" (unknownFieldMsg "f" "R"),
+    expectEqual "missing field `f` in `R`" (missingFieldMsg "f" "R"),
+  ]
+
+test "an ambiguous field message names every owner and the annotation to add" =
+  expectEqual
+    "ambiguous field `.x`: it is declared by `A` and `B` and the record type is undetermined; annotate the record, as in `(r : A).x`"
+    (ambiguousFieldMsg "x" ["A", "B"])
+
+test "argument counts agree in number: one argument, many arguments" = expectAll
+  [
+    expectEqual
+      "type alias `T` takes 1 argument but is applied to 3"
+      (aliasArityMsg "T" 1 3),
+    expectEqual
+      "`f` takes 2 arguments but is applied to 3"
+      (overAppliedMsg "f" 2 3),
+  ]
+
+test "noImplFoundMsg names the interface and the instance type" =
+  expectEqual
+    "no impl of Display for Int"
+    (noImplFoundMsg "Display" [tconBuiltin "Int"])
+
+test "the wide-literal annotate help names U64 or I64 by sign" = expectAll [
+  expectEqual
+    "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(5 : U64)`"
+    (wideAnnotateHelp "5" False),
+  expectEqual
+    "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(-5 : I64)`"
+    (wideAnnotateHelp "-5" True),
+]
+
+test "a discarded statement value gets a `let _ = ` fix at its start" = expectAll
+  [
+    expectEqual
+      "this statement's value (an Int) is discarded; only a `Unit` expression may stand alone as a statement"
+      (discardedValueMsg "an Int"),
+    expectEqual
+      (Some ("probe.mdk:3:1:3:1", "let _ = "))
+      (map
+        (fix => (locGoalKey (Some (fst fix)), snd fix))
+        (discardedValueFix siteA)),
+    expectEqual None (map snd (discardedValueFix None)),
+  ]
+
+test "starSpelling names the pattern-ranging binder with or without a label" = expectAll
+  [
+    expectEqual
+      "`n` pattern-ranging, `@L*` or `Authority L*`"
+      (starSpelling "n" None),
+    expectEqual
+      "`n` pattern-ranging, `(n : String @L*)` or `(n : Authority L*)`"
+      (starSpelling "n" (Some "L")),
+  ]
+
+test "writtenDiag strips a renamed binder's suffix from message and help, and keeps the rest" =
+  let loc = siteA
+  let raw =
+    TcDiag
+      "T-PROBE"
+      1
+      loc
+      "x$m$3$lb has type Int"
+      (Some "rename y$m$12$lb")
+      None
+  let written = writtenDiag raw
+  expectAll [
+    expectEqual "x has type Int" (tcMsg written),
+    expectEqual "T-PROBE" (tcCode written),
+    expectEqual (Some "rename y") (match written
+      TcDiag _ _ _ _ help _ => help),
+    expectEqual
+      "x$m$a$lb and y$m$$lb"
+      (tcMsg
+        (writtenDiag
+          (TcDiag "T-PROBE" 1 None "x$m$a$lb and y$m$$lb" None None))),
+    expectEqual
+      "cost$5 and $x"
+      (tcMsg (writtenDiag (TcDiag "T-PROBE" 1 None "cost$5 and $x" None None))),
+  ]
+
+test "locKey spells a located site and is empty without one" = expectAll [
+  expectEqual "" (locKey None),
+  expectEqual "probe.mdk:3:1" (locKey siteA),
+  expectNotEqual (locKey siteA) (locKey siteB),
+]
+
+test "prependDiagOpt adds a written diagnostic only when there is a message" =
+  let none = prependDiagOpt "T-PROBE" 1 None None []
+  let some = prependDiagOpt "T-PROBE" 1 (Some "h") (Some "q$m$1$lb is bad") []
+  expectAll [
+    expectEqual [] (map tcMsg none),
+    expectEqual ["q is bad"] (map tcMsg some),
+  ]
