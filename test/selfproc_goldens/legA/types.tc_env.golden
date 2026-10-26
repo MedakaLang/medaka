@@ -13,6 +13,9 @@ buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
 buildImplUniverse : List Decl -> ImplUniverse
+builtinClassName : BuiltinClass -> String
+builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
+builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceFunctorEnv : GraphCtx -> ClassEnv
 ceFunctorIface : Decl
@@ -197,6 +200,9 @@ implKeyTc : String -> List Ty -> String
 implMethodNameTc : ImplMethod -> String
 implRowHasReqs : List Require -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String, Option Loc) -> List ImplRow
+importLocFor : Map String (Map String Unit) -> List Decl -> String -> Option Loc
+importLocOf : String -> Decl -> Option Loc
+importLocReaching : Map String (Map String Unit) -> String -> Decl -> Option Loc
 importTableMid : UsePath -> String
 importedBindings : UsePath -> Option (List (String, String))
 importerEdgeIndex : List (String, List Decl) -> Map String (List String) -> Map String (List String)

@@ -1,0 +1,92 @@
+-- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
+-- module record, the codes it has been given, the signatures of a parsed source, and the
+-- alias table and declared parameter kinds a source's declarations register.  Test siblings
+-- import it and no production module does.  The last two are the fixture-side twins of
+-- `tc_decls`' `graphAliasRow` and `withDeclParamKinds`: a test of a module below `tc_decls`
+-- cannot import those, and its fixtures need the same tables.
+
+import list.{reverse}
+import test.{Expectation, expectEqual}
+import frontend.parser.{parse}
+import frontend.ast.{Decl(..), TabKey, Ty(..), TyConOrigin(..)}
+import support.ordmap.{omInsert}
+import types.publish.{tcCode}
+import types.tc_env.{declParamKinds, tyTabKey}
+import types.tc_state.{blankModuleCtx, probeGraphCtx, wAll}
+import types.tc_types.{Kind(..), ModuleCtx(..)}
+
+-- A module record named "probe", minted in a fresh graph record.
+export
+fresh : Unit -> ModuleCtx
+fresh _ = blankModuleCtx (probeGraphCtx ()) "probe"
+
+-- The codes of the diagnostics pushed to [m] so far, oldest first.
+export
+codesOf : ModuleCtx -> List String
+codesOf m = reverse (map tcCode (wAll m.mcCells.typeErrors))
+
+-- The type of every signature among [ds], in source order.
+export
+sigsOf : List Decl -> List Ty
+sigsOf [] = []
+sigsOf ((DTypeSig _ _ t _) :: rest) = t :: sigsOf rest
+sigsOf (_ :: rest) = sigsOf rest
+
+-- The type of the first signature of [src], or `None` when it declares none.
+export
+firstSig : String -> Option Ty
+firstSig src = match sigsOf (parse src)
+  t :: _ => Some t
+  [] => None
+
+-- [k] applied to the type of the first signature of [src]; a source with no signature
+-- fails the test rather than reading as some placeholder type.
+export
+withFirstSig : String -> (Ty -> Expectation) -> Expectation
+withFirstSig src k = match firstSig src
+  Some t => k t
+  None => expectEqual "a source with a signature" src
+
+export
+intTy : Ty
+intTy =
+  TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- The alias table of [ds]: each alias keyed by its identity, with its parameters and
+-- right-hand side.
+export
+aliasTableOf : List Decl -> List (TabKey, (List String, Ty))
+aliasTableOf [] = []
+aliasTableOf ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasOrigin = o }) :: rest) =
+  (tyTabKey o n, (ps, rhs)) :: aliasTableOf rest
+aliasTableOf (_ :: rest) = aliasTableOf rest
+
+-- Records in [m] the parameter kinds each data, newtype or alias head of [ds] declares.
+-- A head whose parameters are all of kind `Type` has no entry, as it has none at a real
+-- registration.
+export
+recordKindsOf : ModuleCtx -> List Decl -> Unit
+recordKindsOf _ [] = ()
+recordKindsOf m ((DData { dataName = n, dataParams = ps, dataParamKinds = anns, dataOrigin = o }) :: rest) =
+  recordKinds m o n (declParamKinds m.mcGraph ps anns)
+  recordKindsOf m rest
+recordKindsOf m ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = anns, newtypeOrigin = o }) :: rest) =
+  recordKinds m o n (declParamKinds m.mcGraph ps anns)
+  recordKindsOf m rest
+recordKindsOf m ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = anns, tyAliasOrigin = o }) :: rest) =
+  recordKinds m o n (declParamKinds m.mcGraph ps anns)
+  recordKindsOf m rest
+recordKindsOf m (_ :: rest) = recordKindsOf m rest
+
+recordKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
+recordKinds m o n kinds
+  | any kindIsDeclared kinds =
+    m.mcCells.dataParamKindsRef :=
+      (tyTabKey o n, kinds) :: m.mcCells.dataParamKindsRef.value
+    m.mcCells.dataParamNameIndexRef :=
+      omInsert n () m.mcCells.dataParamNameIndexRef.value
+  | otherwise = ()
+
+kindIsDeclared : Kind -> Bool
+kindIsDeclared KType = False
+kindIsDeclared _ = True

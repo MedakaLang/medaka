@@ -580,6 +580,15 @@ test "arch_boundaries: types.tc_unify closure matches its golden" =
 test "arch_boundaries: types.tc_decls_variance closure matches its golden" =
   closurePin "types.tc_decls_variance"
 
+test "arch_boundaries: types.tc_decls_types closure matches its golden" =
+  closurePin "types.tc_decls_types"
+
+test "arch_boundaries: types.tc_decls closure matches its golden" =
+  closurePin "types.tc_decls"
+
+test "arch_boundaries: types.tc_foreign closure matches its golden" =
+  closurePin "types.tc_foreign"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 
@@ -1082,6 +1091,9 @@ typecheckFamily = [
   "types.tc_scope",
   "types.tc_unify",
   "types.tc_decls_variance",
+  "types.tc_decls_types",
+  "types.tc_decls",
+  "types.tc_foreign",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

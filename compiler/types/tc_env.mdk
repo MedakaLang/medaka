@@ -1,6 +1,8 @@
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
--- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index, the export and
--- definer tables; their construction from declarations is `tc_decls`), the identity keys, the
+-- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import
+-- site it finds (`importLocFor`), the export and definer tables; their construction from
+-- declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and
+-- references, `builtinClassName`, `builtinIfaceRef`), the
 -- imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an
 -- import makes visible is `tc_scope`.
 --
@@ -59,6 +61,7 @@ import frontend.ast.{
   identOriginOf,
   ifaceIdentity,
   mkIdent,
+  orElseLoc,
   sameTyConHead,
   tabKeyEq,
   tabKeyOf,
@@ -73,16 +76,43 @@ import types.effect_rows.{EffLabel(..)}
 import types.tc_diag_text.{kindName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
-  CeRow(..), ClassEnv(..), DeclEnvAcc(..), DeclEnvModule(..), DeclEnvs(..),
-  EnvBinding(..), GraphCtx(..), ImplAcc(..), ImplEnv(..), ImplRow(..),
-  ImplUniverse(..), InstRef(..), KeyEntry(..), Kind(..), MethodEnv(..),
-  MethodPredicateSlot(..), MethodRow(..), MethodSchemeRow(..), ModuleCtx(..),
-  RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
-  CDeclared, dynFor, MethodEntry
+  CeRow(..),
+  ClassEnv(..),
+  DeclEnvAcc(..),
+  DeclEnvModule(..),
+  DeclEnvs(..),
+  EnvBinding(..),
+  GraphCtx(..),
+  ImplAcc(..),
+  ImplEnv(..),
+  ImplRow(..),
+  ImplUniverse(..),
+  InstRef(..),
+  KeyEntry(..),
+  Kind(..),
+  MethodEnv(..),
+  MethodPredicateSlot(..),
+  MethodRow(..),
+  MethodSchemeRow(..),
+  ModuleCtx(..),
+  RecordInfo(..),
+  StandaloneOrigin(..),
+  TcEnv(..),
+  ValueScheme(..),
+  AliasDecl,
+  CDeclared,
+  BuiltinClass(..),
+  dynFor,
+  MethodEntry,
 }
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
-import list.{drop, indexed, last}
+import list.{
+  drop,
+  findMap,
+  indexed,
+  last,
+}
 import support.util.{
   anyList,
   contains,
@@ -3526,6 +3556,66 @@ useModuleId _ = []
 export
 lastComponent : List String -> String
 lastComponent ns = optionOr "" (last ns)
+
+-- The import in [prog] that brings in module [owner]'s declarations: its own
+-- import, or else the first import of a module that reaches it.
+export
+importLocFor : OrdMap (OrdMap Unit) -> List Decl -> String -> Option Loc
+importLocFor reach prog owner =
+  orElseLoc
+    (findMap (importLocOf owner) prog)
+    (findMap (importLocReaching reach owner) prog)
+
+importLocOf : String -> Decl -> Option Loc
+importLocOf owner (DUse _ path loc)
+  | useModId path == owner = Some loc
+importLocOf _ _ = None
+
+importLocReaching : OrdMap (OrdMap Unit) -> String -> Decl -> Option Loc
+importLocReaching reach owner (DUse _ path loc)
+  | omHasKey owner (optionOr omEmpty (omLookup (useModId path) reach)) =
+    Some loc
+importLocReaching _ _ _ = None
+
+-- the spelling each built-in class has in the prelude.  It is a CONSTANT of the
+-- language, not a lookup key: nothing resolves this string against a scope.
+export
+builtinClassName : BuiltinClass -> String
+builtinClassName BNum = "Num"
+builtinClassName BEq = "Eq"
+builtinClassName BOrd = "Ord"
+builtinClassName BSemigroup = "Semigroup"
+
+export
+builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
+builtinClassOrigin gctx BNum = gctx.crossRun.builtinClassesRef.value.bcNum
+builtinClassOrigin gctx BEq = gctx.crossRun.builtinClassesRef.value.bcEq
+builtinClassOrigin gctx BOrd = gctx.crossRun.builtinClassesRef.value.bcOrd
+builtinClassOrigin gctx BSemigroup =
+  gctx.crossRun.builtinClassesRef.value.bcSemigroup
+
+-- the identity-carrying interface reference a synthetic occurrence records.
+--
+-- Standing condition, for the four call sites this function feeds
+-- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`).  Each of
+-- them builds a DECL-LAYER obligation goal out of this ref, via `builtinClassOrigin` ->
+-- `builtinClassesRef`, a table `builtinClassesGo` populates by reading
+-- `DInterface { ifaceOrigin }`.  That is sound TODAY only because no user declaration can
+-- reach that table's population — MEASURED on both arms: a module IN the import graph
+-- redeclaring one of the four spellings is rejected `Duplicate interface: Semigroup`
+-- (exit 1); a module NOT in the graph is never loaded at all, so it contributes no
+-- `DInterface` to the walk; and a user `core.mdk` cannot shadow the prelude.  The
+-- cross-layer defect U1c (#1507) cured at `recordImplObligation` RETURNS at all four
+-- sites if ANY of these changes: the duplicate-interface guard is relaxed; DICT §7.1 U1
+-- makes the prelude a graph node (at which point §8 I4 makes two same-spelled
+-- declarations legal, which is precisely what removes the guard); or a fifth
+-- `BuiltinClass` is added whose spelling the guard does not cover.  The safety here is a
+-- property of the LANGUAGE's current namespace rules, not of this channel.  Background:
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.
+export
+builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
+builtinIfaceRef gctx c =
+  IfaceRef { irName = builtinClassName c, irOrigin = builtinClassOrigin gctx c }
 
 -- test-only observation: declarations whose only callers are tests and probes.
 

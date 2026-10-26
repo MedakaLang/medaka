@@ -17,7 +17,7 @@ import types.tc_decls_variance.{
   recordParamPolarities,
 }
 import types.tc_state.{blankModuleCtx, probeGraphCtx}
-import types.tc_types.{DeclEnvModule(..), ModuleCtx(..), Polarity(..)}
+import types.tc_types.{DeclEnvModule(..), Polarity(..)}
 
 polName : Polarity -> String
 polName PCo = "co"

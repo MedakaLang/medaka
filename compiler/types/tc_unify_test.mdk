@@ -29,7 +29,7 @@ import types.tc_mono_test.{
   genMTy,
   varsOf,
 }
-import types.tc_state.{blankModuleCtx, probeGraphCtx, wAll}
+import types.tc_test_support.{codesOf, fresh}
 import types.tc_types.{ModuleCtx(..)}
 import types.tc_unify.{
   enterLevel,
@@ -42,13 +42,6 @@ import types.tc_unify.{
 }
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
-
-fresh : Unit -> ModuleCtx
-fresh _ = blankModuleCtx (probeGraphCtx ()) "probe"
-
--- The codes of the diagnostics pushed so far, oldest first.
-codes : ModuleCtx -> List String
-codes m = reverse (map tcCode (wAll m.mcCells.typeErrors))
 
 level : ModuleCtx -> Int
 level m = m.mcCells.currentLevel.value
@@ -124,7 +117,7 @@ unifyPair a b swap =
   let ma = buildFresh m a
   let mb = buildFresh m b
   if swap then unify m mb ma else unify m ma mb
-  PairRead { accepted = codes m == [], readings = shapes [ma, mb] }
+  PairRead { accepted = codesOf m == [], readings = shapes [ma, mb] }
 
 -- A pair of model types to unify.  A quarter are independent draws, which clash or
 -- unify by chance; the rest are two independent "blurs" of one closed type, in which
@@ -187,7 +180,7 @@ test "a variable unifies with a type and reads as it afterwards, from either sid
   expectAll [
     expectEqual ["Int"] (shapes [a]),
     expectEqual ["Bool"] (shapes [b]),
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
   ]
 
 test "two variables unified become one: binding either binds both" =
@@ -198,7 +191,7 @@ test "two variables unified become one: binding either binds both" =
   unify m b (TApp (tconBuiltin "List") (tconBuiltin "Int"))
   expectAll [
     expectEqual ["(List Int)", "(List Int)"] (shapes [a, b]),
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
   ]
 
 test "a constructor clash is a type mismatch and binds nothing" =
@@ -207,7 +200,7 @@ test "a constructor clash is a type mismatch and binds nothing" =
   unify m (tconBuiltin "Int") (tconBuiltin "Bool")
   unify m (TApp (tconBuiltin "List") a) (TApp (tconUnresolved "Pair") a)
   expectAll [
-    expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codes m),
+    expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m),
     expectEqual ["v0"] (shapes [a]),
   ]
 
@@ -222,35 +215,35 @@ test "unification descends applications and arrows and binds the variables it me
     (TFun int pureRow (TApp (tconBuiltin "List") (tconBuiltin "Bool")))
   expectAll [
     expectEqual ["Int", "Bool"] (shapes [a, b]),
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
   ]
 
 test "an arrow does not unify with an application" =
   let m = fresh ()
   let int = tconBuiltin "Int"
   unify m (TFun int pureRow int) (TApp (tconBuiltin "List") int)
-  expectEqual ["T-TYPE-MISMATCH"] (codes m)
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
 
 test "a rigid variable unifies with itself and with no constructor" =
   let m = fresh ()
   unify m (TRigid "a") (TRigid "a")
-  let none = codes m
+  let none = codesOf m
   unify m (TRigid "a") (tconBuiltin "Int")
   unify m (TRigid "a") (TRigid "b")
   expectAll [
     expectEqual [] none,
-    expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codes m),
+    expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m),
   ]
 
 test "same-named types of two modules are different types; an absent origin makes no claim" =
   let m = fresh ()
   unify m (tconFrom (OriginModule "m1") "T") (tconFrom (OriginModule "m1") "T")
   unify m (tconUnresolved "T") (tconFrom (OriginModule "m1") "T")
-  let accepted = codes m
+  let accepted = codesOf m
   unify m (tconFrom (OriginModule "m1") "T") (tconFrom (OriginModule "m2") "T")
   expectAll [
     expectEqual [] accepted,
-    expectEqual ["T-TYPE-MISMATCH"] (codes m),
+    expectEqual ["T-TYPE-MISMATCH"] (codesOf m),
   ]
 
 -- ── the occurs check ──────────────────────────────────────────────────────
@@ -260,7 +253,7 @@ test "a variable is refused a type that contains it: T-INFINITE-TYPE" =
   let a = freshVar m ()
   unify m a (TApp (tconBuiltin "List") a)
   expectAll [
-    expectEqual ["T-INFINITE-TYPE"] (codes m),
+    expectEqual ["T-INFINITE-TYPE"] (codesOf m),
     expectEqual ["v0"] (shapes [a]),
   ]
 
@@ -268,11 +261,11 @@ test "the occurs check sees through an arrow, and a variable unifies with itself
   let m = fresh ()
   let a = freshVar m ()
   unify m a a
-  let accepted = codes m
+  let accepted = codesOf m
   unify m (TFun a pureRow (tconBuiltin "Int")) a
   expectAll [
     expectEqual [] accepted,
-    expectEqual ["T-INFINITE-TYPE"] (codes m),
+    expectEqual ["T-INFINITE-TYPE"] (codesOf m),
   ]
 
 test "a variable bound to a type without it is accepted, whatever the type's size" =
@@ -281,7 +274,7 @@ test "a variable bound to a type without it is accepted, whatever the type's siz
   let b = freshVar m ()
   unify m a (TApp (tconBuiltin "List") (TApp (tconBuiltin "List") b))
   expectAll [
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
     expectEqual ["(List (List v0))"] (shapes [a]),
   ]
 
@@ -297,10 +290,10 @@ prop "a variable is refused any type that strictly contains it, and accepted a c
     [] =>
       let v = freshVar m ()
       unify m v (TApp (tconBuiltin "List") (build [] t))
-      codes m == []
+      codesOf m == []
     (k, v) :: _ =>
       unify m v (TApp (tconBuiltin "List") (build cells t))
-      codes m /= [] && all (c => c == "T-INFINITE-TYPE") (codes m)
+      codesOf m /= [] && all (c => c == "T-INFINITE-TYPE") (codesOf m)
 
 -- ── levels ────────────────────────────────────────────────────────────────
 
@@ -312,7 +305,7 @@ test "binding a variable lowers the variables of its target to the variable's le
   unify m outer (TApp (tconBuiltin "List") inner)
   expectAll [
     expectEqual [0] (map snd (levelsOf inner)),
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
   ]
 
 test "binding a variable never raises the level of its target's variables" =
@@ -417,7 +410,7 @@ test "an instance is independent of the scheme: unifying it binds none of the sc
   expectAll [
     expectEqual ["(v0 -> v0)"] (shapes [mono]),
     expectEqual ["(Int -> Int)"] (shapes [inst]),
-    expectEqual [] (codes m),
+    expectEqual [] (codesOf m),
   ]
 
 -- Law: `instantiate (generalize t)` is `t` up to a renaming of its variables.

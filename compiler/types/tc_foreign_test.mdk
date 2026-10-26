@@ -1,0 +1,280 @@
+-- Tests of `types.tc_foreign`'s own API: the crossable set of FFI-ABI section 1 as
+-- `ffiCheckExternsCrossable` enforces it, the ownership gate (`False` checks nothing), the
+-- unlabelled and nullary rules of `ffiCheckExternsLabelled`, the exemption of an extern
+-- named like a runtime-catalog entry, the builtin-shadow and catalog-narrow rules against
+-- such an entry, the reading of an alias-headed extern through its alias, the extern
+-- signature table `externSigsToMap` and the helper `externDecls`.  Each test parses its own
+-- declarations and mints its own module record in a fresh graph record.
+
+import test.{
+  Expectation(..),
+  expectAll,
+  expectEqual,
+  expectEach,
+  expectFalse,
+  expectTextContainsAll,
+  expectTrue,
+}
+import frontend.parser.{parse}
+import frontend.ast.{Decl(..), ExternDecl(..)}
+import support.util.{joinWith}
+import support.ordmap.{omEmpty, omHasKey}
+import types.publish.{tcMsg}
+import types.tc_state.{wAll}
+import types.tc_types.{ModuleCtx(..), GraphCtx(..)}
+import types.tc_test_support.{aliasTableOf, codesOf, fresh}
+import types.tc_foreign.{
+  externDecls,
+  externSigsToMap,
+  ffiCheckExternsCatalogRow,
+  ffiCheckExternsCrossable,
+  ffiCheckExternsLabelled,
+  ffiCheckExternsShadow,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- The program text of one extern declaration over the type [sig].
+externProgram : String -> String
+externProgram sig = "extern probe : \{sig}\n"
+
+-- A module record whose runtime catalog holds the externs declared in [src].
+catalogCtx : String -> ModuleCtx
+catalogCtx src =
+  let m = fresh ()
+  m.mcGraph.builtinExternNamesRef := externSigsToMap (parse src) omEmpty
+  m
+
+-- A module record whose alias table is that of the declarations in [src].
+aliasCtx : String -> ModuleCtx
+aliasCtx src =
+  let m = fresh ()
+  m.mcCells.aliasTableRef := aliasTableOf (parse src)
+  m
+
+-- The codes [rule] pushes to [m] for [decls], with ownership [owned].
+codesFrom : (ModuleCtx -> Bool -> List Decl -> Unit) ->
+  ModuleCtx ->
+  Bool ->
+  String ->
+  List String
+codesFrom rule m owned decls =
+  rule m owned (parse decls)
+  codesOf m
+
+crossableCodes : Bool -> String -> List String
+crossableCodes owned sig =
+  codesFrom ffiCheckExternsCrossable (fresh ()) owned (externProgram sig)
+
+labelCodes : Bool -> String -> List String
+labelCodes owned sig =
+  codesFrom ffiCheckExternsLabelled (fresh ()) owned (externProgram sig)
+
+accepted : String -> Expectation
+accepted sig = expectEqual [] (crossableCodes True sig)
+
+rejected : String -> Expectation
+rejected sig = expectEqual ["T-FFI-NONCROSSABLE"] (crossableCodes True sig)
+
+externName : Decl -> List String
+externName (DExtern d) = [d.edName]
+externName _ = []
+
+-- ── the crossable set ─────────────────────────────────────────────────────
+
+test "each crossable scalar is accepted as an argument and as a result" = expectEach
+  [
+    ("Int", accepted "Int -> <FFI \"c\"> Int"),
+    ("Float", accepted "Float -> <FFI \"c\"> Float"),
+    ("Bool", accepted "Bool -> <FFI \"c\"> Bool"),
+    ("Char", accepted "Char -> <FFI \"c\"> Char"),
+    ("String", accepted "String -> <FFI \"c\"> String"),
+    ("Unit", accepted "Unit -> <FFI \"c\"> Unit"),
+  ]
+
+test "the fixed-width integers and Array Int cross" = expectEach [
+  ("U8", accepted "U8 -> <FFI \"c\"> U8"),
+  ("I32", accepted "I32 -> <FFI \"c\"> I64"),
+  ("U64", accepted "U64 -> <FFI \"c\"> U32"),
+  ("Array Int", accepted "Array Int -> <FFI \"c\"> Array Int"),
+]
+
+test "a function-typed argument is not crossable" =
+  rejected "(Int -> Int) -> <FFI \"c\"> Int"
+
+test "a polymorphic type variable is not crossable, as argument or result" = expectEach
+  [
+    ("argument", rejected "a -> <FFI \"c\"> Int"),
+    ("result", rejected "Int -> <FFI \"c\"> a"),
+  ]
+
+test "a type outside the crossable set is not crossable" = expectEach [
+  ("List", rejected "List Int -> <FFI \"c\"> Int"),
+  ("Option", rejected "Int -> <FFI \"c\"> Option Int"),
+  ("tuple", rejected "(Int, Int) -> <FFI \"c\"> Int"),
+]
+
+test "Array of anything but Int is not crossable" = expectEach [
+  ("Array String", rejected "Array String -> <FFI \"c\"> Int"),
+  ("nested Array", rejected "Array (Array Int) -> <FFI \"c\"> Int"),
+]
+
+test "every non-crossable position is reported, one diagnostic each" =
+  expectEqual
+    ["T-FFI-NONCROSSABLE", "T-FFI-NONCROSSABLE"]
+    (crossableCodes True "List Int -> Option Int -> <FFI \"c\"> Int")
+
+test "a named argument crosses as its type" = expectAll [
+  accepted "(n : Int) -> <FFI \"c\"> Int",
+  rejected "(n : List Int) -> <FFI \"c\"> Int",
+]
+
+-- ── ownership ─────────────────────────────────────────────────────────────
+
+test "a program the rule does not own is not checked" =
+  expectEqual [] (crossableCodes False "List Int -> <FFI \"c\"> Int")
+
+test "a non-crossable extern is reported with the type it names" =
+  let m = fresh ()
+  ffiCheckExternsCrossable
+    m
+    True
+    (parse (externProgram "List Int -> <FFI \"c\"> Int"))
+  expectTextContainsAll
+    ["`List Int`", "extern `probe`"]
+    (joinWith " " (map tcMsg (wAll m.mcCells.typeErrors)))
+
+-- ── the unlabelled and nullary rules ──────────────────────────────────────
+
+test "an extern whose result row lacks the FFI label is reported as unlabelled" =
+  expectEqual ["T-FFI-UNLABELLED"] (labelCodes True "Int -> Int")
+
+test "an extern declaring the FFI label with a host is accepted by the label rule" =
+  expectEqual [] (labelCodes True "Int -> <FFI \"c\"> Int")
+
+test "the label rule checks nothing for a program it does not own" =
+  expectEqual [] (labelCodes False "Int -> Int")
+
+test "an extern with no arrow declares a foreign value and is T-FFI-NULLARY" =
+  expectEqual ["T-FFI-NULLARY"] (labelCodes True "Int")
+
+-- ── an extern named like a runtime-catalog entry ──────────────────────────
+
+test "an extern named like a catalog entry is exempt from the crossable and label rules" =
+  let src = externProgram "List Int -> Int"
+  expectAll [
+    expectEqual
+      []
+      (codesFrom ffiCheckExternsCrossable (catalogCtx src) True src),
+    expectEqual
+      []
+      (codesFrom ffiCheckExternsLabelled (catalogCtx src) True src),
+    expectEqual
+      ["T-FFI-NONCROSSABLE"]
+      (codesFrom ffiCheckExternsCrossable (fresh ()) True src),
+    expectEqual
+      ["T-FFI-UNLABELLED"]
+      (codesFrom ffiCheckExternsLabelled (fresh ()) True src),
+  ]
+
+test "a redeclared catalog name must be an instance of the catalog's type, else T-FFI-BUILTIN-SHADOW" =
+  let catalog = "extern probe : Array a -> Int -> Int\n"
+  expectAll [
+    expectEqual
+      ["T-FFI-BUILTIN-SHADOW"]
+      (codesFrom
+        ffiCheckExternsShadow
+        (catalogCtx catalog)
+        True
+        (externProgram "String -> Int -> Int")),
+    expectEqual
+      []
+      (codesFrom
+        ffiCheckExternsShadow
+        (catalogCtx catalog)
+        True
+        (externProgram "Array Int -> Int -> Int")),
+    expectEqual
+      []
+      (codesFrom
+        ffiCheckExternsShadow
+        (fresh ())
+        True
+        (externProgram "String -> Int -> Int")),
+  ]
+
+test "a redeclared catalog name may widen the catalog's effect row but not narrow it" =
+  let catalog = "extern probe : String -> <Stdout> Unit\n"
+  expectAll [
+    expectEqual
+      ["T-FFI-CATALOG-NARROW"]
+      (codesFrom
+        ffiCheckExternsCatalogRow
+        (catalogCtx catalog)
+        True
+        (externProgram "String -> <FFI \"c\"> Unit")),
+    expectEqual
+      []
+      (codesFrom
+        ffiCheckExternsCatalogRow
+        (catalogCtx catalog)
+        True
+        (externProgram "String -> <FFI \"c\", Stdout> Unit")),
+  ]
+
+-- ── an alias-headed extern ────────────────────────────────────────────────
+
+test "an extern typed by an alias is read through the alias, whatever rule reads it" =
+  let arrow = "type CFn = Int -> Int\n"
+  let listy = "type CArgs = List Int -> <FFI \"c\"> Int\n"
+  let value = "type CVal = Int\n"
+  expectAll [
+    expectEqual
+      ["T-FFI-UNLABELLED"]
+      (codesFrom
+        ffiCheckExternsLabelled
+        (aliasCtx arrow)
+        True
+        "extern probe : CFn\n"),
+    expectEqual
+      ["T-FFI-NONCROSSABLE"]
+      (codesFrom
+        ffiCheckExternsCrossable
+        (aliasCtx listy)
+        True
+        "extern probe : CArgs\n"),
+    expectEqual
+      ["T-FFI-NULLARY"]
+      (codesFrom
+        ffiCheckExternsLabelled
+        (aliasCtx value)
+        True
+        "extern probe : CVal\n"),
+  ]
+
+-- ── the signature table and list helpers ──────────────────────────────────
+
+test "externDecls keeps only the extern declarations, in order" =
+  let ds =
+    parse
+      """
+        extern b : Int -> <FFI "c"> Int
+        f x = x
+        extern a : Int -> <FFI "c"> Int
+        """
+  expectEqual ["b", "a"] (flatMap externName (externDecls ds))
+
+test "externSigsToMap keys each extern by its name" =
+  let ds =
+    parse
+      """
+        extern a : Int -> <FFI "c"> Int
+        f x = x
+        extern b : Int -> <FFI "c"> Int
+        """
+  let table = externSigsToMap ds omEmpty
+  expectAll [
+    expectTrue (omHasKey "a" table),
+    expectTrue (omHasKey "b" table),
+    expectFalse (omHasKey "f" table),
+  ]

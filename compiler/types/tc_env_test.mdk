@@ -25,6 +25,7 @@ import types.tc_env.{
   addCtor,
   buildClassEnvGo,
   buildImplEnvGo,
+  builtinClassName,
   ceLookupAt,
   ceLookupGraph,
   ceRowIfaceName,
@@ -61,7 +62,13 @@ import types.tc_env.{
 import types.tc_mono.{monoScheme, tconBuiltin}
 import types.tc_state.{blankModuleCtx, emptyClassEnv, probeGraphCtx}
 import types.tc_types.{
-  ClassEnv, DeclEnvAcc(..), DeclEnvModule, GraphCtx, ImplEnv, TcEnv
+  ClassEnv,
+  DeclEnvAcc(..),
+  DeclEnvModule,
+  GraphCtx,
+  ImplEnv,
+  TcEnv,
+  BuiltinClass(..),
 }
 import support.ordmap.{omEmpty, omInsert}
 
@@ -318,4 +325,11 @@ test "lastComponent is the final element of a module path" = expectAll [
   expectEqual "c" (lastComponent ["a", "b", "c"]),
   expectEqual "a" (lastComponent ["a"]),
   expectEqual "" (lastComponent []),
+]
+
+test "builtin class names are the surface names" = expectAll [
+  expectEqual "Eq" (builtinClassName BEq),
+  expectEqual "Ord" (builtinClassName BOrd),
+  expectEqual "Num" (builtinClassName BNum),
+  expectEqual "Semigroup" (builtinClassName BSemigroup),
 ]
