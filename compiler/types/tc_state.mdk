@@ -36,7 +36,6 @@ import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
 }
 import types.scopes as Scopes
-import types.registry.{regEmpty}
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
 import support.util.{reverseL}

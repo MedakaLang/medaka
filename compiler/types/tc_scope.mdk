@@ -169,8 +169,8 @@ usePathAdmitsDecl path wide n iface =
   usePathBindsName path n || wide && usePathBindsName path iface.irName
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
--- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
--- is now safe: the export test above still admits only the declarations the dependency
+-- name the dependency exports — and that
+-- is safe: the export test above still admits only the declarations the dependency
 -- really provides.  `UseAlias` yields `Some []` and so witnesses nothing — see the #1276
 -- paragraph above for why that is a different defect rather than this one's residue.
 usePathBindsName : UsePath -> String -> Bool
@@ -494,69 +494,50 @@ argDispatchOf : ModuleCtx -> String -> Option Int
 argDispatchOf mctx name =
   dispatchIdxScoped mctx name mctx.mcGraph.argDispatchIdxByIdRef.value
 
--- ── #1351 L3 (MIGRATE Leg 1): the IDENTITY-SCOPED dispatch-index read ───────────
+-- ── the IDENTITY-SCOPED dispatch-index read ─────────────────────────────────────
 --
--- Both readers above used to answer "which argument position is dispatch-relevant
--- for the bare name [name]" with `lookupAssoc` — FIRST MATCH over the decl-walk
--- order of `argDispatchIndices`.  When two interfaces declare the same method name
--- at DIFFERENT dispatch indices, that order is module-processing order, so the
--- RECEIVER ARGUMENT of an occurrence was decided by import-clause order.  This is
--- Leg 1 of #1351, and it is MEASURED: on the flip direction of #1351's own corpus
--- the index read here is `idx=0` on three orderings and `idx=1` on the other three,
--- on all three arms (L3's clause-1 Leg-1 conflict probe).
+-- Both readers answer "which argument position is dispatch-relevant for the bare name
+-- [name]" from the declaration `methodScopeAt` admits for [name] in THIS module, then that
+-- declaration's own row out of the identity-keyed table.  It is a LOOKUP, not a second
+-- resolver: the resolution happens in `methodScopeAt` (RUN-METHID-056).  A first-match
+-- `lookupAssoc` over the decl-walk order of `argDispatchIndices` would not do: when two
+-- interfaces declare the same method name at DIFFERENT dispatch indices that order is
+-- module-processing order, so import-clause order would decide the RECEIVER ARGUMENT of an
+-- occurrence (#1351; measured `idx=0` on three orderings and `idx=1` on the other three,
+-- on all three arms).
 --
--- The successor asks the SAME question L2's shadow layer already asked and takes the
--- SAME answer: the declaration `methodScopeAt` admits for [name] in THIS
--- module, then that declaration's own row out of L1's identity-keyed table.  It is a
--- LOOKUP, not a second resolver — the resolution happens in `methodScopeAt` (the
--- named prohibition, RUN-METHID-056).
+-- Both readers go through ONE accessor on purpose.  `argDispatchOf` has THREE callers
+-- (`inferMethodAt`'s return-route decision, `inferDefinerShadowApp`'s arg-stamp push, and
+-- `stampWorthyMethod`'s predicate) and `methodDispatchIdx` has one (`recordRLocalSite`).
+-- They answer ONE question, so they move as a SET (RUN-METHID-004/093); one shared accessor
+-- makes a partial move unrepresentable.
 --
--- Both readers are re-keyed through ONE accessor on purpose.  `argDispatchOf` has
--- THREE callers (`inferMethodAt`'s return-route decision, `inferDefinerShadowApp`'s
--- arg-stamp push, and `stampWorthyMethod`'s predicate) and `methodDispatchIdx` has
--- one (`recordRLocalSite`).  They answer ONE question, so they move as a SET
--- (RUN-METHID-004/093); re-keying the shared accessor rather than each call site is
--- what makes a partial move unrepresentable here.  Their signatures are unchanged,
--- so no caller is edited.
---
--- A miss is now `None`, and that is L5 (CONTRACT), NOT A hedge removed by hand.
--- Both arms used to fall back to `lookupAssoc name bare` — the bare-name-keyed table
--- whose first-match-over-decl-walk-order answer IS #1351's residual order-dependence.
--- Retiring it needed the precondition L3 wrote down here verbatim ("after `argNames`'
--- consumer joins the site set") to be TRUE, and L5 MEASURED it rather than assuming it:
+-- A miss is `None`, with no fall-back to a bare-name table: that table's first-match
+-- answer IS #1351's order-dependence.  `None` never stands in for an index the scope could
+-- have supplied:
 --
 --   * `methodEntryHere` answers from `methodScopeAt`: an entry when the scope decides
 --     one declaration, `None` when none is visible or nameable, and `None` when two or
 --     more are admitted.  The last case has no single declaration whose index could
 --     be the answer, and a bare-name table would only pick one by decl-walk order;
 --     an importer-shadow occurrence of such a name reads each admitted declaration's
---     own index instead (`importerDispatchIdxOuter`, `admittedDeclHits`).  So a `None`
---     here never stands in for an index the scope could have supplied.
---   * `argNames`' consumer was ALREADY scoped: `moduleMarkCtx` keeps only
+--     own index instead (`importerDispatchIdxOuter`, `admittedDeclHits`).
+--   * `argNames`' consumer is already scoped: `moduleMarkCtx` keeps only
 --     `filterList keep argNames` (keep = `nameableIfaceMethodSet` of the module's own
 --     decls) for the group marker, so a name this module cannot name is never marked
 --     `EMethodAt` and never reaches here.
---   * MEASURED, panic-instrumented, before the edit: across 327 programs
+--   * Measured with the fall-back arm panic-instrumented: across 327 programs
 --     (`shadow_fixtures`, `import_order_fixtures`, `must_fail_fixtures`) on `check`,
 --     `run` AND `build` — the last being the only path where `argDispatchOf`'s stamping
---     gate is open — plus the compiler's own self-compile, the fall-back arm DECIDED
+--     gate is open — plus the compiler's own self-compile, the fall-back arm decided
 --     ZERO sites.  `methodIfaceHere` never missed at all; the id-table miss did occur
---     (`fromInt`) and the bare table missed there too, so both spellings already
---     answered `None`.
+--     (`fromInt`) and the bare table missed there too, so both spellings answer `None`.
 --
--- The old prose said answering `None` would turn a dispatched site into an RLocal one.
--- That risk was real while the bare table could still answer; with the measurement
--- above it cannot, and keeping the arm would keep import order deciding a receiver
--- argument on any program the corpus does not yet contain.
---
--- ── The two fields this reader consumes (re-homed here by L3, RUN-METHID-054) ──
--- `argDispatchIdxByIdRef` (`GraphCtx`) / `methodDispatchIdxByIdRef` (`ModuleCtx`) — #1351 L1
--- (EXPAND), keyed `(IfaceRef, method name)`.  The `IfaceRef` half carries `irOrigin`,
--- the module-identity component, so a bare method name shared by two interfaces in
--- different modules gets distinct rows instead of colliding.  L1 wrote them and nothing
--- read them; THIS function is the reader L1 was expanding for, and since L5 (CONTRACT)
--- they are the ONLY dispatch-index tables — the bare-name peers they were written in
--- lockstep with are deleted, so lockstep is no longer a property anything can break.
+-- ── The two fields this reader consumes ──
+-- `argDispatchIdxByIdRef` (`GraphCtx`) / `methodDispatchIdxByIdRef` (`ModuleCtx`), keyed
+-- `(IfaceRef, method name)`.  The `IfaceRef` half carries `irOrigin`, the module-identity
+-- component, so a bare method name shared by two interfaces in different modules gets
+-- distinct rows instead of colliding.  They are the ONLY dispatch-index tables.
 --
 -- Their prose lives HERE, not on the fields, because `data GraphCtx` has the
 -- two-line `data X =` / `  | X {` header shape that #829 ([T-PERRUN-COMMENTS])
@@ -564,13 +545,10 @@ argDispatchOf mctx name =
 -- onto a DIFFERENT field, and `fmt --check` does not catch it — measured live at L1,
 -- where one `fmt --write` silently relocated two field comments.
 --
--- ✅ The bare-name tables are RETIRED (L5, CONTRACT).  `argDispatchIdxRef`,
--- `methodDispatchIdxRef` and the `CrossRun` accumulator behind the latter
--- (`universeMethodDispatchIdxRef`) are gone, along with this reader's `bare`
--- parameter.  `argNames` — the one use of the old table that was a NAME SET rather
--- than an index lookup — is now a pure local `map fst (argDispatchIndices …)` at both
--- of its sites (`markSetsOf`); it needed no table storage, only the
--- same structural walk, so no third copy of the universe survives.
+-- No bare-name dispatch-index table exists.  `argNames` — the one use of such a table that
+-- was a NAME SET rather than an index lookup — is a pure local
+-- `map fst (argDispatchIndices …)` at both of its sites (`markSetsOf`): the same
+-- structural walk, so no third copy of the universe survives.
 dispatchIdxScoped : ModuleCtx ->
   String ->
   List ((IfaceRef, String), Int) ->
@@ -638,11 +616,10 @@ admittedIfaceWord mctx name = match methodIfaceHere mctx name
 -- can never be spelled with a dot, so no name that already had an answer gets a
 -- different one.
 --
--- NOT additive against THIS BLOCK'S OWN entries, and the sentence above used to claim
--- it was.  Two DIFFERENT modules aliased under the SAME name (`import ifa as A` beside
+-- NOT additive against THIS BLOCK'S OWN entries.  Two DIFFERENT modules aliased under the SAME name (`import ifa as A` beside
 -- `import ifb as A`) that both export a method spelled `mth` mint the SAME key `A.mth`,
--- and the plain `omInsert` this block shipped with let the later `import` silently
--- overwrite the earlier one.  MEASURED: two interfaces `IA`/`IB` each declaring `mth`,
+-- and a plain `omInsert` lets the later `import` silently
+-- overwrite the earlier one.  MEASURED with such an insert: two interfaces `IA`/`IB` each declaring `mth`,
 -- an entry with both aliases and `impl IA Blob` only — with `ifa as A` FIRST the program
 -- is REJECTED `No impl of IB for Blob`, and with the two `import … as A` lines SWAPPED
 -- (nothing else changed) it is ACCEPTED and prints 1.  Permuting two imports flipped the
@@ -658,7 +635,7 @@ admittedIfaceWord mctx name = match methodIfaceHere mctx name
 -- at the IMPORT rather than at the occurrence, for the reason `R-DUPLICATE-IFACE-METHOD`
 -- (`frontend/resolve.mdk`) is: the ambiguity becomes unrepresentable rather than merely
 -- unreported.  That is an acceptance NARROWING — a program carrying the colliding
--- alias pair but never spelling `A.mth` is rejected now too.
+-- alias pair but never spelling `A.mth` is rejected too.
 --
 -- NOT a de-aliasing rewrite of the occurrence.  Rewriting `A.mth` to bare `mth` on
 -- this path (the other candidate shape) ERASES the very distinction that makes the
@@ -857,7 +834,7 @@ aliasRowIdents ((_, _, _, i, _) :: rest) acc
   | anyList (== i) acc = aliasRowIdents rest acc
   | otherwise = aliasRowIdents rest (acc ++ [i])
 
--- The LAST colliding import's span — the one that used to silently overwrite.  Both
+-- The LAST colliding import's span — the one a plain insert would let silently overwrite.  Both
 -- orderings of the same two imports land on the same line, so the diagnostic's span is
 -- as order-independent as its verdict.
 aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
@@ -915,7 +892,7 @@ anyUsePathBinds gctx ((DUse _ path _) :: rest) wide n c =
   usePathWitnesses gctx path wide n c || anyUsePathBinds gctx rest wide n c
 anyUsePathBinds gctx (_ :: rest) wide n c = anyUsePathBinds gctx rest wide n c
 
--- ── #1111 A-2.5b (#1272 / #1275): the witness reads IDENTITY, not spelling ──
+-- ── the witness reads IDENTITY, not spelling ──
 -- An import witnesses a candidate when TWO things hold:
 --   * the path lets the name through — `usePathBindsName`, the member filter;
 --   * the dependency's row CARRIES *that declaration* of the name — asked of
@@ -923,45 +900,32 @@ anyUsePathBinds gctx (_ :: rest) wide n c = anyUsePathBinds gctx rest wide n c
 --     index, so a re-export chain resolves transitively and by identity.
 --     "carries", not "exports": the row has no `pub` filter (F3, `declMethodIdentsOf`).
 --
--- A-2.5 shipped the second conjunct as a bare-INTERFACE-NAME comparison
--- (`usePathNamesMember path iface`, now deleted), which reinstated the very premise
--- A-2.4 retired: interface names are NOT globally unique.  Two S0s came out of that one
--- string compare, both of them the second conjunct answered by spelling rather than by
--- the export graph:
+-- The second conjunct is not a bare-INTERFACE-NAME comparison, because interface names
+-- are NOT globally unique, and a spelling compare mis-witnesses in two ways:
 --   #1275 — an unrelated BYSTANDER module declaring a same-named interface with the same
---           method name was witnessed by an import that names neither it nor anything of
---           it, so the guard saw two matches and the scope decided neither;
---   #1272 — a WILDCARD import of a re-exporter (`import mid.*`) named no member, so the
---           old witness could not fire at all.  It could not simply be relaxed either:
---           letting a wildcard satisfy a NAME test makes it "name" every interface and
---           witness every candidate.  Under an EXPORT test that dilemma disappears —
---           a wildcard admits every name, and the index still admits only the
---           declarations `mid` really re-exports;
--- L2 (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md`): identity is resolved, never
--- re-derived from spelling.  The candidate's `iface` string is no longer read here.
+--           method name would be witnessed by an import that names neither it nor anything
+--           of it, so the guard would see two matches and the scope would decide neither;
+--   #1272 — a WILDCARD import of a re-exporter (`import mid.*`) names no member, so a name
+--           test cannot fire for it; letting a wildcard satisfy a NAME test makes it "name"
+--           every interface and witness every candidate.  Under an EXPORT test that dilemma
+--           disappears — a wildcard admits every name, and the index still admits only the
+--           declarations `mid` really re-exports.
+-- L2 (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md`): identity is resolved, never re-derived
+-- from spelling, so the candidate's `iface` string is not read here.
 --
--- The old module-id witness (`mkIdent NsMethod (OriginModule dep) n == Some ident`) is
--- GONE rather than kept as a disjunct: it is exactly the case where `dep` declares the
--- method itself, and `meExports` seeds every module with its OWN declarations,
--- so the export test subsumes it.  Keeping both would be the parallel-near-copy shape
--- this workstream exists to remove.
+-- There is no module-id disjunct (`mkIdent NsMethod (OriginModule dep) n == Some ident`):
+-- it is the case where `dep` declares the method itself, and `meExports` seeds every module
+-- with its OWN declarations, so the export test subsumes it.  Keeping both would be a
+-- parallel near-copy.
 --
--- #1276 (the ALIAS spelling, `import m as A` … `A.mth`) is NOT fixed here, and its own
--- remedy sketch (1) — "give usePathWitnesses a UseAlias arm" — is REFUTED.  The primary
--- evidence is DIRECT, not inferential: that arm was written, built and probed on this
--- branch, and left #1276's repro printing `2` at exit 0, unchanged.  That measurement
--- alone covers every surface, and it is what the refutation rests on.
---
--- A SECOND observation: `A.mth` never becomes a bare-`mth` occurrence for this table on
--- ANY path.  It used to hold on the `check` drivers alone, because `renameAliasedMethods`
--- has one caller (`elaborateModules`) and they do not use it; the module-alias arm of
--- that rewrite is now gone, so the elaborate path keeps the spelling too.  Neither half
--- may be read as "no surface reports anything" — F1 was precisely a case where `check`
--- was clean and `run` reported a type error.  CONTROL for the check half, on a
--- binary built from this branch: `import ifacea as A`, `data Blob`, NO impl anywhere —
--- `medaka check` exits 0 with no diagnostic while `medaka run` panics `unbound
--- identifier: mth`.  #1276's fix is a driver / AST-carrier change; the alias arm was
--- removed rather than shipped inert.
+-- The ALIAS spelling (`import m as A` … `A.mth`, #1276) is NOT witnessed here, and a
+-- `UseAlias` arm in `usePathWitnesses` does not help: with such an arm #1276's repro still
+-- printed `2` at exit 0.  `A.mth` never becomes a bare-`mth` occurrence for this table on
+-- any path: `renameAliasedMethods` has one caller (`elaborateModules`), which the `check`
+-- drivers do not use, and it has no module-alias arm.  That does not mean no surface
+-- reports anything: with `import ifacea as A`, `data Blob` and NO impl anywhere, `medaka
+-- check` exits 0 with no diagnostic while `medaka run` panics `unbound identifier: mth`.
+-- The fix is a driver / AST-carrier change.
 --
 -- `core` is the implicit prelude, never an explicit provenance (importDefinersOf skips it
 -- for the same reason); the ladder's last rung (`methodUndecided`) reads it.
@@ -1306,20 +1270,18 @@ insertRecordRow mctx tyName o cn pop = match lookupRecordByName mctx cn
 -- named-field-variant name pays one `[]` match per module and mutates nothing.
 --
 -- "NORMALLY EMPTY" IS A claim about record keys, not about field names, and the
--- distinction is load-bearing rather than pedantic.  An earlier cut of this unit built the
--- same machinery for `fieldOwnersRef` keyed on collided FIELD names; adversarial review
--- measured that list to be routinely non-empty (any two records anywhere in the graph
--- sharing `name`/`id`/`size` put a name on it), which turned the per-module walk into
--- 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
+-- distinction is load-bearing rather than pedantic.  Keying the same machinery on
+-- collided FIELD names (`fieldOwnersRef`) fails: that list is routinely non-empty (any two
+-- records anywhere in the graph sharing `name`/`id`/`size` put a name on it), and the
+-- per-module walk became 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
 -- record spelled the same, which is the collision this unit exists for and is genuinely
 -- rare — but it is an empirical claim, so `gen_modules` in
--- `test/diff_compiler_perf_scaling.sh` now declares records per module, because before that
--- NO multi-module generator in the gate declared a single record or field and this code
--- path could not be seen at all.  Derive the generator set rather than trusting this
+-- `test/diff_compiler_perf_scaling.sh` declares records per module; without that no
+-- multi-module generator in the gate exercises this code path.  Derive the generator set rather than trusting this
 -- sentence: `grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh`.
 --
 -- OVERLAY, never a rebuild: anything a module's scope does not decide keeps the floor's
--- answer, which is today's behaviour.
+-- answer.
 --
 -- The scoped view must not reach the universe, and it does not — but only because of
 -- where `appendDataUniverse` reloads.  The overlay mutates the PER-RUN ref, and
@@ -1330,40 +1292,24 @@ insertRecordRow mctx tyName o cn pop = match lookupRecordByName mctx cn
 -- Moving the reload, or growing the universe from the per-run refs as they stand at the
 -- end of the arm, would make module A's import scope decide module B's records.
 --
--- This breaks the `#415` lockstep and the obligation is now real.  The note at
--- `registerRecordInfoKeyed` calls that function *"the SOLE registration writer of both"*
--- `recordByNameRef` and `fieldOwnersRef`, and calls their lockstep *"structural, not an
--- obligation"*.  That is no longer true: this overlay writes `recordByNameRef` ALONE.
--- Re-pointing key `K` does not change WHICH keys own a field name (the key is the same
--- string), but it does change which FIELDS `K` declares — so with two same-named records
--- having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner of a field the
--- newly-selected `K` does not have.
---
--- And that had A CONSEQUENCE.  An earlier draft of this note called it *"an obligation
--- with no observed consequence today"* on the strength of one probe; the probe kept both
--- projections inside the module that NAMED the record, so the overlay agreed with the floor
--- and could not show anything.  **#1377 was the consequence**: a module that names one `Cfg`
--- and holds a value of the OTHER `Cfg` was refused, `Field 'beta' does not belong to record
--- 'Cfg'`, exit 1, where `5` is correct.
---
--- #1319 UNIT 3 DRAINED #1377 without reconciling these two tables, so the write asymmetry
--- above is unchanged and this paragraph must not be read as retired.  What unit 3 removed is
--- the QUESTION: `resolveFieldRecord`'s arm (a) no longer reads this overlay's answer for a
--- receiver whose type already carries an identity.  Do NOT restate the note as "no observed
--- consequence today" — that sentence has been wrong twice here already; the accurate
--- statement is that the consequence which was found is gone and nobody has shown it was the
--- only one.
+-- This breaks the `#415` lockstep.  `registerRecordInfoKeyed` is the sole registration
+-- writer of `recordByNameRef` and `fieldOwnersRef`, and this overlay writes
+-- `recordByNameRef` ALONE.  Re-pointing key `K` does not change WHICH keys own a field
+-- name (the key is the same string), but it does change which FIELDS `K` declares: with
+-- two same-named records having DISJOINT field sets, `fieldOwnersRef` can name `K` as the
+-- owner of a field the newly-selected `K` does not have.  That has a consequence (#1377):
+-- a module that names one `Cfg` and holds a value of the OTHER `Cfg` was refused, `Field
+-- 'beta' does not belong to record 'Cfg'`, where `5` is correct.  `resolveFieldRecord`'s
+-- arm (a) no longer reads this overlay's answer for a receiver whose type carries an
+-- identity, which removes that question but not the write asymmetry; do not state the
+-- asymmetry as harmless.
 --
 -- ── the rule this overlay now states, and its boundary ──────────────────────
 -- **The declaration this module NAMES wins for every occurrence of that name written in this
 -- MODULE'S SOURCE** — a record literal, a record pattern, a variant update, an annotation.
 --
--- The second half of this rule was deleted by unit 3, and the old wording is quoted here
--- SO A stale copy elsewhere is recognisable.  It used to read *"… for EVERY projection of
--- that key in this module, including projections of values whose type the module never
--- named"*, which is exactly the sentence #1377 falsified.  That clause is gone: a projection
--- of a value whose type this module never named is now decided by the RECEIVER's identity
--- (`lookupRecordForReceiver`), not here.
+-- A projection of a value whose type this module never named is decided by the
+-- RECEIVER's identity (`lookupRecordForReceiver`), not here.
 --
 -- What is left is the SPELLING question, and for that a per-module scope decision is the
 -- right instrument rather than a stopgap — `docs/spec/DICT-SEMANTICS.md` §8 I4 qualification

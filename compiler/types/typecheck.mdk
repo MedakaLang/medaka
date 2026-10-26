@@ -511,13 +511,6 @@ import types.entry_outcome.{
   mainAsyncPayloadIsUnitNow,
   mainIsUnitNow,
 }
-import types.registry.{
-  Registry,
-  identKey,
-  regKeyOfTab,
-  regKeyRender,
-  regEmpty,
-}
 import frontend.desugar.{mapProg, mapChildren, mapExpr, exprSpanLoc, joinLocs}
 import frontend.marker.{localBoundNames}
 import frontend.visibility.{useModId}
@@ -613,6 +606,7 @@ import types.registry.{
   -- `headTabOf`, whose `dispHeadTab` deliberately flattens every head to
   -- `TkBare` for the SPELLING-keyed dispatch buckets.
   headKeyDecl,
+  identKey,
   regKeyOfTab,
   regKeyNTab,
   regKeyRender,
@@ -1271,7 +1265,6 @@ import types.tc_unify.{
   captureScope,
   clampPrefix,
   declaredCrossModuleObls,
-  dropFirst,
   effectLeakCheck,
   effectSiteKey,
   enterLevel,
@@ -2871,9 +2864,7 @@ headRemainingKinds : ModuleCtx ->
 headRemainingKinds mctx o n nApplied
   | isSome (lookupTab key mctx.mcCells.aliasTableRef.value) = None
   | otherwise =
-    map
-      (dropFirst nApplied)
-      (lookupTab key mctx.mcCells.dataParamKindsRef.value)
+    map (drop nApplied) (lookupTab key mctx.mcCells.dataParamKindsRef.value)
   where
     key = tyTabKey o n
 
@@ -3331,7 +3322,7 @@ dropGoalsSince gctx mark kinds =
   let tags = map goalKindTag kinds
   let kept =
     filterList (o => not (containsI (goalKindTag o.oKind) tags)) (take n now)
-  g.goals := kept ++ dropFirst n now
+  g.goals := kept ++ drop n now
   g.goalsN := mark + listLen kept
 
 -- return-position method sites discovered during inference: (method name, the

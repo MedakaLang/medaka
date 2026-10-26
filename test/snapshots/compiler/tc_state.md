@@ -1,5 +1,5 @@
 # META
-source_lines=1155
+source_lines=1154
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
@@ -40,7 +40,6 @@ import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
 }
 import types.scopes as Scopes
-import types.registry.{regEmpty}
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
 import support.util.{reverseL}
@@ -1168,7 +1167,6 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -1328,7 +1326,6 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))

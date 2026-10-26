@@ -1,5 +1,5 @@
 # META
-source_lines=3040
+source_lines=3007
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -198,7 +198,7 @@ import types.effect_param_decode.{atomOfLabel}
 import types.solver_contract.{Instantiation(..), Wanted(..)}
 import types.target_profile.{hostLabels}
 import types.disposition.{MethodDisposition(..)}
-import list.{last, replicate}
+import list.{drop, last, replicate}
 import support.ordmap.{omInsert, omLookup}
 import types.invocation_basis.{paramPolaritiesIn}
 import types.effect_infer.{recordEffect, typeAuthority}
@@ -595,11 +595,10 @@ unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   -- open row "can absorb further atoms".  KEEP.  Note it deliberately runs NO
   -- effectLeakCheck (contrast the two closed-side arms just below, which DO): an
   -- open tail has not committed to a bound, so nothing can escape PAST it yet.
-  -- That asymmetry is why #803's intrinsic-atom bound used to run PRE-unify — a
-  -- naive post-unify effrowLabels inspection CANNOT recover the absorbed atom.  It
-  -- now runs POST-unify instead (#839 2b, launderEscapeFromLog), by recording the
-  -- absorbed atoms HERE (recordAbsorptions, increment 2a) so the trail carries what
-  -- effrowLabels no longer can — the whole point of the event trail.
+  -- That asymmetry is why #803's intrinsic-atom bound runs POST-unify (#839 2b,
+  -- launderEscapeFromLog) rather than PRE-unify: a naive post-unify effrowLabels
+  -- inspection CANNOT recover the absorbed atom, so the atoms are recorded HERE
+  -- (recordAbsorptions) and the trail carries what effrowLabels no longer can.
   | otherwise =
     let v3 =
       freshEffvarAt
@@ -637,20 +636,17 @@ unifyRowPlain dyn (EffRow l1 None) (EffRow l2 (Some v2)) =
   linkRow v2 (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: EQUALITY, via `closedRowEqCheck` (#2557).  Two written rows
 -- have no tail to bind and this unifier has no expected/actual role, so the only
--- sound symmetric verdict is that the atom sets match.  The arm used to be a
--- silent no-op, on the argument that an impl legitimately PURER than its declared
--- effect (actual `<>` ~ declared `<Stdout>`, both closed) had to keep checking and
--- that the direction would be recovered downstream by `launderEscapeFromLog` —
--- which only the impl/default-method seam ever consulted.  A plain generic reaches
--- this arm with no such consumer: `coerce : a -> a -> a` applied to two callbacks
--- whose PARAMETER rows differ (`<IO>` vs `<>`) equated them here, `reopenRowN`
--- reopens only covariant rows, and the result carried one closure's declared type
--- with the other's body.  The purer-than-declared case is real, but it is a
--- DIRECTED flow (a value into a declared slot), and every such seam now takes
--- `unifyInto`, which checks a closed~closed pair directionally and never brings
--- one here.  Index rows still route to `unifyIndexRow` below, NOT here — an index
--- is invariant by kind (#1094); do not re-point `unifyN`'s `TEff`/`TEff` arm at
--- `unifyRow`.
+-- sound symmetric verdict is that the atom sets match.  A silent no-op here is wrong:
+-- a plain generic reaches this arm with no downstream consumer of the direction
+-- (`launderEscapeFromLog` is consulted only by the impl/default-method seam), so
+-- `coerce : a -> a -> a` applied to two callbacks whose PARAMETER rows differ (`<IO>`
+-- vs `<>`) would equate them, `reopenRowN` reopens only covariant rows, and the result
+-- would carry one closure's declared type with the other's body.  The
+-- purer-than-declared case (an impl `<>` against a declared `<Stdout>`) is real, but it
+-- is a DIRECTED flow (a value into a declared slot), and every such seam takes
+-- `unifyInto`, which checks a closed~closed pair directionally and never brings one
+-- here.  Index rows route to `unifyIndexRow` below, NOT here — an index is invariant by
+-- kind (#1094); do not re-point `unifyN`'s `TEff`/`TEff` arm at `unifyRow`.
 unifyRowPlain dyn (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck dyn l1 l2
 
 -- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
@@ -1057,28 +1053,25 @@ unifyN : DynCtx -> Mono -> Mono -> Unit
 unifyN dyn (TVar c1) (TVar c2) = unifyVars dyn c1 c2
 unifyN dyn (TVar c) t = bindVar dyn c t
 unifyN dyn t (TVar c) = bindVar dyn c t
--- #1111 A-2.10: the head comparison reads the identity Stage A-1 landed.  This
--- is the site the arc turned on — two modules' unrelated `T`s no longer unify
--- (#1208, #1209), and the origin surviving a link is no longer an artefact of
--- link direction, so a key computed from the field is a function of the type.
+-- The head comparison reads the tycon's identity: two modules' unrelated `T`s do not
+-- unify (#1208, #1209), and the origin surviving a link does not depend on link
+-- direction, so a key computed from the field is a function of the type.
 -- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
 -- derivation before changing either side of this.
 unifyN dyn (ta@(TCon a oa)) (tb@(TCon b ob)) =
   if sameTyConHead a oa b ob then () else typeMismatch dyn ta tb
--- #1110: rigid~rigid.  MANDATORY, not optional — without it a rigid variable
--- fails to unify with ITSELF (it would fall to the catch-all `typeMismatch`),
--- which the shared `TCon` constructor used to handle for free.
+-- Rigid~rigid.  MANDATORY: without it a rigid variable fails to unify with ITSELF (it
+-- would fall to the catch-all `typeMismatch`), because `TRigid` is not a `TCon`.
 unifyN dyn (TRigid a) (TRigid b) =
   if a == b then () else typeMismatch dyn (TRigid a) (TRigid b)
--- #1110 CROSS-POPULATION, and it is NOT dead code.  A rigid and a real head can
--- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so the pre-split
--- `TCon a == TCon b` test could be TRUE across the populations, and dropping
--- these two arms changes an answer: `data Bad = Bad __tuple2__; g : Bad -> (,)`
--- checked clean before the split and becomes `Type mismatch: (,) vs (,)` without
--- them — an error whose two sides render IDENTICALLY.  For every other name the
--- test is False and the message is byte-identical to the catch-all's, since
--- `ppMono` renders `TRigid` exactly as `TCon`.  Placed ABOVE the
--- `tupleUnifyClash` guard because the old `TCon`/`TCon` arm was above it too.
+-- CROSS-POPULATION (#1110), and it is NOT dead code.  A rigid and a real head can
+-- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so a `TCon a == TCon b`
+-- style test can be TRUE across the populations, and dropping these two arms changes an
+-- answer: `data Bad = Bad __tuple2__; g : Bad -> (,)` would become `Type mismatch: (,)
+-- vs (,)` — an error whose two sides render IDENTICALLY.  For every other name the test
+-- is False and the message is byte-identical to the catch-all's, since `ppMono` renders
+-- `TRigid` exactly as `TCon`.  Placed ABOVE the `tupleUnifyClash` guard, as the
+-- `TCon`/`TCon` arm is.
 --
 -- The preserved answer is a FORGERY (DICT-SEMANTICS §8 I6.2(b), OWED-#1110):
 -- a rigid variable is not the builtin tuple head.  Carrier now, semantics later.
@@ -1086,11 +1079,10 @@ unifyN dyn (ta@(TCon a _)) (tb@(TRigid b)) =
   if a == b then () else typeMismatch dyn ta tb
 unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
   if a == b then () else typeMismatch dyn ta tb
--- A tuple TYPE is now a `__tupleN__`-headed `TApp` spine; when it clashes with a
+-- A tuple TYPE is a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
--- recursion bottom out on a partial sub-spine — preserving the pre-refactor
--- tuple mismatch wording.  Guard is False when the other side is a TVar-headed
+-- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a TVar-headed
 -- spine (so `p a b` unifying with a tuple still flows through the generic arm).
 unifyN dyn t1 t2
   | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
@@ -1667,11 +1659,9 @@ typeMismatchReportRest dyn a b = match activeDo dyn
         help
         fix
     None => match sameSpellingHint a b
-      -- #1111 A-2.10: the mismatch this unit MAKES REACHABLE renders with two
+      -- Two modules' unrelated `T`s now mismatch, and the message renders two
       -- identical sides (`Type mismatch: T vs T`) — true, and useless without
-      -- this.  Turning a silent accept into a message a user cannot act on
-      -- would trade an S0 for an S2, which the severity ladder counts as a
-      -- fix only for the first half.
+      -- this hint.
       Some help =>
         pushTypeErrorHelpFixAt
           dyn.dcModule
@@ -1699,12 +1689,9 @@ typeMismatchInDo mctx a b doCtx
       "T-TYPE-MISMATCH"
       "type mismatch: \{ppMono a} vs \{ppMono b}"
 
--- issue 1146 PR1: this is the SIXTH push site — it open-coded the cons + sticky set
--- rather than going through one of the five named `pushTypeError*` helpers, so it is
--- invisible to a grep for them.  It now routes through `recordTypeError` like every
--- other push, which is what makes this path's detection reach the counter too.
--- (It does NOT re-establish "counter delta == list-length delta": PR2 abolished that
--- equality on purpose — see `recordTypeError`.)
+-- This push site routes through `recordTypeError` like every other push, so this
+-- path's detection reaches the counter too.  (The counter is not equal to the
+-- list-length delta: see `recordTypeError`.)
 recordDoMonadError : ModuleCtx -> DoCtx -> Unit
 recordDoMonadError mctx doCtx =
   doCtx.doReported := True
@@ -1831,7 +1818,8 @@ freshAuthSubstOpeningIn mctx ids cells =
           IdMap.has id mctx.mcGraph.graphRun.ctorExistentialsRef.value,
         ))
       ids
-  let opened = flatMap (p => if third3 p then [second3 p] else []) pairs
+  let opened =
+    flatMap ((_, cell, isOpen) => if isOpen then [cell] else []) pairs
   mctx.mcCells.rigidAuthvarsRef :=
     fold
       (m cell => IdMap.set (authvarId cell) () m)
@@ -1842,17 +1830,11 @@ freshAuthSubstOpeningIn mctx ids cells =
       (m cell => IdMap.set (authvarId cell) () m)
       mctx.mcCells.openedAuthvarsRef.value
       opened
-  (map (p => (first3 p, AVar (second3 p))) pairs, opened)
+  (map ((id, cell, _) => (id, AVar cell)) pairs, opened)
 
 export
 first3 : (a, b, c) -> a
 first3 (x, _, _) = x
-
-second3 : (a, b, c) -> b
-second3 (_, y, _) = y
-
-third3 : (a, b, c) -> c
-third3 (_, _, z) = z
 
 export
 freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
@@ -2356,10 +2338,8 @@ instantiateLegacyVarTracked mctx x id s =
 --
 -- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves exactly
 -- as it did.  (3) precedes (2) because (3) is IMPORT-SCOPED and (2) is a program-global
--- bare-NAME table.  This rationale used to say (3) "is source-exact" and to justify the
--- disjointness by `currentImportDefinersRef` — which is (1)'s gate, not (3)'s; (3) reads
--- `importedSchemeOblsRef`.  The conclusion held, the stated reason did not, so here is the
--- real one: (3)'s table is rebuilt per module from THIS module's own `DUse` decls, and
+-- bare-NAME table.  The disjointness does not come from `currentImportDefinersRef`
+-- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from THIS module's own `DUse` decls, and
 -- `importDefinersOf` skipping `core` is irrelevant to it — what keeps prelude names out of
 -- (3) is that no module writes a `DUse` for the implicit prelude at all, so no arm of
 -- `importedSchemeOblEntries` ever emits one.  The populations are therefore disjoint by
@@ -2406,15 +2386,12 @@ qualSchemeOblsFor mctx name =
 -- lift each already-paired dict slot, WITH its recorded predicate argument vector, to a
 -- vector obligation, skipping slots with no interface.
 --
--- U1b (#1482) DELETED `shatterVecObls`, which is what used to stand here.  It took
--- an iface list and an id list as two arguments and zipped them, truncating on a
--- mismatch; the pairing now happens once, in `pairSlots`, so this function cannot be
--- handed a mispaired input at all.
+-- The pairing of interfaces with ids happens once, in `pairSlots`, so this function
+-- cannot be handed a mispaired input.
 --
--- S-xmod-vector-supply (#1868/#1867): the vector is the point, and its absence here
--- was the whole cross-module gap.  This used to emit `voArgs = []` unconditionally — the
--- "shattered per-tyvar dict slots" reading of `funConstraintsRef` — which
--- `substVecOblArgs` then instantiates through `substMonos o.voIds`, i.e. ONE argument per
+-- The vector is the point (#1868/#1867): emitting `voArgs = []` unconditionally — the
+-- "shattered per-tyvar dict slots" reading of `funConstraintsRef` — would make
+-- `substVecOblArgs` instantiate through `substMonos o.voIds`, i.e. ONE argument per
 -- slot.  For a binary predicate that is not a weaker obligation, it is a DIFFERENT one:
 -- `Ix a Bool` re-checked as `Ix Int`.  An empty vector still means exactly what it meant
 -- (`voArgs = []` ⇒ the historical ids-only path), so a slot past the args prefix — an
@@ -2471,10 +2448,9 @@ recordSchemeCallObligations mctx _ [] _ = ()
 recordSchemeCallObligations mctx originId (o :: rest) subst =
   match substVecOblArgs o subst
     Some monos =>
-      -- P1 (#1446) / U1b (#1482): `schemeObligationsRef` and its cross-module mirrors
+      -- `schemeObligationsRef` and its cross-module mirrors
       -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
-      -- site no longer records `OriginUnresolved`.  It was the second of the two
-      -- `ifaceRefBare` producers this unit retired.
+      -- site never records `OriginUnresolved`.
       let _ =
         recordObl
           mctx
@@ -2951,7 +2927,7 @@ producedSlotCovariants mctx head = match headTyconMono head
   Some (HkDecl key) =>
     let slot = monoSpineDepth head
     match paramPolaritiesOf mctx key
-      Some polarities => map isCovariantPolarity (dropFirst slot polarities)
+      Some polarities => map isCovariantPolarity (drop slot polarities)
       None =>
         if tabKeyEq key (tyTabKey OriginBuiltin "List") then
           if slot == 0 then [True] else []
@@ -3008,15 +2984,6 @@ monoUnboundVarLevels t = match normalize t
   TAuth _ => []
   TQual a _ => monoUnboundVarLevels a
 
--- #837: drop the first [n] entries (the complement of `take`) — splits a
--- stamped `coreProg ++ prog0` back into its core/user halves for Flat inference.
-export
-dropFirst : Int -> List a -> List a
-dropFirst n xs
-  | n <= 0 = xs
-dropFirst _ [] = []
-dropFirst n (_ :: xs) = dropFirst (n - 1) xs
-
 -- Container covariance cannot install a confinement wrapper on a function
 -- already packed inside the value. Retain the directed flows until the row
 -- solver closes, including the lower rows of produced-value joins.
@@ -3063,7 +3030,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("list") ((mem "last" false) (mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))
@@ -3341,13 +3308,9 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "freshAuthSubstOpening" ((PVar "mctx") (PVar "ids") (PVar "body")) (EApp (EApp (EApp (EVar "freshAuthSubstOpeningIn") (EVar "mctx")) (EVar "ids")) (EApp (EApp (EVar "authCellsIn") (EVar "body")) (EVar "Tip"))))
 (DTypeSig true "freshAuthSubstOpeningIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PList) PWild) (ETuple (EListLit) (EListLit)))
-(DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EIf (EApp (EVar "third3") (EVar "p")) (EListLit (EApp (EVar "second3") (EVar "p"))) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "first3") (EVar "p")) (EApp (EVar "AVar") (EApp (EVar "second3") (EVar "p")))))) (EVar "pairs")) (EVar "opened")))))
+(DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EVar "flatMap") (ELam ((PTuple PWild (PVar "cell") (PVar "isOpen"))) (EIf (EVar "isOpen") (EListLit (EVar "cell")) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "id") (PVar "cell") PWild)) (ETuple (EVar "id") (EApp (EVar "AVar") (EVar "cell"))))) (EVar "pairs")) (EVar "opened")))))
 (DTypeSig true "first3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
 (DFunDef false "first3" ((PTuple (PVar "x") PWild PWild)) (EVar "x"))
-(DTypeSig false "second3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
-(DFunDef false "second3" ((PTuple PWild (PVar "y") PWild)) (EVar "y"))
-(DTypeSig false "third3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
-(DFunDef false "third3" ((PTuple PWild PWild (PVar "z"))) (EVar "z"))
 (DTypeSig true "freshSubst" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
 (DFunDef false "freshSubst" ((PVar "mctx") (PList)) (EListLit))
 (DFunDef false "freshSubst" ((PVar "mctx") (PCons (PVar "id") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "id") (EVar "ambiguousImportTyvarId")) (EApp (EApp (EApp (EVar "poisonMismatchVars") (EVar "mctx")) (EVar "v")) (EVar "v")) (ELit LUnit))) (DoExpr (EBinOp "::" (ETuple (EVar "id") (EVar "v")) (EApp (EApp (EVar "freshSubst") (EVar "mctx")) (EVar "rest"))))))
@@ -3572,7 +3535,7 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig false "joinValueEqual" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))))
 (DFunDef false "joinValueEqual" ((PVar "outer") (PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "dyn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "outer"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteNumlitCtx") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "left")) (EVar "right")) (EVar "context"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (ERecordUpdate (EVar "dyn") ((fa "dcJoin" (EApp (EVar "Some") (EVar "context")))))) (EVar "left")) (EVar "right")))))
 (DTypeSig true "producedSlotCovariants" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))))
-(DFunDef false "producedSlotCovariants" ((PVar "mctx") (PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EVar "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "dropFirst") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
+(DFunDef false "producedSlotCovariants" ((PVar "mctx") (PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EVar "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "drop") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
 (DTypeSig false "isCovariantPolarity" (TyFun (TyCon "Polarity") (TyCon "Bool")))
 (DFunDef false "isCovariantPolarity" ((PCon "PCo")) (EVar "True"))
 (DFunDef false "isCovariantPolarity" (PWild) (EVar "False"))
@@ -3587,10 +3550,6 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "lowerOwnedRoot" ((PVar "mctx") (PVar "owner") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarLevel") (EVar "cell")) (EVar "owner")) (EApp (EApp (EVar "lowerToCurrent") (EVar "mctx")) (EVar "m")) (ELit LUnit))) (arm PWild () (ELit LUnit))))
 (DTypeSig true "monoUnboundVarLevels" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "monoUnboundVarLevels" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "tyvarLevel") (EVar "cell"))))) (arm (PCon "TCon" PWild PWild) () (EListLit)) (arm (PCon "TRigid" PWild) () (EListLit)) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundVarLevels") (EVar "a")) (EApp (EVar "monoUnboundVarLevels") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundVarLevels") (EVar "a")) (EApp (EVar "monoUnboundVarLevels") (EVar "b")))) (arm (PCon "TEff" PWild) () (EListLit)) (arm (PCon "TAuth" PWild) () (EListLit)) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "monoUnboundVarLevels") (EVar "a")))))
-(DTypeSig true "dropFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "dropFirst" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "xs") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dropFirst" (PWild (PList)) (EListLit))
-(DFunDef false "dropFirst" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "dropFirst") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "recordFileValueFlow" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
 (DFunDef false "recordFileValueFlow" ((PVar "mctx") (PVar "loc") (PVar "upper") (PVar "lower")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (ETuple (EVar "loc") (EVar "upper") (EVar "lower"))))
 (DTypeSig true "unifySourceDomains" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
@@ -3619,7 +3578,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("list") ((mem "last" false) (mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))
@@ -3897,13 +3856,9 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "freshAuthSubstOpening" ((PVar "mctx") (PVar "ids") (PVar "body")) (EApp (EApp (EApp (EVar "freshAuthSubstOpeningIn") (EVar "mctx")) (EVar "ids")) (EApp (EApp (EVar "authCellsIn") (EVar "body")) (EVar "Tip"))))
 (DTypeSig true "freshAuthSubstOpeningIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PList) PWild) (ETuple (EListLit) (EListLit)))
-(DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EIf (EApp (EVar "third3") (EVar "p")) (EListLit (EApp (EVar "second3") (EVar "p"))) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "first3") (EVar "p")) (EApp (EVar "AVar") (EApp (EVar "second3") (EVar "p")))))) (EVar "pairs")) (EVar "opened")))))
+(DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple PWild (PVar "cell") (PVar "isOpen"))) (EIf (EVar "isOpen") (EListLit (EVar "cell")) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "id") (PVar "cell") PWild)) (ETuple (EVar "id") (EApp (EVar "AVar") (EVar "cell"))))) (EVar "pairs")) (EVar "opened")))))
 (DTypeSig true "first3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
 (DFunDef false "first3" ((PTuple (PVar "x") PWild PWild)) (EVar "x"))
-(DTypeSig false "second3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
-(DFunDef false "second3" ((PTuple PWild (PVar "y") PWild)) (EVar "y"))
-(DTypeSig false "third3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
-(DFunDef false "third3" ((PTuple PWild PWild (PVar "z"))) (EVar "z"))
 (DTypeSig true "freshSubst" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
 (DFunDef false "freshSubst" ((PVar "mctx") (PList)) (EListLit))
 (DFunDef false "freshSubst" ((PVar "mctx") (PCons (PVar "id") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "id") (EVar "ambiguousImportTyvarId")) (EApp (EApp (EApp (EVar "poisonMismatchVars") (EVar "mctx")) (EVar "v")) (EVar "v")) (ELit LUnit))) (DoExpr (EBinOp "::" (ETuple (EVar "id") (EVar "v")) (EApp (EApp (EVar "freshSubst") (EVar "mctx")) (EVar "rest"))))))
@@ -4128,7 +4083,7 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig false "joinValueEqual" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))))
 (DFunDef false "joinValueEqual" ((PVar "outer") (PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "dyn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "outer"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteNumlitCtx") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "left")) (EVar "right")) (EVar "context"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (ERecordUpdate (EVar "dyn") ((fa "dcJoin" (EApp (EVar "Some") (EVar "context")))))) (EVar "left")) (EVar "right")))))
 (DTypeSig true "producedSlotCovariants" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))))
-(DFunDef false "producedSlotCovariants" ((PVar "mctx") (PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EMethodRef "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "dropFirst") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
+(DFunDef false "producedSlotCovariants" ((PVar "mctx") (PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EMethodRef "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "drop") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
 (DTypeSig false "isCovariantPolarity" (TyFun (TyCon "Polarity") (TyCon "Bool")))
 (DFunDef false "isCovariantPolarity" ((PCon "PCo")) (EVar "True"))
 (DFunDef false "isCovariantPolarity" (PWild) (EVar "False"))
@@ -4143,10 +4098,6 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "lowerOwnedRoot" ((PVar "mctx") (PVar "owner") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarLevel") (EVar "cell")) (EVar "owner")) (EApp (EApp (EVar "lowerToCurrent") (EVar "mctx")) (EVar "m")) (ELit LUnit))) (arm PWild () (ELit LUnit))))
 (DTypeSig true "monoUnboundVarLevels" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "monoUnboundVarLevels" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "tyvarLevel") (EVar "cell"))))) (arm (PCon "TCon" PWild PWild) () (EListLit)) (arm (PCon "TRigid" PWild) () (EListLit)) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundVarLevels") (EVar "a")) (EApp (EVar "monoUnboundVarLevels") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundVarLevels") (EVar "a")) (EApp (EVar "monoUnboundVarLevels") (EVar "b")))) (arm (PCon "TEff" PWild) () (EListLit)) (arm (PCon "TAuth" PWild) () (EListLit)) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "monoUnboundVarLevels") (EVar "a")))))
-(DTypeSig true "dropFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "dropFirst" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "xs") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dropFirst" (PWild (PList)) (EListLit))
-(DFunDef false "dropFirst" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "dropFirst") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "recordFileValueFlow" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
 (DFunDef false "recordFileValueFlow" ((PVar "mctx") (PVar "loc") (PVar "upper") (PVar "lower")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (ETuple (EVar "loc") (EVar "upper") (EVar "lower"))))
 (DTypeSig true "unifySourceDomains" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))

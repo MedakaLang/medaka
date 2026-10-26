@@ -1,5 +1,5 @@
 # META
-source_lines=4367
+source_lines=4364
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -83,9 +83,6 @@ import types.tc_types.{
   MethodPredicateSlot(..), MethodRow(..), MethodSchemeRow(..), ModuleCtx(..),
   RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
   CDeclared, dynFor, MethodEntry
-}
-import types.registry.{
-  regInsertK, Registry, RegKey, regKeyOfTab, regKeyRender, regLookupK
 }
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
@@ -4379,7 +4376,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "effLabelName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))
@@ -5125,7 +5121,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "effLabelName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))

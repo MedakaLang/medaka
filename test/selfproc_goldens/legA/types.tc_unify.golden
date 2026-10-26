@@ -32,7 +32,6 @@ defaultSourcelessAuthorities : ModuleCtx -> Map Int Unit -> EffRow -> Mono -> Un
 deferEffectRelation : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
 deferJoin : ModuleCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> List (Option Loc, Mono) -> Option Mono
 distinctVariables : List (Option Loc, Mono) -> Bool
-dropFirst : Int -> List a -> List a
 effectLeakCheck : ModuleCtx -> List Atom -> List Atom -> Unit
 effectLeakMsg : GraphCtx -> List Atom -> List Atom -> String
 effectSiteKey : String -> String -> String
@@ -147,7 +146,6 @@ rowFreeEffvars : ModuleCtx -> EffRow -> List Int
 rowHasRigid : ModuleCtx -> EffRow -> Bool
 rowInto : DynCtx -> Bool -> EffRow -> EffRow -> Unit
 rowTailIsJoin : EffRow -> Bool
-second3 : (a, b, c) -> b
 settlePending : DynCtx -> Int -> List PendingJoin -> List PendingJoin
 settlePendingJoins : DynCtx -> Int -> Unit
 settleShapedJoins : DynCtx -> List PendingJoin -> Unit
@@ -161,7 +159,6 @@ tagAllLitLocs : ModuleCtx -> Mono -> JoinContext -> Unit
 tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagNumlitCtxIf : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
 takeJoinsShapedBy : ModuleCtx -> Ref Tyvar -> Mono -> List PendingJoin
-third3 : (a, b, c) -> c
 typeMismatch : DynCtx -> Mono -> Mono -> Unit
 typeMismatchInDo : ModuleCtx -> Mono -> Mono -> DoCtx -> Unit
 typeMismatchReport : DynCtx -> Mono -> Mono -> Unit

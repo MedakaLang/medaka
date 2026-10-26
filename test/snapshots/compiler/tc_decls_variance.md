@@ -1,5 +1,5 @@
 # META
-source_lines=591
+source_lines=588
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
@@ -80,20 +80,18 @@ declEnvPolarityChain (m :: rest) (pacc, pm) =
 -- type even though it cannot see the constructors).  [tab] is what has been
 -- accumulated so far, threaded so a wrapper composes with what it wraps.
 --
--- #2112: THE FIXPOINT'S input set is not its export set.  The cross-module
--- arm used to run the fixpoint over `filterList kindPublicDataDecl m.demDecls`
--- — a PRE-filter — so a PUBLIC wrapper over a PRIVATE write/contra-bearing
--- declaration composed against the lenient `PCo` default and never tightened:
--- `data Inner a = MkInner (Ref a)` (private) under `export data Outer a =
--- MkOuter (Inner a)` accepted the widening `Outer (Unit -> <> Unit)` ⇝ `Outer
--- (Unit -> <Stdout> Unit)` through a module boundary while the identical
--- one-file program correctly rejected it.  Visibility is a filter on what a
--- row EXPORTS, not on what its own variance computation may SEE — the private
--- decl is part of the public wrapper's meaning whether or not anyone can name
--- it.  So the fixpoint now runs over the WHOLE row and the publicity filter
--- moves to its OUTPUT, where it belongs.  (Filtering the output at all still
--- matters: a private key is unnameable from outside, so publishing its row
--- would be dead weight in a table every later row composes against.)
+-- THE FIXPOINT'S input set is not its export set.  It runs over the WHOLE row: a PUBLIC
+-- wrapper over a PRIVATE write/contra-bearing declaration must compose against that
+-- declaration's real polarity.  With `data Inner a = MkInner (Ref a)` (private) under
+-- `export data Outer a = MkOuter (Inner a)`, a pre-filtered input would leave `Inner` at
+-- the lenient `PCo` default and accept the widening `Outer (Unit -> <> Unit)` ⇝ `Outer
+-- (Unit -> <Stdout> Unit)` through a module boundary while the identical one-file program
+-- correctly rejects it (#2112).  Visibility is a filter on what a row EXPORTS, not on
+-- what its own variance computation may SEE — the private decl is part of the public
+-- wrapper's meaning whether or not anyone can name it.  So the publicity filter applies
+-- to the fixpoint's OUTPUT.  (Filtering the output still matters: a private key is
+-- unnameable from outside, so publishing its row would be dead weight in a table every
+-- later row composes against.)
 declEnvRowPolarityEntries : Int ->
   DeclEnvModule ->
   List (TabKey, List Polarity) ->
@@ -107,13 +105,13 @@ declEnvRowPolarityEntries cur m tab
       (declEnvPolarityEntriesFix tab m.demDecls)
   | otherwise = []
 
--- The OUTPUT half of #2112's split: keep only the entries whose declaration
+-- The OUTPUT half of that split: keep only the entries whose declaration
 -- this row actually exports.  The predicate is `kindPublicDataDecl`'s reading
--- of publicity plus the `DTypeAlias` arm `declEnvPolarityEntries` now records
+-- of publicity plus the `DTypeAlias` arm `declEnvPolarityEntries` records
 -- (#2108) — a peer projection rather than a widening of `kindPublicDataDecl`
 -- itself, because that predicate has readers (`declEnvKindEntries`,
 -- `declEnvSeedChain`) with no alias arm at all, and adding one there would
--- move an acceptance table this slice is not scoped to touch.
+-- move an acceptance table.
 polarityEntriesPublicOnly : List Decl ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
@@ -383,8 +381,7 @@ recordParamPolarities mctx o name pols =
 -- `Ref`'s row to already be visible.  A CONCRETE head that is not yet
 -- registered — a forward reference, or the type itself, as in `data List a =
 -- Nil | Cons a (List a)` — reads `PCo` (`polarityAtOr None`), which is exactly
--- today's (fully lenient) behaviour: it can only fail to tighten, never reject
--- something that used to be accepted.  Inside `declEnvPolarityEntriesFix`
+-- the fully lenient default: it can only fail to tighten, never reject a program.  Inside `declEnvPolarityEntriesFix`
 -- no own head misses: every declaration is seeded at `PPhantom`, so a self or
 -- forward reference reads "no occurrence yet", the join's unit, and the
 -- self-recursive `List` comes out `PCo` by convergence.  The `None` default
@@ -450,7 +447,7 @@ paramOccPolarities _ _ _ (TyAuth _ _) = []
 paramOccPolarities tab p pol (TyNamed _ t _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
+  -- OCCURRENCE MINT: same record pattern as
   -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
   -- its acquired identity must be read off one pattern so they cannot drift.
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>

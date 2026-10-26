@@ -207,16 +207,14 @@ prop "substitutions with disjoint domains and closed ranges compose in either or
 -- Law: a pattern abstracted from a closed term unifies with the term, and applying the
 -- recorded bindings to the pattern gives the term back.  Precondition: the target is
 -- closed.
-prop "matching a pattern against its closed target and applying the bindings gives the target" (t : MTy) =
-  if isClosed t then
-    let (_, pat) = abstractLeaves 0 t
-    let patMono = toMono pat
-    let target = toMono t
-    let bindings = Ref []
-    cohOverlapGo bindings [(patMono, target)]
-      && cohEqMono (cohApply bindings patMono) target
-  else
-    True
+prop "matching a pattern against its closed target and applying the bindings gives the target" (c : Closed) =
+  let t = closedTy c
+  let (_, pat) = abstractLeaves 0 t
+  let patMono = toMono pat
+  let target = toMono t
+  let bindings = Ref []
+  cohOverlapGo bindings [(patMono, target)]
+    && cohEqMono (cohApply bindings patMono) target
 
 -- Law: for two closed types, overlap is structural equality (rows are not compared).
 -- `same` makes the second type a copy of the first about half the time, since two

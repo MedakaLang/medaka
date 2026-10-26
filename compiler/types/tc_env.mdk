@@ -80,9 +80,6 @@ import types.tc_types.{
   RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
   CDeclared, dynFor, MethodEntry
 }
-import types.registry.{
-  regInsertK, Registry, RegKey, regKeyOfTab, regKeyRender, regLookupK
-}
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
 import list.{drop, indexed, last}
