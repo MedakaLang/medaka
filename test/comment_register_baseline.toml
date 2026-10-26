@@ -632,7 +632,7 @@ count = 3
 [[entry]]
 file = "compiler/types/tc_mono.mdk"
 class = "history"
-count = 2
+count = 4
 
 [[entry]]
 file = "compiler/types/tc_mono.mdk"
@@ -657,7 +657,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 87
+count = 85
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"

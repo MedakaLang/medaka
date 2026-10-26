@@ -735,18 +735,27 @@ import types.prelude_elab.{
   withShippedRows,
 }
 import types.tc_mono.{
+  allArrowEffs,
   allConcreteHeads,
   allMethodParamsMentioned,
   anyConcreteHead,
   anyListM,
   anyMember,
+  applyParams,
   argMentions,
   arrowArity,
   authCellsIn,
+  authIdsIn,
+  authOrderIn,
+  authOrderRow,
   authRoots,
   authRowCells,
   authRowRoots,
   authSame,
+  authvarIdOf,
+  boundTvarId,
+  boundTyvarIds,
+  cellIdSet,
   cohApply,
   cohEqMono,
   cohOverlap,
@@ -756,22 +765,43 @@ import types.tc_mono.{
   collectRowEffvarIds,
   collectTyIds,
   concreteHeadVarIds,
+  containerParamScalarArg,
+  containsI,
+  declaredOblArgId,
   dedupI,
   distinctIdentsIn2,
+  domainIsTupleOfArity,
+  effectCells,
   effectRoots,
   effectRowRoots,
+  effvarIdOf,
   effvarLevel,
   exactReturnRequestOfGoal,
+  expectedParamTypes,
   findTvarInMono,
   findTvarInMonos,
   findTvName,
+  firstIdConflict,
   firstOrZero,
+  foldrFun,
+  funArity,
+  headIdConflict,
   headMonoNode,
+  headsUnifier,
   headTyconMono,
   headTyconNameMono,
   headTySpineNode,
+  headVarRootOf,
+  instantiateFields,
+  instantiateNamedMonos,
+  invocationHeadKey,
   isBareTyvarMono,
+  isMonoScheme,
+  isPreludeOrigin,
+  isUnboundTvar,
+  isUnshaped,
   joinCellOf,
+  litType,
   locEq,
   matchCol0Type,
   matchEqMono,
@@ -796,6 +826,7 @@ import types.tc_mono.{
   monoSizes,
   monoSpineDepth,
   monoSpineHeadIsCon,
+  monosTvarIds,
   monoTyvarId,
   monoTyvarIds,
   monoUnboundIds,
@@ -803,12 +834,16 @@ import types.tc_mono.{
   monoVecSameGiven,
   monoVectorClosed,
   newEffvarId,
+  nthArgMono,
+  nthFunDomain,
   nthMono,
   patVarsListTc,
   patVarsTc,
   peelArrows,
   peelQual,
   propParamNamesTc,
+  qualifierAuthIds,
+  recordAuthCells,
   recordOwnerModule,
   recordResultMono,
   resultAfterArrows,
@@ -825,6 +860,8 @@ import types.tc_mono.{
   sigCellsOf,
   sigRigidBindings,
   sigStandIn,
+  sigTvarIds,
+  spineHead,
   spineHeadMono,
   stripArrows,
   stripEff,
@@ -833,6 +870,8 @@ import types.tc_mono.{
   substAliasArgs,
   substAuth,
   substMono,
+  substMonos,
+  substOblArgs,
   substRow,
   tconBuiltin,
   tconFrom,
@@ -840,6 +879,7 @@ import types.tc_mono.{
   tconUnresolved,
   tupleMono,
   tupleSpineOf,
+  tupleUnifyClash,
   tyAppSpine,
   tyArrowCount,
   tyHeadEqV,
@@ -849,7 +889,9 @@ import types.tc_mono.{
   tySubsumesV,
   tyvarId,
   tyVarNames,
+  unquantifiedAuthIds,
   walkMonosSame,
+  xmodOblArgId,
 }
 import types.tc_state.{
   blankModuleCtx,
@@ -1648,24 +1690,6 @@ borrowedEffectCells mctx mono cells =
     cells
     (producedInputTypes (producedSlotCovariants mctx) mono)
 
-effectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
-effectCells mono cells = match normalize mono
-  TFun a row b => effectCells b (effectCells a (effectRowCells row cells))
-  TApp a b => effectCells b (effectCells a cells)
-  TEff row => effectRowCells row cells
-  TQual a _ => effectCells a cells
-  TAuth _ => cells
-  _ => cells
-
-effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
-effectRowCells row cells =
-  fold
-    (acc cell => match !cell
-      EUnbound id _ => IdMap.set id cell acc
-      _ => acc)
-    cells
-    (snd (rowFlat row))
-
 -- A contract's effect variables are universal throughout its body judgment.
 -- The same boundary is used for supplied methods and generic default bodies.
 beginEffectContract : ModuleCtx ->
@@ -1870,14 +1894,6 @@ unifyJoinRows mctx isIndex r1 r2 =
   match v3s
     v3 :: _ => recordAbsorptions mctx (dA ++ dB) v3
     [] => ()
-
-cellIdSet : List (Ref Effvar) -> Map Int Unit
-cellIdSet cells = cellIdSetGo cells Tip
-
-cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
-cellIdSetGo [] ids = ids
-cellIdSetGo (cell :: cells) ids =
-  cellIdSetGo cells (IdMap.set (effvarId cell) () ids)
 
 bindEach : List (Ref Effvar) -> EffRow -> Unit
 bindEach [] _ = ()
@@ -6708,14 +6724,6 @@ firstDispatchIdx typarams i (ty :: rest)
   | argMentions typarams ty = Some i
   | otherwise = firstDispatchIdx typarams (i + 1) rest
 
-nthArgMono : Int -> Mono -> Option Mono
-nthArgMono 0 m = match normalize m
-  TFun a _ _ => Some a
-  _ => None
-nthArgMono n m = match normalize m
-  TFun _ _ b => nthArgMono (n - 1) b
-  _ => None
-
 -- D3a: queue an arg-position occurrence's route ref for stamping, keyed on the
 -- inferred type of its discriminating argument (the dispatch-position arg mono).
 -- The cell is read later (resolveArgStamps), once inference has solved it.  D3b-1:
@@ -7855,10 +7863,6 @@ checkRunResidue m = CheckRunSeed {
   crsWarnings = m.mcCells.matchWarnings.value,
 }
 
-containsI : Int -> List Int -> Bool
-containsI _ [] = False
-containsI x (y :: ys) = x == y || containsI x ys
-
 idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
 idSetInsertAll [] m = m
 idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
@@ -8760,20 +8764,6 @@ lastInvocationOps o = match o.doInvocationView
       headKey = invocationHeadKey,
     }
 
-invocationHeadKey : Mono -> String
-invocationHeadKey h = match headTyconMono h
-  Some hk => headKeyTag hk
-  None => "?"
-
--- A constructor's fields at an application's authority arguments: each
--- declared authority parameter is replaced by the argument in its slot.  A
--- type or row argument is left as the declaration's variable; the summary
--- charges it where it lands, by the slot's variance.
-instantiateFields : GraphCtx -> List Mono -> (List Mono, List Mono) -> List Mono
-instantiateFields gctx args (params, fieldTys) =
-  let asub = authorityParamSubst params args
-  map (substMono gctx [] [] asub) fieldTys
-
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
 -- miss (`None`) already says exactly that.
@@ -9049,10 +9039,6 @@ idConflictHelp (name, o1, o2) =
       "import the one you mean instead of declaring a second type with that name"
   "two different types share the name `\{name}`: one comes from \{originPhrase o1}, the other from \{originPhrase o2}; \{remedy}"
 
-isPreludeOrigin : TyConOrigin -> Bool
-isPreludeOrigin (OriginModule m) = m == "core"
-isPreludeOrigin _ = False
-
 -- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
 -- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
 -- present identities) and is answered rather than omitted so this stays total.
@@ -9062,40 +9048,6 @@ originPhrase (OriginModule "__user__") = "this program"
 originPhrase (OriginModule m) = "module `\{m}`"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
-
--- The two sides' application heads, when they are same-spelled type
--- constructors of different declarations.
-headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
-headIdConflict a b = tconIdConflict (spineHead a) (spineHead b)
-
-spineHead : Mono -> Mono
-spineHead t = match normalize t
-  TApp f _ => spineHead f
-  other => other
-
--- The FIRST head, in a parallel structural walk of the two monos, whose name
--- agrees while its identity does not.  Parallel and shape-guarded on purpose:
--- the two sides render identically (the caller's precondition), so they have
--- the same shape, and walking them together is what pairs the conflicting head
--- with its counterpart rather than reporting some unrelated head.
-firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
-firstIdConflict a b = match (normalize a, normalize b)
-  (TApp f1 x1, TApp f2 x2) =>
-    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
-  (TFun d1 _ r1, TFun d2 _ r2) =>
-    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
-  (x, y) => tconIdConflict x y
-
--- Two same-spelled type constructors of different declarations: the one
--- place a conflict of identities is read off a pair of heads.
-tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
-tconIdConflict a b = match (normalize a, normalize b)
-  (TCon n1 o1, TCon n2 o2) =>
-    if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
-      Some (n1, o1, o2)
-    else
-      None
-  _ => None
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
@@ -9583,37 +9535,6 @@ defaultSourcelessAuthorities mctx declared force t =
         linkAuthvar cell (authTop (authvarDomain cell)))
     ()
     candidates
-
--- The variables a caller can supply through the published type: every
--- authority an ARGUMENT carries — a qualified slot (`String @κ`), an index
--- (`Handle κ`) or a row (`Unit -> <L κ> Unit`) — at any depth of an arrow's
--- domain.  A result position supplies nothing: `Unit -> Tok κ` would let a
--- caller choose the index of a value that carries no evidence for it.
-qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
-qualifierAuthIds t acc = match normalize t
-  TFun a _ b => qualifierAuthIds b (authIdsIn a acc)
-  TApp a b => qualifierAuthIds b (qualifierAuthIds a acc)
-  TQual inner _ => qualifierAuthIds inner acc
-  _ => acc
-
--- Every authority a type mentions, at any depth: qualifiers, indices and the
--- atoms of every row.
-authIdsIn : Mono -> Map Int Unit -> Map Int Unit
-authIdsIn t acc = match normalize t
-  TFun a row b => authIdsIn b (authIdsIn a (rowAuthIds row acc))
-  TApp a b => authIdsIn b (authIdsIn a acc)
-  TEff row => rowAuthIds row acc
-  TQual inner q => authIdsIn inner (authTermIds q acc)
-  TAuth q => authTermIds q acc
-  _ => acc
-
-rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
-rowAuthIds row acc =
-  fold (m atom => authTermIds (atomAuth atom) m) acc (fst (rowFlat row))
-
-authTermIds : Authority -> Map Int Unit -> Map Int Unit
-authTermIds q acc =
-  fold (m cell => IdMap.set (authvarId cell) () m) acc (authVars q)
 
 lowerAuthLevels : Int -> Authority -> Unit
 lowerAuthLevels _ (AConst _) = ()
@@ -10251,9 +10172,6 @@ freshAuthvarRanged mctx top pat name =
         IdMap.set id () mctx.mcGraph.graphRun.patternAuthIdsRef.value
   Ref (AUnbound id mctx.mcCells.currentLevel.value top pat name)
 
-authvarIdOf : (String, Ref Authvar) -> Int
-authvarIdOf (_, cell) = authvarId cell
-
 -- Every authority use a signature writes: a binder an atom names, each with
 -- the domain top of its label, and a bare name in an `Authority`-kinded
 -- index slot, with the slot's declared label's.  A name used at two domains
@@ -10391,9 +10309,6 @@ axisAtomBinders gctx a = match (
         _ => [])
       axes
   _ => []
-
-effvarIdOf : (String, Ref Effvar) -> Int
-effvarIdOf (_, cell) = effvarId cell
 
 -- build a row from an arrow's return-position AST type; a named tail resolves
 -- through [etbl] for sharing, an absent/anonymous one is closed
@@ -11666,16 +11581,6 @@ defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
     _ => ()
   defaultPatLitVarsIn dyn quantified rest
 
-litType : Lit -> Mono
-litType (LInt _) = tconBuiltin "Int"
-litType (LFloat _) = tconBuiltin "Float"
-litType (LString _) = tconBuiltin "String"
-litType (LChar _) = tconBuiltin "Char"
-litType (LBool _) = tconBuiltin "Bool"
-litType LUnit = tconBuiltin "Unit"
-litType (LU64 _ _) = tconBuiltin "U64"
-litType (LI64 _ _) = tconBuiltin "I64"
-
 -- A `U64` or `I64` is a boxed cell, and no engine's pattern matcher compares one
 -- against a constant, so a literal pattern cannot match it (INTEGER-TYPES-DESIGN
 -- §3.2 item 5 builds the tagged heads only).  Refused, never compiled to an arm
@@ -11725,10 +11630,6 @@ inferPats env (p :: ps) =
   let pr = inferPat env p
   let rest = inferPats env ps
   (fst pr :: fst rest, snd pr ++ snd rest)
-
-foldrFun : List Mono -> Mono -> Mono
-foldrFun [] result = result
-foldrFun (a :: rest) result = TFun a pureRow (foldrFun rest result)
 
 inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPatTuple env pats =
@@ -12950,28 +12851,6 @@ export
 bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
 bindingGrantArity o _ sch =
   if o.doGrantsEnabled then listLen (grantOrder sch) else 0
-
-authOrderIn : Mono -> List Int -> List Int
-authOrderIn t acc = match normalize t
-  TFun a row b => authOrderIn b (authOrderRow row (authOrderIn a acc))
-  TApp a b => authOrderIn b (authOrderIn a acc)
-  TEff row => authOrderRow row acc
-  TQual inner q => authOrderTerm q (authOrderIn inner acc)
-  TAuth q => authOrderTerm q acc
-  _ => acc
-
-authOrderRow : EffRow -> List Int -> List Int
-authOrderRow row acc =
-  fold (a atom => authOrderTerm (atomAuth atom) a) acc (fst (rowFlat row))
-
-authOrderTerm : Authority -> List Int -> List Int
-authOrderTerm q acc =
-  fold
-    (a cell =>
-      let i = authvarId cell
-      if containsI i a then a else i :: a)
-    acc
-    (authVars q)
 
 -- Mint a use node for a name that takes no dictionary, so its grants have an
 -- identity to be recorded under.
@@ -16803,16 +16682,6 @@ xmodVecObl s v
   | otherwise =
     VecObl { voIface = s.csIface, voIds = flatMap xmodOblArgId v, voArgs = v }
 
--- the ids a cross-module argument defers on: the id itself for a bare tyvar, every
--- tyvar leaf for a structured one (#1937), none for a ground one.  There is no
--- scheme-bound-id set on this side of the boundary, so unlike `declaredOblArgId` this
--- cannot filter — `substOblArgs`' fail-closed lookup is what refuses an id the call's
--- instantiation does not carry.
-xmodOblArgId : Mono -> List Int
-xmodOblArgId m = match normalize m
-  TVar cell => [tyvarId cell]
-  _ => monoTyvarIds m
-
 -- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
 -- call's monos, pushing ONE joint obligation per predicate onto the call channel
 -- (`Windowed UObligation`, #838 I1).  [originId] is the occurrence's own #837 binding
@@ -16856,46 +16725,6 @@ substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
 substVecOblArgs o subst
   | isEmptyL o.voArgs = substMonos o.voIds subst
   | otherwise = substOblArgs o.voIds o.voArgs subst
-
--- #1937 (structured predicate carry): this walk used to substitute ONLY at a TOP-LEVEL
--- `TVar` and pass anything else through untouched, which is why the admission pair
--- (`declaredOblArgOk`) could not admit a structured argument: `Conv (Wrap a) b` would
--- have carried the DEFINING signature's `a` cell into the caller's goal unsubstituted,
--- the wrong-but-concrete goal its header calls strictly worse than a missing one.  It
--- now recurses through `TApp`/`TFun` and substitutes at every `TVar` LEAF, so
--- `Conv (Wrap a) b` at a call instantiating `a := Char, b := Bool` becomes the goal
--- `Conv (Wrap Char) Bool` — the shape #1937 is about.  A leaf among the entry's own
--- ids [ids] that [subst] does not map still fails CLOSED for the whole predicate,
--- exactly as the top-level arm always did.  A leaf outside [ids] is a variable the
--- scheme does not quantify (`residualMixedPred`), the same at every use, so it is
--- kept as itself.
-substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
-substOblArgs _ [] _ = Some []
-substOblArgs ids (m :: rest) subst = match substOblArg ids m subst
-  None => None
-  Some m2 => map (m2 :: _) (substOblArgs ids rest subst)
-
--- ONE predicate argument under [subst]: every tyvar leaf mapped, structure preserved.
-substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
-substOblArg ids m subst = match normalize m
-  TVar cell => match lookupAssocI (tyvarId cell) subst
-    Some m2 => Some m2
-    None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
-  TQual a q => map (a2 => TQual a2 q) (substOblArg ids a subst)
-  TApp a b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TApp a2 b2) (substOblArg ids b subst)
-  TFun a eff b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
-  other => Some other
-
--- the monos [ids] map to under [subst], in order; None if any id is unmapped.
-substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
-substMonos [] _ = Some []
-substMonos (id :: rest) subst = match lookupAssocI id subst
-  Some mono => map (mono :: _) (substMonos rest subst)
-  None => None
 
 -- #837: (name, id)-keyed lookup over schemeObligationsRef.  id /= 0 keys the
 -- occurrence's binding EXACTLY; id == 0 falls to the bare-name scan (today's path).
@@ -17435,13 +17264,6 @@ inferAppNodes : TcEnv -> Mono -> List (Expr, Mono) -> Mono
 inferAppNodes env ft [] = ft
 inferAppNodes env ft ((node, at) :: rest) =
   inferAppNodes env (inferApp env node ft at) rest
-
--- the k-th domain of a (possibly curried) function type — `nthFunDomain 0` is the
--- receiver of an index-0 dispatch, which is what every pre-#1815 caller asked for.
-nthFunDomain : Int -> Mono -> Option Mono
-nthFunDomain k m = match normalize m
-  TFun a _ r => if k == 0 then Some a else nthFunDomain (k - 1) r
-  _ => None
 
 -- Apply [ft] to the spine's argument nodes in order and return the residual
 -- result.  `[]` is the identity.  Each argument flows in through
@@ -19378,16 +19200,6 @@ funDomain : ModuleCtx -> Mono -> Mono
 funDomain mctx (TFun a _ _) = a
 funDomain mctx _ = freshVar mctx ()
 
--- peel up to `n` arrow domains off the (normalized) lambda's expected type; those
--- domains are the lambda's expected PARAM types.  Stops early if it is not (yet)
--- an arrow — those params fall back to a fresh var in inferLamChecked, and the
--- trailing `unify ft (TFun xt …)` reconciles them.
-expectedParamTypes : Mono -> Int -> List Mono
-expectedParamTypes _ 0 = []
-expectedParamTypes (TFun a _ b) n =
-  a :: expectedParamTypes (normalize b) (n - 1)
-expectedParamTypes _ _ = []
-
 -- like inferLam, but checked against the arrow [expected] it flows into, when
 -- one is known: each lambda param is unified with the corresponding expected
 -- param type right after inferPat — so the body and the hover side-channel see
@@ -19468,32 +19280,6 @@ notAFunctionHint None = "this is a value, not a function; remove the argument"
 overAppliedMsg : String -> Int -> Int -> String
 overAppliedMsg name takes applied =
   "`\{name}` takes \{argumentCount takes} but is applied to \{intToString applied}"
-
--- Batch B #6 reframe (2026-07-04): a container-consuming HOF whose next declared
--- parameter is a higher-kinded container `f a` (an unresolved tyvar head applied
--- to an element, i.e. `TApp (TVar …) elem`) is being handed a SCALAR argument —
--- a bare arity-0 type (`String`/`Int`/…) that has no element slot for `f` to
--- bind.  Left to the generic `unify (f a) String` sink it leaks a raw
--- tyvar-application `Type mismatch: a b vs String`.  This detector recognises the
--- shape UPSTREAM (in inferApp, where the callee name + arg loc are still in
--- scope) so the diagnostic can be reframed as container-vs-scalar.  SOUND: a
--- `TApp _ _ ~ TCon n` unification can only ever FAIL — a genuine container arg is
--- itself a `TApp` (`List a`, `Maybe a`, …) and would UNIFY the element, never
--- reaching a mismatch; the reframe therefore never hijacks a legitimate
--- higher-kinded mismatch.  Returns the scalar type's name when it fires.
-containerParamScalarArg : Mono -> Mono -> Option String
-containerParamScalarArg ft xt = match normalize ft
-  TFun dom _ _ => match normalize dom
-    TApp _ _ => match headTyconNameMono dom
-      None => match normalize xt
-        TCon n _ => Some n
-        -- answer-preserving (#1110): a rigid used to arrive here as `TCon n`
-        -- and named itself in the container-vs-scalar reframe.
-        TRigid n => Some n
-        _ => None
-      Some _ => None
-    _ => None
-  _ => None
 
 containerArgMsg : Option String -> String -> String
 containerArgMsg fn argTy =
@@ -19584,28 +19370,11 @@ isDoLoweredAndThenCalleeExpr _ = False
 -- whose residual is consumed WITHOUT error — never shows it.  (residualMono,
 -- help, optional (span, replacement) fix); reset by `freshModuleCtx`.
 
--- number of leading `->` arrows in a (normalized) type — its curried arity.
-funArity : Mono -> Int
-funArity m = match normalize m
-  TFun _ _ r => 1 + funArity r
-  _ => 0
-
 -- the elements of a tuple-literal argument (through the transparent ELoc wrapper).
 tupleArgElems : Expr -> Option (List Expr)
 tupleArgElems (ELoc _ e) = tupleArgElems e
 tupleArgElems (ETuple es) = Some es
 tupleArgElems _ = None
-
--- True iff [ft]'s first parameter is itself an arity-[n] tuple type — the genuine
--- "the tuple IS the intended single argument" shape (e.g. `f (a, b) c = …`), which
--- must NOT be flagged.  Read on the PRISTINE ft (before inferApp unifies its domain
--- with the tuple arg), so the domain here is the declared param type.
-domainIsTupleOfArity : Mono -> Int -> Bool
-domainIsTupleOfArity ft n = match normalize ft
-  TFun dom _ _ => match headTyconNameMono dom
-    Some c => c == "__tuple\{intToString n}__"
-    None => False
-  _ => False
 
 -- render a tuple element to source-ish text for the `add 1 2` fix, for the simple
 -- literal/var/negation cases; None for anything a full printer would be needed for.
@@ -20364,11 +20133,6 @@ joinOfOuterVariables level pj =
   isUnshaped pj.pjResult
     && allList (value => isOuterVariable level (snd value)) pj.pjValues
 
-isUnshaped : Mono -> Bool
-isUnshaped t = match normalize t
-  TVar _ => True
-  _ => False
-
 isOuterVariable : Int -> Mono -> Bool
 isOuterVariable level t = match normalize t
   TVar cell => tyvarLevel cell < level
@@ -21126,16 +20890,6 @@ instantiateRecordShared mctx (RecordInfo paramIds authIds result fields _) =
     map (id => (id, sharedAuthority mctx id (IdMap.get id cells))) authIds
   (RecordSubst subst asub, substMono mctx.mcGraph subst [] asub result)
 
--- The record's authority cells, by id: the head's in the result, a
--- constructor binder's in the fields.
-recordAuthCells : List Int ->
-  Mono ->
-  List (String, Mono) ->
-  Map Int (Ref Authvar)
-recordAuthCells [] _ _ = Tip
-recordAuthCells _ result fields =
-  fold (m f => authCellsIn (snd f) m) (authCellsIn result Tip) fields
-
 -- An update repacks a field under an existential binder only where it
 -- replaces every field that mentions the binder: the value's index is then
 -- the replacement's own.  Replacing some of them would leave one binder
@@ -21766,10 +21520,6 @@ freshVars : ModuleCtx -> Int -> List Mono
 freshVars mctx n
   | n <= 0 = []
   | otherwise = freshVar mctx () :: freshVars mctx (n - 1)
-
-applyParams : Mono -> List Mono -> Mono
-applyParams head [] = head
-applyParams head (p :: ps) = applyParams (TApp head p) ps
 
 addVariants : TcEnv ->
   List (String, Mono) ->
@@ -30225,16 +29975,6 @@ dictParamsFrom n start count
     PVar (dictParamName n start) (Loc "" 0 0 0 0) noBinderId
       :: dictParamsFrom n (start + 1) (count - 1)
 
--- Two monos genuinely CANNOT unify because a tuple spine meets a differing
--- concrete head/arity — used only to pick the readable full-type mismatch
--- message.  A TVar-headed other side returns False (it can still bind).
-tupleUnifyClash : Mono -> Mono -> Bool
-tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
-  (Some xs, Some ys) => listLen xs /= listLen ys
-  (Some _, None) => monoSpineHeadIsCon b
-  (None, Some _) => monoSpineHeadIsCon a
-  (None, None) => False
-
 -- #80: the single per-module typecheck body, reached from the graph driver through
 -- `checkModuleFullImpl`. DICT-SEMANTICS §7's single-evaluator law means one
 -- elaboration decision serves check, run, and emit. `mid` and `implDecls` carry the
@@ -31379,15 +31119,6 @@ inferDefaultMethod : TcEnv ->
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   inferMethodBody env iface DefaultBody (typarams, mty, dscope) mname pats body
 inferDefaultMethod env _ _ _ _ = ()
-
-instantiateNamedMonos : GraphCtx ->
-  List (String, Mono) ->
-  List (Int, Mono) ->
-  List (String, Mono)
-instantiateNamedMonos gctx [] _ = []
-instantiateNamedMonos gctx ((name, mono) :: rest) subst =
-  (name, substMono gctx subst [] [] mono)
-    :: instantiateNamedMonos gctx rest subst
 
 methodLevelPredicateSlots : ModuleCtx ->
   List String ->
@@ -32564,22 +32295,6 @@ rowPrefixSubstRigid mctx rigidIds args row =
   map
     (scratch => !scratch)
     (headsUnifier mctx.mcGraph rigidIds args (freshRowHeads mctx row))
-
--- [args] unified with the first `listLen args` of [heads] in a scratch
--- substitution, every variable in [rigidIds] held rigid.
-headsUnifier : GraphCtx ->
-  OrdMap Unit ->
-  List Mono ->
-  List Mono ->
-  Option (Ref (List (Int, Mono)))
-headsUnifier gctx rigidIds args allHeads =
-  let heads = take (listLen args) allHeads
-  let scratch = Ref []
-  if listLen heads == listLen args
-    && cohOverlapGo scratch (rigidSigPairs gctx rigidIds (zipL args heads)) then
-    Some scratch
-  else
-    None
 
 distinctPrefixes : Int ->
   List (ImplRow, List (Int, Mono)) ->
@@ -35094,13 +34809,6 @@ liveTailId cell = match effrowNorm (EffRow [] (Some cell))
   EffRow _ (Some t) => effvarId t
   EffRow _ None => 0 - 1
 
--- the effect rows on each arrow of a Mono arrow spine, outermost first, down to the
--- non-arrow result (length = the type's arity).
-allArrowEffs : Mono -> List EffRow
-allArrowEffs m = match normalize m
-  TFun _ eff b => eff :: allArrowEffs b
-  _ => []
-
 -- the first source span inside an impl-method body, for locating T-EFFECT-LAUNDER
 -- at the offending body rather than the shared interface signature.  Peels the
 -- let-chain a `let _ = putStr …; body` body desugars to (a partial mirror of
@@ -35401,16 +35109,6 @@ implHeadVarRoots implTvMap =
       Some root => [(fst p, root)]
       None => [])
     implTvMap
-
-headVarRootOf : Mono -> Option HeadVarRoot
-headVarRootOf m = match normalize m
-  TVar cell => Some (TypeVarRoot (tyvarId cell))
-  TEff row => match effrowNorm row
-    EffRow [] (Some cell) => match !cell
-      EUnbound id _ => Some (RowVarRoot id)
-      _ => None
-    _ => None
-  _ => None
 
 -- The head variables that are still type variables, by tyvar root.
 implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
@@ -35852,26 +35550,6 @@ constraintIface (Constraint { constraintHead = n }) = n
 constraintVarNames : Constraint -> List String
 constraintVarNames (Constraint { constraintArgs = args }) =
   flatMap tyVarNames args
-
-isUnboundTvar : Mono -> Bool
--- Same body as `isBareTyvarMono` (tc_mono.mdk); the two collapse when this row moves there.
--- lint-disable-next-line rule-duplicate-body
-isUnboundTvar m = match normalize m
-  TVar _ => True
-  _ => False
-
--- #837 incr2 (Axis A): the value-restricted arm of the old `isBodyLocalScheme`,
--- kept as a pure STRUCTURAL test.  A monomorphic scheme (`Forall [] []`) is never
--- a genuine interface-method occurrence — every real method quantifies at least
--- its interface parameter — so a mono scheme reaching a `recordImplObligation`
--- guard denotes a value-restricted local (a lambda/pattern var, or a
--- value-restricted simple `let`) and must NOT record a method obligation.  This
--- arm is retained verbatim; the old `(name, schemeIds) ∈ bodyLocalSchemesRef`
--- membership arm (generalized locals) is now the ENV is-local flag
--- (`lookupLocalFlag`, §TcEnv), which is lexically scoped and cannot go stale.
-isMonoScheme : Scheme -> Bool
-isMonoScheme (Forall [] [] [] _ _ _) = True
-isMonoScheme _ = False
 
 -- any member of [xs] present in [ys] (tiny per-method var lists)
 anyContainsI : List Int -> List Int -> Bool
@@ -38615,16 +38293,6 @@ rootCellsOf exported schemes =
         [])
     schemes
 
-unquantifiedAuthIds : Scheme -> Map Int Unit
-unquantifiedAuthIds (Forall _ _ auths residual force mono) =
-  fold
-    (acc id => IdMap.delete id acc)
-    (fold
-      (acc r => authTermIds r.arUpper (authTermIds r.arLower acc))
-      (authIdsIn mono (rowAuthIds force Tip))
-      residual)
-    auths
-
 failureMentions : Map Int Unit -> SummaryFailure ObligationSite -> Bool
 failureMentions Tip _ = False
 failureMentions ids failure = match failure.esfAuthority
@@ -40169,14 +39837,6 @@ fixedSibling id ((i, sibling) :: rest)
   | i == id = Some sibling
   | otherwise = fixedSibling id rest
 
--- collect the TVar ids of those entries in tvs that normalize to a TVar
--- (concrete-grounded entries are skipped — only same-TVar collapses are an error)
-sigTvarIds : List Mono -> List Int
-sigTvarIds [] = []
-sigTvarIds (m :: rest) = match normalize m
-  TVar cell => tyvarId cell :: sigTvarIds rest
-  _ => sigTvarIds rest
-
 -- true if the list has any duplicate Int
 hasDupI : List Int -> Bool
 hasDupI [] = False
@@ -40407,16 +40067,6 @@ declaredOblMixed mctx boundIds ifref tvMap args =
     []
   else
     [VecObl { voIface = ifref, voIds = ids, voArgs = monos }]
-
--- the scheme-quantified ids an argument defers on: the id itself for a BARE tyvar, and
--- since #1937 every scheme-bound tyvar LEAF of a STRUCTURED one (`Wrap a` ⇒ `a`), in
--- leaf order.  `[]` for a ground argument.  Duplicates are kept, exactly as the all-bare
--- path's `boundTyvarIds` keeps them for `Conv a a`.
-declaredOblArgId : List Int -> Mono -> List Int
-declaredOblArgId boundIds m = match normalize m
-  TVar cell if containsI (tyvarId cell) boundIds => [tyvarId cell]
-  TVar _ => []
-  _ => filterList (id => containsI id boundIds) (monoTyvarIds m)
 
 -- #1937: a STRUCTURED argument whose free ids are ALL scheme-bound now carries too.
 -- The clause this replaces required a structured argument to be GROUND, because
@@ -42176,15 +41826,6 @@ leadInferredPred (iface, ids, args) = match ids
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
 inferredPredLead (_, id, _) = id
 
--- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
--- None otherwise (a partial vector is a different predicate — never over-reject).
-boundTyvarIds : List Int -> List Mono -> Option (List Int)
-boundTyvarIds _ [] = Some []
-boundTyvarIds boundIds (d :: rest) = match normalize d
-  TVar cell if containsI (tyvarId cell) boundIds =>
-    map (tyvarId cell :: _) (boundTyvarIds boundIds rest)
-  _ => None
-
 -- shatter vector obligations into (interface declaration, id) pairs — the currency of the
 -- coverage subset test.  See checkSigConstraintCoverage's header.
 -- A signed body's inferred predicate is covered only by the same interface declaration;
@@ -42491,16 +42132,6 @@ inferredConstraintIds mctx m boundIds =
       ++ flatMap
         (monosTvarIds boundIds)
         (sitesFor m mctx.mcCells.dictAppFns.value))
-
-monosTvarIds : List Int -> List Mono -> List Int
-monosTvarIds boundIds monos = flatMap (boundTvarId boundIds) monos
-
--- [mono] normalizing to a tyvar this scheme generalized → that (constraint var)
--- id; a pinned-concrete or foreign var → none
-boundTvarId : List Int -> Mono -> List Int
-boundTvarId boundIds mono = match normalize mono
-  TVar cell => if containsI (tyvarId cell) boundIds then [tyvarId cell] else []
-  _ => []
 
 -- [vecs] carries every complete deferred predicate this binding recovered. Predicate
 -- identity is the existing `cslotVecKey` (interface/lead plus the full argument vector),
