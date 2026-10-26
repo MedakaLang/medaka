@@ -1,0 +1,419 @@
+-- Tests of `types.tc_decls`'s own API: `buildDeclEnvs` over hand-built module rows (what
+-- data, record, newtype, alias, interface and impl declarations register, the ordinal and
+-- field-owner tables, the kind projection a later module reads), the data-env fold, the
+-- registration helpers that put constructors, records and aliases into a module record,
+-- alias head expansion, signature-to-scheme conversion with its kind and alias diagnostics,
+-- cyclic-alias rejection and the small predicates over declarations and constraints.  The
+-- declarations are parsed from source so each row states the declaration it relies on.  The
+-- variance tables are `tc_decls_variance`'s and are not read here.  Each test mints its own
+-- graph and module records.
+
+import list.{indexed, nub, reverse, sort}
+import test.{
+  expectAll,
+  expectAtLeast,
+  expectEqual,
+  expectFalse,
+  expectTrue,
+}
+import frontend.parser.{parse}
+import frontend.resolve.{stampGraphTyOrigins}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), tabKeyName}
+import support.ordmap.{omEmpty, omKeys, omLookup}
+import types.publish.{tcCode}
+import types.repr.{IfaceRef(..), ppMono, ppScheme}
+import types.tc_types.{
+  BuiltinClass(..),
+  CeRow(..),
+  ClassEnv(..),
+  DataEnv(..),
+  DeclEnvModule(..),
+  DeclEnvs(..),
+  ImplEnv(..),
+  MethodEnv(..),
+  RecordInfo(..),
+  ModuleCtx(..),
+}
+import types.tc_env.{
+  declEnvKindEntries,
+  declEnvModule,
+  emptyDeclEnvAcc,
+  envFor,
+  lookupCtor,
+  lookupRecordByName,
+}
+import types.tc_state.{blankModuleCtx, probeGraphCtx, wAll}
+import types.tc_decls_types.{sigConstraintsOf}
+import types.tc_mono.{tconBuiltin}
+import types.tc_decls.{
+  addFieldOwners,
+  buildDeclEnvs,
+  builtinClassName,
+  constraintIface,
+  constraintIsMethodLevel,
+  constraintNameMonos,
+  constraintVarNames,
+  dataEnvFromDeclsGo,
+  expandAliasHeadTy,
+  graphAliasRow,
+  isAliasDecl,
+  lookupMethodPredicateSlots,
+  pubTopFnNames,
+  registerAllData,
+  rejectCyclicAliases,
+  sigToScheme,
+  tyConNamesInTy,
+  withDeclParamKinds,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+fresh : Unit -> ModuleCtx
+fresh _ = blankModuleCtx (probeGraphCtx ()) "probe"
+
+-- The declarations of the module at ordinal [ord], named [mid], parsed from [src].
+rowOf : Int -> String -> String -> DeclEnvModule
+rowOf ord mid src = declEnvModule (probeGraphCtx ()) ord mid (parse src)
+
+-- The envelope of a prelude-free graph of the modules [mods] (id, source), in dependency
+-- order, after the declarations are stamped with their module's identity as a loaded graph's
+-- are.  Ordinals count from 1; the core row is empty.
+envsOf : List (String, String) -> DeclEnvs
+envsOf mods =
+  let (_, stamped) =
+    stampGraphTyOrigins [] (map (m => (fst m, parse (snd m))) mods)
+  let g = probeGraphCtx ()
+  let rows =
+    map
+      (e => declEnvModule g (fst e) (fst (snd e)) (snd (snd e)))
+      (map (e => (fst e + 1, snd e)) (indexed stamped))
+  buildDeclEnvs g emptyDeclEnvAcc (rowOf 0 "" "") rows
+
+typeNames : DeclEnvs -> List String
+typeNames envs = map (t => tabKeyName (fst t)) envs.deData.deTypes
+
+aliasNames : DeclEnvs -> List String
+aliasNames envs = map (a => tabKeyName (fst a)) envs.deData.deAliases
+
+ifaceNames : DeclEnvs -> List String
+ifaceNames envs = map ifaceNameOf envs.deIfaces.ceRows
+
+ifaceNameOf : CeRow -> String
+ifaceNameOf (CeRow _ _ ref _ _ _ _ _ _) = ref.irName
+
+firstSig : String -> Ty
+firstSig src = match sigsOf (parse src)
+  t :: _ => t
+  [] => TyVar "none"
+
+sigsOf : List Decl -> List Ty
+sigsOf [] = []
+sigsOf ((DTypeSig _ _ t _) :: rest) = t :: sigsOf rest
+sigsOf (_ :: rest) = sigsOf rest
+
+recordFields : RecordInfo -> List String
+recordFields (RecordInfo _ _ _ fields _) = map fst fields
+
+-- The codes of the diagnostics pushed to [m] so far, oldest first.
+export
+codesOf : ModuleCtx -> List String
+codesOf m = map tcCode (reverse (wAll m.mcCells.typeErrors))
+
+-- The scheme of the first signature of [src] after [src]'s own aliases and kinds are
+-- registered, rendered, with the diagnostics the conversion pushed.
+schemeOf : String -> (String, List String)
+schemeOf src =
+  let ds = parse src
+  let m = fresh ()
+  m.mcCells.aliasTableRef := flatMap graphAliasRow ds
+  withDeclParamKinds m ds (_ =>
+    let s = ppScheme (sigToScheme m (firstSig src))
+    (s, codesOf m))
+
+-- Public data, abstract data, private data and a public newtype.  The kind-public
+-- projection keeps the first, second and fourth, so dropping its abstract-data arm or its
+-- newtype arm lowers the count; the own-row projection keeps all four.
+kindRowSrc : String
+kindRowSrc =
+  """
+public export data Shown a = Shown a
+export data Hidden a = Hidden a
+data Private a = Private a
+export newtype Wrap = Wrap Int
+"""
+
+-- ── the kind projection of a row ──────────────────────────────────────────
+
+test "a row's kind projection drops private data, and the own-row projection keeps it" =
+  let g = probeGraphCtx ()
+  let ds = parse kindRowSrc
+  expectAll [
+    expectEqual 3 (length (declEnvModule g 0 "m" ds).demKindEntries),
+    expectEqual 4 (length (declEnvKindEntries g ds)),
+  ]
+
+-- ── buildDeclEnvs: what each declaration registers ────────────────────────
+
+test "data, newtype and alias declarations register their names" =
+  let envs = envsOf [
+    (
+      "a",
+      "export data Box a = Box a\nexport newtype Id = Id Int\nexport type Name = String\n",
+    ),
+  ]
+  expectAll [
+    expectEqual ["Box", "Id"] (sort (typeNames envs)),
+    expectEqual ["Name"] (aliasNames envs),
+  ]
+
+test "a record declaration registers its constructor and its field names" =
+  let envs = envsOf [("a", "export data Pt = Pt { x : Int, y : Int }\n")]
+  expectAll [
+    expectEqual ["Pt"] (omKeys envs.deData.deCtorIdents),
+    expectEqual ["Pt"] (omKeys envs.deData.deRecordIdents),
+    expectEqual ["x", "y"] (sort (omKeys envs.deData.deFieldOwnerIdents)),
+  ]
+
+test "an interface registers its name, and each method its declaration" =
+  let envs = envsOf [
+    ("a", "export interface Sized a where\n  size : a -> Int\n  empty : a\n"),
+  ]
+  expectAll [
+    expectEqual ["Sized"] (ifaceNames envs),
+    expectEqual ["empty", "size"] (sort (omKeys envs.deMethods.meByName)),
+  ]
+
+test "an impl declaration adds a row to the impl env and no interface" =
+  let envs = envsOf [
+    ("a", "export interface Sized a where\n  size : a -> Int\n"),
+    (
+      "b",
+      "import a.{Sized}\nexport data Box = Box\nimpl Sized Box where\n  size _ = 1\n",
+    ),
+  ]
+  expectAll [
+    expectAtLeast 1 (length envs.deImpls.ieRows),
+    expectEqual ["Sized"] (ifaceNames envs),
+  ]
+
+test "the envelope lists the core row first and indexes each module id by its ordinal" =
+  let envs = envsOf [("a", "export data A = A\n"), ("b", "export data B = B\n")]
+  expectAll [
+    expectEqual [0, 1, 2] (map (m => m.demOrd) envs.deModules),
+    expectEqual (Some 1) (omLookup "a" envs.deOrdIndex),
+    expectEqual (Some 2) (omLookup "b" envs.deOrdIndex),
+  ]
+
+test "the declarations of every row are the envelope's, in ordinal order" =
+  let envs = envsOf [("a", "export data A = A\n"), ("b", "export data B = B\n")]
+  expectEqual ["A", "B"] (sort (typeNames envs))
+
+test "a record owner key lists every module that declares a record of that name" =
+  let envs = envsOf [
+    ("a", "export data P = P { x : Int }\n"),
+    ("b", "export data P = P { x : Int }\nexport data Q = Q { y : Int }\n"),
+  ]
+  expectAll [
+    expectEqual (Some ["a", "b"]) (map sort (omLookup "P" envs.deOwnerModules)),
+    expectEqual (Some ["b"]) (omLookup "Q" envs.deOwnerModules),
+    expectEqual None (omLookup "x" envs.deOwnerModules),
+  ]
+
+test "a later module's kind seed holds the earlier modules' kinds, and not its own" =
+  let envs = envsOf [
+    ("a", "export data A (e : Effect) = A (Unit -> <e> Unit)\n"),
+    ("b", "export data B = B\n"),
+  ]
+  let seedNames =
+    m =>
+      map
+        (e => tabKeyName (fst e))
+        (optionOr [] (omLookup m envs.deKindsBefore))
+  expectAll [
+    expectEqual [] (seedNames "a"),
+    expectEqual ["A"] (seedNames "b"),
+  ]
+
+-- ── the data-env fold ─────────────────────────────────────────────────────
+
+test "the data fold registers a private type too: visibility is read later" =
+  let env =
+    dataEnvFromDeclsGo
+      1
+      (parse "data Hid = Hid\nexport data Pub = Pub\n")
+      (emptyData ())
+  expectEqual ["Hid", "Pub"] (sort (map (t => tabKeyName (fst t)) env.deTypes))
+
+emptyData : Unit -> DataEnv
+emptyData _ = (envsOf []).deData
+
+test "the data fold records an alias with its parameters and right-hand side" =
+  let env =
+    dataEnvFromDeclsGo
+      1
+      (parse "export type Pair a b = (a, b)\n")
+      (emptyData ())
+  expectEqual
+    [("Pair", ["a", "b"])]
+    (map (a => (tabKeyName (fst a), (snd a).adParams)) env.deAliases)
+
+-- ── registration into a module record ─────────────────────────────────────
+
+test "registerAllData gives each constructor a scheme the environment can look up" =
+  let m = fresh ()
+  let env =
+    registerAllData
+      (envFor m)
+      (parse "data Shape = Circle Int | Square Int Int\n")
+  expectAll [
+    expectEqual (Some "Int -> Shape") (map ppScheme (lookupCtor env "Circle")),
+    expectEqual
+      (Some "Int -> Int -> Shape")
+      (map ppScheme (lookupCtor env "Square")),
+    expectEqual None (map ppScheme (lookupCtor env "Triangle")),
+  ]
+
+test "registerAllData records a record's fields and registers it by name" =
+  let m = fresh ()
+  let _ =
+    registerAllData (envFor m) (parse "data Pt = Pt { x : Int, y : Int }\n")
+  expectEqual (Some ["x", "y"]) (map recordFields (lookupRecordByName m "Pt"))
+
+test "registerAllData of a type alias adds it to the alias table" =
+  let m = fresh ()
+  let _ = registerAllData (envFor m) (parse "type Name = String\n")
+  expectEqual
+    ["Name"]
+    (map (a => tabKeyName (fst a)) m.mcCells.aliasTableRef.value)
+
+test "addFieldOwners adds the key under each field and keeps earlier owners" =
+  let m = addFieldOwners "Q" ["x", "z"] (addFieldOwners "P" ["x"] omEmpty)
+  expectAll [
+    expectEqual (Some ["Q", "P"]) (omLookup "x" m),
+    expectEqual (Some ["Q"]) (omLookup "z" m),
+  ]
+
+-- ── aliases ───────────────────────────────────────────────────────────────
+
+test "graphAliasRow reads an alias declaration, through an attribute, and nothing else" = expectAll
+  [
+    expectEqual 1 (length (flatMap graphAliasRow (parse "type A = Int\n"))),
+    expectEqual 0 (length (flatMap graphAliasRow (parse "data B = B\n"))),
+  ]
+
+test "isAliasDecl is true of an alias and false of data" = expectAll [
+  expectTrue (all isAliasDecl (parse "type A = Int\n")),
+  expectFalse (any isAliasDecl (parse "data B = B\n")),
+]
+
+test "expandAliasHeadTy follows aliases at the head, nullary or applied to arguments" =
+  let ds = parse "type A = Int\ntype B = A\ntype P a = List a\n"
+  let m = fresh ()
+  m.mcCells.aliasTableRef := flatMap graphAliasRow ds
+  expectAll [
+    expectEqual
+      ["Int"]
+      (tyConNamesInTy (expandAliasHeadTy m (firstSig "x : B\n"))),
+    expectEqual
+      ["Int"]
+      (tyConNamesInTy (expandAliasHeadTy m (firstSig "x : A\n"))),
+    expectEqual
+      ["List", "Int"]
+      (tyConNamesInTy (expandAliasHeadTy m (firstSig "x : P Int\n"))),
+  ]
+
+test "rejectCyclicAliases reports a cycle of aliases and accepts a chain" =
+  let cyc = parse "type A = B\ntype B = A\n"
+  let chain = parse "type A = B\ntype B = Int\n"
+  let m1 = fresh ()
+  m1.mcCells.aliasTableRef := flatMap graphAliasRow cyc
+  rejectCyclicAliases m1 cyc
+  let m2 = fresh ()
+  m2.mcCells.aliasTableRef := flatMap graphAliasRow chain
+  rejectCyclicAliases m2 chain
+  expectAll [
+    expectEqual ["T-RECURSIVE-ALIAS"] (nub (codesOf m1)),
+    expectEqual [] (codesOf m2),
+  ]
+
+-- ── signatures to schemes ─────────────────────────────────────────────────
+
+test "a signature converts to the scheme it writes, with its variables quantified" = expectAll
+  [
+    expectEqual ("Int -> Bool", []) (schemeOf "f : Int -> Bool\n"),
+    expectEqual ("a -> a", []) (schemeOf "f : a -> a\n"),
+  ]
+
+test "a signature over an alias converts through the alias" =
+  expectEqual ("Int -> Int", []) (schemeOf "type N = Int\nf : N -> N\n")
+
+test "a signature's alias arity error is T-ALIAS-ARITY" =
+  expectEqual
+    ["T-ALIAS-ARITY"]
+    (snd (schemeOf "type P a b = (a, b)\nf : P Int -> Int\n"))
+
+test "a signature putting a type in a row-kinded slot is T-EFFECT-KIND-MISMATCH" =
+  expectEqual
+    ["T-EFFECT-KIND-MISMATCH"]
+    (snd
+      (schemeOf
+        "data Box (e : Effect) a = Box (Unit -> <e> a)\nf : Box Int Int -> Int\n"))
+
+test "a declared Effect parameter admits a row at its slot with no diagnostic" =
+  expectEqual
+    []
+    (snd
+      (schemeOf
+        "data Box (e : Effect) a = Box (Unit -> <e> a)\nf : Box <Stdout> Int -> Int\n"))
+
+-- ── declaration and constraint predicates ─────────────────────────────────
+
+test "pubTopFnNames lists the exported functions that have a definition" =
+  expectEqual
+    ["shown"]
+    (nub
+      (pubTopFnNames
+        (parse
+          "export shown : Int -> Int\nexport shown x = x\nexport lonely : Int\nhidden x = x\n")))
+
+test "tyConNamesInTy collects every constructor name of a written type, in order" =
+  expectEqual
+    ["Int", "List", "Bool"]
+    (tyConNamesInTy (firstSig "f : Int -> List Bool\n"))
+
+test "a constraint exposes its interface and its variable names" =
+  match sigConstraintsOf (firstSig "f : (Eq a, Ord b) => a -> b -> Bool\n")
+    cs => expectAll [
+      expectEqual ["Eq", "Ord"] (map constraintIface cs),
+      expectEqual [["a"], ["b"]] (map constraintVarNames cs),
+    ]
+
+test "a constraint is method-level when it mentions any variable, and not when it is ground" =
+  match (sigConstraintsOf
+    (firstSig "f : (Eq a, Ord b, Show Int) => a -> b -> Bool\n"))
+    cs =>
+      expectEqual [True, True, False] (map (constraintIsMethodLevel ["a"]) cs)
+
+test "builtin class names are the surface names" = expectAll [
+  expectEqual "Eq" (builtinClassName BEq),
+  expectEqual "Ord" (builtinClassName BOrd),
+  expectEqual "Num" (builtinClassName BNum),
+]
+
+test "constraintNameMonos keeps the monos of the names that have one, in the names' order" =
+  expectEqual
+    ["Int", "Bool"]
+    (map
+      ppMono
+      (constraintNameMonos
+        ["a", "z", "b"]
+        [("b", tconBuiltin "Bool"), ("a", tconBuiltin "Int")]))
+
+test "lookupMethodPredicateSlots finds a row by key and is None for an absent key" = expectAll
+  [
+    expectEqual None (map length (lookupMethodPredicateSlots "k" [])),
+    expectEqual
+      (Some 0)
+      (map length (lookupMethodPredicateSlots "k" [("k", [])])),
+    expectEqual None (map length (lookupMethodPredicateSlots "j" [("k", [])])),
+  ]

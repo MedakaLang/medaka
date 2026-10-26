@@ -1,5 +1,5 @@
 # META
-source_lines=3420
+source_lines=3410
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -566,16 +566,6 @@ declEnvSeedDataUniverse mctx mid envs =
     optionOr omEmpty (omLookup mid envs.deReach)
 
 -- ── doctests ─────────────────────────────────────────────────────────────
--- The three arms of `kindPublicDataDecl` that `publicDataDecl` does NOT have are
--- each load-bearing here: `deKindRow0`'s decls are public data, ABSTRACT data,
--- PRIVATE data and a PUBLIC NEWTYPE, so the kind-public projection is 3 (drop the
--- private one) while the own-row projection is all 4.  Drop the `VisAbstract` arm
--- or the `DNewtype` arm and the first number falls to 2 or 1.
--- > listLen (deKindRow0 (probeGraphCtx ())).demKindEntries
--- 3
--- > listLen (declEnvKindEntries (probeGraphCtx ()) (deKindRow0 (probeGraphCtx ())).demDecls)
--- 4
-
 -- Both conjuncts, on the kind projection: own row ⇒ everything; earlier row ⇒ the
 -- kind-public projection; later row ⇒ nothing.
 -- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 0 (deKindRow0 (probeGraphCtx ())))
