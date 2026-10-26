@@ -363,16 +363,15 @@ identity with a plant control, wide-corpus output identity, the LEG A multiset c
 import-collision check, instruction counts within two percent); the idiom rewrite is a separate
 slice (P4-D6, D9, D11). No `Arch-Growth-Override:` is admitted in the phase (P4-D5).
 
-Sprints, serial, one orchestrator, by the Order column: 0 the partition pre-sprint (nothing
-lands; done), 1 orders 1 to 4, 2 orders 5 to 10 (`tc_scope` through `tc_foreign`), 3 orders 11 to
-15 (the solver family), 4 orders 16 and 17, 5 orders 18 to 20, 6 orders 21 and 22, 7 orders 23 and
-24, 8 order 25, 9 order 26's header plus the exit (this document's §6
-collapses to its criterion; `types/ARCHITECTURE.md` re-derived with a spec column;
-`TYPECHECK-ARCHITECTURE.md` to `archive/design/`; #4318), 10 the diagnostic code registry
-(`support/diag_codes.mdk`, one closed type for every stage's codes pinned to
-`DIAGNOSTIC-CODES-DESIGN.md` by a two-way test; P4-D3b, after the exit). Reviews on opus for
-sprints 0, 1, 6, 9 and 10, sonnet elsewhere (P4-D12). The plan, the facts, the contracts and the
-rulings are under `/var/tmp/medaka-sprints/arch-p4/`; milestone 42 holds the tracking issues.
+Sprints run serially under one orchestrator, extracting modules bottom-up in the Order column's
+sequence, each sprint ending with its own review. Sprint 0 (the partition pre-sprint; nothing
+lands) is done. The last two sprints are the exit (this document's §6 collapses to its criterion;
+`types/ARCHITECTURE.md` re-derived with a spec column; `TYPECHECK-ARCHITECTURE.md` to
+`archive/design/`; #4318) and the diagnostic code registry (`support/diag_codes.mdk`, one closed
+type for every stage's codes pinned to `DIAGNOSTIC-CODES-DESIGN.md` by a two-way test; P4-D3b,
+after the exit). Which modules each sprint extracts is set in the phase plan and its tracking
+issues (milestone 42), not here; reviews run on opus where a decision is taken and sonnet where a
+decided placement is executed (P4-D12).
 
 **Exit criterion.** `types/typecheck.mdk` is the entry module and is under 3,000 code lines;
 every module of the 26 `tc_*` names of the table (`tc_types`, `tc_mono`, `tc_state`, `tc_env`,
