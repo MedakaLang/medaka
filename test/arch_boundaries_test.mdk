@@ -914,6 +914,9 @@ typecheckFamily = [
   "types.tc_state",
   "types.tc_env",
   "types.tc_diag",
+  "types.tc_scope",
+  "types.tc_unify",
+  "types.tc_decls_variance",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

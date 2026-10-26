@@ -44,12 +44,20 @@ loadAll = do
   tcState <- readFile (underRoot "compiler/types/tc_state.mdk")
   tcEnv <- readFile (underRoot "compiler/types/tc_env.mdk")
   tcDiag <- readFile (underRoot "compiler/types/tc_diag.mdk")
+  tcScope <- readFile (underRoot "compiler/types/tc_scope.mdk")
+  tcUnify <- readFile (underRoot "compiler/types/tc_unify.mdk")
+  tcDecls <- readFile (underRoot "compiler/types/tc_decls_variance.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
   ck <- readFile (underRoot "compiler/types/chain_key.mdk")
   ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
   siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
-  Ok (astText, "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiag}\n\{rp}\n\{ck}\n\{ec}", siteLedger, declLedger)
+  Ok (
+    astText,
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDecls}\n\{rp}\n\{ck}\n\{ec}",
+    siteLedger,
+    declLedger,
+  )
 
 siteCheck : <IO, FileRead> Expectation
 siteCheck = match loadAll
