@@ -640,6 +640,11 @@ class = "deictic"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_state.mdk"
+class = "history"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_types.mdk"
 class = "history"
 count = 15
@@ -657,7 +662,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 85
+count = 84
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"

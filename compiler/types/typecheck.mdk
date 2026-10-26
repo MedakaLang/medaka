@@ -896,7 +896,9 @@ import types.tc_mono.{
 import types.tc_state.{
   blankModuleCtx,
   builtinCtors,
+  callUOblsWindow,
   carryModuleCtx,
+  checkRunResidue,
   currentScopeStore,
   defaultReceiverOrdinal,
   dictParamName,
@@ -907,6 +909,7 @@ import types.tc_state.{
   emptyMethodEnv,
   emptyShadowDicts,
   emptySigVars,
+  enterStampCtx,
   envAt,
   envAtIfSome,
   freshGraphRun,
@@ -921,6 +924,7 @@ import types.tc_state.{
   mctxAtIfSome,
   mintGraphCtx,
   moduleCtxFrom,
+  moduleWindow,
   noteInterners,
   probeGraphCtx,
   renderEvidenceBinder,
@@ -6521,9 +6525,6 @@ callOblsWindow : ModuleCtx -> Int -> List (IfaceRef, List Mono, Option Loc)
 callOblsWindow mctx mark =
   map (oblAsTuple mctx.mcGraph) (wWindow mctx.mcCells.obls mark)
 
-callUOblsWindow : ModuleCtx -> Int -> List UObligation
-callUOblsWindow mctx mark = wWindow mctx.mcCells.obls mark
-
 -- #1114 (DICT-SEMANTICS §4.2 D1): would `checkOneCallObligation` reach a VERDICT on this
 -- recorded predicate right now?  That — not groundness — is the question the D1-preserving
 -- window in `inferUserImplBodies` has to ask, and getting it wrong is silent by
@@ -7836,13 +7837,6 @@ currentModuleMarks gctx _ = match gctx.graphRun.moduleRanges.value
   (_, m) :: _ => m
   [] => GraphMarks { mGoals = 0, mNumlit = 0 }
 
--- The entries a channel gained since `mark` — this module's own, in the order the
--- per-module list used to hold them.  [now] is the channel's length, read off its own
--- counter: measuring the RUN-WIDE list here instead made every windowed read cost the
--- whole graph, which is the module-count superlinearity #2724 measures.
-moduleWindow : Int -> Int -> List a -> List a
-moduleWindow now mark xs = take (now - mark) xs
-
 -- the numeric-literal channel's window, the counterpart of `goalsSince`
 numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
 numlitSince gctx mark =
@@ -7854,14 +7848,6 @@ pushNumlit gctx e =
   let g = gctx.graphRun
   g.numlitRefs := e :: g.numlitRefs.value
   g.numlitN := g.numlitN.value + 1
-
--- The oracle and warnings [m] holds: the seed of a module checked without one
--- (`cmCheckWorker` and the two core passes), which carries them forward unchanged.
-checkRunResidue : ModuleCtx -> CheckRunSeed
-checkRunResidue m = CheckRunSeed {
-  crsOracle = m.mcCells.matchOracle.value,
-  crsWarnings = m.mcCells.matchWarnings.value,
-}
 
 idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
 idSetInsertAll [] m = m
@@ -49192,19 +49178,6 @@ runStampCtx saved ctx =
   map
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
     (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
-
--- Builds [ctx]'s record, with the two module tables the drain reads taken from
--- [saved], the record current when the drain began: the stamp context holds no
--- module's tables of its own (`StampCtx`).  Returns that record, which the walk that
--- follows runs in.
-enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
-enterStampCtx saved ctx =
-  -- Deferred goals select their `gGiven` bucket from their captured scope frames;
-  -- the record's `currentModuleRef` is the legacy routing context, and its
-  -- `superDeclsRef` the interface decls of the module's universe (`stampCtxOf`), the
-  -- only decls the stampers' super-expansion reads.
-  let s = ctx.scModuleCtx
-  moduleCtxFrom False s s saved s
 
 -- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
 -- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make
