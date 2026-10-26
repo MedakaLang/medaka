@@ -1,0 +1,207 @@
+activeDo : DynCtx -> Option DoCtx
+ambiguousImportTyvarId : Int
+applicationRowTyped : DynCtx -> Mono -> Mono -> Mono -> EffRow
+appliedVarIfaces : ModuleCtx -> Mono -> Mono -> Option (Mono, Mono, List String)
+argumentIntoTyped : DynCtx -> Mono -> Mono -> Unit
+atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
+atomNaming : String -> EffAtomTy -> List String
+atomsEscape : GraphCtx -> List Atom -> List Atom -> List Atom
+authSlotNamesIn : ModuleCtx -> (List Kind -> List Ty -> List a) -> Ty -> List a
+authorityFailureMsg : ModuleCtx -> String -> Option String -> Option String -> Authority -> Authority -> Option Authority -> String
+bindEach : List (Ref Effvar) -> EffRow -> Unit
+bindFrom : DynCtx -> Mono -> Mono -> Unit
+bindValueUpper : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindVar : DynCtx -> Ref Tyvar -> Mono -> Unit
+binderIn : Ref (Map Int Unit) -> Authority -> Bool
+binderLabel : ModuleCtx -> String -> String -> Option String -> Option String
+binderLabelIn : ModuleCtx -> String -> Ty -> Option String
+boundFailureMsg : ModuleCtx -> String -> Option String -> Authority -> String -> String -> Authority -> Option Authority -> String
+calleeArrow : DynCtx -> Mono -> (Mono, EffRow, Mono)
+captureScope : ModuleCtx -> Unit -> ScopeId
+clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
+closedRowEqCheck : DynCtx -> List Atom -> List Atom -> Unit
+collectAuthAllowance : ModuleCtx -> List Authority -> Authority
+collectValueAllowance : DynCtx -> List EffRow -> EffRow
+constrainedApplicationHelp : ModuleCtx -> Mono -> Mono -> Option String
+contraRowCheck : ModuleCtx -> List Atom -> List Atom -> List Atom -> Unit
+decidingJoinOps : DynCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+declaredCrossModuleObls : ModuleCtx -> String -> Option (List VecObl)
+defaultDeferredPatLitsIn : DynCtx -> Int -> Mono -> Unit
+defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
+defaultSourcelessAuthorities : ModuleCtx -> Map Int Unit -> EffRow -> Mono -> Unit
+deferEffectRelation : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
+deferJoin : ModuleCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> List (Option Loc, Mono) -> Option Mono
+distinctVariables : List (Option Loc, Mono) -> Bool
+dropFirst : Int -> List a -> List a
+effectLeakCheck : ModuleCtx -> List Atom -> List Atom -> Unit
+effectLeakMsg : GraphCtx -> List Atom -> List Atom -> String
+effectSiteKey : String -> String -> String
+enterLevel : ModuleCtx -> Unit -> Unit
+exitLevel : ModuleCtx -> Unit -> Unit
+expandIoInBound : GraphCtx -> List Atom -> List Atom
+first3 : (a, b, c) -> a
+flexibleIndex : ModuleCtx -> Ref Authvar -> Authority -> Bool
+forceInstantiation : ModuleCtx -> String -> MethodTrackedInstantiation -> Mono
+freeAuthvars : ModuleCtx -> Mono -> List Int
+freeEffvars : ModuleCtx -> Mono -> List Int
+freeGenVars : Int -> Mono -> List Int
+freshAuthBinderRanged : ModuleCtx -> Bool -> (String, Param) -> (String, Ref Authvar)
+freshAuthSubstFor : ModuleCtx -> List Int -> Mono -> EffRow -> List (Int, Authority)
+freshAuthSubstOpening : ModuleCtx -> List Int -> Mono -> (List (Int, Authority), List (Ref Authvar))
+freshAuthSubstOpeningIn : ModuleCtx -> List Int -> Map Int (Ref Authvar) -> (List (Int, Authority), List (Ref Authvar))
+freshAuthvar : ModuleCtx -> Param -> Option String -> Ref Authvar
+freshAuthvarRanged : ModuleCtx -> Param -> Bool -> Option String -> Ref Authvar
+freshEffMap : ModuleCtx -> List String -> List (String, Ref Effvar)
+freshEffSubst : ModuleCtx -> List Int -> List (Int, Ref Effvar)
+freshEffvar : ModuleCtx -> Unit -> Ref Effvar
+freshEffvarAt : GraphCtx -> Int -> Ref Effvar
+freshInferenceAuthvar : ModuleCtx -> Int -> Option (Ref Authvar) -> Ref Authvar
+freshInferenceEffvar : ModuleCtx -> Unit -> Ref Effvar
+freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
+freshTvMap : ModuleCtx -> List String -> List (String, Mono)
+freshVar : ModuleCtx -> Unit -> Mono
+freshVars : ModuleCtx -> Int -> List Mono
+generalizableAuthvars : ModuleCtx -> List (Ref Authvar) -> List Int
+generalizableEffvar : ModuleCtx -> Ref Effvar -> List Int
+generalize : ModuleCtx -> Mono -> Scheme
+generalizeBindingDeclared : DynCtx -> Map Int Unit -> List AuthResidual -> EffRow -> Mono -> Scheme
+ifacesConstrainingVar : ModuleCtx -> Int -> List String
+indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
+indexOpenClosed : ModuleCtx -> List Atom -> Ref Effvar -> List Atom -> Unit
+indexOutsidePatterns : ModuleCtx -> Authority -> List Authority
+indexRowEqCheck : ModuleCtx -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
+indexRowEquate : ModuleCtx -> List Atom -> List Atom -> Unit
+instantiate : ModuleCtx -> Scheme -> Mono
+instantiateLegacyVarTracked : ModuleCtx -> String -> Int -> Scheme -> MethodTrackedInstantiation
+instantiateMethodTracked : ModuleCtx -> Scheme -> MethodTrackedInstantiation
+instantiateTracked : ModuleCtx -> Scheme -> (Mono, List (Int, Mono))
+instantiateValueTracked : ModuleCtx -> String -> Scheme -> MethodTrackedInstantiation
+ioJoinClause : GraphCtx -> List Atom -> String
+ioLabel : EffLabel
+isCovariantPolarity : Polarity -> Bool
+isOuterVariable : Int -> Mono -> Bool
+isRigidCell : ModuleCtx -> Ref Effvar -> Bool
+joinMismatch : ModuleCtx -> Bool -> (List Atom, List (Ref Effvar)) -> (List Atom, List (Ref Effvar)) -> Unit
+joinOfOuterVariables : Int -> PendingJoin -> Bool
+joinResultIs : Int -> PendingJoin -> Bool
+joinSideCheck : ModuleCtx -> Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
+joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
+joinValueTypes : DynCtx -> JoinContext -> List (Option Loc, Mono) -> Mono
+labelKeyName : String -> String
+labelsMissing : List Atom -> List Atom -> List Atom
+lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
+lookupSchemeObls : String -> Int -> List ((String, Int), List VecObl) -> Option (List VecObl)
+lookupSchemeOblsByName : String -> List ((String, Int), List VecObl) -> Option (List VecObl)
+lowerAuthLevels : Int -> Authority -> Unit
+lowerMembers : Int -> List (Ref Effvar) -> Unit
+lowerOwnedRoot : ModuleCtx -> Int -> Mono -> Unit
+lowerPending : Int -> List PendingJoin -> List PendingJoin
+lowerRowLevels : Int -> EffRow -> Unit
+lowerToCurrent : ModuleCtx -> Mono -> Unit
+lowerTyvarLevel : Int -> Mono -> Unit
+mentionsOpened : ModuleCtx -> Authority -> Bool
+monoHasNonCovariantSlot : ModuleCtx -> Mono -> Bool
+monoSlotNonCovariant : ModuleCtx -> Mono -> Bool
+monoUnboundVarLevels : Mono -> List (Int, Int)
+namedArgDomains : Ty -> List (String, Option EffAtomTy)
+narrowPerformedIo : GraphCtx -> List Atom -> List Atom -> List Atom
+newTyvarId : GraphCtx -> Unit -> Int
+noteNumlitCtx : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
+obligationSiteHere : ModuleCtx -> Bool -> ObligationSite
+occursAdjust : ModuleCtx -> Int -> Int -> Mono -> Unit
+occursAdjustUnbound : ModuleCtx -> Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
+occursAdjustVar : ModuleCtx -> Int -> Int -> Ref Tyvar -> Unit
+openRow : ModuleCtx -> Unit -> EffRow
+optionOrFresh : ModuleCtx -> Option Mono -> Mono
+ordinaryBoundFailureMsg : ModuleCtx -> String -> Option String -> Authority -> String -> String -> Authority -> String
+paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)
+paramVarianceGuard : DynCtx -> Mono -> Mono -> Mono -> Unit
+performEffect : ModuleCtx -> Ref (List EffRow) -> EffRow -> Unit
+poisonMismatchVars : ModuleCtx -> Mono -> Mono -> Unit
+polarityAt : List Polarity -> Int -> Polarity
+postponePendingJoins : ModuleCtx -> Int -> Unit
+predicateSlotArgs : List PredicateSlot -> List (List Mono)
+predicateSlotCSlots : List PredicateSlot -> List CSlot
+producedSlotCovariants : ModuleCtx -> Mono -> List Bool
+propagatePoison : ModuleCtx -> Ref Tyvar -> Mono -> Unit
+qualConstraintDecl : ModuleCtx -> String -> Option CDeclared
+qualConstraintKey : ModuleCtx -> String -> Option (String, String)
+qualDeclOf : GraphCtx -> String -> String -> List PredicateSlot -> CDeclared
+qualSchemeOblsFor : ModuleCtx -> String -> Option (List VecObl)
+quantifyFree : ModuleCtx -> List AuthResidual -> EffRow -> Mono -> Scheme
+raiseAuthvarLevel : Int -> Ref Authvar -> Unit
+recordAbsorptions : ModuleCtx -> List Atom -> Ref Effvar -> Unit
+recordDoMonadError : ModuleCtx -> DoCtx -> Unit
+recordEffectSites : ModuleCtx -> EffRow -> Unit
+recordFileValueFlow : ModuleCtx -> Option Loc -> Mono -> Mono -> Unit
+recordObl : ModuleCtx -> Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordOblAt : ModuleCtx -> Predicate -> Int -> Provenance -> Option Loc -> ScopeId -> Unit
+recordSchemeCallObligations : ModuleCtx -> Int -> List VecObl -> List (Int, Mono) -> Unit
+refStored : DynCtx -> Mono -> Mono
+reportAuthorityFailure : ModuleCtx -> Option Loc -> Option String -> Authority -> Authority -> Unit
+reportIndexFailure : ModuleCtx -> Bool -> Option Loc -> Authority -> Authority -> Unit
+resolvePendingJoin : DynCtx -> PendingJoin -> Unit
+resolvePendingJoins : DynCtx -> Int -> Unit
+rowFreeAuthvars : ModuleCtx -> EffRow -> List Int
+rowFreeEffvars : ModuleCtx -> EffRow -> List Int
+rowHasRigid : ModuleCtx -> EffRow -> Bool
+rowInto : DynCtx -> Bool -> EffRow -> EffRow -> Unit
+rowTailIsJoin : EffRow -> Bool
+second3 : (a, b, c) -> b
+settlePending : DynCtx -> Int -> List PendingJoin -> List PendingJoin
+settlePendingJoins : DynCtx -> Int -> Unit
+settleShapedJoins : DynCtx -> List PendingJoin -> Unit
+slotLabelsNaming : String -> List Kind -> List Ty -> List String
+solveFlexibleUpper : ModuleCtx -> Authority -> Authority -> Bool
+solvedUpper : ModuleCtx -> Option Authority -> Bool
+substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
+substituteIndex : ModuleCtx -> Ref Authvar -> Authority -> Unit
+substituteIndexLinked : ModuleCtx -> Ref Authvar -> Authority -> Unit
+tagAllLitLocs : ModuleCtx -> Mono -> JoinContext -> Unit
+tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
+tagNumlitCtxIf : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
+takeJoinsShapedBy : ModuleCtx -> Ref Tyvar -> Mono -> List PendingJoin
+third3 : (a, b, c) -> c
+typeMismatch : DynCtx -> Mono -> Mono -> Unit
+typeMismatchInDo : ModuleCtx -> Mono -> Mono -> DoCtx -> Unit
+typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportJoin : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportRest : DynCtx -> Mono -> Mono -> Unit
+tyvarLevel : Ref Tyvar -> Int
+unify : ModuleCtx -> Mono -> Mono -> Unit
+unifyAll : DynCtx -> Mono -> List Mono -> Unit
+unifyIn : DynCtx -> Mono -> Mono -> Unit
+unifyIndex : ModuleCtx -> Authority -> Authority -> Unit
+unifyIndexAtomAuthorities : ModuleCtx -> List Atom -> List Atom -> Unit
+unifyIndexRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyInto : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyIntoN : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoOrd : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoStep : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyJoinRows : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
+unifyN : DynCtx -> Mono -> Mono -> Unit
+unifyOrdered : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyParamsExpected : DynCtx -> List Mono -> List Mono -> Unit
+unifyRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifySourceDomains : DynCtx -> Int -> Mono -> Mono -> Unit
+unifySpineProbe : DynCtx -> Mono -> List Mono -> Unit
+unifySpineProbeGo : DynCtx -> Mono -> List Mono -> Unit
+unifyStruct : DynCtx -> Mono -> Mono -> Unit
+unifyValue : DynCtx -> Mono -> Mono -> Unit
+unifyVars : DynCtx -> Ref Tyvar -> Ref Tyvar -> Unit
+valueJoinOps : DynCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
+wantAuthority : ModuleCtx -> Authority -> Authority -> Unit
+wantAuthorityFrom : ModuleCtx -> Option String -> Bool -> Authority -> Authority -> Unit
+wantAuthorityOne : ModuleCtx -> Option String -> Bool -> Bool -> Authority -> Authority -> Unit
+wantAuthorityWith : ModuleCtx -> Bool -> Authority -> Authority -> Unit
+wantIndexCovered : ModuleCtx -> Authority -> Authority -> Unit
+widenOpenedFor : ModuleCtx -> Int -> Authority -> Authority
+withoutVar : Ref Authvar -> Authority -> List Authority
+xmodVecObl : CSlot -> List Mono -> VecObl
+zipBindFrom : DynCtx -> List Mono -> List Mono -> Unit
+zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)

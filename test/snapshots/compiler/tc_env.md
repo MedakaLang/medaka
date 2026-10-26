@@ -1,5 +1,5 @@
 # META
-source_lines=4493
+source_lines=4367
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -8,8 +8,7 @@ stages=DESUGAR,MARK
 -- imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an
 -- import makes visible is `tc_scope`.
 --
--- Spec: DICT section 8 (identity-keyed tables); SHADOW section 1.0 (the envelopes the scope ladders
--- read).
+-- Spec: DICT section 8 (identity-keyed tables).
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -2299,78 +2298,6 @@ requiredMethodNames ((IfaceMethod n _ None _) :: rest) =
 requiredMethodNames ((IfaceMethod _ _ (Some _) _) :: rest) =
   requiredMethodNames rest
 
--- Canonical order for an admitted set: `(originModule, name)` — §8 I4's own identity
--- pair, rendered through `ifaceIdentity` so an unstamped declaration sorts by its bare
--- name rather than colliding with every other unstamped one.
-export
-ifaceSortKey : IfaceRef -> String
-ifaceSortKey ir = "\{ifaceIdentity ir.irOrigin ir.irName}|\{ir.irName}"
-
-export
-sortIfaceRefs : List IfaceRef -> List IfaceRef
-sortIfaceRefs xs = sortIfaceRefsGo xs []
-
-sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
-sortIfaceRefsGo [] acc = acc
-sortIfaceRefsGo (x :: xs) acc = sortIfaceRefsGo xs (sortInsertIfaceRef x acc)
-
-sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
-sortInsertIfaceRef x [] = [x]
--- no dedup arm.  Two declarations with an ABSENT origin render the same sort key
--- (`ifaceIdentity` maps absence to `""`), and dropping one would silently shrink the
--- admitted set — S2-DECL (d) decides BY CARDINALITY, so a merge here is a verdict
--- change.  Sorting is all this does.
-sortInsertIfaceRef x (y :: ys)
-  | ifaceSortKey x < ifaceSortKey y = x :: y :: ys
-  | otherwise = y :: sortInsertIfaceRef x ys
-
--- This module's own interface declaring [n], as an identity.
-export
-ownMethodIdent : List Decl -> String -> Option Ident
-ownMethodIdent [] _ = None
-ownMethodIdent ((DAttrib _ d) :: rest) n = match ownMethodIdent [d] n
-  Some i => Some i
-  None => ownMethodIdent rest n
-ownMethodIdent ((DInterface { methods, ifaceOrigin, ... }) :: rest) n =
-  if contains n (ifaceMethodNames methods) then
-    mkIdent NsMethod ifaceOrigin n
-  else
-    ownMethodIdent rest n
-ownMethodIdent (_ :: rest) n = ownMethodIdent rest n
-
--- The MEMBER filter combined with the `depExportsMethodIdent` identity conjunct
--- prevents #1275 bystander cases: a same-named interface in another module is refused
--- because its spelling passes the member filter but its `Ident` does not appear in
--- `dep`'s export row. `[wide]` is False at `methodScopeAt`'s rung 1
--- (method-name imports decide when they say anything) and True only at rung 2, where
--- rung 1 admitted nothing. See the ladder argument at `methodScopeAt`, and
--- docs/spec/DICT-SEMANTICS.md § "8. Identity, arity, and cross-module elaboration"
--- (I8) for why widening this filter is safe while deciding a declaration by spelling
--- is not.
-export
-usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
-usePathAdmitsDecl path wide n iface =
-  usePathBindsName path n || wide && usePathBindsName path iface.irName
-
--- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
--- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
--- is now safe: the export test above still admits only the declarations the dependency
--- really provides.  `UseAlias` yields `Some []` and so witnesses nothing — see the #1276
--- paragraph above for why that is a different defect rather than this one's residue.
-usePathBindsName : UsePath -> String -> Bool
-usePathBindsName path n = match importedBindings path
-  None => True
-  Some bs => contains n (map snd bs)
-
--- Monomorphic and short-circuiting on purpose (`compiler/AGENTS.md`): this runs only for
--- a COLLIDED method name, but when it runs it walks one module's exported-method list.
-export
-exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
-exportsIdentFor _ _ [] = False
-exportsIdentFor n ident ((en, ei) :: rest)
-  | en == n && ei == ident = True
-  | otherwise = exportsIdentFor n ident rest
-
 export
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandInfo (_, _, ri) = ri
@@ -3286,59 +3213,6 @@ importedBindings (UseAlias _ _) = Some []
 
 memberBinding : UseMember -> (String, String)
 memberBinding m = (useMemberOrigin m, useMemberLocal m)
-
--- resolve one imported bare member name to its actual key in a dependency's public
--- schemes.  The golden path keys schemes by the bare name; the EMIT path runs after
--- universal mangling (types.private_mangle), which rewrites a definition `member`
--- to `<dep>__member` but leaves the importer's `DUse` member name BARE — so the key
--- is the SUFFIX-matching scheme `…__member` (uniquely identified within THIS dep's
--- own schemes; distinct members never share an `__<name>` suffix).  Try the bare
--- key first (golden), then the `__<name>` suffix (mangled emit path).
-memberSuffix : String -> String
-memberSuffix n = "__" ++ n
-
--- Look the member up by its ORIGIN name, bind it under its LOCAL name.  Without an
--- alias the two coincide and this is the historical behaviour.
---
--- On the MANGLED emit path the bare origin is absent (the dep's keys are `<dep>__name`)
--- AND the reference in this module's body has itself been mangled to `<dep>__name` by
--- types/private_mangle — so the suffix-matched entries are passed through under their
--- MANGLED keys, which is exactly the key the mangled reference will look up.  (A member
--- alias is erased by the same mangling, so it needs no rebinding there.)
--- PAYLOAD-GENERIC on purpose (RUN-XMOD-062).  This is the member-resolution half of the
--- ONE admission predicate — "which of a dependency's exported rows does this import form
--- admit, and under which local key" — and it is shared by every consumer of that
--- question rather than re-derived per payload.  Its callers today carry `Scheme`
--- payloads (`importFormSchemes`) and `(definer module, origin name)` payloads
--- (`importDefinersOf`); nothing in the body inspects the payload.
-export
-resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
-resolveMemberRows (origin, local) depRows = match lookupAssoc origin depRows
-  Some s => [(local, s)]
-  None => filter (kv => endsWith (memberSuffix origin) (fst kv)) depRows
-
--- ── THE admission predicate for VALUES, payload-generic (RUN-XMOD-062) ─────────
--- "What does this import form admit out of a dependency's exported rows?", answered
--- ONCE for every caller that asks it.  The forms live in `importedBindings` (wildcard /
--- member list / bare-or-dotted / module alias) and are resolved here; the ALIAS arm is
--- deliberately not special-cased here, because what `A.name` re-keying means is
--- payload-specific — each caller handles `UseAlias` before delegating (see
--- `importFormSchemes`, which routes it to `aliasSchemes`).
---
--- A caller must not re-enumerate the forms.  Three consecutive repairs to the
--- dict-arity identity seam (#1425 F1 and its two relocations) each scoped their fix by
--- enumerating import forms by hand, and each enumeration missed a member the next
--- review found — wildcard, then selective re-export, then wildcard re-export.  Routing
--- through this function makes "did we cover every form" a property of ONE definition
--- instead of a hope: a form added to `importedBindings` reaches every caller by
--- construction.  `selectIfaceRows`/`narrowRowToNamed` are the same predicate for
--- interface ROWS (a row is a name plus a list of methods, so its narrowing is
--- per-method rather than per-key) — deliberate mirrors; move them in lockstep.
-export
-importFormRows : UsePath -> List (String, a) -> List (String, a)
-importFormRows path depRows = match importedBindings path
-  None => depRows
-  Some bindings => flatMap (b => resolveMemberRows b depRows) bindings
 
 -- The definer key every fn-side qual table uses for the implicit prelude is `""`, not
 -- `"core"` (`modInScope`, `selfDeclArities`, `cmCheckWorker`), because the prelude is
@@ -4921,28 +4795,6 @@ methodRowSameNameView rows =
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" PWild) PWild) (PVar "rest"))) (EApp (EVar "requiredMethodNames") (EVar "rest")))
-(DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
-(DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EVar "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
-(DTypeSig true "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
-(DFunDef false "sortIfaceRefs" ((PVar "xs")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "sortIfaceRefsGo" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
-(DFunDef false "sortIfaceRefsGo" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "sortIfaceRefsGo" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EApp (EApp (EVar "sortInsertIfaceRef") (EVar "x")) (EVar "acc"))))
-(DTypeSig false "sortInsertIfaceRef" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
-(DFunDef false "sortInsertIfaceRef" ((PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "sortInsertIfaceRef" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<" (EApp (EVar "ifaceSortKey") (EVar "x")) (EApp (EVar "ifaceSortKey") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sortInsertIfaceRef") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "ownMethodIdent" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident")))))
-(DFunDef false "ownMethodIdent" ((PList) PWild) (EVar "None"))
-(DFunDef false "ownMethodIdent" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EListLit (EVar "d"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EVar "Some") (EVar "i"))) (arm (PCon "None") () (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))))
-(DFunDef false "ownMethodIdent" ((PCons (PRec "DInterface" ((rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "ifaceOrigin")) (EVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n"))))
-(DFunDef false "ownMethodIdent" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))
-(DTypeSig true "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))))
-(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "wide") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EBinOp "&&" (EVar "wide") (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName")))))
-(DTypeSig false "usePathBindsName" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "usePathBindsName" ((PVar "path") (PVar "n")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bs"))))))
-(DTypeSig true "exportsIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
-(DFunDef false "exportsIdentFor" (PWild PWild (PList)) (EVar "False"))
-(DFunDef false "exportsIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "en") (PVar "ei")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "en") (EVar "n")) (EBinOp "==" (EVar "ei") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "recordCandInfo" (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")) (TyCon "RecordInfo")))
 (DFunDef false "recordCandInfo" ((PTuple PWild PWild (PVar "ri"))) (EVar "ri"))
 (DTypeSig true "ceRowIfaceName" (TyFun (TyCon "CeRow") (TyCon "String")))
@@ -5086,12 +4938,6 @@ methodRowSameNameView rows =
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
-(DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
-(DTypeSig true "resolveMemberRows" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWith") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
-(DTypeSig true "importFormRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "importFormRows" ((PVar "path") (PVar "depRows")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depRows")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberRows") (EVar "b")) (EVar "depRows")))) (EVar "bindings")))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))
 (DFunDef false "importTableMid" ((PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (ELit (LString "")) (EVar "mid")))))
 (DTypeSig false "declMethodIdents" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))
@@ -5695,28 +5541,6 @@ methodRowSameNameView rows =
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" PWild) PWild) (PVar "rest"))) (EApp (EVar "requiredMethodNames") (EVar "rest")))
-(DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
-(DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
-(DTypeSig true "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
-(DFunDef false "sortIfaceRefs" ((PVar "xs")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "sortIfaceRefsGo" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
-(DFunDef false "sortIfaceRefsGo" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "sortIfaceRefsGo" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EApp (EApp (EVar "sortInsertIfaceRef") (EVar "x")) (EVar "acc"))))
-(DTypeSig false "sortInsertIfaceRef" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
-(DFunDef false "sortInsertIfaceRef" ((PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "sortInsertIfaceRef" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<" (EApp (EVar "ifaceSortKey") (EVar "x")) (EApp (EVar "ifaceSortKey") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sortInsertIfaceRef") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "ownMethodIdent" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident")))))
-(DFunDef false "ownMethodIdent" ((PList) PWild) (EVar "None"))
-(DFunDef false "ownMethodIdent" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EListLit (EVar "d"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EVar "Some") (EVar "i"))) (arm (PCon "None") () (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))))
-(DFunDef false "ownMethodIdent" ((PCons (PRec "DInterface" ((rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "ifaceOrigin")) (EVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n"))))
-(DFunDef false "ownMethodIdent" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))
-(DTypeSig true "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))))
-(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "wide") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EBinOp "&&" (EVar "wide") (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName")))))
-(DTypeSig false "usePathBindsName" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "usePathBindsName" ((PVar "path") (PVar "n")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bs"))))))
-(DTypeSig true "exportsIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
-(DFunDef false "exportsIdentFor" (PWild PWild (PList)) (EVar "False"))
-(DFunDef false "exportsIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "en") (PVar "ei")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "en") (EVar "n")) (EBinOp "==" (EVar "ei") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "recordCandInfo" (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")) (TyCon "RecordInfo")))
 (DFunDef false "recordCandInfo" ((PTuple PWild PWild (PVar "ri"))) (EVar "ri"))
 (DTypeSig true "ceRowIfaceName" (TyFun (TyCon "CeRow") (TyCon "String")))
@@ -5860,12 +5684,6 @@ methodRowSameNameView rows =
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
-(DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
-(DTypeSig true "resolveMemberRows" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWith") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
-(DTypeSig true "importFormRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "importFormRows" ((PVar "path") (PVar "depRows")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depRows")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberRows") (EVar "b")) (EVar "depRows")))) (EVar "bindings")))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))
 (DFunDef false "importTableMid" ((PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (ELit (LString "")) (EVar "mid")))))
 (DTypeSig false "declMethodIdents" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))

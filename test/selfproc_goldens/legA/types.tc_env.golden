@@ -101,7 +101,6 @@ emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String),
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envFor : ModuleCtx -> TcEnv
 envVarType : TcEnv -> String -> Option Mono
-exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
@@ -189,7 +188,6 @@ ifaceParamKindsDeclAll : GraphCtx -> List String -> List (Option KindAnn) -> Lis
 ifaceParamKindsFor : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> String -> List Kind
 ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
 ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
-ifaceSortKey : IfaceRef -> String
 ifaceTabKey : TyConOrigin -> String -> TabKey
 implAccFinish : ImplAcc -> ImplEnv
 implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
@@ -198,7 +196,6 @@ implKeyTc : String -> List Ty -> String
 implMethodNameTc : ImplMethod -> String
 implRowHasReqs : List Require -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String, Option Loc) -> List ImplRow
-importFormRows : UsePath -> List (String, a) -> List (String, a)
 importTableMid : UsePath -> String
 importedBindings : UsePath -> Option (List (String, String))
 importerEdgeIndex : List (String, List Decl) -> Map String (List String) -> Map String (List String)
@@ -232,7 +229,6 @@ lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
 lookupStandaloneVar : TcEnv -> String -> Option Scheme
 lookupVar : TcEnv -> String -> Option Scheme
 memberBinding : UseMember -> (String, String)
-memberSuffix : String -> String
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 methodArgs : Ty -> List Ty
 methodEnvBinding : MethodSchemeRow -> EnvBinding
@@ -267,7 +263,6 @@ ordOfIndex : String -> Map String Int -> Int
 ordinaryEnvBinding : Scheme -> EnvBinding
 ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : ModuleCtx -> String -> String
-ownMethodIdent : List Decl -> String -> Option Ident
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
@@ -280,21 +275,15 @@ reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List 
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
 removeAllS : List String -> List String -> List String
 requiredMethodNames : List IfaceMethod -> List String
-resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
-sortIfaceRefs : List IfaceRef -> List IfaceRef
-sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
-sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
 standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
 superLookup : GraphCtx -> IfaceRef -> Option (List String, List Super)
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tyTabKey : TyConOrigin -> String -> TabKey
 univReceiverTag : List Ty -> Option HeadKey
 useModuleId : Decl -> List String
-usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
-usePathBindsName : UsePath -> String -> Bool
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 variantNamed : String -> List Variant -> Bool

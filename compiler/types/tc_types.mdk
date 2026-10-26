@@ -1073,7 +1073,7 @@ manifestDriverFor inputs None = inputs.diExecutedMainDriver
 -- convention" across module reset/push/error-rollback, per-channel) as ONE value whose
 -- ONLY mutators are its own five ops.  wPush/wRestore are the sole writers, so
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
--- `takeFirst (…N.value - N0) …value` bracket pattern every channel repeats.  #838 I1
+-- prefix-take bracket over the first `…N.value - N0` items that every channel repeats.  #838 I1
 -- ports `pendingCallObligations`/`pendingCallObligationsN` onto this — see
 -- `compiler/types/typecheck.mdk`'s `obls` field below.  #841 ported
 -- `pendingImplObligations` onto it too (the `implObls` field); the dictionary

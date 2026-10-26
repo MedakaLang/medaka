@@ -1,0 +1,33 @@
+declEnvPolarityChain : List DeclEnvModule -> (List (TabKey, List Polarity), Map String (List (TabKey, List Polarity))) -> (List (TabKey, List Polarity), Map String (List (TabKey, List Polarity)))
+declEnvPolarityEntries : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityEntriesFix : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityFixGo : List (TabKey, List Polarity) -> List Decl -> Int -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+declHasPolarityEntry : Map String (List TabKey) -> Decl -> Bool
+declPolarityKeys : List Decl -> List TabKey
+fieldTyOf : Field -> Ty
+inferParamPolarities : List (TabKey, List Polarity) -> List String -> List (Option KindAnn) -> List Variant -> List Polarity
+joinPolarities : List Polarity -> Polarity
+joinPolaritiesGo : Polarity -> List Polarity -> Polarity
+paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty -> List Polarity
+paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
+payloadAstTypes : ConPayload -> List Ty
+polJoin : Polarity -> Polarity -> Polarity
+polMul : Polarity -> Polarity -> Polarity
+polaritiesEq : List Polarity -> List Polarity -> Bool
+polarityAtOr : Option (List Polarity) -> Int -> Polarity
+polarityDeclHeadAndTys : Decl -> (String, List Ty)
+polarityDeclInfo : Decl -> Option (String, List Ty)
+polarityDependencyOrder : List Decl -> List (Int, Decl)
+polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
+polarityEntriesPublicOnly : List Decl -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+polarityEq : Polarity -> Polarity -> Bool
+polarityPublicKeys : List Decl -> List TabKey
+polarityTyConNames : Ty -> List String -> List String
+publishedPolarity : Polarity -> Polarity
+recordParamPolarities : ModuleCtx -> TyConOrigin -> String -> List Polarity -> Unit
+seedParamPolarityFixpointScoped : ModuleCtx -> List Decl -> List Decl -> Unit
+tabKeyIndex : List TabKey -> Map String (List TabKey)
+tabKeyIndexGo : List TabKey -> Map String (List TabKey) -> Map String (List TabKey)
+tabKeyIndexHas : Map String (List TabKey) -> TabKey -> Bool
+variantPayload : Variant -> ConPayload
