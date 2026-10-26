@@ -67,13 +67,8 @@ import types.tc_env.{
   recordCandInfo,
   variantNamed,
 }
-import types.tc_diag.{
-  ambigReexportHelp,
-  ambigReexportMsg,
-  backticked,
-  pushTypeErrorHelpFixAt,
-  pushTypeErrorOnceAt,
-}
+import types.tc_diag.{pushTypeErrorHelpFixAt, pushTypeErrorOnceAt}
+import types.tc_diag_text.{ambigReexportHelp, ambigReexportMsg, backticked}
 import frontend.ast.{
   ConPayload(..),
   Decl(..),

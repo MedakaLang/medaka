@@ -269,7 +269,7 @@ import tools.lint.{splitLintNames}
 import string.{toInt}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
-import types.tc_diag.{tcDiagGoalKey}
+import types.tc_diag_text.{tcDiagGoalKey}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared

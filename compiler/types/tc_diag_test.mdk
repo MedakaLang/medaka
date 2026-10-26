@@ -16,25 +16,13 @@ import list.{replicate, reverse}
 import types.publish.{TcDiag(..), tcCode, tcLoc, tcMsg}
 import types.repr.{Mono(..)}
 import types.tc_diag.{
-  backticked,
-  derivableIface,
-  erredDuring,
-  locGoalKey,
-  locKey,
-  ordinalWord,
-  prependDiagOpt,
-  pushAmbiguityAt,
-  pushNoImplError,
-  pushTypeError,
-  pushTypeErrorAt,
-  pushTypeErrorHelpFixAt,
-  pushTypeErrorOnce,
-  pushTypeErrorOnceAt,
-  pushTypeErrorOncePerSite,
-  quotedNames,
-  recordTypeError,
-  typeErrorsArmed,
-  writtenDiag,
+  erredDuring, locKey, prependDiagOpt, pushAmbiguityAt, pushNoImplError,
+  pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt, pushTypeErrorOnce,
+  pushTypeErrorOnceAt, pushTypeErrorOncePerSite, recordTypeError,
+  typeErrorsArmed, writtenDiag
+}
+import types.tc_diag_text.{
+  backticked, derivableIface, locGoalKey, ordinalWord, quotedNames
 }
 import types.tc_mono.{tconBuiltin}
 import types.tc_state.{blankModuleCtx, mctxAt, probeGraphCtx, wAll}

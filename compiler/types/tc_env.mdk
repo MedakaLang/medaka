@@ -59,7 +59,6 @@ import frontend.ast.{
   identOriginOf,
   ifaceIdentity,
   mkIdent,
-  patternMark,
   sameTyConHead,
   tabKeyEq,
   tabKeyOf,
@@ -70,7 +69,8 @@ import frontend.ast.{
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), ppTy}
 import types.effect_param_decode.{dtopIn}
 import types.effect_domain.{Param(..)}
-import types.effect_rows.{EffLabel(..), effLabelName}
+import types.effect_rows.{EffLabel(..)}
+import types.tc_diag_text.{kindName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
   CeRow(..), ClassEnv(..), DeclEnvAcc(..), DeclEnvModule(..), DeclEnvs(..),
@@ -512,12 +512,6 @@ tyTabKey o n = tabKeyOf NsType o n
 export
 ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
-
-export
-kindName : Kind -> String
-kindName KType = "Type"
-kindName KRow = "Effect"
-kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
 -- Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
