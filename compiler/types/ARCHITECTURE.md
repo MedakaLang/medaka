@@ -78,7 +78,7 @@ The tree arm (`GOutTrees`; `run`, the emitter child, `medaka test`'s eval drives
 ## Where the design lives
 - `compiler/TYPECHECK-ARCHITECTURE.md` (current shape), `TYPECHECK-TARGET-ARCHITECTURE.md` and `TYPECHECK-CONTRACTS.md` (destination), `TYPECHECK-ARCH-BUG-FIT.md`.
 - `EFFECTS-ARCHITECTURE.md` for the effect modules; `docs/design/TARGETS-DESIGN.md` for profiles.
-- `ARCHITECTURE-PLAYBOOK.md` §6 for the split: the eighteen-module layer table ruled 2026-10-26 (P4-D1 to D12 on #4206), executed by milestone 42; issue #2586 sequences it.
+- `ARCHITECTURE-PLAYBOOK.md` §6 for the split: the twenty-seven-row layer table (twenty-six `tc_*` modules and `typecheck.mdk`) ruled 2026-10-25/26 (P4-D1 to D12 on #4206), executed by milestone 42; issue #2586 sequences it.
 
 ## Traps
 - `[P-EXHAUST-IN-TYPECHECK]` — `checkMatchExhaustive` is defined and called in `typecheck.mdk`, once per `EMatch`; it sees only core patterns.
