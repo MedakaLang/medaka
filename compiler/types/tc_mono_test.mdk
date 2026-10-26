@@ -1,0 +1,273 @@
+-- Tests of `types.tc_mono`'s own API: the builtin tycon mints, variable ids, substitution,
+-- one-sided matching and overlap, and the arrow/head projections.  Properties run over a
+-- model type language (`MTy`) whose reading as a `Mono` is the generator; the expected
+-- answer of each law is computed on the model, never read back from the module under test.
+
+import list.{lookup, nub, zip}
+import test.{
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectSatisfies,
+  expectTrue,
+}
+import frontend.ast.{TyConOrigin(..)}
+import types.effect_rows.{pureRow}
+import types.repr.{Mono(..), Tyvar(..), ppMono, tupleSpine}
+import types.tc_mono.{
+  arrowArity,
+  cohApply,
+  cohEqMono,
+  cohOverlap,
+  cohOverlapGo,
+  headTyconNameMono,
+  monoClosed,
+  monoSameGiven,
+  monoUnboundIds,
+  peelArrows,
+  resultAfterArrows,
+  stripArrows,
+  substMono,
+  tconBuiltin,
+  tconFrom,
+  tconUnresolved,
+  tupleMono,
+}
+import types.tc_state.{probeGraphCtx}
+
+-- The model: a constructor leaf, a numbered variable leaf, an application, an arrow.
+-- A term with no `MVar` is closed.
+data MTy =
+  | MCon String
+  | MVar Int
+  | MApp MTy MTy
+  | MFun MTy MTy
+  deriving (Eq, Debug)
+
+conNames : List String
+conNames = ["Int", "Bool", "List", "Pair"]
+
+genLeaf : Unit -> <Rand> MTy
+genLeaf () =
+  let k = randomInt 0 7
+  if k < 4 then match lookup k (zip [0, 1, 2, 3] (map MCon conNames))
+    Some leaf => leaf
+    None => MCon "Int"
+  else
+    MVar (k - 4)
+
+genMTy : Int -> <Rand> MTy
+genMTy depth
+  | depth <= 0 = genLeaf ()
+  | otherwise = match randomInt 0 3
+    0 => genLeaf ()
+    1 => MApp (genMTy (depth - 1)) (genMTy (depth - 1))
+    _ => MFun (genMTy (depth - 1)) (genMTy (depth - 1))
+
+-- Variables are drawn from the four ids 0..3, so substitutions below have a domain to hit.
+impl Arbitrary MTy where
+  arbitrary () = genMTy 3
+  shrink (MApp a b) = [a, b]
+  shrink (MFun a b) = [a, b]
+  shrink _ = []
+
+varsOf : MTy -> List Int
+varsOf (MCon _) = []
+varsOf (MVar k) = [k]
+varsOf (MApp a b) = varsOf a ++ varsOf b
+varsOf (MFun a b) = varsOf a ++ varsOf b
+
+isClosed : MTy -> Bool
+isClosed t = varsOf t == []
+
+-- One shared unbound cell per distinct variable id, so a repeated variable is one cell.
+cellsFor : List Int -> List (Int, Ref Tyvar)
+cellsFor ids = map (k => (k, Ref (Unbound k 0))) ids
+
+toMonoIn : List (Int, Ref Tyvar) -> MTy -> Mono
+toMonoIn _ (MCon n) = tconBuiltin n
+toMonoIn cells (MVar k) = match lookup k cells
+  Some cell => TVar cell
+  None => tconUnresolved "no-cell"
+toMonoIn cells (MApp a b) = TApp (toMonoIn cells a) (toMonoIn cells b)
+toMonoIn cells (MFun a b) = TFun (toMonoIn cells a) pureRow (toMonoIn cells b)
+
+toMono : MTy -> Mono
+toMono t = toMonoIn (cellsFor (nub (varsOf t))) t
+
+modelSubst : List (Int, MTy) -> MTy -> MTy
+modelSubst _ (MCon n) = MCon n
+modelSubst s (MVar k) = match lookup k s
+  Some r => r
+  None => MVar k
+modelSubst s (MApp a b) = MApp (modelSubst s a) (modelSubst s b)
+modelSubst s (MFun a b) = MFun (modelSubst s a) (modelSubst s b)
+
+-- The monomorphic image of a model substitution: its closed ranges, read as monos.
+monoSubst : List (Int, MTy) -> List (Int, Mono)
+monoSubst s = map ((k, r) => (k, toMono r)) s
+
+applySubst : List (Int, MTy) -> MTy -> Mono
+applySubst s t = substMono (probeGraphCtx ()) (monoSubst s) [] [] (toMono t)
+
+-- The arrows down the right spine, and what is left.
+modelArity : MTy -> Int
+modelArity (MFun _ b) = 1 + modelArity b
+modelArity _ = 0
+
+modelResult : MTy -> MTy
+modelResult (MFun _ b) = modelResult b
+modelResult t = t
+
+modelArgs : MTy -> List MTy
+modelArgs (MFun a b) = a :: modelArgs b
+modelArgs _ = []
+
+-- The head leaf of an application spine, when it is a constructor.
+modelHead : MTy -> Option String
+modelHead (MCon n) = Some n
+modelHead (MApp f _) = modelHead f
+modelHead _ = None
+
+-- Every constructor leaf at an even preorder position becomes a distinct variable, so the
+-- result is a pattern that the original closed term is an instance of.
+abstractLeaves : Int -> MTy -> (Int, MTy)
+abstractLeaves i (MCon n) =
+  if isEven i then (i + 1, MVar (100 + i)) else (i + 1, MCon n)
+abstractLeaves i (MVar k) = (i + 1, MVar k)
+abstractLeaves i (MApp a b) =
+  let (j, a2) = abstractLeaves (i + 1) a
+  let (k, b2) = abstractLeaves j b
+  (k, MApp a2 b2)
+abstractLeaves i (MFun a b) =
+  let (j, a2) = abstractLeaves (i + 1) a
+  let (k, b2) = abstractLeaves j b
+  (k, MFun a2 b2)
+
+-- Law: the unbound ids of a monotype are exactly its variables, in order, so a closed
+-- type has none and `monoClosed` agrees.  No precondition.
+prop "monoUnboundIds lists the variables of a type, and a closed type has none" (t : MTy) =
+  let m = toMono t
+  monoUnboundIds m == varsOf t && monoClosed m == isClosed t
+
+-- Law: substituting with an empty table changes nothing.  No precondition.
+prop "the empty substitution is the identity" (t : MTy) =
+  cohEqMono (applySubst [] t) (toMono t)
+    && monoUnboundIds (applySubst [] t) == varsOf t
+
+-- Law: substitution of closed terms agrees with the model's.  Precondition: both ranges
+-- are closed, since `substMono` is one simultaneous pass and does not re-substitute.
+prop "substituting closed monotypes agrees with the model substitution" (t : MTy) (r0 : MTy) (r1 : MTy) =
+  if isClosed r0 && isClosed r1 then
+    let s = [(0, r0), (1, r1)]
+    cohEqMono (applySubst s t) (toMono (modelSubst s t))
+  else
+    True
+
+-- Law: two substitutions with disjoint domains and closed ranges compose, in either order
+-- and as their union.  Precondition: domains {0} and {1} are disjoint (fixed here) and
+-- both ranges are closed.
+prop "substitutions with disjoint domains and closed ranges compose in either order" (t : MTy) (r0 : MTy) (r1 : MTy) =
+  if isClosed r0 && isClosed r1 then
+    let s0 = [(0, r0)]
+    let s1 = [(1, r1)]
+    let whole = applySubst (s0 ++ s1) t
+    let viaS1 = applySubst s0 (modelSubst s1 t)
+    let viaS0 = applySubst s1 (modelSubst s0 t)
+    cohEqMono whole viaS1 && cohEqMono whole viaS0
+  else
+    True
+
+-- Law: a pattern abstracted from a closed term unifies with the term, and applying the
+-- recorded bindings to the pattern gives the term back.  Precondition: the target is
+-- closed.
+prop "matching a pattern against its closed target and applying the bindings gives the target" (t : MTy) =
+  if isClosed t then
+    let (_, pat) = abstractLeaves 0 t
+    let patMono = toMono pat
+    let target = toMono t
+    let bindings = Ref []
+    cohOverlapGo bindings [(patMono, target)]
+      && cohEqMono (cohApply bindings patMono) target
+  else
+    True
+
+-- Law: for two closed types, overlap is structural equality (rows are not compared).
+-- Precondition: both types closed.
+prop "two closed types overlap exactly when they are equal" (a : MTy) (b : MTy) =
+  if isClosed a && isClosed b then
+    cohOverlap [toMono a] [toMono b] == (a == b)
+      && cohEqMono (toMono a) (toMono b) == (a == b)
+  else
+    True
+
+-- Law: the arrow projections read the right spine.  No precondition; variables are
+-- unbound, so no link is followed.
+prop "arrowArity, peelArrows and stripArrows read the arrow spine" (t : MTy) =
+  let m = toMono t
+  arrowArity m == modelArity t
+    && length (peelArrows 100 m) == modelArity t
+    && cohEqMono (stripArrows m) (toMono (modelResult t))
+    && map ppMono (peelArrows 100 m)
+      == map (a => ppMono (toMono a)) (modelArgs t)
+
+-- Law: the head name of a spine is its leftmost constructor.  Precondition: the spine
+-- head is a constructor (a variable head has no name).
+prop "headTyconNameMono names the leftmost constructor of an application spine" (t : MTy) =
+  match modelHead t
+    Some n => headTyconNameMono (toMono t) == Some n
+    None => True
+
+test "two same-named types from different modules are different types" =
+  let a = tconFrom (OriginModule "m1") "T"
+  let b = tconFrom (OriginModule "m2") "T"
+  expectAll [
+    expectFalse (cohEqMono a b),
+    expectTrue (cohEqMono a (tconFrom (OriginModule "m1") "T")),
+  ]
+
+test "an absent origin makes no claim against an identity of the same name" = expectAll
+  [
+    expectTrue
+      (cohEqMono (tconUnresolved "T") (tconFrom (OriginModule "m1") "T")),
+    expectFalse (cohEqMono (tconUnresolved "T") (tconUnresolved "U")),
+  ]
+
+test "a linked variable reads as its target, and an unbound one as itself" =
+  let target = Ref (Unbound 7 0)
+  let linked = Ref (Link (TVar target))
+  let closed = Ref (Link (tconBuiltin "Int"))
+  expectAll [
+    expectEqual [7] (monoUnboundIds (TVar linked)),
+    expectEqual [] (monoUnboundIds (TVar closed)),
+    expectTrue (monoClosed (TVar closed)),
+    expectFalse (monoClosed (TVar target)),
+  ]
+
+test "a rigid variable is not closed and is not the given of a distinct rigid one" = expectAll
+  [
+    expectFalse (monoClosed (TRigid "a")),
+    expectFalse (monoSameGiven (TRigid "a") (TRigid "b")),
+    expectTrue (monoClosed (TApp (tconBuiltin "List") (tconBuiltin "Int"))),
+  ]
+
+test "tupleMono builds the saturated tuple spine that tupleSpine reads back" =
+  let parts = [tconBuiltin "Int", tconBuiltin "Bool", tconBuiltin "List"]
+  let spine = tupleMono parts
+  expectAll [
+    expectEqual (Some "__tuple3__") (headTyconNameMono spine),
+    expectEqual
+      (Some ["Int", "Bool", "List"])
+      (map (map ppMono) (tupleSpine spine)),
+    expectNotEqual (Some "__tuple2__") (headTyconNameMono spine),
+  ]
+
+test "resultAfterArrows is None past the arrow spine and the rest within it" =
+  let int = tconBuiltin "Int"
+  let fn = TFun int pureRow (TFun int pureRow (tconBuiltin "Bool"))
+  expectAll [
+    expectEqual (Some "Bool") (map ppMono (resultAfterArrows 2 fn)),
+    expectTrue (isNone (resultAfterArrows 3 fn)),
+    expectEqual 2 (arrowArity fn),
+  ]

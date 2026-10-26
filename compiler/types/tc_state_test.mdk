@@ -1,0 +1,210 @@
+-- Tests of `types.tc_state`'s own API: the state-record mints and carries, the span copy,
+-- the process interners cell, the `Windowed` channel ops, and the trace-sink builders.
+-- A minted `ModuleCtx` or `GraphCtx` is needed throughout, so none of these is a doctest.
+
+import list.{sort}
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import frontend.ast.{Loc(..)}
+import types.tc_diag.{recordTypeError}
+import types.tc_state.{
+  beginAssumptionTrace,
+  beginEvidenceObservation,
+  beginMethodReturnTrace,
+  beginNumericPredicateTrace,
+  blankModuleCtx,
+  carryModuleCtx,
+  dictParamName,
+  finishAssumptionTrace,
+  finishEvidenceObservation,
+  freshSubRecordsOf,
+  initialModuleCtx,
+  interners,
+  mctxAt,
+  mctxAtIfSome,
+  noteInterners,
+  probeGraphCtx,
+  takeFirst,
+  wAll,
+  wMark,
+  wPush,
+  wPushAll,
+  wRestore,
+  wSnapshot,
+  wWindow,
+}
+import types.publish.{TcDiag(..)}
+import types.tc_types.{
+  GraphCtx(..),
+  GraphRun(..),
+  Interners(..),
+  Lineage(..),
+  ModuleCells(..),
+  ModuleCtx(..),
+  TraceSink(..),
+  Windowed(..),
+}
+
+-- A channel as `wNew` would mint it; `wNew` is not exported, and the record's own fields
+-- are the whole of its state.
+emptyChannel : Unit -> Windowed Int
+emptyChannel _ = Windowed { items = Ref [], n = Ref 0 }
+
+pushAll : Windowed Int -> List Int -> Unit
+pushAll w xs = wPushAll w xs
+
+someLoc : Option Loc
+someLoc = Some (Loc "probe.mdk" 3 1 3 9)
+
+lineOf : Option Loc -> Int
+lineOf None = 0
+lineOf (Some (Loc _ line _ _ _)) = line
+
+otherLoc : Option Loc
+otherLoc = Some (Loc "probe.mdk" 7 1 7 4)
+
+errorAt : String -> TcDiag
+errorAt msg = TcDiag "T-PROBE" 1 None msg None None
+
+errorMessages : ModuleCtx -> List String
+errorMessages m =
+  map
+    (d => match d
+      TcDiag _ _ _ msg _ _ => msg)
+    (wAll m.mcCells.typeErrors)
+
+-- Law: the items pushed since a mark are exactly the window after it.  The window's order
+-- is not asserted (the channel is newest-first), so both sides are sorted.  No
+-- precondition.
+prop "a window holds exactly the items pushed since its mark" (before : List Int) (after : List Int) =
+  let w = emptyChannel ()
+  let _ = pushAll w before
+  let mark = wMark w
+  let _ = pushAll w after
+  mark == length before
+    && wMark w == length before + length after
+    && sort (wWindow w mark) == sort after
+
+-- Law: restoring a snapshot returns both the items and the mark, whatever was pushed in
+-- between.  No precondition.
+prop "restoring a snapshot undoes every push made after it" (before : List Int) (after : List Int) =
+  let w = emptyChannel ()
+  let _ = pushAll w before
+  let snap = wSnapshot w
+  let _ = pushAll w after
+  let _ = wRestore w snap
+  wAll w == fst (wSnapshot w) && wAll w == fst snap && wMark w == snd snap
+
+-- Law: `wPushAll` is the pushes of its list one after another.  No precondition.
+prop "wPushAll equals pushing each item in order" (xs : List Int) =
+  let bulk = emptyChannel ()
+  let one = emptyChannel ()
+  let _ = wPushAll bulk xs
+  let _ = map (wPush one) xs
+  wAll bulk == wAll one && wMark bulk == wMark one && wMark bulk == length xs
+
+test "takeFirst takes a prefix and is total on a short list" = expectAll [
+  expectEqual [1, 2] (takeFirst 2 [1, 2, 3]),
+  expectEqual [1, 2, 3] (takeFirst 9 [1, 2, 3]),
+  expectEqual [] (takeFirst 0 [1, 2, 3]),
+]
+
+test "a span copy shares the module's cells and replaces only the span" =
+  let m = blankModuleCtx (probeGraphCtx ()) "m"
+  let inner = mctxAt someLoc m
+  let _ = recordTypeError inner (errorAt "pushed through the copy")
+  expectAll [
+    expectEqual ["pushed through the copy"] (errorMessages m),
+    expectEqual ["pushed through the copy"] (errorMessages inner),
+    expectTrue (isNone m.mcLoc),
+    expectTrue (isSome inner.mcLoc),
+  ]
+
+test "mctxAtIfSome keeps the enclosing span when the construct names none" =
+  let m = mctxAt someLoc (blankModuleCtx (probeGraphCtx ()) "m")
+  let kept = mctxAtIfSome None m
+  let moved = mctxAtIfSome otherLoc m
+  expectAll [
+    expectEqual 3 (lineOf kept.mcLoc),
+    expectEqual 7 (lineOf moved.mcLoc),
+  ]
+
+test "a blank record names its module and an initial one names none" =
+  let g = probeGraphCtx ()
+  let named = blankModuleCtx g "some.module"
+  let initial = initialModuleCtx g
+  expectAll [
+    expectEqual "some.module" named.mcCells.currentModuleRef.value,
+    expectEqual "" initial.mcCells.currentModuleRef.value,
+    expectEqual [] (errorMessages named),
+  ]
+
+-- Precondition: the source record has recorded an error and carries a warning before the
+-- carry, and gets a second warning after it.
+test "a carry takes fresh run channels and copies the tables by value" =
+  let g = probeGraphCtx ()
+  let src = blankModuleCtx g "m"
+  let _ = recordTypeError src (errorAt "before the carry")
+  let _ = src.mcCells.matchWarnings := [errorAt "warning before"]
+  let carried = carryModuleCtx g src
+  let _ =
+    src.mcCells.matchWarnings :=
+      [errorAt "warning after", errorAt "warning before"]
+  let _ = recordTypeError carried (errorAt "only in the carry")
+  expectAll [
+    expectEqual ["before the carry"] (errorMessages src),
+    expectEqual ["only in the carry"] (errorMessages carried),
+    expectEqual 1 (length carried.mcCells.matchWarnings.value),
+    expectEqual 2 (length src.mcCells.matchWarnings.value),
+    expectEqual "m" carried.mcCells.currentModuleRef.value,
+  ]
+
+-- Precondition: both graph records come from `probeGraphCtx`, so every run cell starts
+-- at its fresh value.
+test "a fresh sub-record shares no run cell with its source and keeps the rest" =
+  let src = probeGraphCtx ()
+  let sub = freshSubRecordsOf src
+  let _ = src.graphRun.tyvarCounter := 7
+  let _ = sub.graphRun.tyvarCounter := 9
+  let _ = sub.typeErrorsSticky := True
+  expectAll [
+    expectEqual 7 src.graphRun.tyvarCounter.value,
+    expectEqual 9 sub.graphRun.tyvarCounter.value,
+    expectTrue src.typeErrorsSticky.value,
+  ]
+
+-- Precondition: the process cell is restored before the verdict is built, so no other test
+-- in the process sees this one's record.
+test "noting a graph record points the interners at its lineage and keeps the high-water" =
+  let saved = interners.value
+  let g = probeGraphCtx ()
+  let highBefore = saved.lineage.lnTyvarHigh
+  let _ = noteInterners g
+  let noted = interners.value
+  let _ = g.graphRun.evCounter := 41
+  let _ = highBefore := 5
+  let seesCounter = noted.lineage.lnEvCounter.value
+  let seesHigh = noted.lineage.lnTyvarHigh.value
+  let _ = interners := saved
+  expectAll [expectEqual 41 seesCounter, expectEqual 5 seesHigh]
+
+test "a begun trace sink has its one gate on and an empty buffer" =
+  let assumption = beginAssumptionTrace ()
+  let methodReturn = beginMethodReturnTrace ()
+  let numeric = beginNumericPredicateTrace ()
+  let evidence = beginEvidenceObservation ()
+  expectAll [
+    expectTrue assumption.tsAssumptionEnabled,
+    expectFalse assumption.tsMethodReturnEnabled,
+    expectTrue methodReturn.tsMethodReturnEnabled,
+    expectFalse methodReturn.tsAssumptionEnabled,
+    expectTrue numeric.tsNumericPredicateEnabled,
+    expectTrue evidence.tsEvidenceObservationEnabled,
+    expectEqual 0 (length (finishAssumptionTrace assumption)),
+    expectEqual 0 (length (finishEvidenceObservation evidence)),
+  ]
+
+test "dictionary parameter names are keyed by function and slot" = expectAll [
+  expectEqual "$dict_f_0" (dictParamName "f" 0),
+  expectNotEqual (dictParamName "f" 1) (dictParamName "f" 0),
+  expectNotEqual (dictParamName "g" 0) (dictParamName "f" 0),
+]
