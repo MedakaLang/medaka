@@ -518,7 +518,6 @@ checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
 checkOneReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
 checkOneReportKGraph : DriveArgs -> (TcReport, GraphCtx)
 checkOneScheme : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
-checkOneSchemeFull : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullKGraph : DriveArgs -> ((List (String, PubScheme), List (String, PubScheme)), GraphCtx)
 checkOneToLines : DriveInputs -> List Decl -> String
@@ -1986,11 +1985,7 @@ lowerPending : Int -> List PendingJoin -> List PendingJoin
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : ModuleCtx -> Mono -> Unit
 lowerTyvarLevel : Int -> Mono -> Unit
-mainAsyncPayloadIsUnit : DriveOutputs -> Bool
 mainHasObligations : ModuleCtx -> Bool
-mainTypeIsAsync : DriveOutputs -> Bool
-mainTypeIsFloat : DriveOutputs -> Bool
-mainTypeIsUnit : DriveOutputs -> Bool
 mangledCtorShaped : Array Char -> Int -> Int -> Bool
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
@@ -3355,7 +3350,6 @@ wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit
 wPushAll : Windowed a -> List a -> Unit
-wReset : Windowed a -> Unit
 wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a

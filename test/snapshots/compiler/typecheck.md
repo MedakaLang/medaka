@@ -1,5 +1,5 @@
 # META
-source_lines=57172
+source_lines=57130
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{
@@ -8553,17 +8553,6 @@ recordBinderType gctx bid name v arity signed = match bid
 wNew : Unit -> Windowed a
 wNew _ = Windowed { items = Ref [], n = Ref 0 }
 
--- the ONLY reset.  Unused — `freshModuleCtx` re-mints `obls`/`implObls` via
--- `wNew` rather than resetting an existing one (per-module reset is a whole-ModuleCtx
--- re-mint here, not a per-field reset), so none of these channels ever needs a
--- reset-in-place.  Kept as part of the `Windowed` API surface for a future channel
--- whose reset lifecycle is narrower than a whole-ModuleCtx re-mint.
-wReset : Windowed a -> Unit
--- lint-disable-next-line rule-dead-code
-wReset w =
-  w.items := []
-  w.n := 0
-
 -- the ONLY extend.
 wPush : Windowed a -> a -> Unit
 wPush w x =
@@ -9223,7 +9212,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 --
 -- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
 -- is OUTPUT and lives in `ModuleCells.mcCells.typeErrors`, a `Windowed TcDiag` like its
--- obligation-channel siblings (see `Windowed` above — `wPush`/`wReset`/`wRestore` are
+-- obligation-channel siblings (see `Windowed` above — `wPush`/`wRestore` are
 -- its sole WRITERS, so its list and its count cannot drift apart).  "An error
 -- OCCURRED" is CONTROL and lives in `ModuleCells.mcCells.errorsDetected`, a monotone-per-module
 -- occurrence counter that is not a diagnostics channel at all.
@@ -9611,30 +9600,6 @@ envAt loc env =
 envAtIfSome : Option Loc -> TcEnv -> TcEnv
 envAtIfSome None env = env
 envAtIfSome loc env = envAt loc env
-
--- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
--- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
--- `main : Async _` and route it through `runAsync` (perform its row) instead of
--- forcing it to an inert Async value.  Last module wins (the entry is last in
--- dependency order), matching bin/main.ml's `final_schemes` lookup.  `None` until
--- a module binding `main` is elaborated; reset at the top of elaborateModules so a
--- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
-
-export
-mainTypeIsAsync : DriveOutputs -> Bool
-mainTypeIsAsync outputs = outputs.doEntryOutcome.eoMainIsAsync
-
-export
-mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnit outputs = outputs.doEntryOutcome.eoMainAsyncPayloadIsUnit
-
-export
-mainTypeIsUnit : DriveOutputs -> Bool
-mainTypeIsUnit outputs = outputs.doEntryOutcome.eoMainIsUnit
-
-export
-mainTypeIsFloat : DriveOutputs -> Bool
-mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
 
 -- Whether the `main` binding recorded obligations remains inference-private; the
 -- publication module receives its Boolean answer rather than this side table.
@@ -54887,7 +54852,8 @@ checkOneScheme inputs runtimeDecls coreDecls (rootId, prog) =
     checkModulesEntryFull inputs runtimeDecls coreDecls [(rootId, prog)]
   pubSchemes schemes
 
--- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
+-- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116),
+-- `checkOneSchemeFullK`:
 -- `(preludeSchemes, ownSchemes)` for a ONE-MODULE program, the Module-arm
 -- replacement for the retired single-program environment that the
 -- introspection consumers (LSP hover/completion/inlayHint, the playground's
@@ -54901,16 +54867,8 @@ checkOneScheme inputs runtimeDecls coreDecls (rootId, prog) =
 -- binding of the same name) — see `checkModulesEntryFullSplit`'s 🚨 note.  This
 -- is NOT a widening of the `medaka check` front door, whose narrowed
 -- own-schemes-only report is deliberate and unchanged.
-export
-checkOneSchemeFull : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFull inputs runtimeDecls coreDecls prog =
-  checkOneSchemeFullK inputs None runtimeDecls coreDecls prog
-
--- `checkOneSchemeFull` with the prelude key for the prelude interface (see
+--
+-- The prelude key is for the prelude interface (see
 -- `checkCoreMemoized`): pass `Some (desugaredPreludeKey runtimeSrc,
 -- desugaredPreludeKey coreSrc)` when `runtimeDecls`/`coreDecls` are exactly what
 -- `desugaredPrelude` returned for those sources; `None` otherwise.
@@ -58495,8 +58453,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "recordBinderType" ((PVar "gctx") (PVar "bid") (PVar "name") (PVar "v") (PVar "arity") (PVar "signed")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) () (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit LUnit) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderPending")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "PendingBinder") (EVar "bid")) (EApp (EVar "localSourceName") (EVar "name"))) (EVar "v")) (EVar "arity")) (EVar "signed")) (EFieldAccess (EFieldAccess (EVar "g") "binderPending") "value")))))))))
 (DTypeSig false "wNew" (TyFun (TyCon "Unit") (TyApp (TyCon "Windowed") (TyVar "a"))))
 (DFunDef false "wNew" (PWild) (ERecordCreate "Windowed" ((fa "items" (EApp (EVar "Ref") (EListLit))) (fa "n" (EApp (EVar "Ref") (ELit (LInt 0)))))))
-(DTypeSig false "wReset" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Unit")))
-(DFunDef false "wReset" ((PVar "w")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (ELit (LInt 0))))))
 (DTypeSig false "wPush" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
 (DFunDef false "wPush" ((PVar "w") (PVar "x")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EBinOp "::" (EVar "x") (EUnOp "!" (EFieldAccess (EVar "w") "items"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EBinOp "+" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (ELit (LInt 1)))))))
 (DTypeSig false "wMark" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Int")))
@@ -58663,14 +58619,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "envAtIfSome" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
 (DFunDef false "envAtIfSome" ((PCon "None") (PVar "env")) (EVar "env"))
 (DFunDef false "envAtIfSome" ((PVar "loc") (PVar "env")) (EApp (EApp (EVar "envAt") (EVar "loc")) (EVar "env")))
-(DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsAsync" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsAsync"))
-(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainAsyncPayloadIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainAsyncPayloadIsUnit"))
-(DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsUnit"))
-(DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsFloat" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsFloat"))
 (DTypeSig false "mainHasObligations" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
 (DFunDef false "mainHasObligations" ((PVar "mctx")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (ELit (LString "main"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeDefIdsRef") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (ELit (LString "main"))) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
@@ -66096,8 +66044,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "inputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
 (DTypeSig true "checkOneScheme" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "checkOneScheme" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "inputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EApp (EVar "pubSchemes") (EVar "schemes")))))
-(DTypeSig true "checkOneSchemeFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))
-(DFunDef false "checkOneSchemeFull" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "inputs")) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog")))
 (DTypeSig true "checkOneSchemeFullK" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))))))
 (DFunDef false "checkOneSchemeFullK" ((PVar "inputs") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EApp (EVar "fst") (EApp (EVar "checkOneSchemeFullKGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveArgs") (EVar "inputs")) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (EVar "prog"))))))
 (DTypeSig true "checkOneSchemeFullKGraph" (TyFun (TyCon "DriveArgs") (TyTuple (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyCon "GraphCtx"))))
@@ -67731,8 +67677,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "recordBinderType" ((PVar "gctx") (PVar "bid") (PVar "name") (PVar "v") (PVar "arity") (PVar "signed")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) () (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit LUnit) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderPending")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "PendingBinder") (EVar "bid")) (EApp (EVar "localSourceName") (EVar "name"))) (EVar "v")) (EVar "arity")) (EVar "signed")) (EFieldAccess (EFieldAccess (EVar "g") "binderPending") "value")))))))))
 (DTypeSig false "wNew" (TyFun (TyCon "Unit") (TyApp (TyCon "Windowed") (TyVar "a"))))
 (DFunDef false "wNew" (PWild) (ERecordCreate "Windowed" ((fa "items" (EApp (EVar "Ref") (EListLit))) (fa "n" (EApp (EVar "Ref") (ELit (LInt 0)))))))
-(DTypeSig false "wReset" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Unit")))
-(DFunDef false "wReset" ((PVar "w")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (ELit (LInt 0))))))
 (DTypeSig false "wPush" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
 (DFunDef false "wPush" ((PVar "w") (PVar "x")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EBinOp "::" (EVar "x") (EUnOp "!" (EFieldAccess (EVar "w") "items"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EBinOp "+" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (ELit (LInt 1)))))))
 (DTypeSig false "wMark" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Int")))
@@ -67899,14 +67843,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "envAtIfSome" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
 (DFunDef false "envAtIfSome" ((PCon "None") (PVar "env")) (EVar "env"))
 (DFunDef false "envAtIfSome" ((PVar "loc") (PVar "env")) (EApp (EApp (EVar "envAt") (EVar "loc")) (EVar "env")))
-(DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsAsync" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsAsync"))
-(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainAsyncPayloadIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainAsyncPayloadIsUnit"))
-(DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsUnit"))
-(DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
-(DFunDef false "mainTypeIsFloat" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsFloat"))
 (DTypeSig false "mainHasObligations" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
 (DFunDef false "mainHasObligations" ((PVar "mctx")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (ELit (LString "main"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeDefIdsRef") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (ELit (LString "main"))) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
@@ -75332,8 +75268,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "inputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
 (DTypeSig true "checkOneScheme" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "checkOneScheme" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "inputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EApp (EVar "pubSchemes") (EVar "schemes")))))
-(DTypeSig true "checkOneSchemeFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))
-(DFunDef false "checkOneSchemeFull" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "inputs")) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog")))
 (DTypeSig true "checkOneSchemeFullK" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))))))
 (DFunDef false "checkOneSchemeFullK" ((PVar "inputs") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EApp (EVar "fst") (EApp (EVar "checkOneSchemeFullKGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveArgs") (EVar "inputs")) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (EVar "prog"))))))
 (DTypeSig true "checkOneSchemeFullKGraph" (TyFun (TyCon "DriveArgs") (TyTuple (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyCon "GraphCtx"))))

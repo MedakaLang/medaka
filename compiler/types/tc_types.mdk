@@ -1070,7 +1070,7 @@ manifestDriverFor inputs None = inputs.diExecutedMainDriver
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
 -- convention" across module reset/push/error-rollback, per-channel) as ONE value whose
--- ONLY mutators are its own six ops.  wPush/wReset/wRestore are the sole writers, so
+-- ONLY mutators are its own five ops.  wPush/wRestore are the sole writers, so
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
 -- `takeFirst (…N.value - N0) …value` bracket pattern every channel repeats.  #838 I1
 -- ports `pendingCallObligations`/`pendingCallObligationsN` onto this — see

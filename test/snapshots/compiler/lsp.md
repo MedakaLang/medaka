@@ -704,7 +704,7 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p) 0
 -- prelude name (`map`, `println`) as readily as on one the buffer declares — so
 -- this returns the prelude's schemes as well as the buffer's own.
 --
--- S-full-env-scheme-entry (#1116): now the MODULE arm, via `checkOneSchemeFull`
+-- S-full-env-scheme-entry (#1116): now the MODULE arm, via `checkOneSchemeFullK`
 -- (the buffer is a degenerate one-module graph, `"__user__"` as its id, matching
 -- `checkOneToLinesWithRuntime`'s own rootId convention).  It hands back
 -- `(preludeSchemes, ownSchemes)` separately; the flat env this file's three

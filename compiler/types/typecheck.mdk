@@ -8549,17 +8549,6 @@ recordBinderType gctx bid name v arity signed = match bid
 wNew : Unit -> Windowed a
 wNew _ = Windowed { items = Ref [], n = Ref 0 }
 
--- the ONLY reset.  Unused — `freshModuleCtx` re-mints `obls`/`implObls` via
--- `wNew` rather than resetting an existing one (per-module reset is a whole-ModuleCtx
--- re-mint here, not a per-field reset), so none of these channels ever needs a
--- reset-in-place.  Kept as part of the `Windowed` API surface for a future channel
--- whose reset lifecycle is narrower than a whole-ModuleCtx re-mint.
-wReset : Windowed a -> Unit
--- lint-disable-next-line rule-dead-code
-wReset w =
-  w.items := []
-  w.n := 0
-
 -- the ONLY extend.
 wPush : Windowed a -> a -> Unit
 wPush w x =
@@ -9219,7 +9208,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 --
 -- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
 -- is OUTPUT and lives in `ModuleCells.mcCells.typeErrors`, a `Windowed TcDiag` like its
--- obligation-channel siblings (see `Windowed` above — `wPush`/`wReset`/`wRestore` are
+-- obligation-channel siblings (see `Windowed` above — `wPush`/`wRestore` are
 -- its sole WRITERS, so its list and its count cannot drift apart).  "An error
 -- OCCURRED" is CONTROL and lives in `ModuleCells.mcCells.errorsDetected`, a monotone-per-module
 -- occurrence counter that is not a diagnostics channel at all.
@@ -9607,30 +9596,6 @@ envAt loc env =
 envAtIfSome : Option Loc -> TcEnv -> TcEnv
 envAtIfSome None env = env
 envAtIfSome loc env = envAt loc env
-
--- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
--- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
--- `main : Async _` and route it through `runAsync` (perform its row) instead of
--- forcing it to an inert Async value.  Last module wins (the entry is last in
--- dependency order), matching bin/main.ml's `final_schemes` lookup.  `None` until
--- a module binding `main` is elaborated; reset at the top of elaborateModules so a
--- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
-
-export
-mainTypeIsAsync : DriveOutputs -> Bool
-mainTypeIsAsync outputs = outputs.doEntryOutcome.eoMainIsAsync
-
-export
-mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnit outputs = outputs.doEntryOutcome.eoMainAsyncPayloadIsUnit
-
-export
-mainTypeIsUnit : DriveOutputs -> Bool
-mainTypeIsUnit outputs = outputs.doEntryOutcome.eoMainIsUnit
-
-export
-mainTypeIsFloat : DriveOutputs -> Bool
-mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
 
 -- Whether the `main` binding recorded obligations remains inference-private; the
 -- publication module receives its Boolean answer rather than this side table.
@@ -54883,7 +54848,8 @@ checkOneScheme inputs runtimeDecls coreDecls (rootId, prog) =
     checkModulesEntryFull inputs runtimeDecls coreDecls [(rootId, prog)]
   pubSchemes schemes
 
--- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
+-- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116),
+-- `checkOneSchemeFullK`:
 -- `(preludeSchemes, ownSchemes)` for a ONE-MODULE program, the Module-arm
 -- replacement for the retired single-program environment that the
 -- introspection consumers (LSP hover/completion/inlayHint, the playground's
@@ -54897,16 +54863,8 @@ checkOneScheme inputs runtimeDecls coreDecls (rootId, prog) =
 -- binding of the same name) — see `checkModulesEntryFullSplit`'s 🚨 note.  This
 -- is NOT a widening of the `medaka check` front door, whose narrowed
 -- own-schemes-only report is deliberate and unchanged.
-export
-checkOneSchemeFull : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFull inputs runtimeDecls coreDecls prog =
-  checkOneSchemeFullK inputs None runtimeDecls coreDecls prog
-
--- `checkOneSchemeFull` with the prelude key for the prelude interface (see
+--
+-- The prelude key is for the prelude interface (see
 -- `checkCoreMemoized`): pass `Some (desugaredPreludeKey runtimeSrc,
 -- desugaredPreludeKey coreSrc)` when `runtimeDecls`/`coreDecls` are exactly what
 -- `desugaredPrelude` returned for those sources; `None` otherwise.
