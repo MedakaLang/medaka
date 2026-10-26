@@ -1,5 +1,5 @@
 # META
-source_lines=3009
+source_lines=2997
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -83,28 +83,16 @@ import types.tc_mono.{
 import types.tc_state.{dynAtIfSome, wAll, wPush, wRestore, wSnapshot}
 import types.tc_env.{domainHasPatterns, tyTabKey}
 import types.tc_diag.{
-  authorityCoverMsg,
-  authorityIndexMsg,
-  authorityTermTextIn,
-  closedRowMismatchMsg,
-  constrainedApplicationText,
-  contraRowMsg,
-  deferRequiresMonadMsg,
-  doRequiresMonadMsg,
-  elselessIfHelp,
-  firstTupleCallHint,
-  indexRowMismatchMsg,
-  joinMismatchMsg,
-  paramVarianceMismatchMsg,
-  patternIndexMsg,
-  pushTypeError,
-  pushTypeErrorAt,
-  pushTypeErrorHelpFixAt,
-  recordTypeError,
-  renderFlatRow,
-  residualFailureMsg,
-  sameSpellingHint,
-  starSpelling,
+  firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
+  recordTypeError
+}
+import types.tc_diag_text.{
+  authorityCoverMsg, authorityIndexMsg, authorityTermTextIn,
+  closedRowMismatchMsg, constrainedApplicationText, contraRowMsg,
+  deferRequiresMonadMsg, doRequiresMonadMsg, elselessIfHelp,
+  indexRowMismatchMsg, joinMismatchMsg, paramVarianceMismatchMsg,
+  patternIndexMsg, renderFlatRow, residualFailureMsg, sameSpellingHint,
+  starSpelling
 }
 import types.effect_authority.{
   Authority(..),
@@ -3016,7 +3004,8 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "firstTupleCallHint" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "authIsPattern" false) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSplit" false) (mem "authSub" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarId" false) (mem "authvarIsPattern" false) (mem "authvarLevel" false) (mem "authvarName" false) (mem "authVars" false) (mem "linkAuthvar" false) (mem "markAuthvarPattern" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsDiff" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "builtinLabel" false) (mem "collectRows" false) (mem "effLabelName" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "labelKey" false) (mem "linkRow" false) (mem "pureRow" false) (mem "renderAtoms" false) (mem "rowFlat" false) (mem "rowHasSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppMono" false) (mem "tupleTagArity" false))))
@@ -3562,7 +3551,8 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "firstTupleCallHint" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "authIsPattern" false) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSplit" false) (mem "authSub" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarId" false) (mem "authvarIsPattern" false) (mem "authvarLevel" false) (mem "authvarName" false) (mem "authVars" false) (mem "linkAuthvar" false) (mem "markAuthvarPattern" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsDiff" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "builtinLabel" false) (mem "collectRows" false) (mem "effLabelName" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "labelKey" false) (mem "linkRow" false) (mem "pureRow" false) (mem "renderAtoms" false) (mem "rowFlat" false) (mem "rowHasSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppMono" false) (mem "tupleTagArity" false))))

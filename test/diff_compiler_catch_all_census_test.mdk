@@ -43,6 +43,7 @@ loadAll = do
   tcMono <- readFile (underRoot "compiler/types/tc_mono.mdk")
   tcState <- readFile (underRoot "compiler/types/tc_state.mdk")
   tcEnv <- readFile (underRoot "compiler/types/tc_env.mdk")
+  tcDiagText <- readFile (underRoot "compiler/types/tc_diag_text.mdk")
   tcDiag <- readFile (underRoot "compiler/types/tc_diag.mdk")
   tcScope <- readFile (underRoot "compiler/types/tc_scope.mdk")
   tcUnify <- readFile (underRoot "compiler/types/tc_unify.mdk")
@@ -54,7 +55,7 @@ loadAll = do
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
   Ok (
     astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDecls}\n\{rp}\n\{ck}\n\{ec}",
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDecls}\n\{rp}\n\{ck}\n\{ec}",
     siteLedger,
     declLedger,
   )

@@ -12,7 +12,7 @@
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
 import list.{
-  drop, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, partition,
+  drop, take, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, partition,
   reverse, sort, takeWhile
 }
 import map as M
@@ -406,6 +406,191 @@ test "arch_boundaries: types.tc_env closure matches its golden" =
 
 test "arch_boundaries: types.tc_diag closure matches its golden" =
   closurePin "types.tc_diag"
+
+test "arch_boundaries: types.tc_diag_text closure matches its golden" =
+  closurePin "types.tc_diag_text"
+
+-- The modules above `tc_diag_text` in the typecheck family. A golden can be
+-- re-blessed; this set cannot.
+aboveDiagText : List String
+aboveDiagText = [
+  "types.tc_state",
+  "types.tc_env",
+  "types.tc_diag",
+  "types.tc_scope",
+  "types.tc_unify",
+  "types.tc_decls_variance",
+]
+
+test "arch_boundaries: types.tc_diag_text closure holds no module above it" =
+  let closure = closureOf (buildGraph loadModules) "types.tc_diag_text"
+  expectEqual [] (filter (m => elem m aboveDiagText) closure)
+
+-- The state and context record types. A row of `tc_diag_text` names none of
+-- them; a row of `tc_diag` that builds text from one belongs beside its emitter.
+contextTypes : List String
+contextTypes = [
+  "ModuleCtx",
+  "GraphCtx",
+  "GraphRun",
+  "SiteCtx",
+  "DynCtx",
+  "DoCtx",
+  "TcEnv",
+  "ModuleCells",
+  "Windowed",
+  "GrantState",
+  "ShadowDicts",
+  "DeclEnvs",
+  "ImplEnv",
+  "ClassEnv",
+  "DataEnv",
+  "MethodEnv",
+]
+
+-- The `Ref` spellings a context-free signature may carry: the three
+-- variable cells, an `Int` counter and a name table.
+allowedRefs : List String
+allowedRefs = [
+  "Ref Tyvar",
+  "Ref Effvar",
+  "Ref Authvar",
+  "Ref (List (Int, String))",
+  "Ref Int",
+]
+
+isIdentChar : Char -> Bool
+isIdentChar c = isAlphaNum c || c == '_' || c == '\''
+
+-- Identifier tokens of [s]: maximal runs of identifier characters.
+sigTokens : String -> List String
+sigTokens s = filter (/= "") (map fromChars (identRuns (toList (toChars s))))
+
+identRuns : List Char -> List (List Char)
+identRuns [] = [[]]
+identRuns (c :: rest) =
+  let tl = identRuns rest
+  if isIdentChar c then match tl
+    [] => [[c]]
+    t :: ts => (c :: t) :: ts
+  else
+    [] :: tl
+
+-- Every top-level `name : signature` of [ls], as (name, signature text), the
+-- signature joined across its indented continuation lines.
+topSigs : List String -> List (String, String)
+topSigs [] = []
+topSigs (l :: rest) = match sigHead l
+  None => topSigs rest
+  Some (name, sig0) =>
+    let cont = takeWhile isContinuation rest
+    (name, join " " (map trim (sig0 :: cont)))
+      :: topSigs (dropWhile isContinuation rest)
+
+isContinuation : String -> Bool
+isContinuation l = match toList (toChars l)
+  c :: _ => isSpace c
+  [] => False
+
+sigHead : String -> Option (String, String)
+sigHead l = match indexOf " : " l
+  None => None
+  Some i =>
+    let name = fromChars (take i (toList (toChars l)))
+    if name /= "" && all isIdentChar (toList (toChars name)) then
+      Some (name, fromChars (drop (i + 3) (toList (toChars l))))
+    else
+      None
+
+-- The segments of a signature split at each `->` outside parentheses.
+splitAtArrows : String -> List String
+splitAtArrows s = arrowGo 0 [] (toList (toChars s))
+
+arrowGo : Int -> List Char -> List Char -> List String
+arrowGo depth cur [] = [fromChars (reverse cur)]
+arrowGo depth cur ('-' :: '>' :: rest) =
+  if depth == 0 then
+    fromChars (reverse cur) :: arrowGo depth [] rest
+  else
+    arrowGo depth ('>' :: '-' :: cur) rest
+arrowGo depth cur (c :: rest) =
+  let d = if c == '(' then depth + 1 else if c == ')' then depth - 1 else depth
+  arrowGo d (c :: cur) rest
+
+-- The result type of a signature, its leading effect row removed.
+sigResult : String -> String
+sigResult sig =
+  let r = trim (optionOr "" (last (splitAtArrows sig)))
+  if startsWith "<" r then
+    trim (drop 1 (dropWhile (/= '>') (toList (toChars r))) |> fromChars)
+  else
+    r
+
+-- The tokens of every segment of [sig] before its result.
+sigParamTokens : String -> List String
+sigParamTokens sig = flatMap sigTokens (dropLast (splitAtArrows sig))
+
+dropLast : List a -> List a
+dropLast xs = take (length xs - 1) xs
+
+hasContextToken : List String -> Bool
+hasContextToken ts = any (t => elem t contextTypes) ts
+
+-- [sig] with every allowed `Ref` spelling removed, then any `Ref` left over.
+hasDisallowedRef : String -> Bool
+hasDisallowedRef sig =
+  elem "Ref" (sigTokens (fold (acc r => replace r "" acc) sig allowedRefs))
+
+diagTextSigs : List (String, String)
+diagTextSigs = topSigs (linesFor "types.tc_diag_text" loadModules)
+
+test "arch_boundaries: tc_diag_text signatures name no context type" =
+  expectEqual
+    []
+    (filter (nameSig => hasContextToken (sigTokens (snd nameSig))) diagTextSigs)
+
+test "arch_boundaries: tc_diag_text signatures carry only the allowed Ref cells" =
+  expectEqual
+    []
+    (filter (nameSig => hasDisallowedRef (snd nameSig)) diagTextSigs)
+
+test "arch_boundaries: tc_diag_text signature census sees its rows" =
+  expectAtLeast 150 (length diagTextSigs)
+
+test "arch_boundaries: tc_diag_text assigns no cell" =
+  expectEqual
+    []
+    (filter
+      (l => isCodeLine l && indexOf ":=" l /= None)
+      (linesFor "types.tc_diag_text" loadModules))
+
+-- The signature-pure rows of `tc_diag`, kept beside their emitters.
+diagPureRows : List String
+diagPureRows = [
+  "locKey",
+  "msgAtKey",
+  "writtenNames",
+  "dropRenameSuffixes",
+  "writtenDiag",
+  "prependDiagOpt",
+  "findTupleCand",
+]
+
+isTextResult : String -> Bool
+isTextResult r = elem r ["String", "Option String", "Option (Loc, String)"]
+
+-- A `tc_diag` row producing text takes a context-typed parameter, or is on the
+-- allow-list above; the complement of the `tc_diag_text` pin.
+test "arch_boundaries: tc_diag text rows take a context type or are allow-listed" =
+  let rows = topSigs (linesFor "types.tc_diag" loadModules)
+  let offenders =
+    filter
+      (nameSig =>
+        isTextResult (sigResult (snd nameSig))
+          && not (hasContextToken (sigParamTokens (snd nameSig)))
+          && not (elem (fst nameSig) diagPureRows))
+      rows
+  expectEqual [] (map fst offenders)
 
 test "arch_boundaries: types.tc_scope closure matches its golden" =
   closurePin "types.tc_scope"
@@ -913,6 +1098,7 @@ typecheckFamily = [
   "types.tc_mono",
   "types.tc_state",
   "types.tc_env",
+  "types.tc_diag_text",
   "types.tc_diag",
   "types.tc_scope",
   "types.tc_unify",

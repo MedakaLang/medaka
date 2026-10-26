@@ -30,6 +30,7 @@ types.runtime_types
 types.scopes
 types.solver_contract
 types.tc_diag
+types.tc_diag_text
 types.tc_env
 types.tc_mono
 types.tc_state

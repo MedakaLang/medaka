@@ -273,7 +273,7 @@ import tools.lint.{splitLintNames}
 import string.{toInt}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
-import types.tc_diag.{tcDiagGoalKey}
+import types.tc_diag_text.{tcDiagGoalKey}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -4968,7 +4968,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "tcDiagGoalKey" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -5646,7 +5646,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
-(DUse false (UseGroup ("types" "tc_diag") ((mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "tcDiagGoalKey" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))

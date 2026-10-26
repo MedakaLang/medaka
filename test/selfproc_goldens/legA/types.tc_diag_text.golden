@@ -1,0 +1,174 @@
+abstractFieldMsg : String -> String -> String
+aliasArityMsg : String -> Int -> Int -> String
+aliasesHeadRowMsg : String -> Ty -> String
+allDigits : String -> Bool
+allDigitsFrom : String -> Int -> Bool
+ambigReexportHelp : String -> String -> List String -> String
+ambigReexportMsg : String -> String -> List String -> String
+ambiguousFieldDeclsMsg : String -> List String -> List (String, RecordInfo) -> String
+ambiguousFieldMsg : String -> List String -> String
+ambiguousImplMsg : String -> String
+ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
+ambiguousShadowHelp : String
+annotTooGeneralMsg : Ty -> String
+appSpineName : Expr -> Option String
+argAtomsMsgFor : Option String -> String -> String -> List Atom -> String
+argAtomsUncoveredFnMsg : String -> String -> List Atom -> String
+argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
+argOnlyEffVarMsg : String -> String -> String -> String
+argumentCount : Int -> String
+argumentNoun : Int -> String
+authorityAsTypeMsg : String -> String
+authorityAtomicLabelMsg : String -> String
+authorityCoverMsg : Authority -> Authority -> String
+authorityIndexMsg : Authority -> Authority -> String
+authorityParamAsRowMsg : String -> String -> String
+authorityParamAsTypeMsg : String -> String -> String
+authorityTermAsTypeMsg : List EffParamTy -> String
+authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+backticked : String -> String
+bangOnBoolHelp : String
+bangOnBoolMsg : String
+bindOutsideDoMsg : String
+binderDomainMsg : String -> String
+binderDomainTypeMsg : String -> String -> String
+binderNoDomainMsg : String -> String
+binderTypeMsg : String -> String -> String
+closedRowMismatchMsg : List Atom -> List Atom -> String
+cohCrossModuleMsg : String -> String -> String -> String
+cohIncomparableHelp : String
+cohOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+collapsesEffvarsMsg : String -> Ty -> String
+collapsesTyvarsMsg : String -> Ty -> String
+constrainedApplicationText : Mono -> Mono -> List String -> String
+containerArgHint : String -> String
+containerArgMsg : Option String -> String -> String
+contraRowMsg : List Atom -> List Atom -> List Atom -> String
+cyclicSuperIfaceMsg : List String -> String
+declareRemedy : String -> String -> String
+defaultEffectLaunderMsg : String -> List Atom -> String
+defaultSubject : String -> String -> String
+deferRequiresMonadMsg : String
+derivableIface : String -> Bool
+discardedValueFix : Option Loc -> Option (Loc, String)
+discardedValueMsg : String -> String
+doBindArgHint : String -> String
+doBindArgMsg : String -> String
+doRequiresMonadMsg : String
+effVarLaunderMsg : String -> String -> List Atom -> String
+effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
+effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
+effectInclusionMsg : String -> List Atom -> List String -> String
+effectLaunderMsg : String -> String -> List Atom -> String
+effectParamAsTypeMsg : String -> String -> String
+effectUndeterminedMsg : String -> String -> List String -> String
+elselessIfHelp : String
+exactInPatternSlotMsg : String -> String -> String -> String
+existentialEscapeMsg : Option String -> String
+existentialScopeMsg : Option String -> String
+ffiArrowNote : Int -> Int -> String
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclTypeName : (String, RecordInfo) -> String
+fieldFixFrom : Option Loc -> String -> String -> Option (Loc, String)
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldPositionDiffersMsg : String -> String -> (String, Int) -> (String, Int) -> String
+fieldTypeDiffersMsg : String -> String -> String -> Mono -> String -> Mono -> String
+findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
+firstMid : List String -> String
+headL : List String -> String
+i64RangeText : String
+idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+ifaceParamAuthorityKindMsg : String -> String -> String
+ifaceParamEffectKindMsg : String -> String -> String
+ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
+implGoalFixesHeadMsg : String -> String -> List String -> String
+implHeadIndexMsg : String -> String -> String
+implHeadKindClause : String -> Int -> List Kind -> String
+implHeadLabel : String -> KeyEntry -> String
+implKindMismatchFix : String -> String -> Int -> String
+implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String
+implSubject : String -> String -> String
+implTupleHeadKindMsg : String -> Int -> List Kind -> String
+indexEagerMsg : String -> String -> String
+indexRowMismatchMsg : List Atom -> List Atom -> String
+isTupleTyName : String -> Bool
+joinAnd : List String -> String
+joinDomainMsg : List String -> String
+joinMismatchMsg : String -> String -> String
+kindName : Kind -> String
+letRecNonFunctionMsg : String -> String
+locGoalKey : Option Loc -> String
+methodBodyLaunderMsg : MethodBodyKind -> String -> String -> List Atom -> String
+methodBodySubject : MethodBodyKind -> String -> String -> String
+missingConstraintMsg : String -> String -> String -> String
+missingConstraintVecMsg : String -> String -> List String -> String
+missingFieldMsg : String -> String -> String
+missingImplMethodMsg : String -> List Ty -> String -> String
+nameNotAuthorityMsg : String -> String
+narrowsImplHeadMsg : String -> List String -> String -> String
+noImplAdvice : String -> String -> String
+noImplFoundMsg : String -> List Mono -> String
+noMinimumClause : Int -> String
+nonExhaustiveMatchWarning : String
+notAFunctionHint : Option String -> String
+notAFunctionMsg : String -> String
+notAFunctionMsgFor : Option String -> String -> String
+openRowHint : List Atom -> String
+ordinalSentinelMsg : String
+ordinalWord : Int -> String
+ordinaryInPatternSlotMsg : String -> String -> String
+originPhrase : TyConOrigin -> String
+overAppliedMsg : String -> Int -> Int -> String
+paramVarianceMismatchMsg : List Atom -> List Atom -> String
+partialExistentialUpdateMsg : String -> List String -> String
+patternDomainMsg : String -> String -> String
+patternIndexMsg : Authority -> String
+phantomExportMsg : String -> String -> String -> String
+pinsTyvarMsg : String -> Ty -> List String -> String
+qualifiedIfaceLabel : IfaceRef -> String
+qualifierBinderTypeMsg : String -> String -> String
+quotedNames : List String -> String
+renderAtomsOrEmpty : List Atom -> String
+renderCallArg : Expr -> Option String
+renderCallArgs : List Expr -> Option (List String)
+renderDeclaredRow : List Atom -> List String -> String
+renderEffTailVars : List String -> String
+renderFlatRow : (List Atom, List (Ref Effvar)) -> String
+renderKindArrow : List Kind -> String
+requiresKindMsg : String -> String -> String
+requiresUnroutedMsg : IfaceRef -> List Mono -> String
+residualFailureMsg : String -> String -> String -> String
+rowKindMismatchMsg : List EffAtomTy -> List String -> String
+rowText : String -> String
+sameSpellingHint : Mono -> Mono -> Option String
+shadowIfaceLabel : IfaceRef -> String
+sigOverExpansiveMsg : String -> Ty -> String
+sigTooGeneralMsg : String -> Ty -> String
+sigVarGoalMsg : DeclaringBinder -> List (String, Ty, List (String, Mono)) -> List Int -> IfaceRef -> List Mono -> String
+sigVarOwner : List (String, Ty, List (String, Mono)) -> Int -> List (String, (Int, String))
+starSpelling : String -> Option String -> String
+stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
+superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
+superContextUndeclaredMsg : String -> Bool -> String -> String -> String -> String
+tcDiagGoalKey : (String, TcDiag) -> String
+tyOfMsg : Option TabKey -> String
+tyVarNoun : List String -> String
+typeAsAuthorityMsg : String -> String -> String
+typeInRowSlotMsg : Ty -> String
+typeParamAsRowMsg : String -> String -> String
+typeVarAsAuthorityMsg : String -> String -> String
+u64RangeText : String
+unannotatedGradedParamMsg : String -> String -> List Kind -> String
+unannotatedRowParamMsg : String -> String -> String
+unboundVarMsg : String -> String
+undeclaredConstraintMsg : String -> Ty -> String -> String -> String
+undeclaredImplPredicateMsg : String -> String -> String
+undeclaredImplPrerequisiteMsg : String -> String -> String -> String
+unknownCtorMsg : String -> String
+unknownFieldMsg : String -> String -> String
+unknownRecordMsg : String -> String
+unreachableArmWarning : String
+updateMultiCtorMsg : String -> String -> String -> List String -> List String -> String
+varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
+wideAnnotateHelp : String -> Bool -> String

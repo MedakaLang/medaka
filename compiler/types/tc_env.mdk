@@ -83,7 +83,6 @@ import types.tc_types.{
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
 import list.{drop, indexed, last}
-import string.{endsWith}
 import support.util.{
   anyList,
   contains,

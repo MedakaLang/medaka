@@ -212,7 +212,6 @@ keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
 kindAnnAtom : GraphCtx -> KindAnn -> Kind
 kindAnnSlots : GraphCtx -> KindAnn -> List Kind
-kindName : Kind -> String
 kindOfAnn : GraphCtx -> Option KindAnn -> Kind
 kindPublicDataDecl : Decl -> Bool
 lastComponent : List String -> String

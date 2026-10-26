@@ -38,6 +38,7 @@ SRCS = [
     f"{ROOT}/compiler/types/tc_mono.mdk",
     f"{ROOT}/compiler/types/tc_state.mdk",
     f"{ROOT}/compiler/types/tc_env.mdk",
+    f"{ROOT}/compiler/types/tc_diag_text.mdk",
     f"{ROOT}/compiler/types/tc_diag.mdk",
     f"{ROOT}/compiler/types/tc_scope.mdk",
     f"{ROOT}/compiler/types/tc_unify.mdk",
