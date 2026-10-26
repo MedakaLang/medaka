@@ -1,0 +1,469 @@
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectAtLeast,
+  expectTextContainsAll, expectFalse, expectationTag, fail
+}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, withScratchDir, boundedVerbSeconds,
+  expectSpawnOk, expectSpawnOkLine, expectSpawnFailsAll
+}
+import fs.{mkdirAll}
+import string.{contains, startsWith, lines, join, stripPrefix}
+
+data ValueCase = ValueCase String String String
+
+valueCases : List ValueCase
+valueCases = [
+  ValueCase "beyond-i31" "main = (2147483648 + 2147483648) * 3" "12884901888",
+  ValueCase "minimum" "main = -4611686018427387904" "-4611686018427387904",
+  ValueCase "bool" "main = if 2 < 3 then 3 < 4 else 1 > 2" "True",
+  ValueCase "short-and" "main = (1 > 2) && (9 / 0 == 3)" "False",
+  ValueCase "short-or" "main = (1 < 2) || (9 / 0 == 3)" "True",
+  ValueCase "short-if" "main = if 1 > 2 then 9 / 0 else 9" "9",
+  ValueCase "division" "main = 12 / 3" "4",
+  ValueCase
+    "shadow"
+    """
+probe : Int -> Int
+probe x = (let x = x + 1 in let x = x + 1 in x) + x
+main = probe 3
+"""
+    "8",
+  ValueCase
+    "sibling"
+    """
+probe : Int -> Int
+probe x = (let y = x + 1 in y) + (let y = x + 2 in y)
+main = probe 3
+"""
+    "9",
+  ValueCase
+    "function-reset"
+    """
+probe : Int -> Int -> Int
+probe a b = let n = a + b in n
+other : Int -> Int
+other a = let n = a + 2 in n
+main = probe 1 2 + other 4
+"""
+    "9",
+  ValueCase
+    "init-reset"
+    """
+a = let x = 2 in x + 1
+b = let x = 3 in x + 3
+main = a + b
+"""
+    "9",
+  ValueCase
+    "collision"
+    """
+probe : Int -> Int
+probe n = let __sc_b899 = n + 1 in let u____sc_b899 = n + 2 in __sc_b899 + u____sc_b899
+main = probe 3
+"""
+    "9",
+  ValueCase
+    "tail"
+    """
+probe : Int -> Int -> Int
+probe acc n = if n == 0 then acc else let next = n - 1 in probe (acc + 1) next
+main = probe 0 1000000
+"""
+    "1000000",
+  ValueCase "float" "main = 1.25 + 2.5" "3.75",
+  ValueCase
+    "capture"
+    """
+make : Int -> (Int -> Int)
+make x = y => x + y
+main = make 3 6
+"""
+    "9",
+  ValueCase
+    "value-match"
+    """
+probe : Int -> Int
+probe x = 1 + (match x
+  0 => 8
+  _ => 3)
+main = probe 0
+"""
+    "9",
+  ValueCase
+    "where-ref"
+    """
+anchor = "ref"
+probe : Int -> Int
+probe n = v
+  where
+    v = n + 1
+main = probe 8
+"""
+    "9",
+]
+
+strictArgs : String -> List String -> <IO> List String
+strictArgs exe argv =
+  [
+      "MEDAKA_STRICT=1",
+      "MEDAKA_CLANG_OPT=-O0",
+      "MEDAKA_NO_LTO=1",
+      "MEDAKA_ROOT=" ++ medakaRoot,
+      "MEDAKA_EMITTER=" ++ underRoot "medaka_emitter",
+      "perl",
+      "-e",
+      "alarm 180; exec @ARGV",
+      exe,
+    ]
+    ++ argv
+
+buildEntry : String -> String -> <IO, Exec> Expectation
+buildEntry dir name =
+  expectSpawnOk
+    "env"
+    (strictArgs medakaBin [
+      "build",
+      "--allow-internal",
+      underRoot ("compiler/entries/" ++ name ++ ".mdk"),
+      "-o",
+      "\{dir}/\{name}",
+    ])
+
+entryArgs : String -> String -> <IO> List String
+entryArgs route source =
+  if route == "raw" then
+    [source]
+  else if route == "typed" then
+    [underRoot "stdlib/runtime.mdk", source]
+  else if route == "modules" then
+    [underRoot "stdlib/runtime.mdk", underRoot "stdlib/core.mdk", source]
+  else
+    [
+      "compile",
+      underRoot "stdlib/runtime.mdk",
+      underRoot "stdlib/core.mdk",
+      source,
+    ]
+
+entryName : String -> String
+entryName "raw" = "wasm_emit_main"
+entryName "typed" = "wasm_emit_typed_main"
+entryName "modules" = "wasm_emit_modules_main"
+entryName _ = "playground_main"
+
+emit : String ->
+  String ->
+  String ->
+  <IO, Exec> Result String (Int, String, String)
+emit dir route source =
+  boundedVerbSeconds
+    180
+    "env"
+    (strictArgs "\{dir}/\{entryName route}" (entryArgs route source))
+
+watPayload : String -> String -> String
+watPayload route out =
+  if route == "playground" then match stripPrefix "__MEDAKA_WAT__\n" out
+    Some wat => wat
+    None => ""
+  else
+    out
+
+runWat : String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileWrite> Expectation
+runWat path wat want trap = match writeFile (path ++ ".wat") wat
+  Err e => fail e
+  Ok _ =>
+    let parsed = expectSpawnOk "perl" [
+      "-e",
+      "alarm 30; exec @ARGV",
+      "wasm-tools",
+      "parse",
+      path ++ ".wat",
+      "-o",
+      path ++ ".wasm",
+    ]
+    if expectationTag parsed == "Fail" then
+      parsed
+    else
+      let validated = expectSpawnOk "perl" [
+        "-e",
+        "alarm 30; exec @ARGV",
+        "wasm-tools",
+        "validate",
+        "--features=all",
+        path ++ ".wasm",
+      ]
+      if expectationTag validated == "Fail" then
+        validated
+      else
+        let argv = [
+          "-e",
+          "alarm 90; exec @ARGV",
+          "node",
+          underRoot "test/wasm/run.js",
+          path ++ ".wasm",
+        ]
+        if trap == "" then
+          expectAll [
+            expectSpawnOkLine "perl" argv want,
+            match boundedVerbSeconds 90 "node" [
+              underRoot "test/wasm/run.js",
+              path ++ ".wasm",
+            ]
+              Err e => fail e
+              Ok actual => expectEqual (0, want ++ "\n", "") actual,
+          ]
+        else
+          expectSpawnFailsAll "perl" argv [trap]
+
+valueRow : String -> String -> ValueCase -> <IO, Exec, FileWrite> Expectation
+valueRow dir route (ValueCase name src want) =
+  let path = "\{dir}/\{route}-\{name}"
+  match writeFile (path ++ ".mdk") src
+    Err e => fail e
+    Ok _ => match emit dir route (path ++ ".mdk")
+      Err e => fail e
+      Ok (code, out, err) => expectAll [
+        expectEqual (0, "") (code, err),
+        expectTextContainsAll ["(module"] (watPayload route out),
+        runWat path (watPayload route out) want "",
+      ]
+
+refusalRow : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileWrite> Expectation
+refusalRow dir route name src needle =
+  let path = "\{dir}/\{route}-\{name}.mdk"
+  match writeFile path src
+    Err e => fail e
+    Ok _ => expectAll [
+      expectSpawnFailsAll "env" (strictArgs
+        "\{dir}/\{entryName route}"
+        (entryArgs route path)) [
+        "E-PANIC", needle
+      ],
+      match emit dir route path
+        Err e => fail e
+        Ok (code, out, err) => expectAll [
+          expectEqual 1 code,
+          expectEqual "" out,
+          expectTextContainsAll [needle] err,
+        ],
+    ]
+
+abiRow : String -> String -> Bool -> <IO, Exec, FileWrite> Expectation
+abiRow dir route boxed =
+  let src =
+    (if boxed then "anchor = \"ref\"\n" else "")
+      ++ "probe : Int -> Int\nprobe x = x + 1\nmain = probe 8\n"
+  let path = "\{dir}/abi-\{route}\{if boxed then "-ref" else "-raw"}"
+  match writeFile (path ++ ".mdk") src
+    Err e => fail e
+    Ok _ => match emit dir route (path ++ ".mdk")
+      Err e => fail e
+      Ok (code, wat, err) =>
+        let headers =
+          filter
+            (line => startsWith "  (func $" line && contains "probe " line)
+            (lines wat)
+        expectAll [
+          expectEqual (0, "") (code, err),
+          expectEqual 1 (length headers),
+          expectTextContainsAll
+            (if boxed then
+              ["(param", "(ref eq)", "(result (ref eq))"]
+            else
+              ["(param", "i64)", "(result i64)"])
+            (join "\n" headers),
+          runWat path wat "9" "",
+        ]
+
+trapRow : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileWrite> Expectation
+trapRow dir route name src needle =
+  let path = "\{dir}/\{route}-\{name}"
+  match writeFile (path ++ ".mdk") src
+    Err e => fail e
+    Ok _ => match emit dir route (path ++ ".mdk")
+      Err e => fail e
+      Ok (code, wat, err) => expectAll [
+        expectEqual (0, "") (code, err),
+        runWat path wat "" needle,
+        match boundedVerbSeconds 90 "node" [
+          underRoot "test/wasm/run.js",
+          path ++ ".wasm",
+        ]
+          Err e => fail e
+          Ok (exitCode, out, diagnostic) => expectAll [
+            expectEqual 1 exitCode,
+            expectEqual "" out,
+            expectTextContainsAll [needle] diagnostic,
+            expectFalse
+              (contains
+                (if needle == "E-DIV-ZERO" then
+                  "E-INT-OVERFLOW"
+                else
+                  "E-DIV-ZERO")
+                diagnostic),
+          ],
+      ]
+
+baseline : String -> <IO, Exec, FileWrite> Expectation
+baseline dir =
+  expectEach
+    (flatMap
+      (route => [
+        (
+          route ++ "/Unit-C3",
+          refusalRow
+            dir
+            route
+            "unit"
+            "main = ()"
+            "scalar-mode: Unit main has no scalar value to print",
+        ),
+        (
+          route ++ "/CLetGroup-C3",
+          refusalRow
+            dir
+            route
+            "where"
+            """
+probe : Int -> Int
+probe n = v
+  where
+    v = n + 1
+main = probe 8
+"""
+            "scalar-mode: unsupported Core IR node CLetGroup",
+        ),
+        (route ++ "/raw-ABI", abiRow dir route False),
+        (route ++ "/ref-ABI", abiRow dir route True),
+        (
+          route ++ "/overflow-first",
+          trapRow
+            dir
+            route
+            "overflow-first"
+            "main = (4611686018427387903 + 1) + (9 / 0)"
+            "E-INT-OVERFLOW",
+        ),
+        (
+          route ++ "/division-first",
+          trapRow
+            dir
+            route
+            "division-first"
+            "main = (9 / 0) + (4611686018427387903 + 1)"
+            "E-DIV-ZERO",
+        ),
+      ])
+      ["raw", "typed"])
+
+ownerBaseline : String -> <IO, Exec, FileWrite> Expectation
+ownerBaseline dir =
+  let owner = dir ++ "/owner"
+  match mkdirAll owner
+    Err e => fail e
+    Ok _ =>
+      match (writeFile
+        (owner ++ "/core.mdk")
+        """
+answer : Int
+answer = 42
+main = answer
+""")
+        Err e => fail e
+        Ok _ => expectAll [
+          expectSpawnFailsAll "env" (strictArgs (dir
+            ++ "/wasm_emit_modules_main") [
+            underRoot "stdlib/runtime.mdk",
+            underRoot "stdlib/core.mdk",
+            owner ++ "/core.mdk",
+            owner,
+          ]) [
+            "E-PANIC", "method result: missing declaration fact", "Num#fromInt"
+          ],
+          match emit dir "modules" (owner ++ "/core.mdk")
+            Err e => fail e
+            Ok (code, out, err) => expectAll [
+              expectEqual (1, "") (code, out),
+              expectTextContainsAll ["Num#fromInt"] err,
+            ],
+        ]
+
+dictionaryBaseline : String
+dictionaryBaseline =
+  """
+f x = (let x = x + 1 in let x = x + 1 in x) + x
+main = f 3
+"""
+
+floatBaseline : String
+floatBaseline = """
+f n = if n > 0 then 1.25 else 2.5
+main = f 0 + f 1
+"""
+
+runJudges : String -> <IO, Exec, FileRead, FileWrite> Expectation
+runJudges dir =
+  let built =
+    expectEach
+      (map
+        (name => (name, buildEntry dir name))
+        [
+          "wasm_emit_main", "wasm_emit_typed_main", "wasm_emit_modules_main",
+          "playground_main"
+        ])
+  if expectationTag built == "Fail" then
+    built
+  else
+    expectAll [
+      expectAtLeast 15 (length valueCases),
+      expectEach
+        (flatMap
+          (route =>
+            map
+              ((row@(ValueCase name _ _)) =>
+                ("\{route}/\{name}", valueRow dir route row))
+              valueCases)
+          ["raw", "typed"]),
+      baseline dir,
+      refusalRow
+        dir
+        "typed"
+        "unannotated-dictionary"
+        dictionaryBaseline
+        "dictionary slot with no route",
+      trapRow dir "raw" "unannotated-Float" floatBaseline "illegal cast",
+      valueRow dir "modules" (ValueCase "product" "main = 6 * 7" "42"),
+      valueRow dir "playground" (ValueCase "product" "main = 6 * 7" "42"),
+      expectSpawnOkLine
+        "env"
+        (strictArgs (dir ++ "/playground_main") [
+          "analyze",
+          underRoot "stdlib/runtime.mdk",
+          underRoot "stdlib/core.mdk",
+          dir ++ "/playground-product.mdk",
+        ])
+        "__MEDAKA_ANALYZE__",
+      ownerBaseline dir,
+    ]
+
+test "current entry routes preserve values, physical ABIs, first traps and named baseline refusals" =
+  match getEnv "MEDAKA_CUTOVER_ARTIFACT_DIR"
+    None => withScratchDir runJudges
+    Some dir => match mkdirAll dir
+      Err e => fail e
+      Ok _ => runJudges dir
