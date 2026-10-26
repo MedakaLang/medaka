@@ -19,7 +19,8 @@ Core IR and the Plan rather than reaching for a mangling module of its own.
 | `trmc_analysis.mdk` | Backend-agnostic tail-recursion-modulo-cons eligibility analysis | `trmcEligible` |
 | `llvm_emit.mdk` | Core IR to textual LLVM IR; shells out to `clang`; the canonical native backend | `emitProgram` |
 | `llvm_preamble.mdk` | The fixed runtime `declare` lines heading every LLVM module; pure data, order load-bearing | preamble lines |
-| `wasm_emit.mdk` | WasmGC emitter, peer of `llvm_emit.mdk` over the same Core IR | `emitProgram` |
+| `wasm_emit.mdk` | WasmGC emitter, peer of `llvm_emit.mdk` over the same Core IR; one recursive value/control traversal selects raw or boxed physical instructions | `emitProgram` |
+| `wasm_repr.mdk` | WasmGC physical value representations and typed local-slot accessors; no traversal or explicit imports | `WasmRepr`, `WasmValue`, `LocalSlot` |
 | `wasm_preamble.mdk` | The fixed lines heading every WAT module; pure data | preamble lines |
 | `wasm_reach.mdk` | Dispatch-rooted reachability filter for the WasmGC modules path, after `dce` | reachability filter |
 | `wasm_file_grants.mdk` | Wasm file-capability prerequisites on the elaborated AST, shared with the in-browser compiler | `moduleGrantDiags` |

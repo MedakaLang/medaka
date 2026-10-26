@@ -2401,7 +2401,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_os_entropy_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk"]
+sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk"]
 corpus = ["test/os_entropy_fixtures"]
 toolchain = ["clang", "node>=24"]
 link = "production"
@@ -2417,7 +2417,7 @@ kind = "native"
 migration = "done"
 run = "test/wasm_jsffi_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["compiler/backend/emit_plan.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/types/private_mangle.mdk", "playground/medaka_host.mjs"]
+sources = ["compiler/backend/emit_plan.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/types/private_mangle.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/wasm_jsffi_fixtures", "test/two_host_fixtures"]
 toolchain = ["clang", "node>=24"]
 link = "production"
@@ -2433,7 +2433,7 @@ kind = "native"
 migration = "done"
 run = "test/wasm_edge_loader_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["compiler/backend/wasm_loader.mdk", "compiler/driver/build_cmd.mdk", "compiler/backend/wasm_emit.mdk", "playground/medaka_host.mjs"]
+sources = ["compiler/backend/wasm_loader.mdk", "compiler/driver/build_cmd.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/wasm_edge_loader_fixtures"]
 toolchain = ["clang", "node>=24"]
 link = "production"
@@ -2449,7 +2449,7 @@ kind = "native"
 migration = "done"
 run = "test/wasm_edge_corpus_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/llvm_emit.mdk", "compiler/backend/extern_catalog.mdk", "compiler/types/target_profile.mdk", "test/wasm/run.js", "playground/medaka_host.mjs"]
+sources = ["compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/llvm_emit.mdk", "compiler/backend/extern_catalog.mdk", "compiler/types/target_profile.mdk", "test/wasm/run.js", "playground/medaka_host.mjs"]
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed", "test/engine_fixtures", "test/llvm_fixtures_modules"]
 toolchain = ["clang", "node>=24"]
 link = "production"
@@ -2970,7 +2970,7 @@ kind = "native"
 migration = "done"
 run = "test/wasm_host_probes_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["playground/medaka_host.mjs", "playground/medaka_host_test.mjs", "playground/animation_protocol.mjs", "playground/animation_protocol_test.mjs", "playground/animation_host.mjs", "playground/animation_host_test.mjs", "playground/animation_controller.mjs", "playground/animation_controller_test.mjs", "playground/canvas_renderer.mjs", "playground/canvas_renderer_test.mjs", "playground/compile_dispatcher.mjs", "playground/compile_dispatcher_test.mjs", "playground/worker.js", "playground/compile.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk"]
+sources = ["playground/medaka_host.mjs", "playground/medaka_host_test.mjs", "playground/animation_protocol.mjs", "playground/animation_protocol_test.mjs", "playground/animation_host.mjs", "playground/animation_host_test.mjs", "playground/animation_controller.mjs", "playground/animation_controller_test.mjs", "playground/canvas_renderer.mjs", "playground/canvas_renderer_test.mjs", "playground/compile_dispatcher.mjs", "playground/compile_dispatcher_test.mjs", "playground/worker.js", "playground/compile.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk"]
 corpus = ["test/async_jspi_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 link = "production"
@@ -3034,7 +3034,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_async_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk", "playground/medaka_host.mjs"]
+sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/async_fixtures", "test/async_jspi_fixtures"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
 link = "production"
@@ -3178,7 +3178,7 @@ kind = "exec"
 migration = "inverted-polarity"
 run = "test/native_fixtures/run.sh"
 oracles = ["wasm_emit_modules_main"]
-sources = ["test/native_fixtures/run.sh", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk", "runtime/medaka_rt.c"]
+sources = ["test/native_fixtures/run.sh", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/native_fixtures"]
 toolchain = ["node>=24"]
 link = "production"
@@ -3430,7 +3430,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_ffi_wall.sh"
 oracles = []
-sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk", "compiler/entries/entry_support.mdk", "compiler/tools/target_check.mdk"]
+sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "compiler/entries/entry_support.mdk", "compiler/tools/target_check.mdk"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 link = "production"
@@ -3462,7 +3462,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_typed.sh"
 oracles = []
-sources = ["compiler/backend/wasm_emit.mdk", "playground/medaka_host.mjs"]
+sources = ["compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_repr.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"
