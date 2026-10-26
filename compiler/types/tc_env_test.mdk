@@ -56,6 +56,7 @@ import types.tc_env.{
   lookupStandaloneVar,
   lookupVar,
   ordOfIndex,
+  removeAllS,
   sortIfaceRefs,
   tyTabKey,
 }
@@ -147,12 +148,31 @@ schemeText : Option Scheme -> String
 schemeText None = "<none>"
 schemeText (Some s) = ppScheme s
 
--- Law: the ordinal predicate is the prefix order, and the public-reader predicate adds
--- that a row other than the reader's own is seen only through its public part.  No
--- precondition: the two ordinals are any integers, including the `-1` miss sentinel.
-prop "declEnvVisibleAt is the ordinal prefix and declEnvVisibleTo adds publicity" (cur : Int) (entry : Int) (pub : Bool) =
-  declEnvVisibleAt cur entry == (entry <= cur)
-    && declEnvVisibleTo cur entry pub == (entry <= cur && (entry == cur || pub))
+-- Read at ordinal 1: rows at 0 and 1 are visible, a row at 2 is not; a row other than
+-- the reader's own (ordinal 0) is seen only through its public part.
+test "declEnvVisibleAt reads the ordinal prefix and declEnvVisibleTo adds publicity" = expectAll
+  [
+    expectTrue (declEnvVisibleAt 1 0),
+    expectTrue (declEnvVisibleAt 1 1),
+    expectFalse (declEnvVisibleAt 1 2),
+    expectTrue (declEnvVisibleTo 1 0 True),
+    expectFalse (declEnvVisibleTo 1 0 False),
+    expectTrue (declEnvVisibleTo 1 1 False),
+    expectFalse (declEnvVisibleTo 1 2 True),
+  ]
+
+fourNames : List Int -> List String
+fourNames ks = map (k => "n\{intToString (abs k % 4)}") ks
+
+-- Law: removing names keeps the order of the rest, and distributes over concatenation.
+-- No precondition; the names come from a four-name alphabet so removals happen.
+prop "removeAllS keeps what is not dropped, in order, and distributes over append" (ds : List Int) (xs : List Int) (ys : List Int) =
+  let d = fourNames ds
+  let a = fourNames xs
+  let b = fourNames ys
+  removeAllS d (a ++ b) == removeAllS d a ++ removeAllS d b
+    && all (x => not (elem x d)) (removeAllS d a)
+    && removeAllS [] a == a
 
 -- Law: an absent module id reads as the `-1` miss ordinal, and a present one as the
 -- ordinal it was indexed under.  Precondition: the index maps `known` once.

@@ -73,7 +73,6 @@ monoHasArrowInSlot : Mono -> Bool
 monoHeadIsDecl : Mono -> Bool
 monoIndexEffvarIds : Mono -> List Int
 monoIsApp : Mono -> Bool
-monoIsBareTyvar : Mono -> Bool
 monoIsBool : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoMintedBefore : Int -> Int -> Mono -> Bool
@@ -149,6 +148,5 @@ tyStructEqList : List Ty -> List Ty -> Bool
 tySubsumesV : List Ty -> List Ty -> Bool
 tyVarNames : Ty -> List String
 tyvarId : Ref Tyvar -> Int
-unboundSpineHead : Mono -> Bool
 walkMonoSame : Mono -> Mono -> Bool
 walkMonosSame : List Mono -> List Mono -> Bool

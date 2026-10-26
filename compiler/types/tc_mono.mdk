@@ -66,21 +66,16 @@ import types.effect_rows.{
   rowFlat,
 }
 import types.tc_types.{
-  AbsorptionEvent(..),
   GoalPayload(..),
   GraphCtx(..),
-  GraphRun(..),
   MethodReturnRequest(..),
   MStep(..),
   Obligation(..),
-  Predicate(..),
   RecordInfo(..),
   SiteKind(..),
-  Windowed(..),
 }
 import map as IdMap
 import map.{Map(..)}
-import types.solver_contract.{Instantiation(..), Wanted(..)}
 import support.ordmap.{omEmpty, omFromNames, omHasKey, OrdMap}
 import support.util.{
   allList,
@@ -98,7 +93,6 @@ import support.util.{
 }
 import types.registry.{HeadKey(..), headKeyIdent, headKeyOfCon}
 import types.route_key.{funHeadTag}
-import types.disposition.{MethodDisposition(..)}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -1079,13 +1073,13 @@ tyStructEqList _ _ = False
 -- on one classifier, so `headTyconTy` and `headTyconNameTy` cannot disagree about
 -- WHICH node they are classifying (they are only allowed to disagree about how).
 --
--- it also peels `TyConstrained` (#1630).  Peeling a constraint yields a headless
+-- It also peels `TyConstrained`.  Peeling a constraint yields a headless
 -- body only for `Eq a => a`; for `Eq a => Int` the peeled body is a `TyCon`.
--- `eval.headTycon` peels `TyConstrained`, so without the peel here the HEADED case
--- fails as #1618 did with a different wrapper: the definition side filed `impl Sz (Eq a => Int)` under tag `Int` while this side
--- answered `None` and stamped `__none__`, and `medaka build` died with `no impl
--- of method 'sz' for type '__none__'` on a program `check` accepts and `run`
--- answers correctly (measured: check 0, run `2`, build 1).
+-- `eval.headTycon` peels `TyConstrained`, so without the peel here the HEADED
+-- case splits the two sides: the definition side files `impl Sz (Eq a => Int)`
+-- under tag `Int` while this side answers `None` and stamps `__none__`, and
+-- `medaka build` dies with `no impl of method 'sz' for type '__none__'` on a
+-- program `check` accepts and `run` answers correctly.
 --
 -- The HEADLESS body is unaffected and must stay that way: peeling
 -- `Eq a => a` still lands on a `TyVar`, every arm below still falls through to
@@ -1511,15 +1505,6 @@ substTyVars _ (TyAuth p l) = TyAuth p l
 substTyVars sub (TyNamed n t d) = TyNamed n (substTyVars sub t) d
 substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 
--- True iff [m] normalizes to an unbound tyvar (the spine head of `m a`)
-export
-unboundSpineHead : Mono -> Bool
--- Cross-file twin of `isUnboundTvar` (typecheck.mdk) while that row awaits its own module.
--- lint-disable-next-line rule-duplicate-body
-unboundSpineHead m = match normalize m
-  TVar _ => True
-  _ => False
-
 export
 spineHeadMono : Mono -> Mono
 spineHeadMono t = match peelQual t
@@ -1566,14 +1551,6 @@ monoIndexEffvarIds m = match normalize m
 export
 rowTailId : EffRow -> List Int
 rowTailId row = map effvarId (snd (rowFlat row))
-
-export
-monoIsBareTyvar : Mono -> Bool
--- Cross-file twin of `isUnboundTvar` (typecheck.mdk) while that row awaits its own module.
--- lint-disable-next-line rule-duplicate-body
-monoIsBareTyvar m = match normalize m
-  TVar _ => True
-  _ => False
 
 -- structural equality of two monos that may contain RIGID tyvars, compared by tyvar
 -- IDENTITY.  Deliberately NOT unification: a given must match a goal only when it IS
@@ -1689,9 +1666,11 @@ peelArrows n t
     TFun a _ b => a :: peelArrows (n - 1) b
     _ => []
 
+-- True iff [m] normalizes to an unbound tyvar (also the spine head of `m a`).  Same
+-- body as `isUnboundTvar` (typecheck.mdk), which belongs in this module; the two
+-- collapse into one when that row moves.
 export
 isBareTyvarMono : Mono -> Bool
--- Cross-file twin of `isUnboundTvar` (typecheck.mdk) while that row awaits its own module.
 -- lint-disable-next-line rule-duplicate-body
 isBareTyvarMono m = match normalize m
   TVar _ => True

@@ -54,7 +54,6 @@ renderEvidenceBinder : GraphCtx -> EvidenceBinderId -> String
 sameSpan : Option Loc -> Option Loc -> Bool
 scopeFrameStats : GraphCtx -> (Int, Int)
 scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
-takeFirst : Int -> List a -> List a
 wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a

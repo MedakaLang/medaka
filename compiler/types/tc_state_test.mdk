@@ -23,7 +23,6 @@ import types.tc_state.{
   mctxAtIfSome,
   noteInterners,
   probeGraphCtx,
-  takeFirst,
   wAll,
   wMark,
   wPush,
@@ -32,15 +31,9 @@ import types.tc_state.{
   wSnapshot,
   wWindow,
 }
-import types.publish.{TcDiag(..)}
+import types.publish.{TcDiag(..), tcMsg}
 import types.tc_types.{
-  GraphCtx(..),
-  GraphRun(..),
-  Interners(..),
-  Lineage(..),
-  ModuleCells(..),
   ModuleCtx(..),
-  TraceSink(..),
   Windowed(..),
 }
 
@@ -76,9 +69,9 @@ errorMessages m =
 -- is newest-first, like the channel.  No precondition.
 prop "a window holds exactly the items pushed since its mark" (before : List Int) (after : List Int) =
   let w = emptyChannel ()
-  let _ = pushAll w before
+  pushAll w before
   let mark = wMark w
-  let _ = pushAll w after
+  pushAll w after
   mark == length before
     && wMark w == length before + length after
     && wWindow w mark == reverse after
@@ -87,30 +80,24 @@ prop "a window holds exactly the items pushed since its mark" (before : List Int
 -- between.  No precondition.
 prop "restoring a snapshot undoes every push made after it" (before : List Int) (after : List Int) =
   let w = emptyChannel ()
-  let _ = pushAll w before
+  pushAll w before
   let snap = wSnapshot w
-  let _ = pushAll w after
-  let _ = wRestore w snap
+  pushAll w after
+  wRestore w snap
   wAll w == fst (wSnapshot w) && wAll w == fst snap && wMark w == snd snap
 
 -- Law: `wPushAll` is the pushes of its list one after another.  No precondition.
 prop "wPushAll equals pushing each item in order" (xs : List Int) =
   let bulk = emptyChannel ()
   let one = emptyChannel ()
-  let _ = wPushAll bulk xs
+  wPushAll bulk xs
   let _ = map (wPush one) xs
   wAll bulk == wAll one && wMark bulk == wMark one && wMark bulk == length xs
-
-test "takeFirst takes a prefix and is total on a short list" = expectAll [
-  expectEqual [1, 2] (takeFirst 2 [1, 2, 3]),
-  expectEqual [1, 2, 3] (takeFirst 9 [1, 2, 3]),
-  expectEqual [] (takeFirst 0 [1, 2, 3]),
-]
 
 test "a span copy shares the module's cells and replaces only the span" =
   let m = blankModuleCtx (probeGraphCtx ()) "m"
   let inner = mctxAt someLoc m
-  let _ = recordTypeError inner (errorAt "pushed through the copy")
+  recordTypeError inner (errorAt "pushed through the copy")
   expectAll [
     expectEqual ["pushed through the copy"] (errorMessages m),
     expectEqual ["pushed through the copy"] (errorMessages inner),
@@ -142,18 +129,21 @@ test "a blank record names its module and an initial one names none" =
 test "a carry takes fresh run channels and copies the tables by value" =
   let g = probeGraphCtx ()
   let src = blankModuleCtx g "m"
-  let _ = recordTypeError src (errorAt "before the carry")
-  let _ = src.mcCells.matchWarnings := [errorAt "warning before"]
+  recordTypeError src (errorAt "before the carry")
+  src.mcCells.matchWarnings := [errorAt "warning before"]
   let carried = carryModuleCtx g src
-  let _ =
-    src.mcCells.matchWarnings :=
-      [errorAt "warning after", errorAt "warning before"]
-  let _ = recordTypeError carried (errorAt "only in the carry")
+  src.mcCells.matchWarnings :=
+    [errorAt "warning after", errorAt "warning before"]
+  recordTypeError carried (errorAt "only in the carry")
   expectAll [
     expectEqual ["before the carry"] (errorMessages src),
     expectEqual ["only in the carry"] (errorMessages carried),
-    expectEqual 1 (length carried.mcCells.matchWarnings.value),
-    expectEqual 2 (length src.mcCells.matchWarnings.value),
+    expectEqual
+      ["warning before"]
+      (map tcMsg carried.mcCells.matchWarnings.value),
+    expectEqual
+      ["warning after", "warning before"]
+      (map tcMsg src.mcCells.matchWarnings.value),
     expectEqual "m" carried.mcCells.currentModuleRef.value,
   ]
 
@@ -162,9 +152,9 @@ test "a carry takes fresh run channels and copies the tables by value" =
 test "a fresh sub-record shares no run cell with its source and keeps the rest" =
   let src = probeGraphCtx ()
   let sub = freshSubRecordsOf src
-  let _ = src.graphRun.tyvarCounter := 7
-  let _ = sub.graphRun.tyvarCounter := 9
-  let _ = sub.typeErrorsSticky := True
+  src.graphRun.tyvarCounter := 7
+  sub.graphRun.tyvarCounter := 9
+  sub.typeErrorsSticky := True
   expectAll [
     expectEqual 7 src.graphRun.tyvarCounter.value,
     expectEqual 9 sub.graphRun.tyvarCounter.value,
@@ -177,13 +167,13 @@ test "noting a graph record points the interners at its lineage and keeps the hi
   let saved = interners.value
   let g = probeGraphCtx ()
   let highBefore = saved.lineage.lnTyvarHigh
-  let _ = noteInterners g
+  noteInterners g
   let noted = interners.value
-  let _ = g.graphRun.evCounter := 41
-  let _ = highBefore := 5
+  g.graphRun.evCounter := 41
+  highBefore := 5
   let seesCounter = noted.lineage.lnEvCounter.value
   let seesHigh = noted.lineage.lnTyvarHigh.value
-  let _ = interners := saved
+  interners := saved
   expectAll [expectEqual 41 seesCounter, expectEqual 5 seesHigh]
 
 test "a begun trace sink has its one gate on and an empty buffer" =

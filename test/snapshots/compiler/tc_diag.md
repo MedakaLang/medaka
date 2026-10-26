@@ -1,5 +1,5 @@
 # META
-source_lines=554
+source_lines=548
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
@@ -23,12 +23,8 @@ import frontend.ast.{
 }
 import types.repr.{Mono(..), normalize, ppMono, ppMonosShared, ppPredArgsShared}
 import types.tc_types.{
-  AbsorptionEvent(..),
   GraphCtx(..),
   ModuleCtx(..),
-  Predicate(..),
-  UObligation(..),
-  Windowed(..),
 }
 import map as IdMap
 export import types.publish.{TcDiag(..), tcCode, tcLoc, tcMsg}
@@ -37,7 +33,6 @@ import support.util.{
   anyList, contains, filterList, isSome, joinWith, splitOnChar, startsWith
 }
 import types.registry.{HeadKey(..)}
-import types.disposition.{MethodDisposition(..)}
 
 export
 locGoalKey : Option Loc -> String
@@ -70,10 +65,9 @@ typeErrorsArmed gctx _ = gctx.typeErrorsSticky.value
 -- message list), around a memo path's drain.  Any future rollback of `typeErrors`
 -- owes the same pairing.
 --
--- The funnel is not cosmetic.  There are SIX push sites, not the five named helpers:
--- `recordDoMonadError` open-codes its own cons + sticky set.  A hand-placed bump at
--- "the five helpers" would leave that one silent, and the counter would UNDER-count
--- exactly on the `do`-requires-a-monad path.
+-- The funnel is not cosmetic: every push, `recordDoMonadError`'s included, goes
+-- through `recordTypeError`, so the counter cannot miss one.
+--
 -- #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
 -- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
 -- re-scanning the channel (it holds the rendered message and a message-at-site
@@ -110,8 +104,9 @@ noteTypeErrorDetected mctx _ =
 -- THE polling convention for "did region [act] DETECT an error" (issue 1146).
 --
 -- Measuring `listLen typeErrors` before and after the region would make the diagnostic
--- accumulator load-bearing CONTROL FLOW rather than a report: any change to how many entries land in it — a dedup-key
--- change, a rendering change, a loc-selection change — could silently flip an
+-- accumulator load-bearing CONTROL FLOW rather than a report: any change to how
+-- many entries land in it — a dedup-key change, a rendering change, a
+-- loc-selection change — could silently flip an
 -- inference branch, and a gated `unify` that does not run is a type error that is not
 -- caught.  Sites read the occurrence COUNTER, through this ONE combinator, so the
 -- judgment is implemented once and no diagnostics decision reaches a control decision:
@@ -175,15 +170,15 @@ locKey (Some (Loc file line col _ _)) =
 -- Suppressed from the report, NOT from the record of what happened —
 -- the short-circuit still calls `noteTypeErrorDetected`.  Dedup is a presentation
 -- judgment keyed on rendered text; letting it also decide "did an error occur here"
--- is what made a message-rendering change able to flip an inference branch.
+-- would let a message-rendering change flip an inference branch.
 --
 -- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not a scan
--- of the channel.  A scan is O(accumulated) per push, hence O(N^2) over a program whose
--- N diagnostics are pairwise DISTINCT — the common case for this family
+-- of the channel.  A scan is O(accumulated) per push, hence O(N^2) over a program
+-- whose N diagnostics are pairwise DISTINCT — the common case for this family
 -- (`pushNoImplError` renders the interface AND the type into every message).  The
--- index answers the identical
--- question: `recordTypeError` is the sole writer of both, so a key is present iff
--- a diagnostic with that rendered message is in the channel.
+-- index answers the identical question: `recordTypeError` is the sole writer of
+-- both, so a key is present iff a diagnostic with that rendered message is in
+-- the channel.
 export
 pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
 pushTypeErrorOnce mctx code msg = pushTypeErrorOnceAt mctx code None msg
@@ -210,7 +205,8 @@ alreadyReportedAt mctx msg at =
 -- post-HM obligation check runs outside every construct, so the loc was
 -- snapshotted into the obligation tuple at the record site.  `None` falls back
 -- to the record's `mcLoc`, the enclosing construct's span (none after
--- inference).  The short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
+-- inference).  The short-circuit bumps the occurrence counter (see
+-- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 export
 pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt mctx code loc msg =
@@ -310,8 +306,6 @@ pushBoundaryAmbiguity mctx rigidIds args loc msg =
 -- message-keyed side channel.  `Fix`/`Diag` live in driver/diagnostics.mdk (which
 -- imports this module), so the fix is carried as a plain (Loc, String)
 -- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
--- The short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup
--- suppresses the REPORT only.
 export
 pushTypeErrorHelpFixAt : ModuleCtx ->
   String ->
@@ -561,13 +555,12 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Ident" true) (mem "Loc" true) (mem "TabKey" true) (mem "identOriginFold" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GraphCtx" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
@@ -678,13 +671,12 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Ident" true) (mem "Loc" true) (mem "TabKey" true) (mem "identOriginFold" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GraphCtx" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))

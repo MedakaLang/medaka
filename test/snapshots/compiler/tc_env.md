@@ -1,5 +1,5 @@
 # META
-source_lines=4509
+source_lines=4502
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -78,7 +78,6 @@ import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffLabel(..), effLabelName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
-  AbsorptionEvent(..),
   CeRow(..),
   ClassEnv(..),
   DeclEnvAcc(..),
@@ -86,7 +85,6 @@ import types.tc_types.{
   DeclEnvs(..),
   EnvBinding(..),
   GraphCtx(..),
-  GraphRun(..),
   ImplAcc(..),
   ImplEnv(..),
   ImplRow(..),
@@ -99,17 +97,13 @@ import types.tc_types.{
   MethodRow(..),
   MethodSchemeRow(..),
   ModuleCtx(..),
-  Predicate(..),
   RecordInfo(..),
   StandaloneOrigin(..),
   TcEnv(..),
-  UObligation(..),
   ValueScheme(..),
-  Windowed(..),
   dynFor,
   MethodEntry,
 }
-import types.solver_contract.{GoalOrigin(..), Instantiation(..), Wanted(..)}
 import types.registry.{
   regInsertK, Registry, RegKey, regKeyOfTab, regKeyRender, regLookupK
 }
@@ -145,7 +139,6 @@ import types.registry.{
   regLookupK,
 }
 import types.route_key.{implRouteKeyWord}
-import types.disposition.{MethodDisposition(..)}
 
 -- ── RefinementDomain interface (design §2.1): dtop/dsub/djoin/dmeet/drender ──
 -- Stage 1: only ⊤ params (PUnit / PPrefix None) ever occur; the STRUCTURE is
@@ -4520,8 +4513,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "effLabelName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "Windowed" true) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true) (mem "Instantiation" true) (mem "Wanted" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -4530,7 +4522,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "dtopFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffLabel") (TyCon "Param"))))
 (DFunDef false "dtopFor" ((PVar "gctx") (PVar "label")) (EApp (EApp (EVar "dtopIn") (EFieldAccess (EFieldAccess (EVar "gctx") "effectDomains") "value")) (EVar "label")))
 (DTypeSig true "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))
@@ -5311,8 +5302,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "effLabelName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "Windowed" true) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true) (mem "Instantiation" true) (mem "Wanted" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -5321,7 +5311,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "dtopFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffLabel") (TyCon "Param"))))
 (DFunDef false "dtopFor" ((PVar "gctx") (PVar "label")) (EApp (EApp (EVar "dtopIn") (EFieldAccess (EFieldAccess (EVar "gctx") "effectDomains") "value")) (EVar "label")))
 (DTypeSig true "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))

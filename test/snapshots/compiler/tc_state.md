@@ -1,13 +1,13 @@
 # META
-source_lines=1152
+source_lines=1142
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
 -- span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process
 -- interners cell, the `Windowed` channel ops, and the test-only trace-sink probes that only build
--- or read a `TraceSink` or the graph-run evidence cells (`beginAssumptionTrace`,
+-- or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
 -- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
--- `evCellsSpanProbe` and their `finish` forms).
+-- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
 --
 -- Spec: TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md.
 --
@@ -24,7 +24,6 @@ import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..), defaultReceiverDict}
 import types.repr.{IfaceRef(..), Scheme(..)}
 import types.effect_solver as EffectSolver
 import types.tc_types.{
-  AbsorptionEvent(..),
   AssumptionTraceEntry(..),
   BuiltinClasses(..),
   CheckRunSeed(..),
@@ -49,13 +48,11 @@ import types.tc_types.{
   ModuleCells(..),
   ModuleCtx(..),
   NumericPredicateTraceEntry(..),
-  Predicate(..),
   ShadowDicts(..),
   SigVars(..),
   TcConfig(..),
   TcEnv(..),
   TraceSink(..),
-  UObligation(..),
   Windowed(..),
 }
 import map.{Map(..)}
@@ -65,13 +62,11 @@ import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
 }
 import types.scopes as Scopes
-import types.solver_contract.{Instantiation(..)}
 import types.registry.{regEmpty}
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
 import support.util.{reverseL}
 import types.registry.{mregEmpty, regEmpty, spEmpty, spFromFloor}
-import types.disposition.{MethodDisposition(..)}
 import types.runtime_types.{emptyBinderTypes}
 
 -- Bug C: importer-shadow method names → their IMPORTED STANDALONE scheme (e.g.
@@ -457,13 +452,13 @@ wMark : Windowed a -> Int
 wMark w = !w.n
 
 -- recover exactly the items pushed since [mark], newest-first like the channel itself
--- (they sit at the front, so `takeFirst` takes them without reordering).
+-- (they sit at the front, so `take` takes them without reordering).
 export
 wWindow : Windowed a -> Int -> List a
-wWindow w mark = takeFirst (!w.n - mark) !w.items
+wWindow w mark = take (!w.n - mark) !w.items
 
 -- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
--- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- performs (take n items).  For a per-binding reader of a module-wide channel
 -- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
 -- have rebuilt.
 export
@@ -1007,11 +1002,6 @@ emptyBuiltinClasses = BuiltinClasses {
   bcPreludeSeeded = False,
 }
 
--- the first [n] entries of a list (the newly-prepended obligations of a group)
-export
-takeFirst : Int -> List a -> List a
-takeFirst n xs = take n xs
-
 export
 dictParamName : String -> Int -> String
 dictParamName fn slot = "$dict_\{fn}_\{intToString slot}"
@@ -1159,19 +1149,17 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "Predicate" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
@@ -1206,7 +1194,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "wMark" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig true "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "take") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
 (DTypeSig true "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig true "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
@@ -1274,8 +1262,6 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "freshGrantState" (PWild) (ERecordCreate "GrantState" ((fa "gsOccs" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsGrantOnly" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsTopIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsLocalIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsMethods" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsBodies" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsLastInst" (EApp (EVar "Ref") (EVar "None"))) (fa "gsLastMethodInst" (EApp (EVar "Ref") (EVar "None"))) (fa "gsLastStandalone" (EApp (EVar "Ref") (EVar "None"))) (fa "gsSourceless" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsTakers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsFresh" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "gsBounds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsValueBounds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsPassingModule" (EApp (EVar "Ref") (ELit (LString "")))))))
 (DTypeSig true "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
 (DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
-(DTypeSig true "takeFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "takeFirst" ((PVar "n") (PVar "xs")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs")))
 (DTypeSig true "dictParamName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
 (DTypeSig true "defaultReceiverOrdinal" (TyCon "Int"))
@@ -1315,19 +1301,17 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "Predicate" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
@@ -1362,7 +1346,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "wMark" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig true "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "take") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
 (DTypeSig true "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig true "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
@@ -1430,8 +1414,6 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "freshGrantState" (PWild) (ERecordCreate "GrantState" ((fa "gsOccs" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsGrantOnly" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsTopIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsLocalIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsMethods" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsBodies" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsLastInst" (EApp (EVar "Ref") (EVar "None"))) (fa "gsLastMethodInst" (EApp (EVar "Ref") (EVar "None"))) (fa "gsLastStandalone" (EApp (EVar "Ref") (EVar "None"))) (fa "gsSourceless" (EApp (EVar "Ref") (EVar "Tip"))) (fa "gsTakers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsFresh" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "gsBounds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsValueBounds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "gsPassingModule" (EApp (EVar "Ref") (ELit (LString "")))))))
 (DTypeSig true "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
 (DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
-(DTypeSig true "takeFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "takeFirst" ((PVar "n") (PVar "xs")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs")))
 (DTypeSig true "dictParamName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
 (DTypeSig true "defaultReceiverOrdinal" (TyCon "Int"))

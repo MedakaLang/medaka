@@ -896,7 +896,8 @@ bundleFieldNames ls recName =
   let body = takeWhile (l => not (startsWith "}" l)) after
   map (f => "\{recName}.\{f}") (filterMap fieldNameOf body)
 
--- The modules that hold what `types.typecheck` held before the layer split.
+-- The modules of the `types.typecheck` family: the entry module and the leaf modules
+-- its rows are partitioned into.
 typecheckFamily : List String
 typecheckFamily = [
   "types.typecheck",
@@ -1002,17 +1003,21 @@ test "arch_boundaries: the module-field partition classifies every ModuleCtx fie
     flatMap (partitionRows (typecheckFamilyLines mods)) partitionHeaders
   let (cellRows, ctxRows) =
     partition (r => startsWith "ModuleCells." (fst r)) rows
-  expectAll [
-    expectAtLeast 90 (length fields),
-    expectEqual
-      []
-      (symmetricDifference
-        (filter (f => not (startsWith "ModuleCells." f)) fields)
-        (map fst ctxRows)),
-    expectEqual [] (filter (r => not (elem (fst r) fields)) cellRows),
-    expectAtLeast 5 (length cellRows),
-    expectEqual
-      []
-      (filter (r => not (elem (snd r) (drop 1 partitionClasses))) cellRows),
-    expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) ctxRows),
-  ]
+  expectAll
+    [
+      expectAtLeast 90 (length fields),
+      -- A new ModuleCells field is `run` by default in moduleCellsFrom's update: bump this
+      -- count only after naming the field in the update or deciding it is a run cell.
+      expectEqual 92 (length (filter (startsWith "ModuleCells.") fields)),
+      expectEqual
+        []
+        (symmetricDifference
+          (filter (f => not (startsWith "ModuleCells." f)) fields)
+          (map fst ctxRows)),
+      expectEqual [] (filter (r => not (elem (fst r) fields)) cellRows),
+      expectAtLeast 5 (length cellRows),
+      expectEqual
+        []
+        (filter (r => not (elem (snd r) (drop 1 partitionClasses))) cellRows),
+      expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) ctxRows),
+    ]

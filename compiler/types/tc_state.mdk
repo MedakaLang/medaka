@@ -1,9 +1,9 @@
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
 -- span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process
 -- interners cell, the `Windowed` channel ops, and the test-only trace-sink probes that only build
--- or read a `TraceSink` or the graph-run evidence cells (`beginAssumptionTrace`,
+-- or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
 -- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
--- `evCellsSpanProbe` and their `finish` forms).
+-- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
 --
 -- Spec: TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md.
 --
@@ -20,7 +20,6 @@ import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..), defaultReceiverDict}
 import types.repr.{IfaceRef(..), Scheme(..)}
 import types.effect_solver as EffectSolver
 import types.tc_types.{
-  AbsorptionEvent(..),
   AssumptionTraceEntry(..),
   BuiltinClasses(..),
   CheckRunSeed(..),
@@ -45,13 +44,11 @@ import types.tc_types.{
   ModuleCells(..),
   ModuleCtx(..),
   NumericPredicateTraceEntry(..),
-  Predicate(..),
   ShadowDicts(..),
   SigVars(..),
   TcConfig(..),
   TcEnv(..),
   TraceSink(..),
-  UObligation(..),
   Windowed(..),
 }
 import map.{Map(..)}
@@ -61,13 +58,11 @@ import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
 }
 import types.scopes as Scopes
-import types.solver_contract.{Instantiation(..)}
 import types.registry.{regEmpty}
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
 import support.util.{reverseL}
 import types.registry.{mregEmpty, regEmpty, spEmpty, spFromFloor}
-import types.disposition.{MethodDisposition(..)}
 import types.runtime_types.{emptyBinderTypes}
 
 -- Bug C: importer-shadow method names → their IMPORTED STANDALONE scheme (e.g.
@@ -453,13 +448,13 @@ wMark : Windowed a -> Int
 wMark w = !w.n
 
 -- recover exactly the items pushed since [mark], newest-first like the channel itself
--- (they sit at the front, so `takeFirst` takes them without reordering).
+-- (they sit at the front, so `take` takes them without reordering).
 export
 wWindow : Windowed a -> Int -> List a
-wWindow w mark = takeFirst (!w.n - mark) !w.items
+wWindow w mark = take (!w.n - mark) !w.items
 
 -- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
--- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- performs (take n items).  For a per-binding reader of a module-wide channel
 -- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
 -- have rebuilt.
 export
@@ -1002,11 +997,6 @@ emptyBuiltinClasses = BuiltinClasses {
   bcSemigroupPresent = False,
   bcPreludeSeeded = False,
 }
-
--- the first [n] entries of a list (the newly-prepended obligations of a group)
-export
-takeFirst : Int -> List a -> List a
-takeFirst n xs = take n xs
 
 export
 dictParamName : String -> Int -> String

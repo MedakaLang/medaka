@@ -310,6 +310,9 @@ import types.tc_types.{
   RecordInfo(..),
   Kind(..),
   Polarity(..),
+  Accumulate(..),
+  PassEvidence,
+  PassMethod,
   SiteKind(..),
   PendingEntry(..),
   GoalKind(..),
@@ -784,7 +787,6 @@ import types.tc_mono.{
   monoHeadIsDecl,
   monoIndexEffvarIds,
   monoIsApp,
-  monoIsBareTyvar,
   monoIsBool,
   monoIsTyvarId,
   monoMintedBefore,
@@ -847,7 +849,6 @@ import types.tc_mono.{
   tySubsumesV,
   tyvarId,
   tyVarNames,
-  unboundSpineHead,
   walkMonosSame,
 }
 import types.tc_state.{
@@ -881,7 +882,6 @@ import types.tc_state.{
   noteInterners,
   probeGraphCtx,
   renderEvidenceBinder,
-  takeFirst,
   wAll,
   wMark,
   wPush,
@@ -1077,172 +1077,6 @@ import types.tc_diag.{
   recordTypeError,
   typeErrorsArmed,
   writtenDiag,
-}
-import types.tc_types.{Accumulate(..), Accumulate, PassEvidence, PassMethod}
-import types.tc_types.{
-  AbsorptionEvent(..),
-  AdmittedAnswer(..),
-  AdmittedVerdict(..),
-  AliasDecl(..),
-  ArgRw(..),
-  ArmedGuard(..),
-  AssumAnswer(..),
-  AssumptionTraceEntry(..),
-  AssumptionTraceKind(..),
-  BareLocals(..),
-  BindingRole(..),
-  BuiltinClass(..),
-  BuiltinClasses(..),
-  CDeclared(..),
-  CDeclaredPrefix(..),
-  CeRow(..),
-  CheckRunSeed(..),
-  ClassEnv(..),
-  CohImpl(..),
-  CohScan(..),
-  CohSweep(..),
-  ConstraintReg(..),
-  CSlot(..),
-  CtorFieldConflict(..),
-  DataEnv(..),
-  DataTypeDecl(..),
-  DeclaringBinder(..),
-  DeclEnvAcc(..),
-  DeclEnvModule(..),
-  DeclEnvs(..),
-  DeclEnvSeedAcc(..),
-  DoCtx(..),
-  DrainFinding(..),
-  DriveArgs(..),
-  DriveInputs(..),
-  DriveOutputs(..),
-  DynCtx(..),
-  ElabFacts(..),
-  EntailKind(..),
-  EnvBinding(..),
-  EvCell(..),
-  EvDest(..),
-  EvidenceObservationEntry(..),
-  EvidenceOutcomeKind(..),
-  ExistentialScope(..),
-  ExportBinding(..),
-  GivenEntry(..),
-  GivenMatch(..),
-  GivenProvenance(..),
-  GivenScope(..),
-  GoalKind(..),
-  GoalPayload(..),
-  GoalReach(..),
-  GoalWindow(..),
-  GrantBinder(..),
-  GrantCallee(..),
-  GrantOcc(..),
-  GrantState(..),
-  GraphCtx(..),
-  GraphDrive(..),
-  GraphMarks(..),
-  GraphOut(..),
-  GraphRun(..),
-  GroupCtx(..),
-  HeadVarRoot(..),
-  ImplBodySite(..),
-  ImplEnv(..),
-  ImplRow(..),
-  ImplUniverse(..),
-  Interners(..),
-  InvocationView(..),
-  JoinContext(..),
-  KeyEntry(..),
-  Kind(..),
-  LiveGoal(..),
-  LocalAbs(..),
-  MarkCtx(..),
-  MarkSets(..),
-  MethodBodyCheck(..),
-  MethodBodyInstance(..),
-  MethodBodyKind(..),
-  MethodEnv(..),
-  MethodGrant(..),
-  MethodGrantUse(..),
-  MethodInstantiationSubst(..),
-  MethodPredicateSlot(..),
-  MethodPredicateTemplate(..),
-  MethodReturnMemoView(..),
-  MethodReturnRequest(..),
-  MethodReturnResolution(..),
-  MethodReturnTraceEntry(..),
-  MethodReturnTraceStage(..),
-  MethodRow(..),
-  MethodRowTestObservation(..),
-  MethodSchemeRow(..),
-  MethodScope(..),
-  MethodTemplateGivenResult(..),
-  MethodTrackedInstantiation(..),
-  ModuleBindings(..),
-  ModuleCells(..),
-  ModuleCtx(..),
-  ModuleMarking(..),
-  ModuleSeed(..),
-  ModuleServe(..),
-  MStep(..),
-  NumAnchorTestObservation(..),
-  NumBoundary(..),
-  NumBoundaryDisposition(..),
-  NumericPredicateTraceEntry(..),
-  NumericPredicateTraceStage(..),
-  NumGuard(..),
-  Obligation(..),
-  ObligationSite(..),
-  OblProjection(..),
-  PendingBinder(..),
-  PendingDictApp(..),
-  PendingEntry(..),
-  PendingJoin(..),
-  PendingMethodDict(..),
-  Polarity(..),
-  Predicate(..),
-  PredicateRequest(..),
-  PredicateSlot(..),
-  PredicateSlotArgs(..),
-  PreludeMarkFacts(..),
-  PreludePreamble(..),
-  Provenance(..),
-  RecDictApp(..),
-  RecordInfo(..),
-  RecordSubst(..),
-  ReqStep(..),
-  ReqWalk(..),
-  RouteWalkEntry(..),
-  ScopedImplMethod(..),
-  ScopedMember(..),
-  ScopedScheme(..),
-  SelectedValueOccurrence(..),
-  ServeStep(..),
-  ShadowDicts(..),
-  SigVars(..),
-  SiteCell(..),
-  SiteCtx(..),
-  SiteKind(..),
-  SolvedGoalEntry(..),
-  SpellCtx(..),
-  StampCtx(..),
-  StampStep(..),
-  StandaloneOrigin(..),
-  SuperGoalEntry(..),
-  TcConfig(..),
-  TcEnv(..),
-  TraceSink(..),
-  Undetermined(..),
-  UObligation(..),
-  ValueScheme(..),
-  WalkMemo(..),
-  Windowed(..),
-  dynFor,
-  ElabResult,
-  manifestDriverFor,
-  MethodEntry,
-  siteFor,
-  withPublishedManifests,
 }
 
 -- ── effect-label DOMAIN registry ───────────────────────────────────────────
@@ -4157,9 +3991,7 @@ dropGoalsSince gctx mark kinds =
   let n = g.goalsN.value - mark
   let tags = map goalKindTag kinds
   let kept =
-    filterList
-      (o => not (containsI (goalKindTag o.oKind) tags))
-      (takeFirst n now)
+    filterList (o => not (containsI (goalKindTag o.oKind) tags)) (take n now)
   g.goals := kept ++ dropFirst n now
   g.goalsN := mark + listLen kept
 
@@ -8001,7 +7833,7 @@ currentModuleMarks gctx _ = match gctx.graphRun.moduleRanges.value
 -- counter: measuring the RUN-WIDE list here instead made every windowed read cost the
 -- whole graph, which is the module-count superlinearity #2724 measures.
 moduleWindow : Int -> Int -> List a -> List a
-moduleWindow now mark xs = takeFirst (now - mark) xs
+moduleWindow now mark xs = take (now - mark) xs
 
 -- the numeric-literal channel's window, the counterpart of `goalsSince`
 numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
@@ -23149,7 +22981,7 @@ liveNumVarGo id (o :: rest) = match o.oblProj
     Some m => Some m
     None => liveNumVarGo id rest
 
--- #837: drop the first [n] entries (the complement of takeFirst) — splits a
+-- #837: drop the first [n] entries (the complement of `take`) — splits a
 -- stamped `coreProg ++ prog0` back into its core/user halves for Flat inference.
 dropFirst : Int -> List a -> List a
 dropFirst n xs
@@ -28146,7 +27978,7 @@ entailRigidLead sx m encl useScope (EKNestedTop iface _ walk rest) =
   let declared = sx.sxModule.mcCells.declaredSigVarIds.value
   if isEmptyL ids
     || anyList (i => not (omHasKey (intToString i) declared)) ids
-    || allList monoIsBareTyvar goals then
+    || allList isBareTyvarMono goals then
     None
   else
     let env = sx.sxModule.mcCells.bodyImplEnvRef.value
@@ -34115,7 +33947,7 @@ checkReqOne sx univ walk iface args loc scope
 -- a constructed head that a declared `impl Num (Int -> Int)` matches.
 numUnimplementableHead : Mono -> Bool
 numUnimplementableHead m = match normalize m
-  TApp a b => unboundSpineHead (spineHeadMono (TApp a b))
+  TApp a b => isBareTyvarMono (spineHeadMono (TApp a b))
   _ => False
 
 -- Chunk D (Num mis-framing reframe): at the final no-impl branch, a `Num`
@@ -36022,7 +35854,7 @@ constraintVarNames (Constraint { constraintArgs = args }) =
   flatMap tyVarNames args
 
 isUnboundTvar : Mono -> Bool
--- Cross-file twin of `isBareTyvarMono` (tc_mono.mdk) while this row awaits its own module.
+-- Same body as `isBareTyvarMono` (tc_mono.mdk); the two collapse when this row moves there.
 -- lint-disable-next-line rule-duplicate-body
 isUnboundTvar m = match normalize m
   TVar _ => True
@@ -36603,7 +36435,7 @@ registerPredGiven : GraphCtx ->
   Unit
 registerPredGiven gctx _ [] _ = ()
 registerPredGiven gctx iface args dname
-  | allList monoIsBareTyvar args = ()
+  | allList isBareTyvarMono args = ()
   | otherwise =
     let slot = PredicateSlot {
       psIface = iface,

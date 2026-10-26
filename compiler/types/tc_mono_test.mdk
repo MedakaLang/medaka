@@ -9,13 +9,13 @@ import test.{
   expectEqual,
   expectFalse,
   expectNotEqual,
-  expectSatisfies,
   expectTrue,
 }
 import frontend.ast.{TyConOrigin(..)}
 import types.effect_rows.{pureRow}
 import types.repr.{Mono(..), Tyvar(..), ppMono, tupleSpine}
 import types.tc_mono.{
+  anyMember,
   arrowArity,
   cohApply,
   cohEqMono,
@@ -51,9 +51,8 @@ conNames = ["Int", "Bool", "List", "Pair"]
 genLeaf : Unit -> <Rand> MTy
 genLeaf () =
   let k = randomInt 0 7
-  if k < 4 then match lookup k (zip [0, 1, 2, 3] (map MCon conNames))
-    Some leaf => leaf
-    None => MCon "Int"
+  if k < 4 then
+    optionOr (MCon "Int") (lookup k (zip [0, 1, 2, 3] (map MCon conNames)))
   else
     MVar (k - 4)
 
@@ -70,6 +69,28 @@ impl Arbitrary MTy where
   arbitrary () = genMTy 3
   shrink (MApp a b) = [a, b]
   shrink (MFun a b) = [a, b]
+  shrink _ = []
+
+-- A closed model type: constructor leaves only, so no precondition filter is needed
+-- where a law requires closed ranges or closed targets.
+data Closed = Closed MTy deriving (Eq, Debug)
+
+genClosed : Int -> <Rand> MTy
+genClosed depth
+  | depth <= 0 =
+    MCon (optionOr "Int" (lookup (randomInt 0 3) (zip [0, 1, 2, 3] conNames)))
+  | otherwise = match randomInt 0 3
+    0 => genClosed 0
+    1 => MApp (genClosed (depth - 1)) (genClosed (depth - 1))
+    _ => MFun (genClosed (depth - 1)) (genClosed (depth - 1))
+
+closedTy : Closed -> MTy
+closedTy (Closed t) = t
+
+impl Arbitrary Closed where
+  arbitrary () = Closed (genClosed 2)
+  shrink (Closed (MApp a b)) = [Closed a, Closed b]
+  shrink (Closed (MFun a b)) = [Closed a, Closed b]
   shrink _ = []
 
 varsOf : MTy -> List Int
@@ -94,7 +115,9 @@ toMonoIn cells (MApp a b) = TApp (toMonoIn cells a) (toMonoIn cells b)
 toMonoIn cells (MFun a b) = TFun (toMonoIn cells a) pureRow (toMonoIn cells b)
 
 toMono : MTy -> Mono
-toMono t = toMonoIn (cellsFor (nub (varsOf t))) t
+toMono t =
+  let cells = varsOf t |> nub |> cellsFor
+  toMonoIn cells t
 
 modelSubst : List (Int, MTy) -> MTy -> MTy
 modelSubst _ (MCon n) = MCon n
@@ -156,28 +179,23 @@ prop "the empty substitution is the identity" (t : MTy) =
   cohEqMono (applySubst [] t) (toMono t)
     && monoUnboundIds (applySubst [] t) == varsOf t
 
--- Law: substitution of closed terms agrees with the model's.  Precondition: both ranges
--- are closed, since `substMono` is one simultaneous pass and does not re-substitute.
-prop "substituting closed monotypes agrees with the model substitution" (t : MTy) (r0 : MTy) (r1 : MTy) =
-  if isClosed r0 && isClosed r1 then
-    let s = [(0, r0), (1, r1)]
-    cohEqMono (applySubst s t) (toMono (modelSubst s t))
-  else
-    True
+-- Law: substitution of closed terms agrees with the model's.  The ranges are closed by
+-- construction, since `substMono` is one simultaneous pass and does not re-substitute;
+-- the target is open, so the substitution has variables to hit.
+prop "substituting closed monotypes agrees with the model substitution" (t : MTy) (c0 : Closed) (c1 : Closed) =
+  let s = [(0, closedTy c0), (1, closedTy c1)]
+  cohEqMono (applySubst s t) (toMono (modelSubst s t))
 
 -- Law: two substitutions with disjoint domains and closed ranges compose, in either order
--- and as their union.  Precondition: domains {0} and {1} are disjoint (fixed here) and
--- both ranges are closed.
-prop "substitutions with disjoint domains and closed ranges compose in either order" (t : MTy) (r0 : MTy) (r1 : MTy) =
-  if isClosed r0 && isClosed r1 then
-    let s0 = [(0, r0)]
-    let s1 = [(1, r1)]
-    let whole = applySubst (s0 ++ s1) t
-    let viaS1 = applySubst s0 (modelSubst s1 t)
-    let viaS0 = applySubst s1 (modelSubst s0 t)
-    cohEqMono whole viaS1 && cohEqMono whole viaS0
-  else
-    True
+-- and as their union.  The domains {0} and {1} are disjoint (fixed here) and the ranges
+-- are closed by construction.
+prop "substitutions with disjoint domains and closed ranges compose in either order" (t : MTy) (c0 : Closed) (c1 : Closed) =
+  let s0 = [(0, closedTy c0)]
+  let s1 = [(1, closedTy c1)]
+  let whole = applySubst (s0 ++ s1) t
+  let viaS1 = applySubst s0 (modelSubst s1 t)
+  let viaS0 = applySubst s1 (modelSubst s0 t)
+  cohEqMono whole viaS1 && cohEqMono whole viaS0
 
 -- Law: a pattern abstracted from a closed term unifies with the term, and applying the
 -- recorded bindings to the pattern gives the term back.  Precondition: the target is
@@ -194,13 +212,13 @@ prop "matching a pattern against its closed target and applying the bindings giv
     True
 
 -- Law: for two closed types, overlap is structural equality (rows are not compared).
--- Precondition: both types closed.
-prop "two closed types overlap exactly when they are equal" (a : MTy) (b : MTy) =
-  if isClosed a && isClosed b then
-    cohOverlap [toMono a] [toMono b] == (a == b)
-      && cohEqMono (toMono a) (toMono b) == (a == b)
-  else
-    True
+-- `same` makes the second type a copy of the first about half the time, since two
+-- independent draws are almost never equal.
+prop "two closed types overlap exactly when they are equal" (c0 : Closed) (c1 : Closed) (same : Bool) =
+  let a = closedTy c0
+  let b = if same then a else closedTy c1
+  cohOverlap [toMono a] [toMono b] == (a == b)
+    && cohEqMono (toMono a) (toMono b) == (a == b)
 
 -- Law: the arrow projections read the right spine.  No precondition; variables are
 -- unbound, so no link is followed.
@@ -218,6 +236,17 @@ prop "headTyconNameMono names the leftmost constructor of an application spine" 
   match modelHead t
     Some n => headTyconNameMono (toMono t) == Some n
     None => True
+
+-- Law: two name lists share a member exactly when some name is in both, symmetrically; the
+-- empty list shares none and a non-empty list shares one with itself.  No precondition;
+-- the names come from a four-name alphabet so shared members occur.
+prop "anyMember is symmetric and is True exactly for a shared name" (xs : List Int) (ys : List Int) =
+  let a = map (k => "v\{intToString (abs k % 4)}") xs
+  let b = map (k => "v\{intToString (abs k % 4)}") ys
+  anyMember a b == anyMember b a
+    && anyMember a b == (length (filter (x => elem x b) a) > 0)
+    && not (anyMember [] a)
+    && anyMember a a == (a /= [])
 
 test "two same-named types from different modules are different types" =
   let a = tconFrom (OriginModule "m1") "T"
