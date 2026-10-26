@@ -1,5 +1,5 @@
 # META
-source_lines=4364
+source_lines=4368
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -881,6 +881,10 @@ ieRowInst (ImplRow _ i _ _ _ _ _) = i
 export
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
 ieRowTriple (ImplRow _ _ ir tys reqs _ _) = (ir, tys, reqs)
+
+export
+ieRowIface : ImplRow -> IfaceRef
+ieRowIface (ImplRow _ _ ir _ _ _ _) = ir
 
 -- The impl's own explicit/synthesized method table (§1112 A-3's disposition
 -- producer reads this to decide `Supplied` vs `InheritedDefault` per slot).
@@ -4480,6 +4484,8 @@ methodRowSameNameView rows =
 (DFunDef false "ieRowInst" ((PCon "ImplRow" PWild (PVar "i") PWild PWild PWild PWild PWild)) (EVar "i"))
 (DTypeSig true "ieRowTriple" (TyFun (TyCon "ImplRow") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))
 (DFunDef false "ieRowTriple" ((PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") (PVar "reqs") PWild PWild)) (ETuple (EVar "ir") (EVar "tys") (EVar "reqs")))
+(DTypeSig true "ieRowIface" (TyFun (TyCon "ImplRow") (TyCon "IfaceRef")))
+(DFunDef false "ieRowIface" ((PCon "ImplRow" PWild PWild (PVar "ir") PWild PWild PWild PWild)) (EVar "ir"))
 (DTypeSig true "ieRowMethodNames" (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ieRowMethodNames" ((PCon "ImplRow" PWild PWild PWild PWild PWild (PVar "ms") PWild)) (EVar "ms"))
 (DTypeSig true "ieRowLoc" (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -5225,6 +5231,8 @@ methodRowSameNameView rows =
 (DFunDef false "ieRowInst" ((PCon "ImplRow" PWild (PVar "i") PWild PWild PWild PWild PWild)) (EVar "i"))
 (DTypeSig true "ieRowTriple" (TyFun (TyCon "ImplRow") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))
 (DFunDef false "ieRowTriple" ((PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") (PVar "reqs") PWild PWild)) (ETuple (EVar "ir") (EVar "tys") (EVar "reqs")))
+(DTypeSig true "ieRowIface" (TyFun (TyCon "ImplRow") (TyCon "IfaceRef")))
+(DFunDef false "ieRowIface" ((PCon "ImplRow" PWild PWild (PVar "ir") PWild PWild PWild PWild)) (EVar "ir"))
 (DTypeSig true "ieRowMethodNames" (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ieRowMethodNames" ((PCon "ImplRow" PWild PWild PWild PWild PWild (PVar "ms") PWild)) (EVar "ms"))
 (DTypeSig true "ieRowLoc" (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyCon "Loc"))))

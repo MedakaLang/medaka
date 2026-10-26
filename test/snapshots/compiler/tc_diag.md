@@ -1,13 +1,14 @@
 # META
-source_lines=1854
+source_lines=1836
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
 -- keys, ambiguity replacement), the detection counter, `writtenDiag`, and the context-free message
 -- text: every message, help and fix builder whose operands are values and whose closure is
--- `tc_types`, `tc_mono`, `repr`, the AST and the effect leaves (`backticked`, `quotedNames`, the
--- renderers of the checks above); a builder that reads a context record, an environment or a cell,
--- or a fact computed above `tc_diag`, lives beside its emission site (D3).
+-- `tc_types`, `tc_mono`, `tc_env` (`kindName`, for `renderKindArrow`), `repr`, the AST and the
+-- effect leaves (`backticked`, `quotedNames`, the renderers of the checks above); a builder that
+-- reads a context record, an environment or a cell, or a fact computed above `tc_diag`, lives
+-- beside its emission site (D3).
 --
 -- Spec: ERROR-QUALITY.md; DIAGNOSTIC-CODES-DESIGN.md; A5.
 --
@@ -406,9 +407,9 @@ starSpelling n None = "`\{n}` pattern-ranging, `@L*` or `Authority L*`"
 -- because `unify` has no expected/actual role to name one side the culprit.
 --
 -- #2109 (over-reject at the safe direction): the second sentence names the
--- ETA-EXPANSION recovery, because the guard's `this does narrow acceptance
--- In the sound direction too` caveat above is otherwise INVISIBLE to the person
--- who hit it.  `handler : Ref (String -> <Stdout> Unit); handler = Ref noop` is
+-- ETA-EXPANSION recovery, because the `this does narrow acceptance in the sound
+-- direction too` caveat on `paramVarianceGuard` (`tc_unify`) is otherwise INVISIBLE
+-- to the person who hit it.  `handler : Ref (String -> <Stdout> Unit); handler = Ref noop` is
 -- REJECTED while `handler = Ref (s => noop s)` is ACCEPTED — MEASURED, both at
 -- this commit.  The two programs have identical semantics; the second is
 -- accepted only because a lambda's latent row is still an unsolved variable, so
@@ -683,7 +684,6 @@ fieldDeclDescr (k, ri) = match recordOwnerModule ri
   Some mid => "`\{fieldDeclTypeName (k, ri)}` from module `\{mid}`"
   None => "`\{fieldDeclTypeName (k, ri)}`"
 
-export
 headL : List String -> String
 headL [] = ""
 headL (x :: _) = x
@@ -834,7 +834,7 @@ containerArgHint argTy = "convert the `\{argTy}` to a `List` first"
 -- here (its tyvar is still free — nothing has pinned it), so this stays honest by
 -- naming the shape ("Thenable", `do`'s own vocabulary — see `doRequiresMonadMsg`)
 -- rather than guessing a specific type.  Fires ONLY on the exact callee `lowerDo`
--- synthesizes (`isDoLoweredAndThenCallee`, below) — an explicit user call to
+-- synthesizes (`isDoLoweredAndThenCallee`, in `typecheck.mdk`) — an explicit user call to
 -- `andThen` on a scalar argument, even one textually nested inside a do-bind's
 -- own scrutinee, keeps the original List/Array message, which is the right
 -- advice there.
@@ -885,15 +885,10 @@ nonExhaustiveMatchWarning =
   "Warning: non-exhaustive match; not every case is covered"
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
--- An arm is unreachable when its pattern is already fully covered by an EARLIER
--- *unguarded* arm: those arms fire unconditionally, so no value ever reaches
--- this one.  We fold arms left-to-right, accumulating a matrix of the preceding
--- UNGUARDED arm patterns, and flag any arm whose pattern is not `useful` against
--- it (`patUnreachable`).  Guarded predecessors are excluded (their guard may fail
--- at runtime, leaving a later same-shape arm reachable), which keeps the check
--- conservative — we flag only arms provably dead via unconditional predecessors.
--- The warning carries the ARM's own loc (its body span) so the caret points at
--- the dead arm, not the match head.
+-- An arm is unreachable when an EARLIER *unguarded* arm already covers its pattern
+-- (the detection is `patUnreachable` in `frontend.exhaust`; this module holds the
+-- text only).  The warning carries the ARM's own loc (its body span) so the caret
+-- points at the dead arm, not the match head.
 export
 unreachableArmWarning : String
 unreachableArmWarning =
@@ -1015,12 +1010,6 @@ export
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method =
   "`impl \{iface} \{joinWith " " (map ppTyAtom tys)}` is missing the method `\{method}`; define `\{method}` in the impl"
-
-export
-intercalateComma : List String -> String
-intercalateComma [] = ""
-intercalateComma [x] = "'" ++ x ++ "'"
-intercalateComma (x :: rest) = "'\{x}', \{intercalateComma rest}"
 
 export
 ordinalSentinelMsg : String
@@ -1322,23 +1311,16 @@ missingConstraintMsg name iface varName =
 export
 ambigReexportMsg : String -> String -> List String -> String
 ambigReexportMsg n depId mids =
-  "ambiguous `\{n}` imported from `\{depId}`: defined in both \{andList (map backticked mids)}"
+  "ambiguous `\{n}` imported from `\{depId}`: defined in both \{joinAnd (map backticked mids)}"
 
 export
 ambigReexportHelp : String -> String -> List String -> String
 ambigReexportHelp n depId mids =
   "`\{depId}` re-exports more than one `\{n}`; import the definition you mean directly, as in `import \{firstMid mids}.{\{n}}`"
 
-export
 firstMid : List String -> String
 firstMid (m :: _) = m
 firstMid [] = "<module>"
-
-andList : List String -> String
-andList [] = ""
-andList [x] = x
-andList [x, y] = "\{x} and \{y}"
-andList (x :: rest) = "\{x}, \{andList rest}"
 
 export
 locGoalKey : Option Loc -> String
@@ -2041,7 +2023,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
 (DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "` from module `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "`"))))))
-(DTypeSig true "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "headL" ((PList)) (ELit (LString "")))
 (DFunDef false "headL" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "fieldFixFrom" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))))
@@ -2146,10 +2128,6 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "superContextNoImplMsg" ((PVar "subject") (PVar "derived") (PVar "superGoal") (PVar "pred") (PVar "predBare")) (EIf (EVar "derived") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` (derived) must provide its superinterface `"))) (EApp (EVar "display") (EVar "superGoal"))) (ELit (LString "`, whose instance requires `"))) (EApp (EVar "display") (EVar "pred"))) (ELit (LString "`, and no impl provides it; add `impl "))) (EApp (EVar "display") (EVar "predBare"))) (ELit (LString "`, and write the derived impl by hand if its `requires` must change"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` must provide its superinterface `"))) (EApp (EVar "display") (EVar "superGoal"))) (ELit (LString "`, whose instance requires `"))) (EApp (EVar "display") (EVar "pred"))) (ELit (LString "`, and no impl provides it; add `impl "))) (EApp (EVar "display") (EVar "predBare"))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "missingImplMethodMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingImplMethodMsg" ((PVar "iface") (PVar "tys") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "` is missing the method `"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "`; define `"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "` in the impl"))))
-(DTypeSig true "intercalateComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "intercalateComma" ((PList)) (ELit (LString "")))
-(DFunDef false "intercalateComma" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "x")) (ELit (LString "'"))))
-(DFunDef false "intercalateComma" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "', "))) (EApp (EVar "display") (EApp (EVar "intercalateComma") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig true "ordinalSentinelMsg" (TyCon "String"))
 (DFunDef false "ordinalSentinelMsg" () (ELit (LString "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete")))
 (DTypeSig true "cyclicSuperIfaceMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -2239,17 +2217,12 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "missingConstraintMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingConstraintMsg" ((PVar "name") (PVar "iface") (PVar "varName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the body of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` requires `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "varName"))) (ELit (LString "`, which its signature does not declare; add `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "varName"))) (ELit (LString " =>`"))))
 (DTypeSig true "ambigReexportMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "ambigReexportMsg" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` imported from `"))) (EApp (EVar "display") (EVar "depId"))) (ELit (LString "`: defined in both "))) (EApp (EVar "display") (EApp (EVar "andList") (EApp (EApp (EVar "map") (EVar "backticked")) (EVar "mids"))))) (ELit (LString ""))))
+(DFunDef false "ambigReexportMsg" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` imported from `"))) (EApp (EVar "display") (EVar "depId"))) (ELit (LString "`: defined in both "))) (EApp (EVar "display") (EApp (EVar "joinAnd") (EApp (EApp (EVar "map") (EVar "backticked")) (EVar "mids"))))) (ELit (LString ""))))
 (DTypeSig true "ambigReexportHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "ambigReexportHelp" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "depId"))) (ELit (LString "` re-exports more than one `"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`; import the definition you mean directly, as in `import "))) (EApp (EVar "display") (EApp (EVar "firstMid") (EVar "mids")))) (ELit (LString ".{"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "}`"))))
-(DTypeSig true "firstMid" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "firstMid" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstMid" ((PCons (PVar "m") PWild)) (EVar "m"))
 (DFunDef false "firstMid" ((PList)) (ELit (LString "<module>")))
-(DTypeSig false "andList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "andList" ((PList)) (ELit (LString "")))
-(DFunDef false "andList" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "andList" ((PList (PVar "x") (PVar "y"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " and "))) (EApp (EVar "display") (EVar "y"))) (ELit (LString ""))))
-(DFunDef false "andList" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "andList") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
@@ -2540,7 +2513,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
 (DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "` from module `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "`"))))))
-(DTypeSig true "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "headL" ((PList)) (ELit (LString "")))
 (DFunDef false "headL" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "fieldFixFrom" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))))
@@ -2645,10 +2618,6 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "superContextNoImplMsg" ((PVar "subject") (PVar "derived") (PVar "superGoal") (PVar "pred") (PVar "predBare")) (EIf (EVar "derived") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` (derived) must provide its superinterface `"))) (EApp (EMethodRef "display") (EVar "superGoal"))) (ELit (LString "`, whose instance requires `"))) (EApp (EMethodRef "display") (EVar "pred"))) (ELit (LString "`, and no impl provides it; add `impl "))) (EApp (EMethodRef "display") (EVar "predBare"))) (ELit (LString "`, and write the derived impl by hand if its `requires` must change"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` must provide its superinterface `"))) (EApp (EMethodRef "display") (EVar "superGoal"))) (ELit (LString "`, whose instance requires `"))) (EApp (EMethodRef "display") (EVar "pred"))) (ELit (LString "`, and no impl provides it; add `impl "))) (EApp (EMethodRef "display") (EVar "predBare"))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "missingImplMethodMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingImplMethodMsg" ((PVar "iface") (PVar "tys") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "` is missing the method `"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "`; define `"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "` in the impl"))))
-(DTypeSig true "intercalateComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "intercalateComma" ((PList)) (ELit (LString "")))
-(DFunDef false "intercalateComma" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "x")) (ELit (LString "'"))))
-(DFunDef false "intercalateComma" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "', "))) (EApp (EMethodRef "display") (EApp (EVar "intercalateComma") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig true "ordinalSentinelMsg" (TyCon "String"))
 (DFunDef false "ordinalSentinelMsg" () (ELit (LString "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete")))
 (DTypeSig true "cyclicSuperIfaceMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -2738,17 +2707,12 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "missingConstraintMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingConstraintMsg" ((PVar "name") (PVar "iface") (PVar "varName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the body of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` requires `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "varName"))) (ELit (LString "`, which its signature does not declare; add `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "varName"))) (ELit (LString " =>`"))))
 (DTypeSig true "ambigReexportMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "ambigReexportMsg" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` imported from `"))) (EApp (EMethodRef "display") (EVar "depId"))) (ELit (LString "`: defined in both "))) (EApp (EMethodRef "display") (EApp (EVar "andList") (EApp (EApp (EMethodRef "map") (EVar "backticked")) (EVar "mids"))))) (ELit (LString ""))))
+(DFunDef false "ambigReexportMsg" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` imported from `"))) (EApp (EMethodRef "display") (EVar "depId"))) (ELit (LString "`: defined in both "))) (EApp (EMethodRef "display") (EApp (EVar "joinAnd") (EApp (EApp (EMethodRef "map") (EVar "backticked")) (EVar "mids"))))) (ELit (LString ""))))
 (DTypeSig true "ambigReexportHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "ambigReexportHelp" ((PVar "n") (PVar "depId") (PVar "mids")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "depId"))) (ELit (LString "` re-exports more than one `"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`; import the definition you mean directly, as in `import "))) (EApp (EMethodRef "display") (EApp (EVar "firstMid") (EVar "mids")))) (ELit (LString ".{"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "}`"))))
-(DTypeSig true "firstMid" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "firstMid" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstMid" ((PCons (PVar "m") PWild)) (EVar "m"))
 (DFunDef false "firstMid" ((PList)) (ELit (LString "<module>")))
-(DTypeSig false "andList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "andList" ((PList)) (ELit (LString "")))
-(DFunDef false "andList" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "andList" ((PList (PVar "x") (PVar "y"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ""))))
-(DFunDef false "andList" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "andList") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))

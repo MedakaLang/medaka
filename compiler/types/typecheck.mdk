@@ -557,7 +557,9 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex, indexed, sortOn, findMap, last}
+import list.{
+  replicate, drop, take, elemIndex, indexed, sortOn, findMap, last, head
+}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -724,7 +726,6 @@ import types.tc_mono.{
   authvarIdOf,
   boundTvarId,
   boundTyvarIds,
-  cellIdSet,
   cohApply,
   cohEqMono,
   cohOverlap,
@@ -743,7 +744,6 @@ import types.tc_mono.{
   effectRoots,
   effectRowRoots,
   effvarIdOf,
-  effvarLevel,
   exactReturnRequestOfGoal,
   expectedParamTypes,
   findTvarInMono,
@@ -764,7 +764,6 @@ import types.tc_mono.{
   isMonoScheme,
   isPreludeOrigin,
   isUnboundTvar,
-  isUnshaped,
   joinCellOf,
   litType,
   locEq,
@@ -775,13 +774,11 @@ import types.tc_mono.{
   matchTyMono,
   mergeOne,
   mergeSubstPreferConcrete,
-  minLevelOf,
   monoArgUnboundIds,
   monoClosed,
   monoHasArrowInSlot,
   monoHeadIsDecl,
   monoIndexEffvarIds,
-  monoIsApp,
   monoIsBool,
   monoIsTyvarId,
   monoMintedBefore,
@@ -789,7 +786,6 @@ import types.tc_mono.{
   monoSameGiven,
   monoScheme,
   monoSizes,
-  monoSpineDepth,
   monosTvarIds,
   monoTyvarId,
   monoTyvarIds,
@@ -813,7 +809,6 @@ import types.tc_mono.{
   resultAfterArrows,
   rigidSigPairs,
   rootIdOf,
-  rowOfMembers,
   rowSame,
   rowTailId,
   sameRootId,
@@ -825,24 +820,18 @@ import types.tc_mono.{
   sigRigidBindings,
   sigStandIn,
   sigTvarIds,
-  spineHead,
   spineHeadMono,
   stripArrows,
   stripEff,
   stripTyConstraints,
   stripTyWrap,
-  substAuth,
   substMono,
-  substMonos,
-  substOblArgs,
-  substRow,
   tconBuiltin,
   tconFrom,
   tconTupleHead,
   tconUnresolved,
   tupleMono,
   tupleSpineOf,
-  tupleUnifyClash,
   tyAppSpine,
   tyArrowCount,
   tyHeadEqV,
@@ -854,7 +843,6 @@ import types.tc_mono.{
   tyVarNames,
   unquantifiedAuthIds,
   walkMonosSame,
-  xmodOblArgId,
 }
 import types.tc_state.{
   blankModuleCtx,
@@ -937,7 +925,6 @@ import types.tc_env.{
   declEnvReachFrom,
   declEnvRowVisible,
   declEnvsOrdOf,
-  declEnvVisibleAt,
   declEnvVisibleTo,
   declGradedScope,
   declParamKinds,
@@ -965,7 +952,6 @@ import types.tc_env.{
   extendVars,
   funClausePair,
   funDefs,
-  graphAmbigValues,
   graphPubDefiners,
   ieCandidatesForIface,
   ieCandidatesForMethod,
@@ -985,6 +971,7 @@ import types.tc_env.{
   ieRowsAll,
   ieRowsOwnedBy,
   ieRowsVisibleAt,
+  ieRowIface,
   ieRowTriple,
   ieRowTys,
   ieUniverseAt,
@@ -1011,21 +998,14 @@ import types.tc_env.{
   lookupIdxById,
   lookupLocalFlag,
   lookupMethodRow,
-  lookupMethodRowById,
   lookupRecordByName,
-  lookupSchemeById,
   lookupStandaloneValue,
   lookupStandaloneVar,
   lookupVar,
   methodArgs,
-  methodEnvBinding,
   methodEnvGo,
   methodExportsIndex,
   methodLevelConstraintVarNames,
-  methodPreludeRow,
-  methodRowById,
-  methodRowCanCarry,
-  methodRowCand,
   methodRowIface,
   methodRowSameNameView,
   methodRowsByIdentity,
@@ -1056,15 +1036,12 @@ import types.tc_env.{
   superLookup,
   tyTabKey,
   useModuleId,
-  variantNamed,
   withCtors,
 }
 import types.tc_diag.{
   abstractFieldMsg,
   aliasArityMsg,
   aliasesHeadRowMsg,
-  ambigReexportHelp,
-  ambigReexportMsg,
   ambiguousFieldDeclsMsg,
   ambiguousFieldMsg,
   ambiguousImplMsg,
@@ -1076,12 +1053,9 @@ import types.tc_diag.{
   argOnlyEffVarMsg,
   authorityAsTypeMsg,
   authorityAtomicLabelMsg,
-  authorityCoverMsg,
-  authorityIndexMsg,
   authorityParamAsRowMsg,
   authorityParamAsTypeMsg,
   authorityTermAsTypeMsg,
-  authorityTermTextIn,
   backticked,
   bangOnBoolHelp,
   bangOnBoolMsg,
@@ -1091,25 +1065,20 @@ import types.tc_diag.{
   binderTypeMsg,
   bindOutsideDoMsg,
   boundaryOwnsOpen,
-  closedRowMismatchMsg,
   cohCrossModuleMsg,
   cohIncomparableHelp,
   cohOverlapMsg,
   cohPreludeOverlapMsg,
   collapsesEffvarsMsg,
   collapsesTyvarsMsg,
-  constrainedApplicationText,
   containerArgHint,
   containerArgMsg,
-  contraRowMsg,
   cyclicSuperIfaceMsg,
-  deferRequiresMonadMsg,
   derivableIface,
   discardedValueFix,
   discardedValueMsg,
   doBindArgHint,
   doBindArgMsg,
-  doRequiresMonadMsg,
   effectArrowOnDataHeadMsg,
   effectEscapeMsg,
   effectInclusionMsg,
@@ -1126,9 +1095,6 @@ import types.tc_diag.{
   fieldNotInAllCtorsMsg,
   fieldPositionDiffersMsg,
   fieldTypeDiffersMsg,
-  firstMid,
-  firstTupleCallHint,
-  headL,
   i64RangeText,
   ifaceParamAuthorityKindMsg,
   ifaceParamEffectKindMsg,
@@ -1138,10 +1104,7 @@ import types.tc_diag.{
   implKindMismatchMsg,
   implTupleHeadKindMsg,
   indexEagerMsg,
-  indexRowMismatchMsg,
-  intercalateComma,
   joinDomainMsg,
-  joinMismatchMsg,
   letRecNonFunctionMsg,
   locGoalKey,
   locKey,
@@ -1161,10 +1124,8 @@ import types.tc_diag.{
   ordinalWord,
   ordinaryInPatternSlotMsg,
   overAppliedMsg,
-  paramVarianceMismatchMsg,
   partialExistentialUpdateMsg,
   patternDomainMsg,
-  patternIndexMsg,
   phantomExportMsg,
   pinsTyvarMsg,
   prependDiagOpt,
@@ -1181,18 +1142,14 @@ import types.tc_diag.{
   qualifierBinderTypeMsg,
   recordTypeError,
   renderCallArgs,
-  renderFlatRow,
   renderKindArrow,
   requiresKindMsg,
   requiresUnroutedMsg,
-  residualFailureMsg,
   rowKindMismatchMsg,
-  sameSpellingHint,
   shadowIfaceLabel,
   sigOverExpansiveMsg,
   sigTooGeneralMsg,
   sigVarGoalMsg,
-  starSpelling,
   stickyDiagsInPushOrder,
   superContextNoImplMsg,
   superContextUndeclaredMsg,
@@ -1269,7 +1226,6 @@ import types.tc_unify.{
   effectSiteKey,
   enterLevel,
   exitLevel,
-  first3,
   forceInstantiation,
   freshAuthBinderRanged,
   freshAuthSubstOpening,
@@ -3125,7 +3081,7 @@ declaredEffectsOpen mctx ty =
 --     prepend-list first-match (latest-registered wins) for lookupRecordByName.
 --   fieldOwnersRef  : field name → the registry keys whose RecordInfo declares it
 --     (a multimap).  fieldOwnerNames still `sortUniqS`es this so the owner-list
---     order that feeds ambiguousFieldMsg/headL stays byte-identical.
+--     order that feeds ambiguousFieldMsg/head stays byte-identical.
 
 -- Transparent type aliases (`type Foo = Int`, `type Pair a = (a, a)`).  Keyed by
 -- alias name → (params, RHS surface type).  Populated in a pre-pass by
@@ -6509,7 +6465,7 @@ routeWalkMemoized : SiteCtx ->
   List Route
 routeWalkMemoized sx encl useScope goals row walk follow =
   let memo = reqWalkMemo walk
-  let iface = first3 (ieRowTriple row)
+  let iface = ieRowIface row
   let key = enteredGoalKey walk
   let entries = optionOr [] (omLookup key memo.wmRoutes.value)
   match routeWalkRecorded iface goals row encl useScope entries
@@ -11502,7 +11458,7 @@ recordUpdateWellTyped mctx bt rname ri fn = match headTyconMono bt
 -- field_owners maps to the record's type name and the variant's con_name.
 -- The field→owners multimap (fieldOwnersRef) already holds exactly this set of
 -- keys, maintained at registration; `sortUniqS` canonicalizes it so the rendered
--- owner-list order (ambiguousFieldMsg / headL) is byte-identical to the old walk.
+-- owner-list order (ambiguousFieldMsg / head) is byte-identical to the old walk.
 --
 -- #1597: the owner list is then REACHABILITY-FILTERED — see `fieldOwnerReachFilter`.
 -- This is the one reader of the field→owners multimap that decides ACCEPTANCE, and it
@@ -11952,7 +11908,7 @@ resolveFieldAmbiguous mctx te fname owners =
   resolveFieldOwnersNarrowed mctx te fname owners
 
 -- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
--- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
+-- `sortUniqS` makes `head owners` a MODULE-NAME SORT, so before this the concrete
 -- arm decided which record a `.field` access means by the alphabetical order of the
 -- declaring modules — measured on the emit path as `CFieldAccess (CVar
 -- "zwrap__mkZ") "a" "awrap__Cfg"`: zwrap's value, awrap's record, applied
@@ -11985,7 +11941,7 @@ resolveFieldAmbiguous mctx te fname owners =
 --     retracted claim was that "anything other than exactly one surviving candidate
 --     returns today's answer, so it can never widen an accept" — the premise is
 --     true and the conclusion does not follow: a singleton survivor is itself a new
---     accept where the old ladder's `headL` pick reached a unify mismatch.  For
+--     accept where the old ladder's `head` pick reached a unify mismatch.  For
 --     SINGLE-constructor records that widening is the fix (`flat`, `#1216`).  For a
 --     MULTI-`ConNamed`-variant type it was unsound, exactly as the `#1319 UNIT 2`
 --     note above predicted for a type-keyed record index: `recordCandIsReceiverDecl`
@@ -12005,7 +11961,7 @@ resolveFieldAmbiguous mctx te fname owners =
 -- unannotated-receiver path): the named-field constructors of the receiver's type
 -- are one candidate, and `fieldSelectionWellTyped` decides afterwards whether they
 -- agree about the field's slot and type.  Left uncollapsed, two constructors of
--- one type are two survivors, and the answer becomes the sorted `headL owners`,
+-- one type are two survivors, and the answer becomes the sorted `head owners`,
 -- which depends on how an unrelated type's constructor is spelled.
 --
 -- One mint of the receiver's key for the whole filter, not one per candidate, for the
@@ -12043,7 +11999,8 @@ narrowedPick : ModuleCtx ->
   Option (String, RecordInfo)
 narrowedPick mctx rk fname _ [(k, ri)]
   | not (narrowingBlockedByCtorSibling mctx rk fname k) = Some (k, ri)
-narrowedPick mctx _ _ owners _ = pairRecordByName mctx (headL owners)
+narrowedPick mctx _ _ owners _ =
+  pairRecordByName mctx (optionOr "" (head owners))
 
 -- Is there ANOTHER registered named-field constructor sharing the survivor's
 -- RESULT head that does NOT declare `fname`?  That is precisely the
@@ -21509,7 +21466,7 @@ phantomMethodMsg ifaceName typarams (mname, mty, _) =
     [
       (
         firstTyLoc mty,
-        "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{intercalateComma (map backticked typarams)}, so it cannot be dispatched",
+        "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{joinWith ", " (map (t => "'" ++ backticked t ++ "'") typarams)}, so it cannot be dispatched",
       ),
     ]
 
@@ -22232,7 +22189,7 @@ implDictRoutesForRow sx encl useScope goals row =
         useScope
         subst
         reqs
-        (reqWalkSeed (first3 (ieRowTriple row)) goals)
+        (reqWalkSeed (ieRowIface row) goals)
     None => []
 
 -- Missing predicate-vector metadata keeps the scalar result-head match used by
@@ -22256,7 +22213,7 @@ legacyReturnReqRoutesForRow sx encl useScope resultMono row =
             useScope
             subst
             reqs
-            (reqWalkSeed (first3 (ieRowTriple row)) [resultMono])
+            (reqWalkSeed (ieRowIface row) [resultMono])
         None => []
     None => []
 
@@ -23191,7 +23148,7 @@ argImplRequiresRoutesForRow : SiteCtx ->
   ImplRow ->
   List Route
 argImplRequiresRoutesForRow sx encl useScope m goals walk row =
-  match reqWalkEnter walk (first3 (ieRowTriple row)) goals
+  match reqWalkEnter walk (ieRowIface row) goals
     ReqOn next => routeWalkMemoized
       sx
       encl
@@ -43550,7 +43507,8 @@ schemeLines : List (String, PubScheme) -> List String
 schemeLines [] = []
 schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 
--- Rows assigned to `tc_decls`; they live here until that module is extracted (a row cannot sit in an extracted module that a lower module would have to import).
+-- Rows assigned to `tc_decls`; they live here until that module is extracted: an extracted lower
+-- module (`tc_env`) cannot host a row that calls up into a higher extracted module (`tc_scope`).
 
 declEnvModulesFrom : GraphCtx ->
   Int ->

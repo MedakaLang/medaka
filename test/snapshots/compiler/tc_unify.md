@@ -1,11 +1,17 @@
 # META
-source_lines=3007
+source_lines=3009
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
 -- `lowerOwnedRoot`), unification over types, rows, joins, index rows and authority, the occurs
--- check, the mismatch action (`typeMismatch`, `poisonMismatchVars`), generalization and
--- instantiation.
+-- check, the mismatch action (`typeMismatch`, `poisonMismatchVars`, the do-block report
+-- `recordDoMonadError`), generalization (with the defaulting it performs: sourceless authorities,
+-- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
+-- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
+-- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
+-- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
+-- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
+-- message text is `tc_diag`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
 -- 6.6-6.8.
@@ -1082,8 +1088,8 @@ unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
 -- A tuple TYPE is a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
--- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a TVar-headed
--- spine (so `p a b` unifying with a tuple still flows through the generic arm).
+-- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a
+-- TVar-headed spine (so `p a b` unifying with a tuple still flows through the generic arm).
 unifyN dyn t1 t2
   | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
 -- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
@@ -1833,10 +1839,6 @@ freshAuthSubstOpeningIn mctx ids cells =
   (map ((id, cell, _) => (id, AVar cell)) pairs, opened)
 
 export
-first3 : (a, b, c) -> a
-first3 (x, _, _) = x
-
-export
 freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
 freshSubst mctx [] = []
 freshSubst mctx (id :: rest) =
@@ -2339,12 +2341,12 @@ instantiateLegacyVarTracked mctx x id s =
 -- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves exactly
 -- as it did.  (3) precedes (2) because (3) is IMPORT-SCOPED and (2) is a program-global
 -- bare-NAME table.  The disjointness does not come from `currentImportDefinersRef`
--- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from THIS module's own `DUse` decls, and
--- `importDefinersOf` skipping `core` is irrelevant to it — what keeps prelude names out of
--- (3) is that no module writes a `DUse` for the implicit prelude at all, so no arm of
--- `importedSchemeOblEntries` ever emits one.  The populations are therefore disjoint by
--- construction, and the one case where both could answer — a user module exporting a name
--- core also defines — is exactly the case where the import-scoped answer is the right one.
+-- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from
+-- THIS module's own `DUse` decls, and `importDefinersOf` skipping `core` is irrelevant to it —
+-- what keeps prelude names out of (3) is that no module writes a `DUse` for the implicit prelude
+-- at all, so no arm of `importedSchemeOblEntries` ever emits one.  The populations are therefore
+-- disjoint by construction, and the one case where both could answer — a user module exporting a
+-- name core also defines — is exactly the case where the import-scoped answer is the right one.
 export
 declaredCrossModuleObls : ModuleCtx -> String -> Option (List VecObl)
 declaredCrossModuleObls mctx x = match qualConstraintDecl mctx x
@@ -3309,8 +3311,6 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig true "freshAuthSubstOpeningIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PList) PWild) (ETuple (EListLit) (EListLit)))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EVar "flatMap") (ELam ((PTuple PWild (PVar "cell") (PVar "isOpen"))) (EIf (EVar "isOpen") (EListLit (EVar "cell")) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "id") (PVar "cell") PWild)) (ETuple (EVar "id") (EApp (EVar "AVar") (EVar "cell"))))) (EVar "pairs")) (EVar "opened")))))
-(DTypeSig true "first3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
-(DFunDef false "first3" ((PTuple (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig true "freshSubst" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
 (DFunDef false "freshSubst" ((PVar "mctx") (PList)) (EListLit))
 (DFunDef false "freshSubst" ((PVar "mctx") (PCons (PVar "id") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "id") (EVar "ambiguousImportTyvarId")) (EApp (EApp (EApp (EVar "poisonMismatchVars") (EVar "mctx")) (EVar "v")) (EVar "v")) (ELit LUnit))) (DoExpr (EBinOp "::" (ETuple (EVar "id") (EVar "v")) (EApp (EApp (EVar "freshSubst") (EVar "mctx")) (EVar "rest"))))))
@@ -3857,8 +3857,6 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig true "freshAuthSubstOpeningIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PList) PWild) (ETuple (EListLit) (EListLit)))
 (DFunDef false "freshAuthSubstOpeningIn" ((PVar "mctx") (PVar "ids") (PVar "cells")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "freshInferenceAuthvar") (EVar "mctx")) (EVar "id")) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "cells")))) (DoExpr (ETuple (EVar "id") (EVar "cell") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "ctorExistentialsRef") "value"))))))) (EVar "ids"))) (DoLet false false (PVar "opened") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple PWild (PVar "cell") (PVar "isOpen"))) (EIf (EVar "isOpen") (EListLit (EVar "cell")) (EListLit)))) (EVar "pairs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "cell")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "openedAuthvarsRef") "value")) (EVar "opened")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "id") (PVar "cell") PWild)) (ETuple (EVar "id") (EApp (EVar "AVar") (EVar "cell"))))) (EVar "pairs")) (EVar "opened")))))
-(DTypeSig true "first3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
-(DFunDef false "first3" ((PTuple (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig true "freshSubst" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
 (DFunDef false "freshSubst" ((PVar "mctx") (PList)) (EListLit))
 (DFunDef false "freshSubst" ((PVar "mctx") (PCons (PVar "id") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "id") (EVar "ambiguousImportTyvarId")) (EApp (EApp (EApp (EVar "poisonMismatchVars") (EVar "mctx")) (EVar "v")) (EVar "v")) (ELit LUnit))) (DoExpr (EBinOp "::" (ETuple (EVar "id") (EVar "v")) (EApp (EApp (EVar "freshSubst") (EVar "mctx")) (EVar "rest"))))))

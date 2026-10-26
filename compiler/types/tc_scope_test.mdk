@@ -7,6 +7,7 @@
 -- built with the envelope's own builders, so each test needs a minted `ModuleCtx` and none
 -- is a doctest.
 
+import list.{last}
 import test.{
   expectAll,
   expectEqual,
@@ -42,7 +43,6 @@ import types.tc_scope.{
   memberBindsCtorName,
   methodAdmissionHere,
   methodAdmittedHere,
-  methodEntryHere,
   methodIfaceHere,
   methodNameDeclaredAt,
   methodVisibleHere,
@@ -90,15 +90,12 @@ readerOf mods =
   g.declEnvsRef := { empty |
     deMethods = methodEnvGo g rows empty.deMethods,
   }
-  readerIn g (lastMod mods)
+  match last mods
+    Some reader => readerIn g reader
+    None => panic "readerOf: no modules"
 
 rowOf : GraphCtx -> Mod -> DeclEnvModule
 rowOf g (m@(Mod ord mid _)) = declEnvModule g ord mid (modDecls m)
-
-lastMod : List Mod -> Mod
-lastMod [] = Mod 0 "" ""
-lastMod [m] = m
-lastMod (_ :: rest) = lastMod rest
 
 readerIn : GraphCtx -> Mod -> ModuleCtx
 readerIn g (m@(Mod ord mid _)) =
@@ -108,12 +105,14 @@ readerIn g (m@(Mod ord mid _)) =
 
 -- The admitted set of [n], as identity strings.
 admitted : ModuleCtx -> String -> List String
-admitted m n = map (r => originOf (Some r)) (methodAdmittedHere m n)
+admitted m n = map identityOf (methodAdmittedHere m n)
 
 -- The module id an interface was declared in.
-originOf : Option IfaceRef -> String
-originOf None = "<none>"
-originOf (Some ir) = ifaceIdentity ir.irOrigin ir.irName
+identityOf : IfaceRef -> String
+identityOf ir = ifaceIdentity ir.irOrigin ir.irName
+
+originOf : Option IfaceRef -> Option String
+originOf o = map identityOf o
 
 ifaceSrc : String -> String
 ifaceSrc name = "interface \{name} a where\n  mth : a -> Int\n"
@@ -210,7 +209,7 @@ test "the visible declarations of a spelling are the ordinal prefix, in ordinal 
   let at =
     cur =>
       map
-        (r => originOf (Some (iface r.mrEntry)))
+        (r => identityOf (iface r.mrEntry))
         (methodVisibleHere (withOrd m cur) "mth")
   expectAll [
     expectEqual [] (at 0),
@@ -226,14 +225,14 @@ withOrd m ord =
 test "a single visible declaration decides without any import" =
   let m = readerOf [Mod 1 "ma" (ifaceSrc "IA"), Mod 2 "user" ""]
   expectAll [
-    expectEqual "ma::IA" (originOf (methodIfaceHere m "mth")),
+    expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth")),
     expectEqual [] (admitted m "mth"),
   ]
 
 test "a spelling no module declares has no declaration" =
   let m = readTwo ""
   expectAll [
-    expectEqual "<none>" (originOf (methodIfaceHere m "nothing")),
+    expectEqual None (originOf (methodIfaceHere m "nothing")),
     expectEqual [] (admitted m "nothing"),
     expectTrue (isNone (methodAdmissionHere m "nothing")),
   ]
@@ -248,35 +247,35 @@ test "the reader's own interface beats an imported one" =
             "user"
             "import ma.{mth}\ninterface IU a where\n  mth : a -> Int\n",
         ])
-  expectEqual "user::IU" (originOf (methodIfaceHere m "mth"))
+  expectEqual (Some "user::IU") (originOf (methodIfaceHere m "mth"))
 
 test "rung 1: a use-path that names the method decides" = expectAll [
   expectEqual
-    "mb::IB"
+    (Some "mb::IB")
     (originOf (methodIfaceHere (readTwo "import mb.{mth}\n") "mth")),
   expectEqual
-    "ma::IA"
+    (Some "ma::IA")
     (originOf (methodIfaceHere (readTwo "import ma.{mth}\n") "mth")),
 ]
 
 test "rung 2: a use-path that names only the interface decides when no path names the method" = expectAll
   [
     expectEqual
-      "mb::IB"
+      (Some "mb::IB")
       (originOf (methodIfaceHere (readTwo "import mb.{IB}\n") "mth")),
     expectEqual
-      "ma::IA"
+      (Some "ma::IA")
       (originOf (methodIfaceHere (readTwo "import ma.{IA}\n") "mth")),
   ]
 
 test "rung 1 outranks rung 2 when both witness a declaration" =
   let m = readTwo "import ma.{mth}\nimport mb.{IB}\n"
-  expectEqual "ma::IA" (originOf (methodIfaceHere m "mth"))
+  expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth"))
 
 test "a path that names neither the method nor an interface of it admits nothing" =
   let m = readTwo "import mb.{other}\n"
   expectAll [
-    expectEqual "<none>" (originOf (methodIfaceHere m "mth")),
+    expectEqual None (originOf (methodIfaceHere m "mth")),
     expectEqual [] (admitted m "mth"),
   ]
 
@@ -284,7 +283,7 @@ test "two wildcard imports admit both declarations: no single winner, the set so
   let m = readTwo "import ma.*\nimport mb.*\n"
   let swapped = readTwo "import mb.*\nimport ma.*\n"
   expectAll [
-    expectEqual "<none>" (originOf (methodIfaceHere m "mth")),
+    expectEqual None (originOf (methodIfaceHere m "mth")),
     expectEqual ["ma::IA", "mb::IB"] (admitted m "mth"),
     expectEqual (admitted m "mth") (admitted swapped "mth"),
     expectEqual (Some []) (map (map ifaceSortKey) (methodAdmissionHere m "mth")),
@@ -296,7 +295,7 @@ test "a same-named interface in another module is refused by identity, not by sp
     Mod 2 "mb" (ifaceSrc "Same"),
     Mod 3 "user" "import mb.{mth}\n",
   ]
-  expectEqual "mb::Same" (originOf (methodIfaceHere m "mth"))
+  expectEqual (Some "mb::Same") (originOf (methodIfaceHere m "mth"))
 
 test "the prelude's declaration answers when no import names a declaration" =
   let m = readerOf [
@@ -304,7 +303,7 @@ test "the prelude's declaration answers when no import names a declaration" =
     Mod 1 "ma" (ifaceSrc "IA"),
     Mod 2 "user" "",
   ]
-  expectEqual "core::Core" (originOf (methodIfaceHere m "mth"))
+  expectEqual (Some "core::Core") (originOf (methodIfaceHere m "mth"))
 
 test "an import that names the method outranks the prelude's declaration" =
   let m = readerOf [
@@ -312,22 +311,22 @@ test "an import that names the method outranks the prelude's declaration" =
     Mod 1 "ma" (ifaceSrc "IA"),
     Mod 2 "user" "import ma.{mth}\n",
   ]
-  expectEqual "ma::IA" (originOf (methodIfaceHere m "mth"))
+  expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth"))
 
 test "a module alias is the last rung: it decides only when nothing else does" = expectAll
   [
     expectEqual
-      "ma::IA"
+      (Some "ma::IA")
       (originOf (methodIfaceHere (readTwo "import ma as A\n") "mth")),
     expectEqual
-      "mb::IB"
+      (Some "mb::IB")
       (originOf
         (methodIfaceHere (readTwo "import ma as A\nimport mb.{mth}\n") "mth")),
   ]
 
 -- ── the alias-qualified supply ────────────────────────────────────────────
 
-aliasTable : ModuleCtx -> List Decl -> List String
+aliasTable : ModuleCtx -> List Decl -> List (Option String)
 aliasTable m prog =
   let tab = aliasQualifiedMethodEntries m prog omEmpty
   map (k => originOf (map (e => iface e) (omLookup k tab))) ["A.mth", "B.mth"]
@@ -342,7 +341,7 @@ readerProg m = match m.mcCells.methodScopeCtxRef.value
 
 test "an alias-qualified method spelling resolves to the aliased module's declaration" =
   let m = readTwo "import ma as A\nimport mb as B\n"
-  expectEqual ["ma::IA", "mb::IB"] (aliasTable m (readerProg m))
+  expectEqual [Some "ma::IA", Some "mb::IB"] (aliasTable m (readerProg m))
 
 test "two modules aliased under one name give no entry and one ambiguity, in either import order" =
   let ab = readTwo "import ma as A\nimport mb as A\n"
@@ -351,7 +350,7 @@ test "two modules aliased under one name give no entry and one ambiguity, in eit
   let rowsAb = aliasTable ab (readerProg ab)
   let rowsBa = aliasTable ba (readerProg ba)
   expectAll [
-    expectEqual ["<none>", "<none>"] rowsAb,
+    expectEqual [None, None] rowsAb,
     expectEqual rowsAb rowsBa,
     expectEqual ["T-AMBIGUOUS-ALIAS-METHOD"] (codes ab),
     expectEqual (codes ab) (codes ba),

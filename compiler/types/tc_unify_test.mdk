@@ -10,6 +10,7 @@ import list.{indexed, lookup, nub, reverse, zip}
 import test.{
   expectAll,
   expectEqual,
+  expectFalse,
 }
 import frontend.ast.{TyConOrigin(..)}
 import types.effect_rows.{pureRow}
@@ -112,13 +113,18 @@ levelsOf m = match normalize m
 -- Unify the types of [a] and [b] (variables of the two are distinct cells) and answer
 -- whether it was accepted, with the joint reading of both operands afterwards.  [swap]
 -- makes the call with the operands exchanged.
-unifyPair : MTy -> MTy -> Bool -> (Bool, List String)
+data PairRead = PairRead {
+  accepted : Bool,
+  readings : List String,
+} deriving (Eq, Debug)
+
+unifyPair : MTy -> MTy -> Bool -> PairRead
 unifyPair a b swap =
   let m = fresh ()
   let ma = buildFresh m a
   let mb = buildFresh m b
   if swap then unify m mb ma else unify m ma mb
-  (codes m == [], shapes [ma, mb])
+  PairRead { accepted = codes m == [], readings = shapes [ma, mb] }
 
 -- A pair of model types to unify.  A quarter are independent draws, which clash or
 -- unify by chance; the rest are two independent "blurs" of one closed type, in which
@@ -399,12 +405,8 @@ test "instantiation mints fresh variables, keeps a repeated variable as one, and
   expectAll [
     expectEqual ["(v0 -> (v1 -> v0))"] (shapes [first]),
     expectEqual ["(v0 -> (v1 -> v0))"] (shapes [mono]),
-    expectEqual
-      []
-      (filter (id => elem id (monoUnboundIds mono)) (monoUnboundIds first)),
-    expectEqual
-      []
-      (filter (id => elem id (monoUnboundIds first)) (monoUnboundIds second)),
+    expectFalse (anyShared (monoUnboundIds first) (monoUnboundIds mono)),
+    expectFalse (anyShared (monoUnboundIds second) (monoUnboundIds first)),
   ]
 
 test "an instance is independent of the scheme: unifying it binds none of the scheme's variables" =
@@ -440,16 +442,18 @@ anyShared xs ys = any (x => elem x ys) xs
 -- (and both operands read alike).  Directed flows are not symmetric and are not here.
 prop "unification gives the same verdict and the same resolved types under operand swap" (p : UPair) =
   let (UPair a b) = p
-  let (ok1, read1) = unifyPair a b False
-  let (ok2, read2) = unifyPair a b True
-  ok1 == ok2 && (not ok1 || read1 == read2 && length (nub read1) == 1)
+  let r1 = unifyPair a b False
+  let r2 = unifyPair a b True
+  r1.accepted == r2.accepted
+    && (not r1.accepted
+      || r1.readings == r2.readings && length (nub r1.readings) == 1)
 
 test "the symmetry harness reads an accepted pair as one shared type and a refused pair as refused" = expectAll
   [
     expectEqual
-      (True, ["(Int v0)", "(Int v0)"])
+      PairRead { accepted = True, readings = ["(Int v0)", "(Int v0)"] }
       (unifyPair (MApp (MCon "Int") (MVar 0)) (MApp (MVar 1) (MVar 2)) False),
     expectEqual
-      (False, ["Int", "Bool"])
+      PairRead { accepted = False, readings = ["Int", "Bool"] }
       (unifyPair (MCon "Int") (MCon "Bool") True),
   ]

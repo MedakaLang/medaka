@@ -11,7 +11,6 @@ ambiguousFieldMsg : String -> List String -> String
 ambiguousImplMsg : String -> String
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 ambiguousShadowHelp : String
-andList : List String -> String
 annotTooGeneralMsg : Ty -> String
 appSpineName : Expr -> Option String
 argAtomsMsgFor : Option String -> String -> String -> List Atom -> String
@@ -100,7 +99,6 @@ implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 indexEagerMsg : String -> String -> String
 indexRowMismatchMsg : List Atom -> List Atom -> String
-intercalateComma : List String -> String
 isTupleTyName : String -> Bool
 joinAnd : List String -> String
 joinDomainMsg : List String -> String

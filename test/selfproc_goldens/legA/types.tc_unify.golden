@@ -38,7 +38,6 @@ effectSiteKey : String -> String -> String
 enterLevel : ModuleCtx -> Unit -> Unit
 exitLevel : ModuleCtx -> Unit -> Unit
 expandIoInBound : GraphCtx -> List Atom -> List Atom
-first3 : (a, b, c) -> a
 flexibleIndex : ModuleCtx -> Ref Authvar -> Authority -> Bool
 forceInstantiation : ModuleCtx -> String -> MethodTrackedInstantiation -> Mono
 freeAuthvars : ModuleCtx -> Mono -> List Int

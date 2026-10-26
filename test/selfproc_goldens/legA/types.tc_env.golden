@@ -155,6 +155,7 @@ ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
 ieRowAnswersMethod : GraphCtx -> ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
+ieRowIface : ImplRow -> IfaceRef
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInheritsDefault : GraphCtx -> ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef

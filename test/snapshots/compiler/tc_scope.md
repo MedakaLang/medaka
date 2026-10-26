@@ -1,12 +1,14 @@
 # META
-source_lines=1764
+source_lines=1765
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
--- own, imported and undecided rungs, admission, the dispatch-index and impl-existence reads scoped
--- by it), the ctor and record scoped views (candidates, overrides, scoped entries), and the
--- alias-qualified supply (`import m as A` rows, keys, spellings, ambiguity message, dictionary
--- names and constraint entries).
+-- own, imported and undecided rungs, admission, the method scheme rows it selects
+-- (`pickSchemesByDecl`, `admittedRowFor`, `admittedSchemeFor`, `undecidedSchemeFor`,
+-- `annotateImportedMethodRows`), the dispatch-index and impl-existence reads scoped by it), the
+-- ctor and record scoped views (candidates, overrides, scoped entries), and the alias-qualified
+-- supply (`import m as A` rows, keys, spellings, ambiguity message, dictionary names and constraint
+-- entries).
 --
 -- Spec: SHADOW section 1.0, S1-NS, S2-DECL; language-design Module System, Import Details; SYNTAX
 -- Import aliasing.
@@ -173,10 +175,10 @@ usePathAdmitsDecl path wide n iface =
   usePathBindsName path n || wide && usePathBindsName path iface.irName
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
--- name the dependency exports — and that
--- is safe: the export test above still admits only the declarations the dependency
--- really provides.  `UseAlias` yields `Some []` and so witnesses nothing — see the #1276
--- paragraph above for why that is a different defect rather than this one's residue.
+-- name the dependency exports — and that is safe: the export test above still admits only
+-- the declarations the dependency really provides.  `UseAlias` yields `Some []` and so witnesses
+-- nothing — see the #1276 paragraph above for why that is a different defect rather than this
+-- one's residue.
 usePathBindsName : UsePath -> String -> Bool
 usePathBindsName path n = match importedBindings path
   None => True
@@ -616,16 +618,15 @@ admittedIfaceWord mctx name = match methodIfaceHere mctx name
 --
 -- The remedy is a SUPPLY, not a re-key and not a rewrite: add `A.<method>` → the entry
 -- `m`'s OWN declaration identity gives, for every method `m` exports.  Additive against
--- the bare-name scope answer (`methodScopeAt`) — a bare method name
--- can never be spelled with a dot, so no name that already had an answer gets a
--- different one.
+-- the bare-name scope answer (`methodScopeAt`) — a bare method name can never be spelled
+-- with a dot, so no name that already had an answer gets a different one.
 --
--- NOT additive against THIS BLOCK'S OWN entries.  Two DIFFERENT modules aliased under the SAME name (`import ifa as A` beside
--- `import ifb as A`) that both export a method spelled `mth` mint the SAME key `A.mth`,
--- and a plain `omInsert` lets the later `import` silently
--- overwrite the earlier one.  MEASURED with such an insert: two interfaces `IA`/`IB` each declaring `mth`,
--- an entry with both aliases and `impl IA Blob` only — with `ifa as A` FIRST the program
--- is REJECTED `No impl of IB for Blob`, and with the two `import … as A` lines SWAPPED
+-- NOT additive against THIS BLOCK'S OWN entries.  Two DIFFERENT modules aliased under the
+-- SAME name (`import ifa as A` beside `import ifb as A`) that both export a method spelled
+-- `mth` mint the SAME key `A.mth`, and a plain `omInsert` lets the later `import` silently
+-- overwrite the earlier one.  MEASURED with such an insert: two interfaces `IA`/`IB` each
+-- declaring `mth`, an entry with both aliases and `impl IA Blob` only — with `ifa as A` FIRST the
+-- program is REJECTED `No impl of IB for Blob`, and with the two `import … as A` lines SWAPPED
 -- (nothing else changed) it is ACCEPTED and prints 1.  Permuting two imports flipped the
 -- accept/reject verdict, on `check`, `run` and `build` alike.
 --

@@ -1,9 +1,12 @@
 # META
-source_lines=588
+source_lines=591
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
--- and the `DeclEnvs` polarity fixpoint.
+-- and the `DeclEnvs` polarity fixpoint, with its dependency order, key index (`tabKeyIndex*`) and
+-- public-entry filter, and the recording of a declaration's parameter polarities; it also holds the
+-- AST payload accessors it is the lowest caller of (`variantPayload`, `payloadAstTypes`,
+-- `fieldTyOf`).
 --
 -- Spec: EFFECTS section 6.4 (inferred variance, invariant indices), section 6.8 (covariant joins),
 -- section 5 (the covariant-position check); HM-CORE section 3 (owed, #2555: unification
@@ -381,11 +384,11 @@ recordParamPolarities mctx o name pols =
 -- `Ref`'s row to already be visible.  A CONCRETE head that is not yet
 -- registered — a forward reference, or the type itself, as in `data List a =
 -- Nil | Cons a (List a)` — reads `PCo` (`polarityAtOr None`), which is exactly
--- the fully lenient default: it can only fail to tighten, never reject a program.  Inside `declEnvPolarityEntriesFix`
--- no own head misses: every declaration is seeded at `PPhantom`, so a self or
--- forward reference reads "no occurrence yet", the join's unit, and the
--- self-recursive `List` comes out `PCo` by convergence.  The `None` default
--- is left to the single-pass `registerVariants` path.
+-- the fully lenient default: it can only fail to tighten, never reject a program.  Inside
+-- `declEnvPolarityEntriesFix` no own head misses: every declaration is seeded at `PPhantom`, so a
+-- self or forward reference reads "no occurrence yet", the join's unit, and the self-recursive
+-- `List` comes out `PCo` by convergence.  The `None` default is left to the single-pass
+-- `registerVariants` path.
 -- That paragraph scopes to the unregistered-*TyCon*-head miss only, and is
 -- Not the abstract-HEAD ARM (#2107).  The two were one sentence until #2107
 -- separated them: a head that is a type *parameter* (`data W f a = MkW (f a)`)

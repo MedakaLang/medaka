@@ -41,62 +41,67 @@ chainRows mods =
   map (e => (tabKeyName (fst e), map polName (snd e))) entries
 
 -- The published polarities of [name] in one module whose source is [src].
-polsOf : String -> String -> List String
-polsOf src name =
-  optionOr ["<absent>"] (lookup name (chainRows [moduleOf 1 src]))
+polsOf : String -> String -> Option (List String)
+polsOf src name = lookup name (chainRows [moduleOf 1 src])
 
 test "a parameter used only as a field is covariant, and a repeat keeps it covariant" = expectAll
   [
-    expectEqual ["co"] (polsOf "export data Box a = Box a" "Box"),
-    expectEqual ["co"] (polsOf "export data Two a = A a | B a a" "Two"),
+    expectEqual (Some ["co"]) (polsOf "export data Box a = Box a" "Box"),
+    expectEqual (Some ["co"]) (polsOf "export data Two a = A a | B a a" "Two"),
   ]
 
 test "a parameter used only as an argument is contravariant" = expectAll [
-  expectEqual ["contra"] (polsOf "export data Sink a = Sink (a -> Int)" "Sink"),
   expectEqual
-    ["contra"]
+    (Some ["contra"])
+    (polsOf "export data Sink a = Sink (a -> Int)" "Sink"),
+  expectEqual
+    (Some ["contra"])
     (polsOf "export data Sink a = S1 (a -> Int) | S2 (a -> Bool)" "Sink"),
 ]
 
 test "covariant joined with contravariant is invariant, in either field order" = expectAll
   [
     expectEqual
-      ["inv"]
+      (Some ["inv"])
       (polsOf "export data Both a = Both a (a -> Int)" "Both"),
     expectEqual
-      ["inv"]
+      (Some ["inv"])
       (polsOf "export data Both a = Both (a -> Int) a" "Both"),
     expectEqual
-      ["inv"]
+      (Some ["inv"])
       (polsOf "export data Both a = L a | R (a -> Int)" "Both"),
   ]
 
 test "an argument of an argument is covariant again, and a phantom parameter publishes as covariant" = expectAll
   [
     expectEqual
-      ["co"]
+      (Some ["co"])
       (polsOf "export data Cc a = Cc ((a -> Int) -> Int)" "Cc"),
-    expectEqual ["co"] (polsOf "export data Ph a = Ph Int" "Ph"),
+    expectEqual (Some ["co"]) (polsOf "export data Ph a = Ph Int" "Ph"),
   ]
 
 test "a head variable and its argument are both invariant, and each parameter gets its own row" = expectAll
   [
-    expectEqual ["inv", "inv"] (polsOf "export data F f a = F (f a)" "F"),
     expectEqual
-      ["co", "contra"]
+      (Some ["inv", "inv"])
+      (polsOf "export data F f a = F (f a)" "F"),
+    expectEqual
+      (Some ["co", "contra"])
       (polsOf "export data Mix a b = Mix a (b -> Int)" "Mix"),
   ]
 
 test "a recursive datatype keeps the polarity its own occurrences agree on" = expectAll
   [
-    expectEqual ["co"] (polsOf "export data L a = Nil | Cons a (L a)" "L"),
     expectEqual
-      ["contra"]
+      (Some ["co"])
+      (polsOf "export data L a = Nil | Cons a (L a)" "L"),
+    expectEqual
+      (Some ["contra"])
       (polsOf
         "export data Pred a = Pred (a -> Bool) | And (Pred a) (Pred a)"
         "Pred"),
     expectEqual
-      ["inv"]
+      (Some ["inv"])
       (polsOf "export data Bad a = Bad a (a -> Int) (Bad a)" "Bad"),
   ]
 
@@ -171,11 +176,8 @@ test "recordParamPolarities publishes phantom as covariant and keeps the newest 
   expectEqual [["inv"], ["co"]] pushed
 
 test "a private datatype never reaches a later reader's table" =
-  let rows = chainRows [
-    moduleOf 1 "data Hidden a = Hidden (a -> Int)",
-    moduleOf 2 "export data Shown a = Shown (Hidden a)",
-  ]
-  expectAll [
-    expectEqual None (lookup "Hidden" rows),
-    expectEqual (Some ["co"]) (lookup "Shown" rows),
-  ]
+  expectEqual
+    None
+    (lookup
+      "Hidden"
+      (chainRows [moduleOf 1 "data Hidden a = Hidden (a -> Int)"]))

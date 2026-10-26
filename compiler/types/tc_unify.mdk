@@ -1,7 +1,13 @@
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
 -- `lowerOwnedRoot`), unification over types, rows, joins, index rows and authority, the occurs
--- check, the mismatch action (`typeMismatch`, `poisonMismatchVars`), generalization and
--- instantiation.
+-- check, the mismatch action (`typeMismatch`, `poisonMismatchVars`, the do-block report
+-- `recordDoMonadError`), generalization (with the defaulting it performs: sourceless authorities,
+-- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
+-- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
+-- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
+-- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
+-- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
+-- message text is `tc_diag`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
 -- 6.6-6.8.
@@ -1078,8 +1084,8 @@ unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
 -- A tuple TYPE is a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
--- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a TVar-headed
--- spine (so `p a b` unifying with a tuple still flows through the generic arm).
+-- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a
+-- TVar-headed spine (so `p a b` unifying with a tuple still flows through the generic arm).
 unifyN dyn t1 t2
   | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
 -- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
@@ -1829,10 +1835,6 @@ freshAuthSubstOpeningIn mctx ids cells =
   (map ((id, cell, _) => (id, AVar cell)) pairs, opened)
 
 export
-first3 : (a, b, c) -> a
-first3 (x, _, _) = x
-
-export
 freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
 freshSubst mctx [] = []
 freshSubst mctx (id :: rest) =
@@ -2335,12 +2337,12 @@ instantiateLegacyVarTracked mctx x id s =
 -- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves exactly
 -- as it did.  (3) precedes (2) because (3) is IMPORT-SCOPED and (2) is a program-global
 -- bare-NAME table.  The disjointness does not come from `currentImportDefinersRef`
--- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from THIS module's own `DUse` decls, and
--- `importDefinersOf` skipping `core` is irrelevant to it — what keeps prelude names out of
--- (3) is that no module writes a `DUse` for the implicit prelude at all, so no arm of
--- `importedSchemeOblEntries` ever emits one.  The populations are therefore disjoint by
--- construction, and the one case where both could answer — a user module exporting a name
--- core also defines — is exactly the case where the import-scoped answer is the right one.
+-- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from
+-- THIS module's own `DUse` decls, and `importDefinersOf` skipping `core` is irrelevant to it —
+-- what keeps prelude names out of (3) is that no module writes a `DUse` for the implicit prelude
+-- at all, so no arm of `importedSchemeOblEntries` ever emits one.  The populations are therefore
+-- disjoint by construction, and the one case where both could answer — a user module exporting a
+-- name core also defines — is exactly the case where the import-scoped answer is the right one.
 export
 declaredCrossModuleObls : ModuleCtx -> String -> Option (List VecObl)
 declaredCrossModuleObls mctx x = match qualConstraintDecl mctx x

@@ -878,6 +878,10 @@ export
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
 ieRowTriple (ImplRow _ _ ir tys reqs _ _) = (ir, tys, reqs)
 
+export
+ieRowIface : ImplRow -> IfaceRef
+ieRowIface (ImplRow _ _ ir _ _ _ _) = ir
+
 -- The impl's own explicit/synthesized method table (§1112 A-3's disposition
 -- producer reads this to decide `Supplied` vs `InheritedDefault` per slot).
 export
