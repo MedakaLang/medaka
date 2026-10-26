@@ -1,0 +1,22 @@
+public export data WasmRepr = WBoxEq | WInt63 | WBool64 | WUnit64
+
+public export data WasmValue = WasmValue WasmRepr (List String)
+
+public export data LocalSlot = LocalSlot Int WasmRepr
+
+export
+valueRepr : WasmValue -> WasmRepr
+valueRepr (WasmValue repr _) = repr
+
+export
+valueLines : WasmValue -> List String
+valueLines (WasmValue _ lines) = lines
+
+export
+slotIndex : LocalSlot -> Int
+slotIndex (LocalSlot index _) = index
+
+export
+physicalType : WasmRepr -> String
+physicalType WBoxEq = "(ref eq)"
+physicalType _ = "i64"

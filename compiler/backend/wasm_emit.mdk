@@ -1,3 +1,7 @@
+import backend.wasm_repr.{
+  WasmRepr(..), WasmValue(..), LocalSlot(..), valueRepr, valueLines, slotIndex,
+  physicalType
+}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
   selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, envMark,
@@ -59,8 +63,8 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --   * TCO (§4.2): at TAIL positions (descending if/let/block/decision-arm tails) a
 --     saturated direct call → `return_call`; an indirect / non-saturated call →
 --     `return_call $__mdk_apply` (which itself `return_call_ref`s the exact case).
---     Guaranteed constant-stack (Wasm 3.0 / Node 24).  TCO is emitted in BOTH the
---     scalar-i32 path (emitScalarTail) and the ref path (emitRefTail).
+--     Guaranteed constant-stack (Wasm 3.0 / Node 24).  The common emitRefTail
+--     dispatcher handles raw i64 direct calls and boxed ref calls.
 --   * Multi-clause / pattern-param top-level fns: coalesced into one wasm func that
 --     dispatches over its synthetic positional params (a fallthrough clause chain
 --     testing literal/ctor params + binding PVar params), reusing the W3 match
@@ -707,10 +711,21 @@ data FnCtx = FnCtx {
   disp : WDispCtx,
   site : Int,
   binding : String,
+  localSlots : Ref (OrdMap LocalSlot),
+  localTypes : Ref (List WasmRepr),
+  nextLocal : Ref Int,
 }
 
-freshFnCtx : FnCtx
-freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }
+freshFnCtx : Unit -> FnCtx
+freshFnCtx () = FnCtx {
+  trmc = WTrmcOff,
+  disp = WDispOff,
+  site = 0,
+  binding = "?",
+  localSlots = Ref omEmpty,
+  localTypes = Ref [],
+  nextLocal = Ref 0,
+}
 
 progValNames : Prog -> List String
 progValNames (Prog _ _ vals _ _ _ _ _) = vals
@@ -735,12 +750,12 @@ progFnCtx (Prog _ _ _ _ _ _ _ fn) = fn
 -- group, no clause site; the binding name is inherited.
 progInFn : Prog -> Prog
 progInFn prog =
-  progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }
+  progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding }
 
 -- [progInFn prog] for the binding [name] whose first clause is at [site].
 progForBinding : String -> Int -> Prog -> Prog
 progForBinding name site prog =
-  progWithFnCtx prog { freshFnCtx | site = site, binding = name }
+  progWithFnCtx prog { freshFnCtx () | site = site, binding = name }
 
 -- The binding name the body being emitted with [prog] cites in a gap message.
 progBinding : Prog -> String
@@ -1570,11 +1585,9 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   let useClos = physical.useClos
   let useRef = physical.useRef
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
-  if useRef then
-    emitRefProgram prog plan groups
-  else
-    emitScalarProgram emit plan fnNames valNames groups
+  let prog =
+    Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
+  emitRefProgram prog plan groups
 
 -- ── emit-time closure check (#392) ──────────────────────────────────────────
 -- The runtime-line gating graph (which WAT helper block a program's use-flags
@@ -1756,7 +1769,8 @@ emitProgramGaps input plan cp0 =
   let useClos = (physicalPlanW plan).useClos
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
+  let prog =
+    Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
   let _ = emitFnsGapsW prog (userFnBinds groups)
   let _ = emitImplsGapsW prog (implGroups prog impls)
   let _ = emitValsGapsW prog (filterList isValBind groups)
@@ -2012,93 +2026,11 @@ anyList _ [] = False
 anyList p (x :: xs) = if p x then True else anyList p xs
 
 -- ════════════════════════════════════════════════════════════════════════════
--- SCALAR MODE (W2, raw i32) — byte-identical to the W2 emitter.
+-- Raw physical values and function-local storage.
 -- ════════════════════════════════════════════════════════════════════════════
-
-emitScalarProgram : WasmEmit ->
-  EmitPlan ->
-  List String ->
-  List String ->
-  List CBind ->
-  String
-emitScalarProgram emit plan fnNames valNames groups =
-  -- the scalar type section (W2 shape) with the byte-write IO import (W6 collapse)
-  -- replacing the old mdk_write_int/mdk_write_bool scaffold imports.
-  let header =
-    preambleHeadLines
-      ++ [
-        "  ;; ── §3 type section (one rec group) — scalar subset uses raw i32 ──",
-        "  (rec", "    (type $boxint (sub (struct (field i64))))",
-        "    (type $float (sub (struct (field f64))))", "  )"
-      ]
-      ++ plannedImportLines (physicalPlanW plan).imports
-  let globals = map oneGlobalI32 valNames
-  let fns =
-    flatMap (emitScalarFnBind emit fnNames valNames) (userFnBinds groups)
-  let initLines = emitScalarInit emit plan fnNames valNames groups
-  let runtime =
-    plannedHelperLines
-      (physicalPlanW plan)
-      (map strBytesW (reverseL emit.siteFiles.value))
-  let trapMsgRt = trapMsgRuntimeOf emit
-  joinNl
-    (header ++ globals ++ fns ++ runtime ++ initLines ++ trapMsgRt ++ [")"])
 
 oneGlobalI32 : String -> String
 oneGlobalI32 n = "  (global $" ++ gname n ++ " (mut i64) (i64.const 0))"
-
-emitScalarInit : WasmEmit ->
-  EmitPlan ->
-  List String ->
-  List String ->
-  List CBind ->
-  List String
-emitScalarInit emit plan fnNames valNames groups =
-  let valBinds = plannedValBinds plan groups
-  let valInit = flatMap (emitScalarValInit emit fnNames valNames) valBinds
-  let mainLines = emitScalarMain emit fnNames valNames groups
-  let valLocals = flatMap collectBindLocals valBinds
-  let mainLocals = match findMain emit groups
-    Some body => collectExprLocals body
-    None => []
-  let declsOf = ls => map (l => "  " ++ localDeclI32 l) (dedupKeep ls)
-  -- B5: scalar divisor-guard scratch (a `/`/`%` in a value-binding or `main` body).
-  let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []
-  -- Same entry shape as ref mode (emitRefInit): `start` runs the value inits,
-  -- the host calls the exported `mdk_main`.
-  ["  (func $__main"]
-    ++ dv
-    ++ declsOf mainLocals
-    ++ mainLines
-    ++ ["  )"]
-    ++ entryExports
-    ++ ["  (func $__init"]
-    ++ dv
-    ++ declsOf valLocals
-    ++ valInit
-    ++ ["  )", "  (start $__init)"]
-
-emitScalarValInit : WasmEmit ->
-  List String ->
-  List String ->
-  CBind ->
-  List String
-emitScalarValInit emit fnNames valNames (CBind name [CClause [] body] _ _) =
-  let (instrs, _) = emitScalarExpr emit fnNames valNames omEmpty body
-  indent instrs ++ ["    global.set $" ++ gname name]
-emitScalarValInit emit _ _ _ =
-  gapL emit "value binding must be a nullary clause"
-
-emitScalarMain : WasmEmit ->
-  List String ->
-  List String ->
-  List CBind ->
-  List String
-emitScalarMain emit fnNames valNames groups = match findMain emit groups
-  Some body =>
-    let (instrs, ty) = emitScalarExpr emit fnNames valNames omEmpty body
-    indent instrs ++ printFor emit ty
-  None => gapL emit "no `main` binding"
 
 printFor : WasmEmit -> WTy -> List String
 -- layer-17 §2.1: scalar values are uniformly i64 now.  Int prints directly; Bool is
@@ -2122,116 +2054,6 @@ printFor emit WFloat =
     emit
     "scalar-mode main produced a Float — internal mode mismatch (Float forces ref-mode)"
 
-emitScalarFnBind : WasmEmit ->
-  List String ->
-  List String ->
-  CBind ->
-  List String
-emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _ _) =
-  let params = map (patName emit name) pats
-  let localsInBody = collectExprLocals body
-  let extraLocals = filterList (notIn params) (dedupKeep localsInBody)
-  let env = omFromNames params omEmpty
-  let instrs = emitScalarTail emit fnNames valNames env body
-  let sig =
-    "  (func $\{gname name}\{joinWith "" (map paramDeclI32 params)} (result i64)"
-  let localDecls = map localDeclI32 extraLocals
-  -- B5: scalar divisor-guard scratch for a concrete-Int `/`/`%` in this fn body.
-  let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []
-  [sig] ++ map ("  " ++ _) (dv ++ localDecls) ++ indent instrs ++ ["  )"]
-emitScalarFnBind emit _ _ (CBind name _ _ _) =
-  gapL
-    emit
-    ("scalar-mode top-level function '"
-      ++ name
-      ++ "' is multi-clause or pattern-matching (decision-tree match needs ADT mode)")
-
--- scalar (i32) TAIL-position emitter (§4.2 TCO for the monomorphic-Int fast path).
--- Descends into if-branches; a call of a known top-level fn flagged as the tail call
--- → `return_call` (guaranteed constant-stack); any other tail leaf → its value +
--- `return`.  This is what lets a deep scalar tail-recursion (the 5M `loop`) run in
--- bounded stack.  Non-recursive / shallow fns are unaffected (still correct).
-emitScalarTail : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  CExpr ->
-  List String
-emitScalarTail emit fnNames valNames env (CIf c t f) =
-  let (ci, _) = emitScalarExpr emit fnNames valNames env c
-  let ti = emitScalarTail emit fnNames valNames env t
-  let fi = emitScalarTail emit fnNames valNames env f
-  ci
-    ++ ["i64.const 0", "i64.ne", "if (result i64)"]
-    ++ indent ti
-    ++ ["else"]
-    ++ indent fi
-    ++ ["end", "unreachable"]
-emitScalarTail emit fnNames valNames env (CLet False (PVar x _ _) e1 e2) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env e1
-  i1
-    ++ ["local.set $" ++ gname x]
-    ++ emitScalarTail emit fnNames valNames (omInsert x () env) e2
-emitScalarTail emit fnNames valNames env (CLet False PWild e1 e2) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env e1
-  i1 ++ ["drop"] ++ emitScalarTail emit fnNames valNames env e2
-emitScalarTail emit fnNames valNames env (app@(CApp _ _ _)) =
-  emitScalarAppTail emit fnNames valNames env app
-emitScalarTail emit fnNames valNames env other =
-  let (i, _) = emitScalarExpr emit fnNames valNames env other
-  i ++ ["return"]
-
-emitScalarAppTail : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  CExpr ->
-  List String
-emitScalarAppTail emit fnNames valNames env app =
-  let (hd, args) = flattenApp app []
-  match hd
-    CVar f _ =>
-      if contains f fnNames && isTailCall app then
-        let argInstrs =
-          flatMap (a => fst (emitScalarExpr emit fnNames valNames env a)) args
-        argInstrs ++ ["return_call $" ++ gname f]
-      else
-        let (i, _) = emitScalarExpr emit fnNames valNames env app
-        i ++ ["return"]
-    _ =>
-      let (i, _) = emitScalarExpr emit fnNames valNames env app
-      i ++ ["return"]
-
-paramDeclI32 : String -> String
-paramDeclI32 p = " (param $" ++ gname p ++ " i64)"
-
-localDeclI32 : String -> String
-localDeclI32 l = "(local $" ++ gname l ++ " i64)"
-
-emitScalarExpr : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  CExpr ->
-  (List String, WTy)
-emitScalarExpr emit fnNames valNames env (CLit l) = emitLitI32 emit l
-emitScalarExpr emit fnNames valNames env (CVar x _) =
-  emitVarI32 emit fnNames valNames env x
-emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag loc) =
-  emitBinI32 emit fnNames valNames env op l r tag (sitePackedW emit loc)
-emitScalarExpr emit fnNames valNames env (CUnOp op x) =
-  emitUnI32 emit fnNames valNames env op x
-emitScalarExpr emit fnNames valNames env (CIf c t f) =
-  emitIfI32 emit fnNames valNames env c t f
-emitScalarExpr emit fnNames valNames env (CLet recF pat e1 e2) =
-  emitLetI32 emit fnNames valNames env recF pat e1 e2
-emitScalarExpr emit fnNames valNames env (CBlock stmts) =
-  emitBlockI32 emit fnNames valNames env stmts
-emitScalarExpr emit fnNames valNames env (app@(CApp _ _ _)) =
-  emitAppI32 emit fnNames valNames env app
-emitScalarExpr emit _ _ _ other =
-  gapLTy emit ("scalar-mode: unsupported Core IR node " ++ ctag other)
-
 emitLitI32 : WasmEmit -> Lit -> (List String, WTy)
 -- layer-17 §2.1: scalar mode is now uniformly i64 (Int/Bool/Unit all i64 0/1/value)
 -- so >2^30 Int arithmetic computes in i64 and never truncates.
@@ -2251,34 +2073,85 @@ emitLitI32 emit (LU64 _ _) =
 emitLitI32 emit (LI64 _ _) =
   gapLTy emit "I64 literal (a boxed $i64 cell) needs ref-mode"
 
-emitVarI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  String ->
-  (List String, WTy)
-emitVarI32 emit fnNames valNames env x =
-  if omHasKey x env then
-    (["local.get $" ++ gname x], WInt)
-  else if contains x valNames then
-    (["global.get $" ++ gname x], WInt)
-  else if contains x fnNames then
-    (["call $" ++ gname x], WInt)
-  else if isUnprovidedOn
-    WasmBackend
-    (optionOr "" (externRuntimeKey emit.externFacts x)) then
-    (
-      unprovidedExternW
-        emit
-        (optionOr "" (externRuntimeKey emit.externFacts x)),
-      WInt,
-    )
+rawProgramW : Prog -> Bool
+rawProgramW prog = not (emitDemandW (progEmit prog)).useRef
+
+programReprW : Prog -> WasmRepr
+programReprW prog = if rawProgramW prog then WInt63 else WBoxEq
+
+programValueW : Prog -> List String -> WasmValue
+programValueW prog lines = WasmValue (programReprW prog) lines
+
+prependValueW : List String -> WasmValue -> WasmValue
+prependValueW prefix (WasmValue repr lines) = WasmValue repr (prefix ++ lines)
+
+rawPrintKindW : WasmRepr -> WTy
+rawPrintKindW WBool64 = WBool
+rawPrintKindW WUnit64 = WUnit
+rawPrintKindW _ = WInt
+
+rawReprW : WTy -> WasmRepr
+rawReprW WBool = WBool64
+rawReprW WUnit = WUnit64
+rawReprW _ = WInt63
+
+localTargetW : Prog -> List String -> String -> String
+localTargetW prog env name =
+  if rawProgramW prog then match WD.envLookup name env
+    WD.LocalBinder ord => match omLookup ord (progFnCtx prog).localSlots.value
+      Some slot => intToString (slotIndex slot)
+      None => panic ("wasm: missing numeric local for binder " ++ ord)
+    _ => panic ("wasm: missing scoped binder for local " ++ name)
   else
-    gapUnboundLTy
-      emit
-      ("unbound variable '"
-        ++ externDisplayW emit x
-        ++ "' (scalar mode: not a local, global value, or known function)")
+    "$" ++ gname name
+
+mintLocalW : Prog -> BinderId -> Unit
+mintLocalW prog bid =
+  if rawProgramW prog then
+    let ctx = progFnCtx prog
+    let ord = intToString (binderOrdinal bid)
+    let index = ctx.nextLocal.value
+    let _ = setRef ctx.nextLocal (index + 1)
+    let _ =
+      setRef
+        ctx.localSlots
+        (omInsert ord (LocalSlot index WInt63) ctx.localSlots.value)
+    setRef ctx.localTypes (WInt63 :: ctx.localTypes.value)
+
+installRawParamsW : Prog -> Int -> List Pat -> Unit
+installRawParamsW prog index [] = setRef (progFnCtx prog).nextLocal index
+installRawParamsW prog index (pat :: rest) =
+  let ctx = progFnCtx prog
+  let _ = match pat
+    PVar _ _ bid =>
+      setRef
+        ctx.localSlots
+        (omInsert
+          (intToString (binderOrdinal bid))
+          (LocalSlot index WInt63)
+          ctx.localSlots.value)
+    _ => ()
+  installRawParamsW prog (index + 1) rest
+
+numericDeclsW : Prog -> List String
+numericDeclsW prog =
+  map
+    (repr => "  (local " ++ physicalType repr ++ ")")
+    (reverseL (progFnCtx prog).localTypes.value)
+
+rawScratchW : Prog -> List String
+rawScratchW prog =
+  if rawProgramW prog && (progEmit prog).useDivGuard.value then
+    ["  (local $__sdivr i64)"]
+  else
+    []
+
+conditionW : Prog -> List String
+conditionW prog =
+  if rawProgramW prog then
+    ["i64.const 0", "i64.ne"]
+  else
+    ["ref.cast (ref i31)", "i31.get_u"]
 
 -- Sign-extend the i64 on the stack from bit 62 — the `(x << 1) >> 1` pair that
 -- mirrors native's tag/untag shift.  Only a fixed-width (`U8`/`U16`/`U32`) scalar
@@ -2366,168 +2239,17 @@ fixedWidthWrapW tag op = match fixedWidthMask tag
     else
       []
 
-emitBinI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  String ->
-  CExpr ->
-  CExpr ->
-  String ->
-  Int ->
-  (List String, WTy)
-emitBinI32 emit fnNames valNames env op l r tag site =
-  let (li, _) = emitScalarExpr emit fnNames valNames env l
-  let (ri, _) = emitScalarExpr emit fnNames valNames env r
-  -- An `Int` operator that can leave the 63-bit range calls its checked helper
-  -- (E-INT-OVERFLOW).  A fixed-width site computes the i64 op and keeps its low
-  -- bits (`fixedWidthWrapW`); the sign-extend ahead of the mask cannot change them.
-  let opInstrs =
-    if isTaggedFixedHead tag then
-      [wasmBinOp64 emit op]
-        ++ (if intOpCanOverflow op then normInt64 else [])
-        ++ fixedWidthWrapW tag op
-    else if intOpCanOverflow op then
-      intChkCall emit op site
-    else
-      [wasmBinOp64 emit op]
-  -- layer-17 §2.1: i64 arithmetic.  A comparison yields wasm i32 0/1, so extend it
-  -- back to the uniform i64 value rep.
-  if isCmpOp op then
-    (li ++ ri ++ [wasmBinOp64 emit op, "i64.extend_i32_u"], binOpTy op)
-  else if op == "/" || op == "%" then
-    -- B5: scalar-mode concrete-Int `/`/`%` get the same coded divisor-zero guard as
-    -- ref mode (single function-scope $__sdivr i64 scratch; reuse across nested divs is
-    -- safe — each store-then-immediately-use completes before the next).
-    (
-      li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" site ++ opInstrs,
-      binOpTy op,
-    )
-  else
-    (li ++ ri ++ opInstrs, binOpTy op)
-
-emitUnI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  String ->
-  CExpr ->
-  (List String, WTy)
-emitUnI32 emit fnNames valNames env "-" x =
-  let (xi, _) = emitScalarExpr emit fnNames valNames env x
-  -- negation overflows at exactly intMinBound, whose negation is 2^62.
-  (xi ++ intChkNegCall emit, WInt)
-emitUnI32 emit _ _ _ op _ =
-  gapLTy emit ("scalar-mode: unsupported unary op '" ++ op ++ "'")
-
-emitIfI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  (List String, WTy)
-emitIfI32 emit fnNames valNames env c t f =
-  let (ci, _) = emitScalarExpr emit fnNames valNames env c
-  let (ti, tty) = emitScalarExpr emit fnNames valNames env t
-  let (fi, _) = emitScalarExpr emit fnNames valNames env f
-  -- the condition is an i64 Bool; wasm `if` consumes i32, so test against zero.
-  (
-    ci
-      ++ ["i64.const 0", "i64.ne", "if (result i64)"]
-      ++ indent ti
-      ++ ["else"]
-      ++ indent fi
-      ++ ["end"],
-    tty,
-  )
-
-emitLetI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  Bool ->
-  Pat ->
-  CExpr ->
-  CExpr ->
-  (List String, WTy)
-emitLetI32 emit fnNames valNames env False (PVar x _ _) e1 e2 =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env e1
-  let (i2, ty2) = emitScalarExpr emit fnNames valNames (omInsert x () env) e2
-  (i1 ++ ["local.set $" ++ gname x] ++ i2, ty2)
-emitLetI32 emit fnNames valNames env False PWild e1 e2 =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env e1
-  let (i2, ty2) = emitScalarExpr emit fnNames valNames env e2
-  (i1 ++ ["drop"] ++ i2, ty2)
-emitLetI32 emit _ _ _ _ _ _ _ =
-  gapLTy emit "scalar-mode: only non-recursive `let x = e` / `let _ = e`"
-
-emitBlockI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  List CStmt ->
-  (List String, WTy)
-emitBlockI32 emit fnNames valNames env [CSExpr ex] =
-  emitScalarExpr emit fnNames valNames env ex
-emitBlockI32 emit fnNames valNames env ((CSExpr ex) :: rest) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env ex
-  let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
-  (i1 ++ ["drop"] ++ i2, ty)
-emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _ _) ex) :: rest) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env ex
-  let (i2, ty) = emitBlockI32 emit fnNames valNames (omInsert x () env) rest
-  (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
-emitBlockI32 emit fnNames valNames env ((CSLet _ PWild ex) :: rest) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env ex
-  let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
-  (i1 ++ ["drop"] ++ i2, ty)
--- W11: a `let mut x` reassignment `x = e` in scalar mode — `x` is already an i32
--- local (the originating `let mut`'s PVar is declared by collectExprLocals); just
--- recompute and re-set it.  (Scalar mode is i32-only, so the value is an i32.)
-emitBlockI32 emit fnNames valNames env ((CSAssign x ex) :: rest) =
-  let (i1, _) = emitScalarExpr emit fnNames valNames env ex
-  let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
-  (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
--- A block whose last statement is a `let` yields Unit, as in eval and LLVM.
-emitBlockI32 _ _ _ _ [] = (["i64.const 0"], WUnit)
-emitBlockI32 emit _ _ _ _ =
-  gapLTy emit "scalar-mode: unsupported block statement"
-
-emitAppI32 : WasmEmit ->
-  List String ->
-  List String ->
-  OrdMap Unit ->
-  CExpr ->
-  (List String, WTy)
-emitAppI32 emit fnNames valNames env app =
-  let (hd, args) = flattenApp app []
-  match hd
-    CVar f _ =>
-      if contains f fnNames then
-        let argInstrs =
-          flatMap (a => fst (emitScalarExpr emit fnNames valNames env a)) args
-        (argInstrs ++ ["call $" ++ gname f], WInt)
-      else
-        gapLTy
-          emit
-          ("scalar-mode: application of non-top-level head '"
-            ++ f
-            ++ "' (closures/HOFs are W4)")
-    _ =>
-      gapLTy
-        emit
-        "scalar-mode: application of a non-variable head (closures/HOFs are W4)"
-
--- ════════════════════════════════════════════════════════════════════════════
--- REF MODE (W3, uniform (ref eq) + i31/structs) — the ADT path.
--- ════════════════════════════════════════════════════════════════════════════
-
 emitRefProgram : Prog -> EmitPlan -> List CBind -> String
 emitRefProgram prog plan groups =
   let header = preambleHeadLines
-  let typeSection = emitTypeSection prog
+  let typeSection =
+    if rawProgramW prog then
+      [
+        "  (rec", "    (type $boxint (sub (struct (field i64))))",
+        "    (type $float (sub (struct (field f64))))", "  )"
+      ]
+    else
+      emitTypeSection prog
   let physical = physicalPlanW plan
   let imports = plannedImportLines physical.imports
   let valNames = progValNames prog
@@ -2546,7 +2268,10 @@ emitRefProgram prog plan groups =
   let lazyStateGlobals =
     map oneGlobalState (filterList (isLazyGlobalW prog) valNames)
   let globals =
-    rngGlobal ++ dispGlobals ++ map oneGlobalRef valNames ++ lazyStateGlobals
+    rngGlobal
+      ++ dispGlobals
+      ++ map (if rawProgramW prog then oneGlobalI32 else oneGlobalRef) valNames
+      ++ lazyStateGlobals
   -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
@@ -2822,30 +2547,36 @@ emitRefInit prog plan groups =
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
   let valBinds = plannedValBinds plan groups
+  let initProg = progInFn prog
+  let mainProg = progInFn prog
   let initW7Outer = w7ScopeOpen (progEmit prog)
-  let valInit = flatMap (emitRefValInit prog) valBinds
+  let valInit = flatMap (emitRefValInit initProg) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
   let mainW7Outer = w7ScopeOpen (progEmit prog)
-  let mainLines = emitRefMain prog plan groups
+  let mainLines = emitRefMain mainProg plan groups
   let mainW7Used = w7ScopeClose (progEmit prog) mainW7Outer
-  let valLocals = flatMap collectBindLocals valBinds
+  let valLocals =
+    if rawProgramW prog then [] else flatMap collectBindLocals valBinds
   let mainBodies = match findMain (progEmit prog) groups
     Some body => [body]
     None => []
-  let mainLocals = flatMap collectExprLocals mainBodies
+  let mainLocals =
+    if rawProgramW prog then [] else flatMap collectExprLocals mainBodies
   let valBodies = flatMap bindBodies valBinds
   -- scratch ($__rf<d>) locals sized to the deepest match nesting of each
   -- function's own bodies: the val inits for $__init, `main` for $__main.
-  let valDepth = foldMaxDepth valBodies
-  let mainDepth = foldMaxDepth mainBodies
+  let valDepth = if rawProgramW prog then 0 else foldMaxDepth valBodies
+  let mainDepth = if rawProgramW prog then 0 else foldMaxDepth mainBodies
   let initLocalDecls =
     map
       (l => "  " ++ localDeclRef l)
-      (dedupKeep valLocals ++ scratchLocals valDepth)
+      (dedupKeep valLocals
+        ++ (if rawProgramW prog then [] else scratchLocals valDepth))
   let mainLocalDecls =
     map
       (l => "  " ++ localDeclRef l)
-      (dedupKeep mainLocals ++ scratchLocals mainDepth)
+      (dedupKeep mainLocals
+        ++ (if rawProgramW prog then [] else scratchLocals mainDepth))
   let initW7Decls = map ("  " ++ _) (w7LocalDecls initW7Used valDepth)
   let mainW7Decls = map ("  " ++ _) (w7LocalDecls mainW7Used mainDepth)
   -- `start` runs only the eager value inits; `main` is the exported
@@ -2855,12 +2586,16 @@ emitRefInit prog plan groups =
   -- `mdk_main` on one instance (playground/compile.mjs keeps the compiler's
   -- top-level memo Refs alive across analyze calls that way).
   ["  (func $__main"]
+    ++ numericDeclsW mainProg
+    ++ rawScratchW mainProg
     ++ mainLocalDecls
     ++ mainW7Decls
     ++ mainLines
     ++ ["  )"]
     ++ entryExports
     ++ ["  (func $__init"]
+    ++ numericDeclsW initProg
+    ++ rawScratchW initProg
     ++ initLocalDecls
     ++ initW7Decls
     ++ valInit
@@ -2966,27 +2701,41 @@ emitRefForceFn prog _ = gapLP prog "value binding must be a nullary clause"
 emitRefMain : Prog -> EmitPlan -> List CBind -> List String
 emitRefMain prog plan groups = match findMain (progEmit prog) groups
   Some body =>
-    let instrs = emitRefExpr prog [] 0 body
-    -- A main stamped `Unit` is Unit whatever its body's shape, and one stamped
-    -- with a printable scalar prints as that scalar: the structural read below is
-    -- only for a main with no stamp of its own (an untyped lowering stamps every
-    -- binder `RTValue`).  The typechecker's Float hint overrides a body whose
-    -- result is a polymorphic return (`main = fold (acc x => acc + x) 0.0 [..]`).
-    let k =
-      if planEntryMainIsUnit plan
-        || mainStamp prog == RTUnit
-        || mainBodyIsUnit prog (cafBodies groups) body then
-        WUnit
-      else if planEntryMainIsFloat plan then
-        WFloat
-      else
-        stampPrintKind (mainPrintStamp prog body)
-    -- a Unit main (a `putStrLn …` etc.) has already produced its IO effect; drop its
-    -- i31-0 result and auto-print NOTHING (the "Unit main no auto-print" contract).
-    match k
-      WUnit => indent instrs ++ ["    drop"]
-      _ => indent instrs ++ refPrintFor prog k
+    let value = emitValueW prog [] 0 body
+    let instrs = valueLines value
+    if rawProgramW prog then
+      indent instrs
+        ++ printFor (progEmit prog) (rawPrintKindW (valueRepr value))
+    else
+      emitBoxedMainW prog plan groups body instrs
   None => gapLP prog "no `main` binding"
+
+emitBoxedMainW : Prog ->
+  EmitPlan ->
+  List CBind ->
+  CExpr ->
+  List String ->
+  List String
+emitBoxedMainW prog plan groups body instrs =
+  -- A main stamped `Unit` is Unit whatever its body's shape, and one stamped
+  -- with a printable scalar prints as that scalar: the structural read below is
+  -- only for a main with no stamp of its own (an untyped lowering stamps every
+  -- binder `RTValue`).  The typechecker's Float hint overrides a body whose
+  -- result is a polymorphic return (`main = fold (acc x => acc + x) 0.0 [..]`).
+  let k =
+    if planEntryMainIsUnit plan
+      || mainStamp prog == RTUnit
+      || mainBodyIsUnit prog (cafBodies groups) body then
+      WUnit
+    else if planEntryMainIsFloat plan then
+      WFloat
+    else
+      stampPrintKind (mainPrintStamp prog body)
+  -- a Unit main (a `putStrLn …` etc.) has already produced its IO effect; drop its
+  -- i31-0 result and auto-print NOTHING (the "Unit main no auto-print" contract).
+  match k
+    WUnit => indent instrs ++ ["    drop"]
+    _ => indent instrs ++ refPrintFor prog k
 
 -- W9b: a value main whose head function returns Unit (`println`, `print`, any
 -- user/prelude Unit-returning wrapper: the head's return stamp) is a Unit main and
@@ -3143,7 +2892,12 @@ emitRefFnBind : Prog -> CBind -> List String
 emitRefFnBind outer (CBind name clauses bindLoc _) =
   let prog = progForBinding name (sitePackedW (progEmit outer) bindLoc) outer
   let arity = clauseArityOf clauses
-  let params = clauseParamNames clauses arity
+  let params =
+    if rawProgramW prog then match clauses
+      [CClause pats _] => map (patName (progEmit prog) name) pats
+      _ => synthParams arity
+    else
+      clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
   -- reset-wrapper (root) / inner-loop or redirected-leaf member path.  The group takes
   -- PRECEDENCE over Stage-1: a group root like the lexer's `layout` is Stage-1-eligible
@@ -3152,7 +2906,9 @@ emitRefFnBind outer (CBind name clauses bindLoc _) =
   -- would return its own locally-built spine instead of closing the group's shared dest
   -- globals (a miscompile).  Detection keeps a Stage-1-claimable SINGLETON out of any
   -- group (wDispValidate v5), so plain self-TMC fns still take the Stage-1 loop below.
-  match dispGroupOf (progEmit prog).wDispGroups.value name
+  if rawProgramW prog then
+    emitOrdinaryFnW prog name params arity clauses
+  else match dispGroupOf (progEmit prog).wDispGroups.value name
     Some grp =>
       let gd =
         if wDispIsRoot grp name then
@@ -3178,30 +2934,64 @@ emitRefFnBind outer (CBind name clauses bindLoc _) =
             emitFnClosWrapper prog name arity
           else
             [])
-      None =>
-        let w7Outer = w7ScopeOpen (progEmit prog)
-        let bodyLines = emitClausesRef prog name params arity clauses
-        let allLocals = clauseLocals clauses
-        let extraLocals = filterList (notIn params) (dedupKeep allLocals)
-        let scratch = scratchLocals (clausesMaxDepth clauses)
-        let sig =
-          "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
-        let localDecls = map localDeclRef (extraLocals ++ scratch)
-        let w7Decls =
-          w7LocalDecls
-            (w7ScopeClose (progEmit prog) w7Outer)
-            (clausesMaxDepth clauses)
-        let fnDef =
-          [sig]
-            ++ map ("  " ++ _) (localDecls ++ w7Decls)
-            ++ indent bodyLines
-            ++ ["  )"]
-        let wrapper =
-          if needsClosWrapper prog name then
-            emitFnClosWrapper prog name arity
-          else
-            []
-        fnDef ++ wrapper
+      None => emitOrdinaryFnW prog name params arity clauses
+
+emitOrdinaryFnW : Prog ->
+  String ->
+  List String ->
+  Int ->
+  List CClause ->
+  List String
+emitOrdinaryFnW prog name params arity clauses =
+  let w7Outer = w7ScopeOpen (progEmit prog)
+  let bodyLines =
+    if rawProgramW prog then match clauses
+      [CClause pats body] =>
+        if allPlainParams pats then
+          let _ = installRawParamsW prog 0 pats
+          emitRefTail prog (paramEnv pats) arity body
+        else
+          gapLP
+            prog
+            ("scalar-mode top-level function '"
+              ++ name
+              ++ "' is multi-clause or pattern-matching (decision-tree match needs ADT mode)")
+      _ =>
+        gapLP
+          prog
+          ("scalar-mode top-level function '"
+            ++ name
+            ++ "' is multi-clause or pattern-matching (decision-tree match needs ADT mode)")
+    else
+      emitClausesRef prog name params arity clauses
+  let extraLocals =
+    if rawProgramW prog then
+      []
+    else
+      filterList (notIn params) (dedupKeep (clauseLocals clauses))
+  let depth = if rawProgramW prog then 0 else clausesMaxDepth clauses
+  let scratch = if rawProgramW prog then [] else scratchLocals depth
+  let paramDecls =
+    if rawProgramW prog then
+      map (_ => " (param i64)") params
+    else
+      map paramDeclRef params
+  let sig =
+    "  (func $\{gname name}\{joinWith "" paramDecls} (result \{physicalType (programReprW prog)})"
+  let localDecls = map localDeclRef (extraLocals ++ scratch)
+  let w7Decls = w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) depth
+  let fnDef =
+    [sig]
+      ++ numericDeclsW prog
+      ++ rawScratchW prog
+      ++ map ("  " ++ _) (localDecls ++ w7Decls)
+      ++ indent bodyLines
+      ++ ["  )"]
+  fnDef
+    ++ (if needsClosWrapper prog name then
+      emitFnClosWrapper prog name arity
+    else
+      [])
 
 -- synthetic positional parameter names `$__wparg0 $__wparg1 …` (used for multi-clause
 -- dispatch and as the uniform fn ABI param names).  The `__wparg` prefix is RESERVED:
@@ -4624,54 +4414,109 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
 -- was a live silent-wrong-dispatch S0 on both backends until the guard landed.
 -- See `private_mangle.hashName`'s note.
 
--- ── ref-mode expression emitter — every result is a (ref eq) on the stack ────
+-- Common expression traversal; physical mode chooses i64 or (ref eq) values.
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a
 -- value into the scratch local `$__rf<d>` and recurses at d+1, so simultaneously-
 -- live stash locals never collide.  The function header declares `$__rf0..` up to
 -- the body's max depth (`maxRefDepth`).  No mutable counter needed → re-derivable.
 
 emitRefExpr : Prog -> List String -> Int -> CExpr -> List String
-emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l
-emitRefExpr prog env d (CVar x _) = emitVarRef prog env d x
-emitRefExpr prog env d (CBinPrim op l r tag loc) =
-  emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
-emitRefExpr prog env d (CUnOp op x) = emitUnRef prog env d op x
-emitRefExpr prog env d (CIf c t f) = emitIfRef prog env d c t f
-emitRefExpr prog env d (CLet recF pat e1 e2) =
-  emitLetWith prog env d (env2 b => emitRefExpr prog env2 d b) recF pat e1 e2
-emitRefExpr prog env d (CLetGroup binds body) =
-  emitLetGroupWith prog env d (env2 b => emitRefExpr prog env2 d b) binds body
-emitRefExpr prog env d (CBlock stmts) = emitBlockRef prog env d stmts
-emitRefExpr prog env d (app@(CApp _ _ _)) = emitAppRef prog env d app
-emitRefExpr prog env d (CDecision scrut arms tree) =
-  emitDecisionRef prog env d scrut arms tree
-emitRefExpr prog env d (CLam pats body) = emitClosure prog env d pats body
-emitRefExpr prog env d (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) =
-  emitMethodValueRef prog env d name iface arity route implRoutes methRoutes
-emitRefExpr prog env d (CDict name routes) =
-  emitDictValueRef prog env d name routes
-emitRefExpr prog env d (CTuple es) = emitTupleRef prog env d es
-emitRefExpr prog env d (CList es) = emitListRef prog env d es
-emitRefExpr prog env d (CRangeList lo hi incl) =
-  emitRangeListRef prog env d lo hi incl
-emitRefExpr prog env d (CArray es) = emitArrayCreateRef prog env d es
-emitRefExpr prog env d (CRangeArray lo hi incl) =
-  emitRangeArrayRef prog env d lo hi incl
-emitRefExpr prog env d (CIndex a i) = emitIndexRef prog env d a i
-emitRefExpr prog env d (CSlice a lo hi incl) =
-  emitSliceRef prog env d a lo hi incl
-emitRefExpr prog env d (CRecord name fields) =
-  emitRecordRef prog env d name fields
-emitRefExpr prog env d (CFieldAccess ex label recName ord) =
-  emitFieldAccessRef prog env d ex label recName ord
-emitRefExpr prog env d (CRecordUpdate recName base fields) =
-  emitRecordUpdateRef prog env d recName base fields
-emitRefExpr prog env d (CVariantUpdate con base fields) =
-  emitVariantUpdateRef prog env d con base fields
-emitRefExpr prog env d other =
-  gapLP
+emitRefExpr prog env d expr = valueLines (emitValueW prog env d expr)
+
+refOnlyValueW : Prog -> CExpr -> (Unit -> List String) -> WasmValue
+refOnlyValueW prog expr body =
+  if rawProgramW prog then
+    programValueW
+      prog
+      (gapLP prog ("scalar-mode: unsupported Core IR node " ++ ctag expr))
+  else
+    WasmValue WBoxEq (body ())
+
+emitValueW : Prog -> List String -> Int -> CExpr -> WasmValue
+emitValueW prog env d (CLit l) =
+  if rawProgramW prog then
+    let (lines, ty) = emitLitI32 (progEmit prog) l
+    WasmValue (rawReprW ty) lines
+  else
+    WasmValue WBoxEq (emitLitRef (progEmit prog) l)
+emitValueW prog env d (CVar x _) = programValueW prog (emitVarRef prog env d x)
+emitValueW prog env d (CBinPrim op l r tag loc) =
+  let code =
+    if rawProgramW prog then
+      emitIntBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+    else
+      emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+  WasmValue (if rawProgramW prog then rawReprW (binOpTy op) else WBoxEq) code
+emitValueW prog env d (CUnOp op x) =
+  programValueW prog (emitUnRef prog env d op x)
+emitValueW prog env d (CIf c t f) =
+  let ci = emitRefExpr prog env d c ++ conditionW prog
+  let tv = emitValueW prog env d t
+  let fv = emitValueW prog env d f
+  WasmValue
+    (valueRepr tv)
+    (ci
+      ++ ["if (result " ++ physicalType (programReprW prog) ++ ")"]
+      ++ indent (valueLines tv)
+      ++ ["else"]
+      ++ indent (valueLines fv)
+      ++ ["end"])
+emitValueW prog env d (CLet recF pat e1 e2) =
+  let (prefix, env2) = emitLetBindingW prog env d recF pat e1
+  prependValueW prefix (emitValueW prog env2 d e2)
+emitValueW prog env d (CLetGroup binds body) = refOnlyValueW prog (CLetGroup
+  binds
+  body) (() =>
+  emitLetGroupWith prog env d (env2 b => emitRefExpr prog env2 d b) binds body)
+emitValueW prog env d (CBlock stmts) = emitBlockRef prog env d stmts
+emitValueW prog env d (app@(CApp _ _ _)) =
+  programValueW prog (emitAppRef prog env d app)
+emitValueW prog env d (node@(CDecision scrut arms tree)) =
+  refOnlyValueW prog node (() => emitDecisionRef prog env d scrut arms tree)
+emitValueW prog env d (node@(CLam pats body)) =
+  refOnlyValueW prog node (() => emitClosure prog env d pats body)
+emitValueW prog env d (node@(CMethod name (MethodEvidence iface arity route implRoutes methRoutes))) = refOnlyValueW
+  prog
+  node
+  (() =>
+    emitMethodValueRef prog env d name iface arity route implRoutes methRoutes)
+emitValueW prog env d (node@(CDict name routes)) =
+  refOnlyValueW prog node (() => emitDictValueRef prog env d name routes)
+emitValueW prog env d (node@(CTuple es)) =
+  refOnlyValueW prog node (() => emitTupleRef prog env d es)
+emitValueW prog env d (node@(CList es)) =
+  refOnlyValueW prog node (() => emitListRef prog env d es)
+emitValueW prog env d (node@(CRangeList lo hi incl)) =
+  refOnlyValueW prog node (() => emitRangeListRef prog env d lo hi incl)
+emitValueW prog env d (node@(CArray es)) =
+  refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
+emitValueW prog env d (node@(CRangeArray lo hi incl)) =
+  refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
+emitValueW prog env d (node@(CIndex a i)) =
+  refOnlyValueW prog node (() => emitIndexRef prog env d a i)
+emitValueW prog env d (node@(CSlice a lo hi incl)) =
+  refOnlyValueW prog node (() => emitSliceRef prog env d a lo hi incl)
+emitValueW prog env d (node@(CRecord name fields)) =
+  refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
+emitValueW prog env d (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
+  prog
+  node
+  (() => emitFieldAccessRef prog env d ex label recName ord)
+emitValueW prog env d (node@(CRecordUpdate recName base fields)) = refOnlyValueW
+  prog
+  node
+  (() => emitRecordUpdateRef prog env d recName base fields)
+emitValueW prog env d (node@(CVariantUpdate con base fields)) = refOnlyValueW
+  prog
+  node
+  (() => emitVariantUpdateRef prog env d con base fields)
+emitValueW prog env d other =
+  programValueW
     prog
-    "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"
+    (gapLP prog (if rawProgramW prog then
+      "scalar-mode: unsupported Core IR node " ++ ctag other
+    else
+      "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"))
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -4816,7 +4661,32 @@ dropPrefix s p = stringSlice (stringLength p) (stringLength s) s
 
 -- a variable: local/global → get (already (ref eq)); a nullary ctor → its i31 tag;
 emitVarRef : Prog -> List String -> Int -> String -> List String
-emitVarRef prog env d x = match emitFtSentinel x
+emitVarRef prog env d x =
+  if rawProgramW prog then
+    if contains x env then
+      ["local.get " ++ localTargetW prog env x]
+    else if omHasKey x (indexValNamesW (progIndex prog)) then
+      ["global.get $" ++ gname x]
+    else if progFnMemberW prog x then
+      ["call $" ++ gname x]
+    else if isUnprovidedOn
+      WasmBackend
+      (optionOr "" (externRuntimeKey (progEmit prog).externFacts x)) then
+      unprovidedExternW
+        (progEmit prog)
+        (optionOr "" (externRuntimeKey (progEmit prog).externFacts x))
+    else
+      fst
+        (gapUnboundLTy
+          (progEmit prog)
+          ("unbound variable '"
+            ++ externDisplayW (progEmit prog) x
+            ++ "' (scalar mode: not a local, global value, or known function)"))
+  else
+    emitVarRefBoxed prog env d x
+
+emitVarRefBoxed : Prog -> List String -> Int -> String -> List String
+emitVarRefBoxed prog env d x = match emitFtSentinel x
   Some instrs => instrs
   None => emitVarRefPlain prog env d x
 
@@ -5105,8 +4975,10 @@ emitIntBinRef : Prog ->
   Int ->
   List String
 emitIntBinRef prog env d op l r tag site =
-  let li = emitRefExpr prog env d l ++ ["call $mdk_unbox_int"]
-  let ri = emitRefExpr prog env d r ++ ["call $mdk_unbox_int"]
+  let seamIn = if rawProgramW prog then [] else ["call $mdk_unbox_int"]
+  let seamOut = if rawProgramW prog then [] else ["call $mdk_box_int"]
+  let li = emitRefExpr prog env d l ++ seamIn
+  let ri = emitRefExpr prog env d r ++ seamIn
   -- N4 (#3377): an `Int` `+ - * /` runs its checked operator BEFORE the rebox, so an
   -- out-of-range result stops with E-INT-OVERFLOW rather than reaching
   -- `$mdk_box_int`'s sign-extend.  A fixed-width site keeps the plain i64 op and
@@ -5116,19 +4988,32 @@ emitIntBinRef prog env d op l r tag site =
       intChkCall (progEmit prog) op site
     else
       [wasmBinOp64 (progEmit prog) op]
+        ++ (if rawProgramW prog
+          && isTaggedFixedHead tag
+          && intOpCanOverflow op then
+          normInt64
+        else
+          [])
   -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
   -- (peer of the native emitIntDivZeroChecked) before the division.
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op (divrLocal prog d) site
+      ++ emitDivZeroGuard
+        (progEmit prog)
+        op
+        (if rawProgramW prog then "$__sdivr" else divrLocal prog d)
+        site
       ++ opInstrs
       ++ fixedWidthWrapW tag op
-      ++ ["call $mdk_box_int"]
+      ++ seamOut
   else if isCmpOp op then
-    li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
+    li
+      ++ ri
+      ++ [wasmBinOp64 (progEmit prog) op]
+      ++ (if rawProgramW prog then ["i64.extend_i32_u"] else ["ref.i31"])
   else
-    li ++ ri ++ opInstrs ++ fixedWidthWrapW tag op ++ ["call $mdk_box_int"]
+    li ++ ri ++ opInstrs ++ fixedWidthWrapW tag op ++ seamOut
 
 -- A `U64` operator (the typechecker stamps both arithmetic and comparison sites
 -- `U64`): unbox both i64 payloads, then the unsigned i64 op.  `+ - *` wrap modulo
@@ -5589,7 +5474,7 @@ cexprIsFloat prog env e = cexprStamp prog env e == RTFloat
 emitUnRef : Prog -> List String -> Int -> String -> CExpr -> List String
 emitUnRef prog env d "-" x =
   -- W8b: unary `-` on a Float negates the f64 (f64.neg), reboxing; else integer negate.
-  if cexprIsFloat prog env x then
+  if not (rawProgramW prog) && cexprIsFloat prog env x then
     emitRefExpr prog env d x
       ++ [
         "ref.cast (ref $float)",
@@ -5600,25 +5485,16 @@ emitUnRef prog env d "-" x =
   else
     -- layer-17 §2.1: integer negate over the i64 box/unbox seam, checked
     -- (intMinBound has no negation).
-    let xi = emitRefExpr prog env d x ++ ["call $mdk_unbox_int"]
-    xi ++ intChkNegCall (progEmit prog) ++ ["call $mdk_box_int"]
+    let xi =
+      emitRefExpr prog env d x
+        ++ (if rawProgramW prog then [] else ["call $mdk_unbox_int"])
+    xi
+      ++ intChkNegCall (progEmit prog)
+      ++ (if rawProgramW prog then [] else ["call $mdk_box_int"])
 emitUnRef prog _ _ op _ =
-  gapLP prog ("ref-mode: unsupported unary op '" ++ op ++ "'")
-
--- if/else: cond is an i31 Bool — unbox to i32 for the wasm `if`; both branches push
--- a (ref eq).
-emitIfRef : Prog -> List String -> Int -> CExpr -> CExpr -> CExpr -> List String
-emitIfRef prog env d c t f =
-  let ci = emitRefExpr prog env d c ++ ["ref.cast (ref i31)", "i31.get_u"]
-  let ti = emitRefExpr prog env d t
-  let fi = emitRefExpr prog env d f
-  ci
-    ++ ["if (result (ref eq))"]
-    ++ indent ti
-    ++ ["else"]
-    ++ indent fi
-    ++ ["end"]
-
+  gapLP
+    prog
+    "\{if rawProgramW prog then "scalar-mode" else "ref-mode"}: unsupported unary op '\{op}'"
 -- ── W11: irrefutable destructuring let / refutable let-else / assignment ──────
 -- An irrefutable `let <pat> = e` (PTuple / single-ctor PCon / PRecord / PCons /
 -- PList — all single-shape here, the type proves the shape): emit the RHS once,
@@ -5639,71 +5515,103 @@ emitDestructureLet prog env d pat e1 =
   let (binds, env2) = bindPatRef prog env pat ["local.get $" ++ sv]
   (rhs ++ binds, env2)
 
--- A `let`: its binding, then `e2` emitted by `body` in the env the binding
--- extends.  The value path passes `emitRefExpr`; a let in tail position passes
--- `emitRefTail`, so the let's body stays in tail position whatever its pattern.
-emitLetWith : Prog ->
+-- Binding emission is shared by value and tail descent; the caller keeps the
+-- body's position and passes the extended lexical environment.
+emitLetBindingW : Prog ->
   List String ->
   Int ->
-  (List String -> CExpr -> List String) ->
   Bool ->
   Pat ->
   CExpr ->
-  CExpr ->
-  List String
-emitLetWith prog env d body False (PVar x _ bid) e1 e2 =
-  let i1 = emitRefExpr prog env d e1
-  let i2 = body (envBind x bid env) e2
-  i1 ++ ["local.set $" ++ gname x] ++ i2
-emitLetWith prog env d body False PWild e1 e2 =
-  let i1 = emitRefExpr prog env d e1
-  let i2 = body env e2
-  i1 ++ ["drop"] ++ i2
-emitLetWith prog env d body False pat e1 e2 =
-  let (binds, env2) = emitDestructureLet prog env d pat e1
-  binds ++ body env2 e2
--- #379: a recursive function-`let` in EXPRESSION position (`let go i = … in e2` →
--- CLet True (PVar go) (CLam …)).  The block-statement form already routed here via
--- emitBlockRef; the `let..in` form fell to the catch-all gap below — that asymmetry
--- was the whole bug.  Same route as emitBlockRef's CSLet arm and the peer of the
--- native emitter's `emitLet e env True (PVar f) (CLam …)` → emitRecLam clause:
--- lift the one-member letgroup (its prologue rebinds `go` inside the lifted body, so
--- the self-call resolves), rebuild `go`'s closure into local `$go`, then emit `e2`
--- with `go` bound.  `collectExprLocals` already declares `$go` (its CLet clause
--- wildcards the rec flag), so no locals change is needed.
-emitLetWith prog env _ body True (PVar x _ bid) (CLam pats lamBody) e2 =
-  emitSelfRecLocalBind prog env x bid pats lamBody
-    ++ body (envBind x bid env) e2
--- a recursive NON-function `let` (`let x = … x … in e2`) is a value knot that no
--- backend ties: the native emitter's rec clause likewise matches only `(PVar f)
--- (CLam …)` and has no `True`/non-CLam clause at all.  We keep a named gap here
--- rather than inherit its non-exhaustive trap.
-emitLetWith prog _ _ _ _ _ _ _ =
-  gapLP prog "ref-mode: recursive non-function `let` binding (value knot)"
+  (List String, List String)
+emitLetBindingW prog env d False (PVar x _ bid) e1 =
+  let rhs = emitRefExpr prog env d e1
+  let _ = mintLocalW prog bid
+  let env2 = envBind x bid env
+  (rhs ++ ["local.set " ++ localTargetW prog env2 x], env2)
+emitLetBindingW prog env d False PWild e1 =
+  (emitRefExpr prog env d e1 ++ ["drop"], env)
+emitLetBindingW prog env d False pat e1 =
+  if rawProgramW prog then
+    (
+      gapLP prog "scalar-mode: only non-recursive `let x = e` / `let _ = e`",
+      env,
+    )
+  else
+    emitDestructureLet prog env d pat e1
+emitLetBindingW prog env _ True (PVar x _ bid) (CLam pats body) =
+  if rawProgramW prog then
+    (
+      gapLP prog "scalar-mode: only non-recursive `let x = e` / `let _ = e`",
+      env,
+    )
+  else
+    (emitSelfRecLocalBind prog env x bid pats body, envBind x bid env)
+emitLetBindingW prog env _ _ _ _ = (
+  gapLP prog (if rawProgramW prog then
+    "scalar-mode: only non-recursive `let x = e` / `let _ = e`"
+  else
+    "ref-mode: recursive non-function `let` binding (value knot)"),
+  env,
+)
 
-emitBlockRef : Prog -> List String -> Int -> List CStmt -> List String
-emitBlockRef prog env d [CSExpr ex] = emitRefExpr prog env d ex
+emitBlockRef : Prog -> List String -> Int -> List CStmt -> WasmValue
+emitBlockRef prog env d [CSExpr ex] = emitValueW prog env d ex
 emitBlockRef prog env d ((CSExpr ex) :: rest) =
-  emitRefExpr prog env d ex ++ ["drop"] ++ emitBlockRef prog env d rest
--- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockRef prog env d ((CSLet _ (PVar x _ bid) (CLam pats body)) :: rest) =
-  emitSelfRecLocalBind prog env x bid pats body
-    ++ emitBlockRef prog (envBind x bid env) d rest
-emitBlockRef prog env d ((CSLet _ (PVar x _ bid) ex) :: rest) =
-  emitRefExpr prog env d ex
-    ++ ["local.set $" ++ gname x]
-    ++ emitBlockRef prog (envBind x bid env) d rest
-emitBlockRef prog env d ((CSLet _ PWild ex) :: rest) =
-  emitRefExpr prog env d ex ++ ["drop"] ++ emitBlockRef prog env d rest
-emitBlockRef prog env d ((CSLet _ pat ex) :: rest) =
-  let (binds, env2) = emitDestructureLet prog env d pat ex
-  binds ++ emitBlockRef prog env2 d rest
+  let prefix = emitRefExpr prog env d ex ++ ["drop"]
+  prependValueW prefix (emitBlockRef prog env d rest)
+emitBlockRef prog env d ((CSLet recF pat ex) :: rest) =
+  let (prefix, env2) = emitBlockBindingW prog env d recF pat ex
+  prependValueW prefix (emitBlockRef prog env2 d rest)
 emitBlockRef prog env d ((CSAssign x ex) :: rest) =
-  emitRefExpr prog env d ex
-    ++ ["local.set $" ++ gname x]
-    ++ emitBlockRef prog env d rest
-emitBlockRef prog env d [] = emitRefExpr prog env d (CLit LUnit)
-emitBlockRef prog _ _ _ = gapLP prog "ref-mode: unsupported block statement"
+  let prefix =
+    emitRefExpr prog env d ex ++ ["local.set " ++ localTargetW prog env x]
+  prependValueW prefix (emitBlockRef prog env d rest)
+emitBlockRef prog env d [] = emitValueW prog env d (CLit LUnit)
+emitBlockRef prog _ _ _ =
+  programValueW
+    prog
+    (gapLP prog (if rawProgramW prog then
+      "scalar-mode: unsupported block statement"
+    else
+      "ref-mode: unsupported block statement"))
+
+emitBlockBindingW : Prog ->
+  List String ->
+  Int ->
+  Bool ->
+  Pat ->
+  CExpr ->
+  (List String, List String)
+emitBlockBindingW prog env d _ pat ex = match (pat, ex)
+  (PVar x _ bid, CLam pats body) =>
+    if rawProgramW prog then
+      emitLetBindingW prog env d False pat ex
+    else
+      (emitSelfRecLocalBind prog env x bid pats body, envBind x bid env)
+  _ => emitLetBindingW prog env d False pat ex
+
+emitDirectRawCallW : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  List CExpr ->
+  Bool ->
+  List String
+emitDirectRawCallW prog env d (CVar f _) args tail =
+  if progFnMemberW prog f then
+    flatMap (a => emitRefExpr prog env d a) args
+      ++ [(if tail then "return_call $" else "call $") ++ gname f]
+  else
+    gapLP
+      prog
+      ("scalar-mode: application of non-top-level head '"
+        ++ f
+        ++ "' (closures/HOFs are W4)")
+emitDirectRawCallW prog _ _ _ _ _ =
+  gapLP
+    prog
+    "scalar-mode: application of a non-variable head (closures/HOFs are W4)"
 
 -- application (non-tail position).  An exact application of a known top-level fn
 -- → `call`.  A ctor application → struct.new.  Anything else (a partial / over
@@ -5713,7 +5621,9 @@ emitBlockRef prog _ _ _ = gapLP prog "ref-mode: unsupported block statement"
 emitAppRef : Prog -> List String -> Int -> CExpr -> List String
 emitAppRef prog env d app =
   let (hd, args, mode) = appParts app
-  match hd
+  if rawProgramW prog then
+    emitDirectRawCallW prog env d hd args False
+  else match hd
     CVar f0 _ =>
       let f = canonFn prog f0
       if f0 == "$withFileReadBound"
@@ -7265,39 +7175,36 @@ emitWDispTailOrBase prog env root members f e = match appParts e
 -- the ordinary tail descent (TMC-inactive, or the wrapper arms while TMC is active).
 emitRefTailWrap : Prog -> List String -> Int -> CExpr -> List String
 emitRefTailWrap prog env arity (CIf c t f) =
-  let ci = emitRefExpr prog env 0 c ++ ["ref.cast (ref i31)", "i31.get_u"]
+  let ci = emitRefExpr prog env 0 c ++ conditionW prog
   let ti = emitRefTail prog env arity t
   let fi = emitRefTail prog env arity f
   ci ++ ["if"] ++ indent ti ++ ["else"] ++ indent fi ++ ["end", "unreachable"]
 emitRefTailWrap prog env arity (CLet recF pat e1 e2) =
-  emitLetWith
-    prog
-    env
-    0
-    (env2 b => emitRefTail prog env2 arity b)
-    recF
-    pat
-    e1
-    e2
-emitRefTailWrap prog env arity (CLetGroup binds body) =
-  emitLetGroupWith
-    prog
-    env
-    0
-    (env2 b => emitRefTail prog env2 arity b)
-    binds
-    body
+  let (prefix, env2) = emitLetBindingW prog env 0 recF pat e1
+  prefix ++ emitRefTail prog env2 arity e2
+emitRefTailWrap prog env arity (node@(CLetGroup binds body)) =
+  valueLines
+    (refOnlyValueW prog node (() =>
+      emitLetGroupWith
+        prog
+        env
+        0
+        (env2 b => emitRefTail prog env2 arity b)
+        binds
+        body))
 emitRefTailWrap prog env arity (CBlock stmts) =
   emitBlockTail prog env arity stmts
-emitRefTailWrap prog env arity (CDecision scrut arms tree) =
-  emitDecisionTail prog env arity scrut arms tree
+emitRefTailWrap prog env arity (node@(CDecision scrut arms tree)) =
+  valueLines
+    (refOnlyValueW prog node (() =>
+      emitDecisionTail prog env arity scrut arms tree))
 emitRefTailWrap prog env arity (app@(CApp _ _ _)) =
   emitAppTail prog env arity app
 -- a bare fall-through sentinel in tail position lowers to its sentinel instrs (a `br`
 -- to the clause label, or a trap) — NOT value+return (the generic CVar arm would
 -- append a dead `return` after an unconditional branch, leaving the stack ill-typed).
 emitRefTailWrap prog env arity (e@(CVar x _)) =
-  if isFtSentinel x then
+  if not (rawProgramW prog) && isFtSentinel x then
     ftSentinelInstrs x
   else
     emitRefExpr prog env 0 e ++ ["return"]
@@ -8109,7 +8016,12 @@ emitWDispBase prog env root e =
 emitAppTail : Prog -> List String -> Int -> CExpr -> List String
 emitAppTail prog env arity app =
   let (hd, args, _) = appParts app
-  match hd
+  if rawProgramW prog then
+    if isTailCall app then
+      emitDirectRawCallW prog env 0 hd args True
+    else
+      emitAppRef prog env 0 app ++ ["return"]
+  else match hd
     CVar f0 _ =>
       if f0 == "$withFileReadBound"
         || f0 == "$withFileWriteBound" then match fileBoundW app
@@ -8203,26 +8115,18 @@ emitBlockTail : Prog -> List String -> Int -> List CStmt -> List String
 emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
 emitBlockTail prog env arity ((CSExpr ex) :: rest) =
   emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
--- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockTail prog env arity ((CSLet _ (PVar x _ bid) (CLam pats body)) :: rest) =
-  emitSelfRecLocalBind prog env x bid pats body
-    ++ emitBlockTail prog (envBind x bid env) arity rest
-emitBlockTail prog env arity ((CSLet _ (PVar x _ bid) ex) :: rest) =
-  emitRefExpr prog env 0 ex
-    ++ ["local.set $" ++ gname x]
-    ++ emitBlockTail prog (envBind x bid env) arity rest
-emitBlockTail prog env arity ((CSLet _ PWild ex) :: rest) =
-  emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
-emitBlockTail prog env arity ((CSLet _ pat ex) :: rest) =
-  let (binds, env2) = emitDestructureLet prog env 0 pat ex
-  binds ++ emitBlockTail prog env2 arity rest
+emitBlockTail prog env arity ((CSLet recF pat ex) :: rest) =
+  let (prefix, env2) = emitBlockBindingW prog env 0 recF pat ex
+  prefix ++ emitBlockTail prog env2 arity rest
 emitBlockTail prog env arity ((CSAssign x ex) :: rest) =
   emitRefExpr prog env 0 ex
-    ++ ["local.set $" ++ gname x]
+    ++ ["local.set " ++ localTargetW prog env x]
     ++ emitBlockTail prog env arity rest
 emitBlockTail prog env arity [] = emitRefTail prog env arity (CLit LUnit)
-emitBlockTail prog _ _ _ =
-  gapLP prog "ref-mode: unsupported block statement in tail position"
+emitBlockTail prog _ _ _ = gapLP prog (if rawProgramW prog then
+  "scalar-mode: unsupported block statement"
+else
+  "ref-mode: unsupported block statement in tail position")
 
 -- a CDecision in tail position: each arm body is itself in tail position.  Reuse the
 -- W3 decision machinery but route arm bodies through emitRefTail (so a tail call in
