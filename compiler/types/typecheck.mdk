@@ -1053,6 +1053,31 @@ import types.tc_env.{
   variantNamed,
   withCtors,
 }
+import types.tc_diag.{
+  appSpineName,
+  backticked,
+  boundaryOwnsOpen,
+  derivableIface,
+  erredDuring,
+  firstTupleCallHint,
+  locGoalKey,
+  locKey,
+  ordinalWord,
+  prependDiagOpt,
+  pushAmbiguityAt,
+  pushBoundaryAmbiguity,
+  pushNoImplError,
+  pushTypeError,
+  pushTypeErrorAt,
+  pushTypeErrorHelpFixAt,
+  pushTypeErrorOnce,
+  pushTypeErrorOnceAt,
+  pushTypeErrorOncePerSite,
+  quotedNames,
+  recordTypeError,
+  typeErrorsArmed,
+  writtenDiag,
+}
 import types.tc_types.{Accumulate(..), Accumulate, PassEvidence, PassMethod}
 import types.tc_types.{
   AbsorptionEvent(..),
@@ -7046,289 +7071,10 @@ tcDiagGoalKey : (String, TcDiag) -> String
 tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
   "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"
 
-locGoalKey : Option Loc -> String
-locGoalKey None = ""
-locGoalKey (Some (Loc file sl sc el ec)) =
-  "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
-
 -- True iff the drive recorded a type error, as the drive left it.
 export
 hadTypeErrors : DriveOutputs -> Bool
 hadTypeErrors o = o.doHadTypeErrors
-
--- The same question asked during a drive, of the live sticky flag.
-typeErrorsArmed : GraphCtx -> Unit -> Bool
-typeErrorsArmed gctx _ = gctx.typeErrorsSticky.value
-
--- issue 1146 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
--- or not, helper-mediated or not, funnels through here, so the three facts one push
--- establishes cannot drift apart at one site and not another: the diagnostic is
--- STORED, the build/run sticky gate is ARMED, and an error OCCURRED.
---
--- It is NOT the sole writer of `ModuleCells.mcCells.errorsDetected` — that would put the
--- counter back in step with the list, which is exactly what PR2 removed.  The counter
--- is bumped by `noteTypeErrorDetected` below, from here AND from each dedup
--- short-circuit, so it counts errors DETECTED rather than errors STORED.  Do not
--- "restore" the equality: a region containing only a deduped push must still answer
--- `erredDuring` True, or a diagnostics decision reaches a control decision again.
---
--- ⚠️ ONE standing obligation, and it is not discharged here: anywhere the channel is
--- ROLLED BACK, this counter must be rolled back WITH it, or a region straddling the
--- rollback would see a detection that no longer has a diagnostic behind it.  No site
--- rolls the channel back within one module record's lifetime today: `checkGraphFinish`
--- rolls back only the two cells that OUTLIVE a module (`typeErrorsSticky` and its
--- message list), around a memo path's drain.  Any future rollback of `typeErrors`
--- owes the same pairing.
---
--- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
--- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
--- hand-placed bump at "the five helpers" would have left that one silent, and the
--- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
--- ⚠️ #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
--- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
--- re-scanning the channel (it holds the rendered message and a message-at-site
--- key).  Keeping the insert HERE — inside the one funnel — is what makes the
--- index unable to disagree with the channel: there is no second push site to
--- forget.  A rollback of the channel owes the index the same pairing the counter
--- states above; today there is none within a module record's lifetime (see there).
-recordTypeError : ModuleCtx -> TcDiag -> Unit
-recordTypeError mctx raw =
-  let d = writtenDiag raw
-  mctx.mcGraph.typeErrorsSticky := True
-  mctx.mcGraph.typeErrorsStickyDiags :=
-    (mctx.mcCells.currentModuleRef.value, d)
-      :: mctx.mcGraph.typeErrorsStickyDiags.value
-  let _ = noteTypeErrorDetected mctx ()
-  mctx.mcCells.typeErrorMsgSetRef :=
-    omInsert
-      (msgAtKey (tcMsg d) (tcLoc d))
-      ()
-      (omInsert (tcMsg d) () mctx.mcCells.typeErrorMsgSetRef.value)
-  wPush mctx.mcCells.typeErrors d
-
--- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
--- detected" is written in one place whether or not the diagnostic is stored.
--- Called from `recordTypeError` (stored) and from all three dedup short-circuits
--- (detected, suppressed as a duplicate).  It deliberately does NOT arm
--- `typeErrorsSticky`: a short-circuit means an identical message is already in the
--- channel, which armed it at its own push, and nothing clears it within the drive.
-noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
-noteTypeErrorDetected mctx _ =
-  mctx.mcCells.errorsDetected := mctx.mcCells.errorsDetected.value + 1
-
--- issue 1146 — THE polling convention for "did region [act] DETECT an error".
---
--- Three inference sites used to answer that by measuring `listLen typeErrors` before
--- and after the region.  That made the diagnostic accumulator load-bearing CONTROL
--- FLOW rather than a report: any change to how many entries land in it — a dedup-key
--- change, a rendering change, a loc-selection change — could silently flip an
--- inference branch, and a gated `unify` that does not run is a type error that is not
--- caught.  They now read the occurrence COUNTER, through this ONE combinator, so the
--- judgment is implemented once and no diagnostics decision reaches a control decision:
--- the counter records DETECTIONS, and no dedup, rendering, ordering, loc-selection or
--- code-selection choice changes whether an error was detected.
---
--- Read the answer as "an error was detected in [act]", NOT as "[act] added a
--- diagnostic" — since PR2 those differ, and the difference is the point.  Do not
--- re-derive it from `typeErrors`; that reintroduces the coupling this removes.
---
--- ⚠️ Medaka is STRICT, so [act] must be a thunk: `erredDuring (_ => work)`.  Passing
--- the region's VALUE would evaluate it before the first read and always answer False.
-erredDuring : ModuleCtx -> (Unit -> a) -> (Bool, a)
-erredDuring mctx act =
-  let before = mctx.mcCells.errorsDetected.value
-  let result = act ()
-  (mctx.mcCells.errorsDetected.value /= before, result)
-
--- Push one type-error message at the span of the construct around it.
-pushTypeError : ModuleCtx -> String -> String -> Unit
-pushTypeError mctx code msg =
-  recordTypeError mctx (TcDiag code 1 mctx.mcLoc msg None None)
-
--- Push one type-error message attributed to [loc] rather than the enclosing
--- construct (#414).  Same non-deduping semantics as `pushTypeError` — the
--- deduping `pushTypeErrorOnceAt` is for obligation errors, which two checkers can
--- each detect; a coherence conflict is pushed exactly once per run.  `None` falls
--- back to the enclosing construct's span.
--- The same diagnostic at the same span is one diagnostic: a default body
--- checked generically and again as each instance's copy, or two checks
--- deriving one obligation, report it once.  The identity is the binding, the
--- span and the text: an unlocated diagnostic is never folded, and a probe
--- that parses without location state (every span degenerate and equal)
--- still keeps one report per binding.
-pushTypeErrorAt : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorAt mctx code loc msg =
-  let at = orElseLoc loc mctx.mcLoc
-  let key = "\{code}\t\{mctx.mcCells.currentFn.value}\t\{locKey at}\t\{msg}"
-  if isSome at && omHasKey key mctx.mcCells.typeErrorKeySetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    mctx.mcCells.typeErrorKeySetRef :=
-      omInsert key () mctx.mcCells.typeErrorKeySetRef.value
-    recordTypeError mctx (TcDiag code 1 at msg None None)
-
-locKey : Option Loc -> String
-locKey None = ""
-locKey (Some (Loc file line col _ _)) =
-  "\{file}:\{intToString line}:\{intToString col}"
-
--- #11 soundness: REPORT an obligation error only if the SAME message isn't already
--- accumulated.  A single missing impl can be detected by both checkImplObligations
--- (the original deferred obligation, once it grounds) and checkCallObligations (the
--- call-site instantiation); ERROR-QUALITY dim R/X want one diagnostic per root cause,
--- so the second detection is suppressed from the REPORT.
---
--- issue 1146 PR2: suppressed from the report, NOT from the record of what happened —
--- the short-circuit still calls `noteTypeErrorDetected`.  Dedup is a presentation
--- judgment keyed on rendered text; letting it also decide "did an error occur here"
--- is what made a message-rendering change able to flip an inference branch.
---
--- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not the
--- `anyList (e => tcMsg e == msg) mctx.mcCells.typeErrors.items.value` scan it used
--- to be.  The scan was O(accumulated) per push, hence O(N^2) over a program whose
--- N diagnostics are pairwise DISTINCT — which is the common case for this family
--- (`pushNoImplError` renders the interface AND the type into every message).  It
--- read linear only on a corpus of REPEATED messages, where the first comparison
--- always matched and the list never grew.  The index answers the identical
--- question: `recordTypeError` is the sole writer of both, so a key is present iff
--- a diagnostic with that rendered message is in the channel.
-pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
-pushTypeErrorOnce mctx code msg =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    pushTypeError mctx code msg
-
--- Membership key for "this message at this span".  A located diagnostic is a
--- duplicate only of the same text at the same span, so two sites with identical
--- text each report; an unlocated one folds on text alone.
-msgAtKey : String -> Option Loc -> String
-msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
-
-alreadyReportedAt : ModuleCtx -> String -> Option Loc -> Bool
-alreadyReportedAt mctx msg None =
-  omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value
-alreadyReportedAt mctx msg at =
-  omHasKey (msgAtKey msg at) mctx.mcCells.typeErrorMsgSetRef.value
-
--- B.10.2c: push a deduped type error attributing it to the supplied loc: the
--- post-HM obligation check runs outside every construct, so the loc was
--- snapshotted into the obligation tuple at the record site.  `None` falls back
--- to the record's `mcLoc`, the enclosing construct's span (none after
--- inference).  issue 1146 PR2: the short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
-pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorOnceAt mctx code loc msg =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError
-      mctx
-      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg None None)
-
--- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
--- another span is a second diagnostic, the same text at the same span (a signature
--- elaborated twice) still folds.  For messages that describe one site's own fault,
--- where two sites with identical text must each be reported.  An ambiguous goal
--- folds on its span instead (`pushAmbiguityAt`).
-pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorOncePerSite mctx code loc msg =
-  let at = orElseLoc loc mctx.mcLoc
-  if alreadyReportedAt mctx msg at then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError mctx (TcDiag code 1 at msg None None)
-
--- A `T-AMBIGUOUS-INSTANCE` is one diagnostic per span, however many checks judge
--- the goal there: the boundary, the module's obligation check and the selector each
--- reach the same verdict on it.  Its text does not identify it, since the short
--- message names only the interface, so two goals at two spans are two diagnostics.
--- Of two messages at one span the one that names the goal and its candidates
--- ([namesGoal]) is kept.  An unlocated one folds on its text.
-pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
-pushAmbiguityAt mctx namesGoal loc msg =
-  let at = orElseLoc loc mctx.mcLoc
-  let code = "T-AMBIGUOUS-INSTANCE"
-  if isNone at then
-    pushTypeErrorOnceAt mctx code at msg
-  else
-    let site = locKey at
-    match omLookup site mctx.mcCells.ambiguitySitesRef.value
-      None =>
-        mctx.mcCells.ambiguitySitesRef :=
-          omInsert site namesGoal mctx.mcCells.ambiguitySitesRef.value
-        recordTypeError mctx (TcDiag code 1 at msg None None)
-      Some named =>
-        if namesGoal && not named then
-          mctx.mcCells.ambiguitySitesRef :=
-            omInsert site True mctx.mcCells.ambiguitySitesRef.value
-          replaceAmbiguityAt
-            mctx
-            site
-            (writtenDiag (TcDiag code 1 at msg None None))
-        else
-          noteTypeErrorDetected mctx ()
-
--- Puts [d] in place of the `T-AMBIGUOUS-INSTANCE` recorded at [site], in the
--- module's channel and the sticky one.
-replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
-replaceAmbiguityAt mctx site d =
-  let same e = tcCode e == tcCode d && locKey (tcLoc e) == site
-  let swap e = if same e then d else e
-  let _ = noteTypeErrorDetected mctx ()
-  mctx.mcCells.typeErrorMsgSetRef :=
-    omInsert
-      (msgAtKey (tcMsg d) (tcLoc d))
-      ()
-      (omInsert (tcMsg d) () mctx.mcCells.typeErrorMsgSetRef.value)
-  mctx.mcCells.typeErrors.items := map swap !mctx.mcCells.typeErrors.items
-  mctx.mcGraph.typeErrorsStickyDiags :=
-    map ((m, e) => (m, swap e)) mctx.mcGraph.typeErrorsStickyDiags.value
-
--- A boundary's `T-AMBIGUOUS-INSTANCE` on the goal [args]: one undetermined
--- variable is one diagnostic, however many goals at however many spans pose it, so
--- a goal sharing a boundary-owned variable with one already reported folds into
--- it.  Only the variables the boundary owns ([rigidIds] and scheme-quantified ones
--- excluded) identify the cause: two goals that share only a rigid variable are two
--- defects.  The selector and the obligation check cannot tell a rigid variable
--- from an open one, so they fold on the span alone (`pushAmbiguityAt`).
-pushBoundaryAmbiguity : ModuleCtx ->
-  OrdMap Unit ->
-  List Mono ->
-  Option Loc ->
-  String ->
-  Unit
-pushBoundaryAmbiguity mctx rigidIds args loc msg =
-  let reported = mctx.mcCells.ambiguityVarsRef
-  let ids =
-    filterList (boundaryOwnsOpen mctx rigidIds) (flatMap monoUnboundIds args)
-  if anyList (i => IdMap.has i reported.value) ids then
-    noteTypeErrorDetected mctx ()
-  else
-    reported := fold (m i => IdMap.set i () m) reported.value ids
-    pushAmbiguityAt mctx False loc msg
-
--- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
--- carries a human `help` string and an optional machine-applicable `fix`
--- (ERROR-QUALITY dim F).  #159: help/fix now ride INSIDE the TcDiag — no
--- message-keyed side channel.  `Fix`/`Diag` live in driver/diagnostics.mdk (which
--- imports this module), so the fix is carried as a plain (Loc, String)
--- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
--- issue 1146 PR2: the short-circuit bumps the occurrence counter (see
--- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
-pushTypeErrorHelpFixAt : ModuleCtx ->
-  String ->
-  Option Loc ->
-  String ->
-  String ->
-  Option (Loc, String) ->
-  Unit
-pushTypeErrorHelpFixAt mctx code loc msg help fix =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError
-      mctx
-      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
 
 -- Whether the `main` binding recorded obligations remains inference-private; the
 -- publication module receives its Boolean answer rather than this side table.
@@ -12961,35 +12707,6 @@ localSourceName name
     [] => name
   | otherwise = name
 
--- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
-writtenNames : String -> String
-writtenNames text = match splitOnChar '$' text
-  [only] => only
-  parts => dropRenameSuffixes parts
-
-dropRenameSuffixes : List String -> String
-dropRenameSuffixes [] = ""
-dropRenameSuffixes [a] = a
-dropRenameSuffixes (a :: _ :: n :: lb :: more)
-  | allDigits n && startsWith "lb" lb =
-    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
-dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
-
-allDigits : String -> Bool
-allDigits n = stringLength n > 0 && allDigitsFrom n 0
-
-allDigitsFrom : String -> Int -> Bool
-allDigitsFrom n i
-  | i >= stringLength n = True
-  | otherwise =
-    let c = stringSlice i (i + 1) n
-    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
-
--- A diagnostic as the user reads it: binder names as written.
-writtenDiag : TcDiag -> TcDiag
-writtenDiag (TcDiag code sev loc msg help fix) =
-  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
-
 localAbsFor : GraphCtx -> String -> Option LocalAbs
 localAbsFor gctx name =
   match omLookup name gctx.graphRun.localAbs.lasBinders.value
@@ -15940,9 +15657,6 @@ missingFieldMsg fname rname = "missing field `\{fname}` in `\{rname}`"
 ambiguousFieldMsg : String -> List String -> String
 ambiguousFieldMsg fname owners =
   "ambiguous field `.\{fname}`: it is declared by \{joinAnd (map backticked owners)} and the record type is undetermined; annotate the record, as in `(r : \{headL owners}).\{fname}`"
-
-backticked : String -> String
-backticked s = "`\{s}`"
 
 -- TYPECHECK-AUDIT D1: convert resolve-not-pre-screened error shapes (unknown
 -- record / constructor, unbound variable) from uncatchable interpreter panics
@@ -19890,23 +19604,6 @@ unifyParamsExpected dyn (p :: ps) (e :: es) =
   unifyParamsExpected dyn ps es
 unifyParamsExpected dyn _ _ = ()
 
--- Chunk C: recover the ultimate callee name of an application spine (the
--- leftmost head), stripping transparent wrappers.  `None` when the head is not
--- a plain variable (so no name to blame in an over-application message).
-appSpineName : Expr -> Option String
-appSpineName (ELoc _ e) = appSpineName e
-appSpineName (EDoOrigin _ e) = appSpineName e
-appSpineName (EAnnot e _) = appSpineName e
-appSpineName (EApp f _) = appSpineName f
-appSpineName (EVar n) = Some n
-appSpineName (EVarId n _) = Some n
-appSpineName (EVarAt n _) = Some n
--- #2705: every driver marks now, so a callee can arrive as the marked occurrence
--- shape; it still has the name a message wants.
-appSpineName (EMethodAt n _ _) = Some n
-appSpineName (EDictAt n _) = Some n
-appSpineName _ = None
-
 -- Chunk C: number of arguments applied in this spine (`f a b c` ⇒ 3).
 appSpineArgCount : Expr -> Int
 appSpineArgCount (ELoc _ e) = appSpineArgCount e
@@ -20157,30 +19854,6 @@ tupleCallShapeHint f x ft = match tupleArgElems x
       None
     else
       map (name => buildTupleCallHint name es f x) (appSpineName f)
-
--- surface-site lookup: does [m] (a type appearing in a no-impl / mismatch error)
--- equal a recorded tuple-call residual?  Compared by normalized rendering — the
--- residual IS the very type that flows into the error, so they render identically.
-tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
-tupleCallHintFor mctx m =
-  findTupleCand (ppMono (normalize m)) mctx.mcCells.tupleCallCandidates.value
-
-findTupleCand : String ->
-  List (Mono, String, Option (Loc, String)) ->
-  Option (String, Option (Loc, String))
-findTupleCand _ [] = None
-findTupleCand key ((res, help, fix) :: rest)
-  | ppMono (normalize res) == key = Some (help, fix)
-  | otherwise = findTupleCand key rest
-
--- first tuple-call hint matching any of the offending types in an error.
-firstTupleCallHint : ModuleCtx ->
-  List Mono ->
-  Option (String, Option (Loc, String))
-firstTupleCallHint mctx [] = None
-firstTupleCallHint mctx (m :: rest) = match tupleCallHintFor mctx m
-  Some hf => Some hf
-  None => firstTupleCallHint mctx rest
 
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
 inferApp env appExpr ft xt =
@@ -33430,12 +33103,6 @@ reportMixedGoalAmbiguity mctx rigidIds window iface args loc =
         (ambiguousImplMsg iface.irName)
     _ => ()
 
--- [i] is neither held rigid nor quantified by a registered scheme.
-boundaryOwnsOpen : ModuleCtx -> OrdMap Unit -> Int -> Bool
-boundaryOwnsOpen mctx rigidIds i =
-  not (omHasKey (intToString i) rigidIds)
-    && not (IdMap.has i mctx.mcCells.deferrableVarIds.value)
-
 -- The variables a later group can still ground (§6.2 T2): those no scheme
 -- quantifies in the types of this group's members [monos] and of every earlier
 -- top-level member of the module.  The members that still carry one are kept for
@@ -33903,15 +33570,6 @@ undeterminedNoImplMsg gctx iface args =
     "\{head}; no impl of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it"
   else
     "\{head}; no impl of `\{iface}` has that shape, so no type for `_` can satisfy it"
-
--- The ordinal of the zero-based position [i].
-ordinalWord : Int -> String
-ordinalWord 0 = "first"
-ordinalWord 1 = "second"
-ordinalWord 2 = "third"
-ordinalWord 3 = "fourth"
-ordinalWord 4 = "fifth"
-ordinalWord i = "\{intToString (i + 1)}th"
 
 improveGoal : DynCtx -> OrdMap Unit -> IfaceRef -> List Mono -> Unit
 improveGoal dyn sigIds iface args
@@ -34459,125 +34117,6 @@ numUnimplementableHead : Mono -> Bool
 numUnimplementableHead m = match normalize m
   TApp a b => unboundSpineHead (spineHeadMono (TApp a b))
   _ => False
-
--- #1952: a MULTI-ARGUMENT goal names its arguments at ARGUMENT precedence, so
--- `Conv (Wrap a) Int` no longer prints as `Conv for Wrap a Int` — which reads as a
--- three-argument predicate and cannot be matched against the impl heads printed beside
--- it.  ⚠️ The length gate is the whole disambiguation and is not a hedge: with exactly
--- ONE argument the entire remainder of the message IS that argument, so there is nothing
--- to mis-group, and `ppMonosShared` is kept there so every existing single-argument
--- reject (`No impl of Eq for List Int`) renders byte-identically.  This message is prose,
--- not source — `renderConstraintCtx` is the surface that owes parens unconditionally.
-noImplFoundMsg : String -> List Mono -> String
-noImplFoundMsg iface [arg] = "no impl of \{iface} for \{ppMonosShared [arg]}"
-noImplFoundMsg iface args = "no impl of \{iface} for \{ppPredArgsShared args}"
-
--- Actionable-fix hint (F dimension) for a `No impl of <iface> for <ty>` reject:
--- only when [args] is a single user-declared data type (a `dataParamKindsRef`
--- hit) does "add deriving" / "write an impl" read as concrete, applicable
--- advice — a builtin (String/Int/Bool/…) can't take `deriving`, and a function
--- type is structurally un-implementable, so both stay hint-free (unchanged
--- message) rather than print misleading advice.  A stdlib-owned type is
--- hint-free too for the derivable interfaces (`headIsStdlibOwned`).
--- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
--- question, and it is a membership test rather than a lookup.  A-2.2 has since
--- landed, so the identity IS reachable here (`headTyconMono` now answers a
--- `HeadKey`); this site deliberately calls the bare-name residual
--- `headTyconNameMono` instead, and is therefore one of the residual rows the
--- Stage A-2 ledger counts.
--- That costs nothing real: the question this asks is "is a type by this name
--- user-declared anywhere?", used ONLY to decide whether `add 'deriving X'` is
--- applicable advice rather than a dead end for a builtin.  `omHasKey` (over
--- `dataParamNameIndexRef`, which #2158 put in front of the old `tabHasName`
--- scan — same bare-name question, same answer) returns no value, so it cannot
--- select the wrong module's row; the worst a collision can do is offer
--- applicable advice for the right reason under the wrong module's declaration.
-noImplHint : ModuleCtx -> String -> List Mono -> Option String
-noImplHint mctx iface [arg] = match headTyconNameMono arg
-  Some n =>
-    if derivableIface iface && headIsStdlibOwned mctx.mcGraph arg then
-      None
-    else
-      noImplHintFor mctx iface n
-  None => None
-noImplHint mctx _ _ = None
-
--- A type declared in a stdlib-owned module cannot take `deriving`, and an
--- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md
--- "No Orphan Instances"), so neither remedy of `noImplAdvice` is available to the
--- caller.  A type with no module identity (builtin, unresolved) is not stdlib-owned.
-headIsStdlibOwned : GraphCtx -> Mono -> Bool
-headIsStdlibOwned gctx arg = match headTyconMono arg
-  Some (HkDecl (TkIdent (Ident _ io _))) =>
-    identOriginFold
-      False
-      (mid => omHasKey mid gctx.config.value.tcStdlibOwned)
-      io
-  _ => False
-
-noImplHintFor : ModuleCtx -> String -> String -> Option String
-noImplHintFor mctx iface n
-  -- #2158: was `tabHasName n mctx.mcCells.dataParamKindsRef.value`, an O(n)
-  -- linear scan re-run per no-impl diagnostic. `dataParamNameIndexRef` is the
-  -- same bare-name membership question (built from `tabKeyName` over exactly
-  -- the same keys, kept in lockstep at every dataParamKindsRef write site —
-  -- see the field's comment on `ModuleCtx`), answered via `omHasKey` instead.
-  | omHasKey n mctx.mcCells.dataParamNameIndexRef.value =
-    Some (noImplAdvice iface n)
-  | otherwise = None
-
--- Roadmap #18a: only a DERIVABLE interface may be suggested via `deriving`.  A
--- `deriving <iface>` for anything outside that set is silently DROPPED by desugar's
--- `deriveImpls` (its `deriveForData`/`deriveForNewtype` return None), so the old
--- unconditional "add 'deriving X'" sent the user down a dead end for every other
--- interface — including the `Semigroup` reject `a ++ b` now raises, and the
--- pre-existing user-interface case (`No impl of Printable for Foo`).  For those the
--- only real fix is to write the impl, so that is all we advise.
-noImplAdvice : String -> String -> String
-noImplAdvice iface n
-  | derivableIface iface =
-    "add `deriving \{iface}` to `\{n}` or write `impl \{iface} \{n}`"
-  | otherwise = "write `impl \{iface} \{n}`"
-
--- The interfaces desugar.mdk can actually synthesize an impl for (deriveForData /
--- deriveForNewtype).  `Generic` is data-only; the other four cover both.
-derivableIface : String -> Bool
-derivableIface iface =
-  contains iface ["Eq", "Ord", "Debug", "Display", "Generic"]
-
--- Append the hint (when applicable) to the plain `noImplFoundMsg`, mirroring
--- the did-you-mean append convention (base message ++ "; " ++ hint).
-noImplFoundMsgHinted : ModuleCtx ->
-  String ->
-  List Mono ->
-  (String, Option String)
-noImplFoundMsgHinted mctx iface args =
-  let base = noImplFoundMsg iface args
-  match noImplHint mctx iface args
-    Some hint => ("\{base}; \{hint}", Some hint)
-    None => (base, None)
-
--- Push a `No impl of …` type error, appending + recording the actionable-fix
--- hint (via `pushTypeErrorHelpFixAt`) when one applies; otherwise behaves
--- exactly like the previous plain `pushTypeErrorOnceAt "T-NO-IMPL" …` call.
-pushNoImplError : ModuleCtx -> String -> Option Loc -> List Mono -> Unit
-pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
-  -- P0-16: the un-implementable type IS a tuple-call residual (e.g. `println
-  -- (add(1, 2))` → `No impl of Display for ((Int, Int) -> (Int, Int))`) — append
-  -- the "call with spaces, not parentheses" hint + machine fix.
-  Some (help, fix) =>
-    pushTypeErrorHelpFixAt
-      mctx
-      "T-NO-IMPL"
-      loc
-      "\{noImplFoundMsg iface args}; \{help}"
-      help
-      fix
-  None =>
-    let (msg, mhint) = noImplFoundMsgHinted mctx iface args
-    match mhint
-      Some hint => pushTypeErrorHelpFixAt mctx "T-NO-IMPL" loc msg hint None
-      None => pushTypeErrorOnceAt mctx "T-NO-IMPL" loc msg
 
 -- Chunk D (Num mis-framing reframe): at the final no-impl branch, a `Num`
 -- obligation forced to a fully-ground concrete non-Num head (`args` already passed
@@ -36799,9 +36338,6 @@ effVarTailIds ((_, cell) :: rest) = match effrowNorm (EffRow [] (Some cell))
     else
       effvarId t :: effVarTailIds rest
   EffRow _ None => effVarTailIds rest
-
-quotedNames : List String -> String
-quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 
 tyVarNoun : List String -> String
 tyVarNoun [_] = "variable"
@@ -48235,17 +47771,6 @@ checkModulesEntryFullReportKGraph (DriveArgs inputs valueMain _ preludeKey _ run
         effectiveCoreDecls0
         effectiveModules0)
   ((g.gdReport, g.gdOutputs), g.gdGraph)
-
--- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
-prependDiagOpt : String ->
-  Int ->
-  Option String ->
-  Option String ->
-  List TcDiag ->
-  List TcDiag
-prependDiagOpt _ _ _ None ds = ds
-prependDiagOpt code sev help (Some msg) ds =
-  writtenDiag (TcDiag code sev None msg help None) :: ds
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
 -- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.

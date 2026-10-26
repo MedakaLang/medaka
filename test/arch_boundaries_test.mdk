@@ -884,12 +884,27 @@ bundleFieldNames ls recName =
   let body = takeWhile (l => not (startsWith "}" l)) after
   map (f => "\{recName}.\{f}") (filterMap fieldNameOf body)
 
--- The cell census: the column-0 `name = Ref` cells of `types.typecheck`, then
+-- The modules that hold what `types.typecheck` held before the layer split.
+typecheckFamily : List String
+typecheckFamily = [
+  "types.typecheck",
+  "types.tc_mono",
+  "types.tc_state",
+  "types.tc_env",
+  "types.tc_diag",
+]
+
+-- The lines of every module in [typecheckFamily], in that order.
+typecheckFamilyLines : List (String, List String) -> List String
+typecheckFamilyLines mods =
+  flatMap (m => optionOr [] (lookup m mods)) typecheckFamily
+
+-- The cell census: the column-0 `name = Ref` cells of the typecheck family, then
 -- the `Bundle.field` names of the `tc_types` bundles.
 cellCensus : List (String, List String) -> List String
 cellCensus mods =
   let linesFor m = optionOr [] (lookup m mods)
-  filterMap cellName (linesFor "types.typecheck")
+  filterMap cellName (typecheckFamilyLines mods)
     ++ bundleNames (linesFor "types.tc_types")
 
 -- Names in exactly one of the two lists, sorted.
@@ -969,7 +984,7 @@ test "arch_boundaries: the module-field partition classifies every ModuleCtx fie
         (h => bundleFieldNames (linesFor "types.tc_types") (fst h))
         partitionHeaders)
   let rows =
-    flatMap (partitionRows (linesFor "types.typecheck")) partitionHeaders
+    flatMap (partitionRows (typecheckFamilyLines mods)) partitionHeaders
   expectAll [
     expectAtLeast 90 (length fields),
     expectEqual [] (symmetricDifference fields (map fst rows)),

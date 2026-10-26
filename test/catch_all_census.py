@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Catch-all clause census over the typechecker (`compiler/types/typecheck.mdk`, `compiler/types/repr.mdk`, `compiler/types/chain_key.mdk` and `compiler/types/evidence_coverage.mdk`, #2551).
+"""Catch-all clause census over the typechecker (`compiler/types/typecheck.mdk` and its `tc_*.mdk` layer modules, `compiler/types/repr.mdk`, `compiler/types/chain_key.mdk` and `compiler/types/evidence_coverage.mdk`, #2551).
 
 Enumerates every top-level multi-clause function whose clauses dispatch on an
 `Expr` or `Decl` constructor at some parameter position while the FINAL clause
@@ -35,6 +35,10 @@ ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
 AST = f"{ROOT}/compiler/frontend/ast.mdk"
 SRCS = [
     f"{ROOT}/compiler/types/typecheck.mdk",
+    f"{ROOT}/compiler/types/tc_mono.mdk",
+    f"{ROOT}/compiler/types/tc_state.mdk",
+    f"{ROOT}/compiler/types/tc_env.mdk",
+    f"{ROOT}/compiler/types/tc_diag.mdk",
     f"{ROOT}/compiler/types/repr.mdk",
     f"{ROOT}/compiler/types/chain_key.mdk",
     f"{ROOT}/compiler/types/evidence_coverage.mdk",

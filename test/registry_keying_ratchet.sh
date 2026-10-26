@@ -109,6 +109,10 @@ else
   ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 TC="$ROOT/compiler/types/typecheck.mdk"
+# The IE and CE registry blocks, and the driver-state publishers, sit in the layer modules beside
+# typecheck.mdk: tc_env holds both blocks (the CE block ends in tc_state), tc_*.mdk hold the publishers.
+TCENV="$ROOT/compiler/types/tc_env.mdk"
+TCSTATE="$ROOT/compiler/types/tc_state.mdk"
 TCT="$ROOT/compiler/types/tc_types.mdk"
 EV="$ROOT/compiler/eval/eval.mdk"
 CIE="$ROOT/compiler/ir/core_ir_eval.mdk"
@@ -812,12 +816,12 @@ echo "  ok: ctorFieldOrdersRef asymmetry unchanged (interpreter-drivers-only, ju
 #         that pattern copied.
 echo "checking #1112 A-3.4 IE namespace ratchet ..."
 
-ie_block=$(sed -n '/IE-BLOCK-BEGIN/,/IE-BLOCK-END/p' "$TC" | strip_comments)
+ie_block=$(cat "$TCENV" "$TCSTATE" | sed -n '/IE-BLOCK-BEGIN/,/IE-BLOCK-END/p' | strip_comments)
 ie_n=$(printf '%s\n' "$ie_block" | grep -c . || true)
 if [ "$ie_n" -eq 0 ]; then
   echo "FAIL: check 4 extracted ZERO lines for the IE block. Either the"
   echo "  'IE-BLOCK-BEGIN' / 'IE-BLOCK-END' banner comments in"
-  echo "  compiler/types/typecheck.mdk were moved, reworded or deleted, or this"
+  echo "  compiler/types/tc_env.mdk were moved, reworded or deleted, or this"
   echo "  check just validated nothing. A zero-length IE block is a BROKEN"
   echo "  DELIMITER, never an empty answer. Restore the banners (or update this"
   echo "  range) -- do NOT treat a zero extraction as a pass."
@@ -882,12 +886,12 @@ echo "  ok: IE block is $ie_n line(s), no non-IE namespace mint, no default-arm 
 #      EMPTY                                                          -> FAIL
 echo "checking #1519 A-3.3 CE construction ratchet ..."
 
-ce_block=$(sed -n '/CE-BLOCK-BEGIN/,/CE-BLOCK-END/p' "$TC" | strip_comments)
+ce_block=$(cat "$TCENV" "$TCSTATE" | sed -n '/CE-BLOCK-BEGIN/,/CE-BLOCK-END/p' | strip_comments)
 ce_n=$(printf '%s\n' "$ce_block" | grep -c . || true)
 if [ "$ce_n" -eq 0 ]; then
   echo "FAIL: check 5 extracted ZERO lines for the CE block. Either the"
   echo "  'CE-BLOCK-BEGIN' / 'CE-BLOCK-END' banner comments in"
-  echo "  compiler/types/typecheck.mdk were moved, reworded or deleted, or this"
+  echo "  compiler/types/tc_env.mdk and tc_state.mdk were moved, reworded or deleted, or this"
   echo "  check just validated nothing. A zero-length CE block is a BROKEN"
   echo "  DELIMITER, never an empty answer. Restore the banners (or update this"
   echo "  range) -- do NOT treat a zero extraction as a pass."
@@ -1025,7 +1029,8 @@ fi
 #   (b) SOLE SITE -- every non-comment line of this file that mentions NAME (the
 #       callee/ref alone, so the check does not depend on any one caller's parameter
 #       names) is inside graphPreamble's body, apart from NAME's own column-0
-#       definition lines. A mention anywhere else is a second copy of the whole-graph
+#       definition lines or its bare import-member line (the definition may live
+#       in a layer module). A mention anywhere else is a second copy of the whole-graph
 #       writer set, which is exactly what #2791 exploited.
 check_parity_row() {
   label="$1"
@@ -1049,6 +1054,7 @@ check_parity_row() {
       sub(/^[ \t]+/, "", line)
       if (line ~ /^--/) next
       if (index($0, name) == 1) next
+      if (line == name || line == name ",") next
       if (NR >= lo && NR <= hi) next
       printf "    %d: %s\n", NR, line
     }
@@ -1152,7 +1158,7 @@ echo "  ok: populateEffectDomainsGraph precedes declEnvsRef := at the driver ent
 # assertion is a SUBSET one -- the child may call more, never less.
 CLI="$ROOT/compiler/driver/medaka_cli.mdk"
 ES="$ROOT/compiler/entries/entry_support.mdk"
-pubs=$(grep -o '^\(set\|reset\)[A-Za-z]* :' "$TC" | sed 's/ :$//' | sort -u)
+pubs=$(grep -ho '^\(set\|reset\)[A-Za-z]* :' "$TC" "$ROOT"/compiler/types/tc_*.mdk | sed 's/ :$//' | sort -u)
 inputs_calls="driveInputsFor stdlibOwnership"
 if [ -z "$pubs" ]; then
   echo "FAIL: check 7 derived ZERO driver-state publishers from $TC. The grep"

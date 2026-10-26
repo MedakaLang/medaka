@@ -1,5 +1,5 @@
-{- | Catch-all clause ratchet over compiler/types/typecheck.mdk,
-   compiler/types/repr.mdk, compiler/types/chain_key.mdk and
+{- | Catch-all clause ratchet over compiler/types/typecheck.mdk, its tc_*.mdk
+   layer modules, compiler/types/repr.mdk, compiler/types/chain_key.mdk and
    compiler/types/evidence_coverage.mdk (#2551). Replaces diff_compiler_catch_all_census.sh
    and the check mode of test/catch_all_census.py (the .py stays as the
    ledger writer; the ledgers are not touched here).
@@ -40,12 +40,16 @@ loadAll : <IO, FileRead> Result String (String, String, String, String)
 loadAll = do
   astText <- readFile (underRoot "compiler/frontend/ast.mdk")
   tc <- readFile (underRoot "compiler/types/typecheck.mdk")
+  tcMono <- readFile (underRoot "compiler/types/tc_mono.mdk")
+  tcState <- readFile (underRoot "compiler/types/tc_state.mdk")
+  tcEnv <- readFile (underRoot "compiler/types/tc_env.mdk")
+  tcDiag <- readFile (underRoot "compiler/types/tc_diag.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
   ck <- readFile (underRoot "compiler/types/chain_key.mdk")
   ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
   siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
-  Ok (astText, "\{tc}\n\{rp}\n\{ck}\n\{ec}", siteLedger, declLedger)
+  Ok (astText, "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiag}\n\{rp}\n\{ck}\n\{ec}", siteLedger, declLedger)
 
 siteCheck : <IO, FileRead> Expectation
 siteCheck = match loadAll
