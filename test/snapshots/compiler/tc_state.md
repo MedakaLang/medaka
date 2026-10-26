@@ -1,5 +1,5 @@
 # META
-source_lines=1142
+source_lines=1154
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
@@ -24,36 +24,14 @@ import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..), defaultReceiverDict}
 import types.repr.{IfaceRef(..), Scheme(..)}
 import types.effect_solver as EffectSolver
 import types.tc_types.{
-  AssumptionTraceEntry(..),
-  BuiltinClasses(..),
-  CheckRunSeed(..),
-  ClassEnv(..),
-  CrossRun(..),
-  DataEnv(..),
-  DeclEnvs(..),
-  DeclEnvSeedAcc(..),
-  DriveInputs(..),
-  DynCtx(..),
-  EvidenceObservationEntry(..),
-  GrantState(..),
-  GraphCtx(..),
-  GraphRun(..),
-  ImplEnv(..),
-  ImplUniverse(..),
-  Interners(..),
-  InvocationView(..),
-  Lineage(..),
-  LocalAbsState(..),
-  MethodEnv(..),
-  ModuleCells(..),
-  ModuleCtx(..),
-  NumericPredicateTraceEntry(..),
-  ShadowDicts(..),
-  SigVars(..),
-  TcConfig(..),
-  TcEnv(..),
-  TraceSink(..),
-  Windowed(..),
+  AssumptionTraceEntry(..), BuiltinClasses(..), CheckRunSeed(..), ClassEnv(..),
+  CrossRun(..), DataEnv(..), DeclEnvs(..), DeclEnvSeedAcc(..), DriveInputs(..),
+  DynCtx(..), EvidenceObservationEntry(..), GrantState(..), GraphCtx(..),
+  GraphRun(..), ImplEnv(..), ImplUniverse(..), Interners(..),
+  InvocationView(..), Lineage(..), LocalAbsState(..), MethodEnv(..),
+  ModuleCells(..), ModuleCtx(..), NumericPredicateTraceEntry(..),
+  ShadowDicts(..), SigVars(..), TcConfig(..), TcEnv(..), TraceSink(..),
+  Windowed(..), StampCtx, UObligation
 }
 import map.{Map(..)}
 import list.{take}
@@ -62,12 +40,46 @@ import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
 }
 import types.scopes as Scopes
-import types.registry.{regEmpty}
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
 import support.util.{reverseL}
 import types.registry.{mregEmpty, regEmpty, spEmpty, spFromFloor}
 import types.runtime_types.{emptyBinderTypes}
+
+export
+callUOblsWindow : ModuleCtx -> Int -> List UObligation
+callUOblsWindow mctx mark = wWindow mctx.mcCells.obls mark
+
+-- The entries a channel gained since `mark` — this module's own, in the order the
+-- per-module list used to hold them.  [now] is the channel's length, read off its own
+-- counter: measuring the RUN-WIDE list here instead made every windowed read cost the
+-- whole graph, which is the module-count superlinearity #2724 measures.
+export
+moduleWindow : Int -> Int -> List a -> List a
+moduleWindow now mark xs = take (now - mark) xs
+
+-- The oracle and warnings [m] holds: the seed of a module checked without one
+-- (`cmCheckWorker` and the two core passes), which carries them forward unchanged.
+export
+checkRunResidue : ModuleCtx -> CheckRunSeed
+checkRunResidue m = CheckRunSeed {
+  crsOracle = m.mcCells.matchOracle.value,
+  crsWarnings = m.mcCells.matchWarnings.value,
+}
+
+-- Builds [ctx]'s record, with the two module tables the drain reads taken from
+-- [saved], the record current when the drain began: the stamp context holds no
+-- module's tables of its own (`StampCtx`).  Returns that record, which the walk that
+-- follows runs in.
+export
+enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
+enterStampCtx saved ctx =
+  -- Deferred goals select their `gGiven` bucket from their captured scope frames;
+  -- the record's `currentModuleRef` is the legacy routing context, and its
+  -- `superDeclsRef` the interface decls of the module's universe (`stampCtxOf`), the
+  -- only decls the stampers' super-expansion reads.
+  let s = ctx.scModuleCtx
+  moduleCtxFrom False s s saved s
 
 -- Bug C: importer-shadow method names → their IMPORTED STANDALONE scheme (e.g.
 -- `eval/eval.mdk`'s imported `add` → `U64 -> U64 -> U64`, which `Num.add` shadows).
@@ -1149,18 +1161,25 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
+(DTypeSig true "callUOblsWindow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "UObligation")))))
+(DFunDef false "callUOblsWindow" ((PVar "mctx") (PVar "mark")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "obls")) (EVar "mark")))
+(DTypeSig true "moduleWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "moduleWindow" ((PVar "now") (PVar "mark") (PVar "xs")) (EApp (EApp (EVar "take") (EBinOp "-" (EVar "now") (EVar "mark"))) (EVar "xs")))
+(DTypeSig true "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
+(DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchWarnings") "value")))))
+(DTypeSig true "enterStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyCon "ModuleCtx"))))
+(DFunDef false "enterStampCtx" ((PVar "saved") (PVar "ctx")) (EBlock (DoLet false false (PVar "s") (EFieldAccess (EVar "ctx") "scModuleCtx")) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "s")) (EVar "s")) (EVar "saved")) (EVar "s")))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig true "emptyDeclEnvSeedAcc" (TyCon "DeclEnvSeedAcc"))
@@ -1301,18 +1320,25 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "registry") ((mem "regEmpty" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
+(DTypeSig true "callUOblsWindow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "UObligation")))))
+(DFunDef false "callUOblsWindow" ((PVar "mctx") (PVar "mark")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "obls")) (EVar "mark")))
+(DTypeSig true "moduleWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "moduleWindow" ((PVar "now") (PVar "mark") (PVar "xs")) (EApp (EApp (EVar "take") (EBinOp "-" (EVar "now") (EVar "mark"))) (EVar "xs")))
+(DTypeSig true "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
+(DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchWarnings") "value")))))
+(DTypeSig true "enterStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyCon "ModuleCtx"))))
+(DFunDef false "enterStampCtx" ((PVar "saved") (PVar "ctx")) (EBlock (DoLet false false (PVar "s") (EFieldAccess (EVar "ctx") "scModuleCtx")) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "s")) (EVar "s")) (EVar "saved")) (EVar "s")))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig true "emptyDeclEnvSeedAcc" (TyCon "DeclEnvSeedAcc"))

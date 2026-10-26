@@ -1,0 +1,3009 @@
+-- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
+-- `lowerOwnedRoot`), unification over types, rows, joins, index rows and authority, the occurs
+-- check, the mismatch action (`typeMismatch`, `poisonMismatchVars`, the do-block report
+-- `recordDoMonadError`), generalization (with the defaulting it performs: sourceless authorities,
+-- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
+-- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
+-- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
+-- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
+-- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
+-- message text is `tc_diag`'s.
+--
+-- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
+-- 6.6-6.8.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_decls_variance`,
+-- `tc_decls_types`, `tc_decls`, `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`,
+-- `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+
+import types.tc_types.{
+  AbsorptionEvent(..),
+  CDeclared(..),
+  CDeclaredPrefix(..),
+  CSlot(..),
+  DynCtx(..),
+  JoinContext(..),
+  Kind(..),
+  MethodInstantiationSubst(..),
+  MethodTrackedInstantiation(..),
+  ObligationSite(..),
+  OblProjection(..),
+  PendingJoin(..),
+  Polarity(..),
+  Predicate(..),
+  PredicateSlotArgs(..),
+  Provenance(..),
+  UObligation(..),
+  Windowed(..),
+  DoCtx,
+  dynFor,
+  GraphCtx,
+  ModuleCtx,
+  PredicateSlot,
+}
+import types.tc_mono.{
+  authCellsIn,
+  authRowCells,
+  cellIdSet,
+  containsI,
+  dedupI,
+  effvarLevel,
+  headTyconMono,
+  headTyconNameMono,
+  isUnshaped,
+  joinCellOf,
+  minLevelOf,
+  monoHasArrowInSlot,
+  monoIsApp,
+  monoSpineDepth,
+  monoUnboundIds,
+  newEffvarId,
+  qualifierAuthIds,
+  rowOfMembers,
+  sameRootId,
+  spineHead,
+  substAuth,
+  substMono,
+  substMonos,
+  substOblArgs,
+  substRow,
+  tconBuiltin,
+  tupleUnifyClash,
+  tyAppSpine,
+  tyvarId,
+  xmodOblArgId,
+}
+import types.tc_state.{dynAtIfSome, wAll, wPush, wRestore, wSnapshot}
+import types.tc_env.{domainHasPatterns, tyTabKey}
+import types.tc_diag.{
+  authorityCoverMsg,
+  authorityIndexMsg,
+  authorityTermTextIn,
+  closedRowMismatchMsg,
+  constrainedApplicationText,
+  contraRowMsg,
+  deferRequiresMonadMsg,
+  doRequiresMonadMsg,
+  elselessIfHelp,
+  firstTupleCallHint,
+  indexRowMismatchMsg,
+  joinMismatchMsg,
+  paramVarianceMismatchMsg,
+  patternIndexMsg,
+  pushTypeError,
+  pushTypeErrorAt,
+  pushTypeErrorHelpFixAt,
+  recordTypeError,
+  renderFlatRow,
+  residualFailureMsg,
+  sameSpellingHint,
+  starSpelling,
+}
+import types.effect_authority.{
+  Authority(..),
+  Authvar(..),
+  authDomainTop,
+  authHasVars,
+  authIsPattern,
+  authIsTop,
+  authJoinAll,
+  authNorm,
+  authSplit,
+  authSub,
+  authTop,
+  authvarDomain,
+  authvarId,
+  authvarIsPattern,
+  authvarLevel,
+  authvarName,
+  authVars,
+  linkAuthvar,
+  markAuthvarPattern,
+}
+import types.effect_rows.{
+  Atom(..),
+  EffLabel(..),
+  EffRow(..),
+  Effvar(..),
+  atomAuth,
+  atomKey,
+  atomsDiff,
+  atomsNorm,
+  atomsUnion,
+  builtinLabel,
+  collectRows,
+  effLabelName,
+  effrowNorm,
+  effvarId,
+  findAtom,
+  isJoinCell,
+  labelKey,
+  linkRow,
+  pureRow,
+  renderAtoms,
+  rowFlat,
+  rowHasSummary,
+}
+import types.repr.{
+  AuthResidual(..),
+  Mono(..),
+  Scheme(..),
+  Tyvar(..),
+  VecObl(..),
+  normalize,
+  ppAuthority,
+  ppMono,
+  tupleTagArity,
+}
+import frontend.ast.{
+  Decl(..),
+  EffAtomTy(..),
+  EffParamTy(..),
+  Loc(..),
+  TabKey(..),
+  Ty(..),
+  TyConOrigin(..),
+  lookupTab,
+  sameTyConHead,
+  tabKeyEq,
+}
+import types.registry.{HeadKey(..)}
+import map.{Map(..)}
+import types.effect_domain.{Param(..)}
+import types.evidence.{ScopeId(..)}
+import types.publish.{TcDiag(..)}
+import types.effect_values.{
+  ValueJoinOps(..),
+  joinProduced,
+  joinProducedEnvelope,
+  resolveDeferredJoin,
+}
+import support.util.{
+  allList,
+  anyList,
+  dedup,
+  filterList,
+  isEmptyL,
+  isNonEmptyL,
+  isSome,
+  listLen,
+  lookupAssoc,
+  minI,
+  orElseOpt,
+  reverseL,
+  splitOnChar,
+}
+import types.effect_param_decode.{atomOfLabel}
+import types.solver_contract.{Instantiation(..), Wanted(..)}
+import types.target_profile.{hostLabels}
+import types.disposition.{MethodDisposition(..)}
+import list.{drop, last, replicate}
+import support.ordmap.{omInsert, omLookup}
+import types.invocation_basis.{paramPolaritiesIn}
+import types.effect_infer.{recordEffect, typeAuthority}
+import types.effect_solver as EffectSolver
+import types.scopes as Scopes
+import map as IdMap
+
+ioLabel : EffLabel
+ioLabel = builtinLabel "IO"
+
+-- `IO` is the join of the labels the drive's profile grants (`ioJoin`), so it
+-- widens on either side of an escape check.  On the bound side a NARROW inferred
+-- row is subsumed by an `<IO>` bound (narrow ⊑ IO); `IO` stays in the expansion
+-- (atomsNorm keeps it) so an inferred IO matches a bound IO.
+expandIoInBound : GraphCtx -> List Atom -> List Atom
+expandIoInBound gctx b = match findAtom (labelKey ioLabel) b
+  None => b
+  Some _ => atomsNorm (b ++ gctx.config.value.tcIoJoin)
+
+-- A performed `IO` left over against a bound without `IO` stands for the labels
+-- it joins: a bound naming all of them admits it, a bound naming some refuses it
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.  Only a
+-- label of the join can cover a performed `IO`, so when the profile grants no
+-- host label the join is empty, the bound names none of it, and `IO` stands.
+narrowPerformedIo : GraphCtx -> List Atom -> List Atom -> List Atom
+narrowPerformedIo gctx diff bound = match findAtom (labelKey ioLabel) diff
+  None => diff
+  Some _ =>
+    let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
+    let join = gctx.config.value.tcIoJoin
+    let missing = atomsDiff join bound
+    if listLen missing == listLen join then
+      diff
+    else if isEmptyL missing then
+      rest
+    else
+      atomsNorm (rest ++ missing)
+
+-- escape-direction difference: inferred [a] not permitted by bound [b], with
+-- `IO` widened to its security-label alias on both sides.
+export
+atomsEscape : GraphCtx -> List Atom -> List Atom -> List Atom
+atomsEscape gctx a b =
+  let bound = expandIoInBound gctx b
+  narrowPerformedIo gctx (atomsDiff a bound) bound
+
+newTyvarId : GraphCtx -> Unit -> Int
+newTyvarId gctx _ =
+  let n = gctx.graphRun.tyvarCounter.value
+  gctx.graphRun.tyvarCounter := n + 1
+  n
+
+export
+freshVar : ModuleCtx -> Unit -> Mono
+freshVar mctx _ =
+  TVar
+    (Ref (Unbound (newTyvarId mctx.mcGraph ()) mctx.mcCells.currentLevel.value))
+
+export
+freshEffvar : ModuleCtx -> Unit -> Ref Effvar
+freshEffvar mctx _ =
+  Ref (EUnbound (newEffvarId mctx.mcGraph ()) mctx.mcCells.currentLevel.value)
+
+export
+freshEffvarAt : GraphCtx -> Int -> Ref Effvar
+freshEffvarAt gctx lvl = Ref (EUnbound (newEffvarId gctx ()) lvl)
+
+-- An inference-created row is a local existential choice. Publication retains
+-- it if it is still reachable from the inferred value; otherwise scope solving
+-- may close it. Declaration variables use freshEffvar directly, not this path.
+freshInferenceEffvar : ModuleCtx -> Unit -> Ref Effvar
+freshInferenceEffvar mctx _ =
+  let cell = freshEffvar mctx ()
+  let _ = EffectSolver.registerExistential mctx.mcCells.effectSummaries cell
+  cell
+
+export
+openRow : ModuleCtx -> Unit -> EffRow
+openRow mctx _ = EffRow [] (Some (freshInferenceEffvar mctx ()))
+
+export
+enterLevel : ModuleCtx -> Unit -> Unit
+enterLevel mctx _ =
+  mctx.mcCells.currentLevel := mctx.mcCells.currentLevel.value + 1
+
+export
+exitLevel : ModuleCtx -> Unit -> Unit
+exitLevel mctx _ =
+  mctx.mcCells.currentLevel := mctx.mcCells.currentLevel.value - 1
+
+-- #821: a rigid method effect variable (its cell id is in the current impl
+-- body's rigid set) must never be identified with another tail; two such tails
+-- meeting in an ambient row JOIN instead.
+isRigidCell : ModuleCtx -> Ref Effvar -> Bool
+isRigidCell mctx cell =
+  IdMap.has (effvarId cell) mctx.mcCells.rigidEffvarsRef.value
+
+-- Accumulation records what ran. It never solves the performed row's variables:
+-- two independently effectful computations contribute their join, not equality.
+export
+performEffect : ModuleCtx -> Ref (List EffRow) -> EffRow -> Unit
+performEffect mctx cur eff =
+  let _ = recordEffectSites mctx eff
+  recordEffect cur eff
+
+-- Most performed rows carry no atom of their own (a pure call, a row that
+-- is one tail variable), and those cost nothing here: the key is built only
+-- for an atom that is present.
+recordEffectSites : ModuleCtx -> EffRow -> Unit
+recordEffectSites mctx (EffRow [] _) = ()
+recordEffectSites mctx eff =
+  fold
+    (_ atom =>
+      let key = effectSiteKey mctx.mcCells.currentFn.value (atomKey atom)
+      let sites = optionOr [] (omLookup key mctx.mcCells.effectSitesRef.value)
+      mctx.mcCells.effectSitesRef :=
+        omInsert
+          key
+          ((atomAuth atom, mctx.mcLoc) :: sites)
+          mctx.mcCells.effectSitesRef.value)
+    ()
+    (fst (rowFlat eff))
+
+export
+effectSiteKey : String -> String -> String
+effectSiteKey fn label = "\{fn}\t\{label}"
+
+obligationSiteHere : ModuleCtx -> Bool -> ObligationSite
+obligationSiteHere mctx covering = ObligationSite {
+  osLoc = mctx.mcLoc,
+  osFn = mctx.mcCells.currentFn.value,
+  osCovering = covering,
+}
+
+deferEffectRelation : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
+deferEffectRelation mctx exact lower upper =
+  EffectSolver.recordRelation
+    mctx.mcCells.effectSummaries
+    exact
+    (obligationSiteHere mctx False)
+    lower
+    upper
+
+-- An index slot is invariant.  A flexible variable on either side takes the
+-- other side as its solution outright — a substitution, as an alias
+-- parameter's or an impl head's variable is — so a match or an improvement
+-- loop that unifies indices sees progress rather than a pair of pending
+-- obligations; two determined terms (constants, rigids, joins) record the
+-- equality as the pair of obligations the scope checks.
+unifyIndex : ModuleCtx -> Authority -> Authority -> Unit
+unifyIndex mctx qa qb = match (authNorm qa, authNorm qb)
+  (AVar a, b) if flexibleIndex mctx a b => substituteIndex mctx a b
+  (a, AVar b) if flexibleIndex mctx b a => substituteIndex mctx b a
+  (a, b) =>
+    let _ = wantAuthorityWith mctx True a b
+    wantAuthorityWith mctx True b a
+
+-- A pattern-ranging cell takes only a pattern-ranging term (EFFECTS-SEMANTICS
+-- §4.1): the term's flexible variables are narrowed to patterns with it,
+-- since the equation makes them one authority, but an exact element or a
+-- variable a caller chooses over the whole domain cannot be, and the
+-- equation is refused.
+substituteIndex : ModuleCtx -> Ref Authvar -> Authority -> Unit
+substituteIndex mctx cell term =
+  let _ =
+    if authvarIsPattern cell && not (authIsPattern term) then
+      let fixed = indexOutsidePatterns mctx term
+      if isEmptyL fixed then
+        fold
+          (_ v => if authvarIsPattern v then () else markAuthvarPattern v)
+          ()
+          (authVars term)
+      else
+        pushTypeError mctx "T-AUTHORITY-PATTERN" (patternIndexMsg term)
+  substituteIndexLinked mctx cell term
+
+-- The operands of [term] no narrowing brings into the pattern range: a
+-- constant that is not a pattern, and a rigid variable that is not
+-- pattern-ranging.
+indexOutsidePatterns : ModuleCtx -> Authority -> List Authority
+indexOutsidePatterns mctx term =
+  let members = match authNorm term
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c =>
+        not (authvarIsPattern c)
+          && IdMap.has (authvarId c) mctx.mcCells.rigidAuthvarsRef.value
+      other => not (authIsPattern other))
+    members
+
+substituteIndexLinked : ModuleCtx -> Ref Authvar -> Authority -> Unit
+substituteIndexLinked mctx cell term =
+  let _ = lowerAuthLevels (authvarLevel cell) term
+  let _ =
+    if authHasVars term then
+      ()
+    else
+      mctx.mcCells.indexSubstitutedRef :=
+        IdMap.set (authvarId cell) () mctx.mcCells.indexSubstitutedRef.value
+  linkAuthvar cell term
+
+flexibleIndex : ModuleCtx -> Ref Authvar -> Authority -> Bool
+flexibleIndex mctx cell other =
+  not (IdMap.has (authvarId cell) mctx.mcCells.rigidAuthvarsRef.value)
+    && not (anyList (c => authvarId c == authvarId cell) (authVars other))
+
+-- Ordinary row equality can solve flexible cells, never declaration universals.
+-- Binding-owned summaries instead record both directions for scoped solving.
+unifyRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyRow dyn r1 r2 = unifyRowN dyn (effrowNorm r1) (effrowNorm r2)
+
+-- Joins and universal leaves use the role-aware unifier. Plain flexible rows
+-- retain the cheaper single-tail unification path.
+unifyRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowN dyn r1 r2 =
+  if rowHasSummary r1 || rowHasSummary r2 then
+    let _ = deferEffectRelation dyn.dcModule False r1 r2
+    deferEffectRelation dyn.dcModule False r2 r1
+  else if rowTailIsJoin r1
+    || rowTailIsJoin r2
+    || rowHasRigid dyn.dcModule r1
+    || rowHasRigid dyn.dcModule r2 then
+    unifyJoinRows dyn.dcModule False r1 r2
+  else
+    unifyRowPlain dyn r1 r2
+
+-- Equality may solve a flexible variable toward a declared universal, but
+-- never the reverse. The join unifier already partitions cells by this role.
+rowHasRigid : ModuleCtx -> EffRow -> Bool
+rowHasRigid mctx row = match mctx.mcCells.rigidEffvarsRef.value
+  Tip => False
+  _ => anyList (isRigidCell mctx) (snd (rowFlat row))
+
+rowTailIsJoin : EffRow -> Bool
+rowTailIsJoin (EffRow _ (Some c)) = isJoinCell c
+rowTailIsJoin (EffRow _ None) = False
+
+-- ── #821: unifying rows whose tails are JOINS ─────────────────────────────
+-- Both rows are taken apart into (atoms, unbound member cells).  Members
+-- common to both sides cancel; what remains on each side is split into RIGID
+-- members (a method effect variable of the impl body being checked — never
+-- bound) and FLEXIBLE ones (ordinary metavariables).  The spec's discipline
+-- (EFFECTS-SEMANTICS §6, "unification never decomposes a join") is honoured by
+-- never binding a rigid member: a join is solved only by binding the flexible
+-- members on each side to whatever the OTHER side has left over, which is the
+-- ordinary open-absorbs rule generalized from one tail to a set.  A rigid
+-- member with nothing on the other side to match it is a genuine mismatch.
+--   * flexible on both sides — every flexible member is bound to a fresh
+--     shared tail joined with the other side's rigid residue (the plain
+--     BOTH-OPEN arm, over sets);
+--   * flexible on one side only — those members are bound to the other side's
+--     residue; a closed residue also runs the §5 leak check on the open side's
+--     atoms (the plain OPEN~CLOSED arm), and in INDEX mode the atoms must be
+--     equal (the plain index arm);
+--   * no flexible member anywhere — the rigid residues must both be empty and
+--     (index mode) the atoms equal; an arrow row with equal member sets and
+--     differing prefixes keeps the plain SAME-TAIL arm's leniency.
+unifyJoinRows : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
+unifyJoinRows mctx isIndex r1 r2 =
+  let fa = rowFlat r1
+  let fb = rowFlat r2
+  let ma = snd fa
+  let mb = snd fb
+  let idsA = cellIdSet ma
+  let idsB = cellIdSet mb
+  let common = filterList (c => IdMap.has (effvarId c) idsB) ma
+  -- a SHARED flexible member can absorb either side's leftovers too:
+  -- `x ⊔ R` against `x` is solved by `x := x' ⊔ R` (both sides gain R).
+  let cflex = filterList (c => not (isRigidCell mctx c)) common
+  let onlyA = filterList (c => not (IdMap.has (effvarId c) idsB)) ma
+  let onlyB = filterList (c => not (IdMap.has (effvarId c) idsA)) mb
+  let rigidA = filterList (isRigidCell mctx) onlyA
+  let flexA = filterList (c => not (isRigidCell mctx c)) onlyA
+  let rigidB = filterList (isRigidCell mctx) onlyB
+  let flexB = filterList (c => not (isRigidCell mctx c)) onlyB
+  -- An index with no flexible member on either side has no room for an
+  -- atom the other side lacks, so its shared labels are equal as indices.
+  let _ =
+    if isIndex && isEmptyL flexA && isEmptyL flexB && isEmptyL cflex then
+      unifyIndexAtomAuthorities mctx (fst fa) (fst fb)
+  let dA = atomsDiff (fst fa) (fst fb)
+  let dB = atomsDiff (fst fb) (fst fa)
+  -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
+  -- flexible leftovers if any, else by a shared flexible member.
+  let bindC =
+    isNonEmptyL cflex
+      && (isNonEmptyL rigidA && isEmptyL flexB
+        || isNonEmptyL rigidB && isEmptyL flexA
+        || isNonEmptyL dA && isEmptyL flexB
+        || isNonEmptyL dB && isEmptyL flexA)
+  let useV3 = isNonEmptyL flexA && isNonEmptyL flexB || bindC
+  let v3s =
+    if useV3 then
+      [freshEffvarAt mctx.mcGraph (minLevelOf (flexA ++ flexB ++ cflex))]
+    else
+      []
+  let _ =
+    if isNonEmptyL rigidA && isEmptyL flexB && not bindC then
+      joinMismatch mctx isIndex fa fb
+  let _ =
+    if isNonEmptyL rigidB && isEmptyL flexA && not bindC then
+      joinMismatch mctx isIndex fa fb
+  let _ =
+    if isNonEmptyL dA && isEmptyL flexB && not bindC then
+      joinSideCheck mctx isIndex dA dB (fst fa) (fst fb)
+  let _ =
+    if isNonEmptyL dB && isEmptyL flexA && not bindC then
+      joinSideCheck mctx isIndex dB dA (fst fb) (fst fa)
+  let _ = bindEach flexA (rowOfMembers mctx.mcGraph dB (v3s ++ rigidB))
+  let _ = bindEach flexB (rowOfMembers mctx.mcGraph dA (v3s ++ rigidA))
+  let _ =
+    if bindC then
+      bindEach
+        cflex
+        (rowOfMembers mctx.mcGraph (atomsUnion dA dB) (v3s ++ rigidA ++ rigidB))
+  match v3s
+    v3 :: _ => recordAbsorptions mctx (dA ++ dB) v3
+    [] => ()
+
+bindEach : List (Ref Effvar) -> EffRow -> Unit
+bindEach [] _ = ()
+bindEach (c :: cs) row =
+  linkRow c row
+  bindEach cs row
+
+-- the open side's atoms [dOpen] escaping the closed side's bound: the plain
+-- OPEN~CLOSED arm's leak check for arrows, coverage for an index.
+joinSideCheck : ModuleCtx ->
+  Bool ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  Unit
+joinSideCheck mctx True dOpen _ lOpen lClosed =
+  indexRowEqCheck mctx (indexAtomsCovered mctx dOpen lClosed) [] lOpen lClosed
+joinSideCheck mctx False _ _ lOpen lClosed =
+  effectLeakCheck mctx (atomsEscape mctx.mcGraph lOpen lClosed) lClosed
+
+joinMismatch : ModuleCtx ->
+  Bool ->
+  (List Atom, List (Ref Effvar)) ->
+  (List Atom, List (Ref Effvar)) ->
+  Unit
+joinMismatch mctx isIndex fa fb =
+  pushTypeError
+    mctx
+    (if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK")
+    (joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb))
+
+-- #839 STRICTNESS AUDIT.  The four arms below are classified against
+-- EFFECTS-SEMANTICS §5 (docs/spec/EFFECTS-SEMANTICS.md:335-371) and §6
+-- (:406-451).  Each open-tailed arm can ABSORB or DISCARD a concrete effect
+-- atom; whether that loss is load-bearing subtyping-via-reopen or accidental
+-- leniency decides whether a downstream soundness check must RACE this unifier
+-- (run pre-unify) or may inspect its result.  This records that relevance AT
+-- the arm rather than only ~12k lines away in checkImplEffectLaunder's comment.
+-- Per-arm verdicts inline.  The eventual fix (#839 increments 2a-2c) is an
+-- absorption event trail so a post-unify QUERY can substitute for the pre-unify
+-- races; a post-unify cell inspection alone CANNOT recover an absorbed atom
+-- (see the both-open note), which is the whole reason the trail is needed.
+-- (Intra-file refs below name SYMBOLS, not line numbers — the latter rot; the
+-- §N (:lines) spec cites point into EFFECTS-SEMANTICS.md, verified current.)
+unifyRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+  -- L1 ∪ r = L2 ∪ r requires every unmatched atom to belong to r. Preserve
+  -- that lower bound by extending the shared tail, just as the join unifier
+  -- does for a shared flexible member. Merely recording an absorption loses
+  -- the effect when r is a recursive binding's forcing row. Equal prefixes
+  -- need no mutation. A caller-chosen tail cannot acquire such a lower bound.
+  | effvarId v1 == effvarId v2 =
+    let missing = atomsUnion (atomsDiff l1 l2) (atomsDiff l2 l1)
+    match missing
+      [] => ()
+      _ =>
+        if isRigidCell dyn.dcModule v1 then
+          pushTypeError
+            dyn.dcModule
+            "T-EFFECT-LAUNDER"
+            "a caller-chosen effect row cannot be required to contain <\{renderAtoms missing}>; declare those effects as labels beside the row variable"
+        else
+          let next = freshEffvarAt dyn.dcModule.mcGraph (effvarLevel v1)
+          linkRow v1 (EffRow missing (Some next))
+          recordAbsorptions dyn.dcModule missing next
+  -- BOTH-OPEN arm (v1 /= v2): two distinct open tails.  Merges each side's
+  -- missing atoms (atomsDiff l2 l1, atomsDiff l1 l2) into a shared fresh tail v3
+  -- and links both old tails to it — after this, effrowLabels on either cell
+  -- resolves THROUGH v3 and no longer distinguishes intrinsic vs argument-borne
+  -- atoms; the atoms are ABSORBED into the shared tail.  LOAD-BEARING: this is
+  -- the standard subtyping-via-row-polymorphism encoding §5 (:361) relies on and
+  -- the effect-parametricity of map/andThen/fold/traverse §6 (:388-396) — an
+  -- open row "can absorb further atoms".  KEEP.  Note it deliberately runs NO
+  -- effectLeakCheck (contrast the two closed-side arms just below, which DO): an
+  -- open tail has not committed to a bound, so nothing can escape PAST it yet.
+  -- That asymmetry is why #803's intrinsic-atom bound runs POST-unify (#839 2b,
+  -- launderEscapeFromLog) rather than PRE-unify: a naive post-unify effrowLabels
+  -- inspection CANNOT recover the absorbed atom, so the atoms are recorded HERE
+  -- (recordAbsorptions) and the trail carries what effrowLabels no longer can.
+  | otherwise =
+    let v3 =
+      freshEffvarAt
+        dyn.dcModule.mcGraph
+        (minI (effvarLevel v1) (effvarLevel v2))
+    let d21 = atomsDiff l2 l1
+    let d12 = atomsDiff l1 l2
+    -- #821: rigidity follows the REPRESENTATIVE.  A method effect variable of
+    -- the impl body being checked (`rigidEffvarsRef`) linked into the shared
+    -- fresh tail makes that tail rigid too, so `performEffect`/`unifyJoinRows`
+    -- still see the variable after `inferApp` has unified the callee's row
+    -- with a fresh one.  Two rigid tails meeting here still identify (the dup
+    -- check downstream reports it), exactly as before.
+    let _ =
+      if isRigidCell dyn.dcModule v1 || isRigidCell dyn.dcModule v2 then
+        dyn.dcModule.mcCells.rigidEffvarsRef :=
+          IdMap.set (effvarId v3) () dyn.dcModule.mcCells.rigidEffvarsRef.value
+    linkRow v1 (EffRow d21 (Some v3))
+    linkRow v2 (EffRow d12 (Some v3))
+    -- #839 2a: both diffs vanish into the shared fresh tail v3; record them
+    -- against v3 (the surviving tail).  The setRef links above are UNCHANGED —
+    -- d21/d12 are the same values inlined before, so unification is byte-identical.
+    recordAbsorptions dyn.dcModule (d21 ++ d12) v3
+-- OPEN~CLOSED / CLOSED~OPEN arms: GUARDED — each runs effectLeakCheck (atomsEscape …),
+-- §5's binding-boundary escape check (:339-351), checking the OPEN side's labels against
+-- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
+-- the guarded direction.)
+unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 None) =
+  let _ =
+    effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l1 l2) l2
+  linkRow v1 (EffRow (atomsDiff l2 l1) None)
+unifyRowPlain dyn (EffRow l1 None) (EffRow l2 (Some v2)) =
+  let _ =
+    effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l2 l1) l1
+  linkRow v2 (EffRow (atomsDiff l1 l2) None)
+-- CLOSED~CLOSED arm: EQUALITY, via `closedRowEqCheck` (#2557).  Two written rows
+-- have no tail to bind and this unifier has no expected/actual role, so the only
+-- sound symmetric verdict is that the atom sets match.  A silent no-op here is wrong:
+-- a plain generic reaches this arm with no downstream consumer of the direction
+-- (`launderEscapeFromLog` is consulted only by the impl/default-method seam), so
+-- `coerce : a -> a -> a` applied to two callbacks whose PARAMETER rows differ (`<IO>`
+-- vs `<>`) would equate them, `reopenRowN` reopens only covariant rows, and the result
+-- would carry one closure's declared type with the other's body.  The
+-- purer-than-declared case (an impl `<>` against a declared `<Stdout>`) is real, but it
+-- is a DIRECTED flow (a value into a declared slot), and every such seam takes
+-- `unifyInto`, which checks a closed~closed pair directionally and never brings one
+-- here.  Index rows route to `unifyIndexRow` below, NOT here — an index is invariant by
+-- kind (#1094); do not re-point `unifyN`'s `TEff`/`TEff` arm at `unifyRow`.
+unifyRowPlain dyn (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck dyn l1 l2
+
+-- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
+-- `Mono` carries two different kinds of row and they obey different rules:
+--   * `TFun _ EffRow _` — an arrow's LATENT row.  Sub-effecting via row-polymorphic
+--     re-open (§5) is load-bearing; `unifyRow` above is written for it.
+--   * `TEff EffRow`     — a row in an `Effect`-kinded type-argument (INDEX) slot.
+--     EFFECTS-SEMANTICS §9 "Index fidelity": `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable
+--     only when `φ₁ = φ₂`.  INVARIANT — no direction of `≤` is licensed here.  A
+--     parameter's polarity is not knowable without a variance analysis, which this
+--     compiler does not have, and a CONTRAVARIANT index is writable today
+--     (`data Sink e = MkSink ((Unit -> <e> Unit) -> Int)`), so widening in EITHER
+--     direction launders an effect.  Only equality is sound.
+-- `substMonoP` already encodes this distinction (it wraps an arrow row in `reopenRow`
+-- and passes a `TEff` row through UNCHANGED); routing both through one unifier threw
+-- that decision away.  This restores the agreement.
+--
+-- Invariance is not "both sides closed and equal" checked at the top.  Solving an
+-- index METAVARIABLE against a written row is instantiation, not interchange, and must
+-- keep working — `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:17`
+-- (`mkPure : a -> Async <> a`, body `Done x`) unifies a FRESH OPEN effvar against the
+-- written closed `<>`.  So the OPEN-tailed cases are not blanket-rejected.
+--
+-- BUT "every open-tailed arm of `unifyRowN` is already invariance-correct" is FALSE,
+-- and an earlier revision of this comment said it.  Exactly TWO of the three open-tailed
+-- shapes are:
+--   * open~closed / closed~open — binds the tail to the exact difference and
+--     `effectLeakCheck`s the residue.  Correct: there is a metavariable to solve.
+--   * BOTH-OPEN with DISTINCT tails — ordinary Rémy/Wand unification into a shared fresh
+--     tail.  Correct: two metavariable-tailed rows CAN be made equal, and the join is the
+--     most general row equal to both.
+--   * SAME-TAIL with DIFFERING PREFIXES (`<Stdout | e>` ~ `<e>`, the same physical
+--     effvar) — NOT correct.  `unifyRowN`'s own arm DISCARDS the symmetric difference
+--     ("the atom evaporates … ACCIDENTAL leniency, NOT load-bearing", ~60 lines above).
+--     There is nothing left to solve — the tails are already the same cell — so the
+--     differing prefixes are two genuinely different rows, and dropping the difference is
+--     precisely the widening invariance forbids.  `launderBox : Box <Stdout | e> a ->
+--     Box e a` was accepted, and a value typed `Int` printed.  Hence the same-tail arm
+--     below, BEFORE the delegation.
+--     The benign self-unify `e ~ e` (equal prefixes, including two empty ones) has an
+--     EMPTY diff in both directions, so `relay : Box e a -> Box e a` stays green.
+--     Nothing is lost by intercepting here: the arm this pre-empts would have called
+--     `recordAbsorptions` on exactly this symmetric difference, and a non-empty
+--     difference is now an error instead of a silently-absorbed atom, while an empty one
+--     recorded nothing to begin with.
+--     Do not copy this arm onto `unifyRowN`'s ARROW same-tail arm.  The same discard
+--     launders there too (`launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+--     Unit)` is accepted), but that arm's leniency is NOT the same call: the covering
+--     rule for it was deliberately pushed to DECLARATION time (T-EFFECT-ARG-UNCOVERED /
+--     `checkArgEffVars`, whose own comment cites that arm), and the recordAbsorptions →
+--     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
+--     decision with its own blast radius, tracked separately — not a copy-paste of this.
+unifyIndexRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRow dyn r1 r2 = unifyIndexRowN dyn (effrowNorm r1) (effrowNorm r2)
+
+-- An index row is a set of atoms, and two index rows are equal when each
+-- covers the other (EFFECTS-SEMANTICS §6.4, §2.2).  Two atoms of one label at
+-- different authorities are two members of that set, not one authority to be
+-- equated: `<Net h | e1>` and `<Net "127.0.0.1" | e2>` are made equal by
+-- giving each open tail the other side's atom, and `<Net h | e1>` equals
+-- `<Net | e>` because the bare label covers `Net h`.  So an atom one side
+-- does not cover flows into the other side's flexible tail when there is one;
+-- only a side with no room must cover it, as an index obligation
+-- (`indexAtomsCovered`).  Where NEITHER side has a flexible tail, a shared
+-- label's two authorities are equal as indices (`unifyIndex`): a flexible
+-- one is substituted, two fixed ones are compared for equality, and what is
+-- left for the row comparison is which labels each side carries.
+unifyIndexAtomAuthorities : ModuleCtx -> List Atom -> List Atom -> Unit
+unifyIndexAtomAuthorities mctx a1 a2 =
+  fold
+    (_ x => match findAtom (atomKey x) a2
+      Some y => unifyIndex mctx (atomAuth x) (atomAuth y)
+      None => ())
+    ()
+    a1
+
+-- #821: an index row whose tail is a join is solved by the join unifier in
+-- INDEX mode (equality, never subsumption).  A row with a summary cell goes
+-- to the scoped solver as two exact relations, whose coverage is already
+-- atom by atom.
+unifyIndexRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowN dyn r1 r2 =
+  if rowHasSummary r1 || rowHasSummary r2 then
+    let _ = deferEffectRelation dyn.dcModule True r1 r2
+    deferEffectRelation dyn.dcModule True r2 r1
+  else if rowTailIsJoin r1
+    || rowTailIsJoin r2
+    || rowHasRigid dyn.dcModule r1
+    || rowHasRigid dyn.dcModule r2 then
+    unifyJoinRows dyn.dcModule True r1 r2
+  else
+    unifyIndexRowPlain dyn r1 r2
+
+-- Both closed, or the same tail: nothing can absorb an atom, so the rows are
+-- equal label by label.  Open against closed: the closed side's extra atoms
+-- are the open tail's solution, and the open side's atoms must be covered by
+-- the closed side (the §5 leak check, with a shared label's authority an
+-- index obligation).  Two distinct open tails: each takes what the other
+-- side has that it does not cover, into one fresh shared tail.
+unifyIndexRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowPlain dyn (EffRow l1 None) (EffRow l2 None) =
+  indexRowEquate dyn.dcModule l1 l2
+unifyIndexRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+  | effvarId v1 == effvarId v2 = indexRowEquate dyn.dcModule l1 l2
+unifyIndexRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 None) =
+  indexOpenClosed dyn.dcModule l1 v1 l2
+unifyIndexRowPlain dyn (EffRow l1 None) (EffRow l2 (Some v2)) =
+  indexOpenClosed dyn.dcModule l2 v2 l1
+unifyIndexRowPlain dyn r1 r2 = unifyRowPlain dyn r1 r2
+
+indexRowEquate : ModuleCtx -> List Atom -> List Atom -> Unit
+indexRowEquate mctx l1 l2 =
+  let _ = unifyIndexAtomAuthorities mctx l1 l2
+  indexRowEqCheck mctx (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
+
+indexOpenClosed : ModuleCtx -> List Atom -> Ref Effvar -> List Atom -> Unit
+indexOpenClosed mctx lOpen v lClosed =
+  let _ =
+    effectLeakCheck
+      mctx
+      (indexAtomsCovered mctx (atomsEscape mctx.mcGraph lOpen lClosed) lClosed)
+      lClosed
+  linkRow v (EffRow (atomsDiff lClosed lOpen) None)
+
+-- The atoms of [escaping] whose label [bound] does not carry.  An escaping
+-- atom whose label the bound does carry is not missing from it: its
+-- authority must lie within the bound's, which is recorded as an index
+-- obligation, so a variable is solved and a mismatch reads as an atom the
+-- bound does not cover (`wantIndexCovered`).
+indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
+indexAtomsCovered mctx [] _ = []
+indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
+  Some y =>
+    let _ = wantIndexCovered mctx (atomAuth x) (atomAuth y)
+    indexAtomsCovered mctx rest bound
+  None => x :: indexAtomsCovered mctx rest bound
+
+-- The atoms of [l1] whose label [l2] does not carry.  A shared label's two
+-- authorities were already equated by `unifyIndexAtomAuthorities`, which
+-- reports their mismatch as an authority index, so it is not a second report
+-- here.
+labelsMissing : List Atom -> List Atom -> List Atom
+labelsMissing l1 l2 =
+  filterList
+    (x => match findAtom (atomKey x) l2
+      Some _ => False
+      None => True)
+    l1
+
+-- Two index rows with nothing left to solve — both closed, or both already ending in the
+-- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
+-- `atomsDiff` (not `atomsEscape`) on purpose: `expandIoInBound` widens a bound's
+-- `IO` into the security-label alias, which is a SUBSUMPTION step — exactly the ≤ that
+-- invariance forbids here, so `<IO>` and `<Stdout>` are different index rows.
+indexRowEqCheck : ModuleCtx ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  Unit
+indexRowEqCheck mctx [] [] _ _ = ()
+indexRowEqCheck mctx _ _ l1 l2 =
+  pushTypeError mctx "T-EFFECT-INDEX-MISMATCH" (indexRowMismatchMsg l1 l2)
+
+-- SOUNDNESS (Phase 146): an open row (an inference-synthesized arrow, i.e. a
+-- concrete value's latent effect) meeting a closed bound — its own labels must
+-- not exceed the bound, else they escape.  [escaping] = open labels \ bound.
+export
+effectLeakCheck : ModuleCtx -> List Atom -> List Atom -> Unit
+effectLeakCheck mctx [] bound = ()
+effectLeakCheck mctx escaping bound =
+  pushTypeError mctx "T-EFFECT-LEAK" (effectLeakMsg mctx.mcGraph bound escaping)
+
+-- Two CLOSED rows meeting at `unify` must carry the same atoms (#2557).  Neither
+-- has a tail to bind, and `unify` has no expected/actual role to read a direction
+-- from, so equality is the only sound symmetric rule — the rule `unifyIndexRow`
+-- already applies to an index and the non-covariant slot rule applies to a type
+-- argument.  A seam that DOES know which side is the declaration (a signed body,
+-- a call argument, a supplied field, an annotated expression, an impl method)
+-- goes through `unifyInto`, which checks a closed~closed pair directionally and
+-- never brings one here.  Equality is modulo the `IO` alias — each side's atoms
+-- must be covered by the other's (`atomsEscape` both ways), so `<IO>` and
+-- `<IO, Stderr>`, one denotation in two spellings, are equal, while `<IO>` and
+-- `<Stderr>` are not.  Inside a non-covariant type argument the mismatch takes
+-- the variance wording, which names that slot and its eta-expansion recovery.
+closedRowEqCheck : DynCtx -> List Atom -> List Atom -> Unit
+closedRowEqCheck dyn l1 l2 = match (
+  atomsEscape dyn.dcModule.mcGraph l1 l2,
+  atomsEscape dyn.dcModule.mcGraph l2 l1,
+)
+  ([], []) => ()
+  _ =>
+    if dyn.dcNonCovariant then
+      pushTypeError
+        dyn.dcModule
+        "T-EFFECT-PARAM-VARIANCE"
+        (paramVarianceMismatchMsg l1 l2)
+    else
+      pushTypeError dyn.dcModule "T-EFFECT-LEAK" (closedRowMismatchMsg l1 l2)
+
+effectLeakMsg : GraphCtx -> List Atom -> List Atom -> String
+effectLeakMsg gctx bound extras =
+  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed\{ioJoinClause gctx (bound ++ extras)}"
+
+-- What `IO` means on the selected profile, for a message naming `IO` there:
+-- the reader cannot otherwise tell why `IO` does not cover a host label.
+-- Empty when `IO` joins every host label at its top.
+ioJoinClause : GraphCtx -> List Atom -> String
+ioJoinClause gctx atoms =
+  let join = gctx.config.value.tcIoJoin
+  let full = map (atomOfLabel gctx.effectDomains.value) hostLabels
+  if isSome (findAtom (labelKey ioLabel) atoms)
+    && isNonEmptyL (atomsDiff full join) then
+    "; `IO` on `\{gctx.config.value.tcIoJoinProfile}` is <\{renderAtoms join}>"
+  else
+    ""
+
+-- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
+-- A row's level is its tail's and every authority its atoms name: a row that
+-- reaches an older binding carries its atoms' authorities with it, so they
+-- are lowered with the tail (an authority left at an arm's level would read
+-- as local to the arm after it escaped through the row).
+export
+lowerRowLevels : Int -> EffRow -> Unit
+lowerRowLevels level r =
+  let (atoms, members) = rowFlat r
+  let _ = lowerMembers level members
+  fold (_ a => lowerAuthLevels level (atomAuth a)) () atoms
+
+lowerMembers : Int -> List (Ref Effvar) -> Unit
+lowerMembers _ [] = ()
+lowerMembers level (m :: ms) =
+  let _ = match !m
+    EUnbound id lvl => if lvl > level then m := EUnbound id level
+    _ => ()
+  lowerMembers level ms
+
+-- free generalizable effect variables: a row tail effvar deeper than the current
+-- scope (deduped by the caller, mirroring freeGenVars)
+freeEffvars : ModuleCtx -> Mono -> List Int
+freeEffvars mctx t = match normalize t
+  TVar cell => match !cell
+    Link t2 => freeEffvars mctx t2
+    Unbound _ _ => []
+  TCon _ _ => []
+  TRigid _ => []
+  TApp a b => freeEffvars mctx a ++ freeEffvars mctx b
+  TFun a r b =>
+    freeEffvars mctx a ++ rowFreeEffvars mctx r ++ freeEffvars mctx b
+  TEff r => rowFreeEffvars mctx r
+  TQual a _ => freeEffvars mctx a
+  TAuth _ => []
+
+rowFreeEffvars : ModuleCtx -> EffRow -> List Int
+rowFreeEffvars mctx r = flatMap (generalizableEffvar mctx) (snd (rowFlat r))
+
+generalizableEffvar : ModuleCtx -> Ref Effvar -> List Int
+generalizableEffvar mctx v = match !v
+  EUnbound id lvl => if lvl > mctx.mcCells.currentLevel.value then [id] else []
+  ELink _ _ => []
+  EJoin _ _ _ => []
+  ESummary _ _ _ => []
+
+-- The inverse function-slot projections.  A malformed carrier (non-singleton bound ids,
+-- or a known vector after an unknown one) deliberately loses that field so the live
+-- round-trip comparator below panics instead of silently normalising it.
+export
+predicateSlotCSlots : List PredicateSlot -> List CSlot
+predicateSlotCSlots [] = []
+predicateSlotCSlots (s :: rest) = match s.psBoundIds
+  id :: _ =>
+    CSlot { csIface = s.psIface, csId = id } :: predicateSlotCSlots rest
+  _ => predicateSlotCSlots rest
+
+export
+predicateSlotArgs : List PredicateSlot -> List (List Mono)
+predicateSlotArgs [] = []
+predicateSlotArgs (slot :: rest) = match slot.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args => args :: predicateSlotArgs rest
+
+-- The single recorder for the (now-ported) call channel: every producer becomes a
+-- thin caller stamping its own provenance.
+export
+recordObl : ModuleCtx -> Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordObl mctx p originId prov loc =
+  recordOblAt mctx p originId prov loc (captureScope mctx ())
+
+export
+recordOblAt : ModuleCtx ->
+  Predicate ->
+  Int ->
+  Provenance ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+recordOblAt mctx p originId prov loc scope = wPush
+  mctx.mcCells.obls
+  UObligation {
+    pred = p,
+    originId = originId,
+    prov = prov,
+    loc = loc,
+    uoScope = scope,
+    oblProj = OpProjected,
+  }
+
+-- #839 increment 2a: append one AbsorptionEvent per absorbed/discarded atom onto
+-- the (write-only in 2a) trail, keyed on the surviving/absorbing tail [cell].
+-- Recursive + []-short-circuits so the hot self-unify path (empty prefixes ⇒
+-- empty diff) pushes NOTHING and allocates nothing.  Records the cell Ref, not
+-- effvarId (see AbsorptionEvent), and snapshots the enclosing construct's span.
+recordAbsorptions : ModuleCtx -> List Atom -> Ref Effvar -> Unit
+recordAbsorptions mctx [] _ = ()
+recordAbsorptions mctx (a :: rest) cell =
+  let _ = wPush mctx.mcCells.absorptions AbsorptionEvent {
+    atom = a,
+    cell = cell,
+    loc = mctx.mcLoc,
+  }
+  recordAbsorptions mctx rest cell
+
+export
+captureScope : ModuleCtx -> Unit -> ScopeId
+captureScope mctx _ = Scopes.captureScopeCursor mctx.mcCells.currentScope.value
+
+tyvarLevel : Ref Tyvar -> Int
+tyvarLevel cell = match !cell
+  Unbound _ lvl => lvl
+  Link _ => 0
+
+-- occurs-check + lower the levels of vars in [t] to <= [level] (Phase: Rémy levels)
+occursAdjust : ModuleCtx -> Int -> Int -> Mono -> Unit
+occursAdjust mctx id level t = match normalize t
+  TVar cell => occursAdjustVar mctx id level cell
+  TCon _ _ => ()
+  TRigid _ => ()
+  TApp a b =>
+    let _ = occursAdjust mctx id level a
+    occursAdjust mctx id level b
+  TFun a r b =>
+    let _ = occursAdjust mctx id level a
+    let _ = lowerRowLevels level r
+    occursAdjust mctx id level b
+  TEff r => lowerRowLevels level r
+  TQual a q =>
+    let _ = lowerAuthLevels level q
+    occursAdjust mctx id level a
+  TAuth q => lowerAuthLevels level q
+
+occursAdjustVar : ModuleCtx -> Int -> Int -> Ref Tyvar -> Unit
+occursAdjustVar mctx id level cell = match !cell
+  Unbound id2 lvl2 => occursAdjustUnbound mctx id level cell id2 lvl2
+  Link t => occursAdjust mctx id level t
+
+occursAdjustUnbound : ModuleCtx -> Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
+occursAdjustUnbound mctx id level cell id2 lvl2
+  | id2 == id =
+    mctx.mcCells.occursCheckFailed := True
+    pushTypeError
+      mctx
+      "T-INFINITE-TYPE"
+      ("cannot construct an infinite type involving `"
+        ++ ppMono (TVar cell)
+        ++ "`")
+  | lvl2 > level = cell := Unbound id2 level
+  | otherwise = ()
+
+-- Two VALUE types equated.  A top-level qualifier erases: undirected
+-- unification cannot tell which side is the value, so it may neither let a
+-- variable's value claim the other side's authority nor demand a proof of the
+-- plain side.  A qualifier reaches a variable only through a directed flow —
+-- an argument (`argumentInto`), a declared parameter, a match scrutinee or a
+-- call's result (`bindFrom`), a cell read (`refStored`).  Below the top the
+-- types are structure, not values, and `unifyN` keeps qualifiers equal.
+--
+-- `unify` is the call from outside every construct that sets a dynamic context;
+-- the unification core takes the caller's `DynCtx` (`unifyIn`).
+export
+unify : ModuleCtx -> Mono -> Mono -> Unit
+unify mctx a b = unifyIn (dynFor mctx) a b
+
+export
+unifyIn : DynCtx -> Mono -> Mono -> Unit
+unifyIn dyn a b = unifyValue dyn (normalize a) (normalize b)
+
+unifyValue : DynCtx -> Mono -> Mono -> Unit
+unifyValue dyn (TVar c) (TQual a _) = unifyN dyn (TVar c) (normalize a)
+unifyValue dyn (TQual a _) (TVar c) = unifyN dyn (normalize a) (TVar c)
+unifyValue dyn (TQual a _) (TQual b _) = unifyN dyn (normalize a) (normalize b)
+unifyValue dyn (TQual a _) b = unifyN dyn (normalize a) b
+unifyValue dyn a (TQual b _) = unifyN dyn a (normalize b)
+unifyValue dyn a b = unifyN dyn a b
+
+-- Structural equality: inside a constructor argument, an arrow or an index, a
+-- qualifier is part of the type.  A variable takes a qualified type verbatim,
+-- two qualifiers must cover each other, and a qualified type against a plain
+-- one is equal only where the qualifier admits the domain's top — a `Ref`
+-- holding `String @p` cannot be the same cell as one holding any `String`.
+unifyStruct : DynCtx -> Mono -> Mono -> Unit
+unifyStruct dyn a b = unifyN dyn (normalize a) (normalize b)
+
+unifyN : DynCtx -> Mono -> Mono -> Unit
+unifyN dyn (TVar c1) (TVar c2) = unifyVars dyn c1 c2
+unifyN dyn (TVar c) t = bindVar dyn c t
+unifyN dyn t (TVar c) = bindVar dyn c t
+-- The head comparison reads the tycon's identity: two modules' unrelated `T`s do not
+-- unify (#1208, #1209), and the origin surviving a link does not depend on link
+-- direction, so a key computed from the field is a function of the type.
+-- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
+-- derivation before changing either side of this.
+unifyN dyn (ta@(TCon a oa)) (tb@(TCon b ob)) =
+  if sameTyConHead a oa b ob then () else typeMismatch dyn ta tb
+-- Rigid~rigid.  MANDATORY: without it a rigid variable fails to unify with ITSELF (it
+-- would fall to the catch-all `typeMismatch`), because `TRigid` is not a `TCon`.
+unifyN dyn (TRigid a) (TRigid b) =
+  if a == b then () else typeMismatch dyn (TRigid a) (TRigid b)
+-- CROSS-POPULATION (#1110), and it is NOT dead code.  A rigid and a real head can
+-- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so a `TCon a == TCon b`
+-- style test can be TRUE across the populations, and dropping these two arms changes an
+-- answer: `data Bad = Bad __tuple2__; g : Bad -> (,)` would become `Type mismatch: (,)
+-- vs (,)` — an error whose two sides render IDENTICALLY.  For every other name the test
+-- is False and the message is byte-identical to the catch-all's, since `ppMono` renders
+-- `TRigid` exactly as `TCon`.  Placed ABOVE the `tupleUnifyClash` guard, as the
+-- `TCon`/`TCon` arm is.
+--
+-- The preserved answer is a FORGERY (DICT-SEMANTICS §8 I6.2(b), OWED-#1110):
+-- a rigid variable is not the builtin tuple head.  Carrier now, semantics later.
+unifyN dyn (ta@(TCon a _)) (tb@(TRigid b)) =
+  if a == b then () else typeMismatch dyn ta tb
+unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
+  if a == b then () else typeMismatch dyn ta tb
+-- A tuple TYPE is a `__tupleN__`-headed `TApp` spine; when it clashes with a
+-- differing-arity tuple or with a concrete non-tuple head, report the FULL types
+-- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
+-- recursion bottom out on a partial sub-spine.  Guard is False when the other side is a
+-- TVar-headed spine (so `p a b` unifying with a tuple still flows through the generic arm).
+unifyN dyn t1 t2
+  | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
+-- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
+-- the number of `TApp` nodes already in `a1` is `b1`'s positional index.  When
+-- the head's recorded polarity at that index is not `PCo`, an effect row inside
+-- the argument must be EQUAL rather than merely compatible — see
+-- `paramVarianceGuard`, which unifies the argument.
+unifyN dyn (TApp a1 b1) (TApp a2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  paramVarianceGuard dyn a1 b1 b2
+unifyN dyn (TFun a1 r1 b1) (TFun a2 r2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  let _ = unifyRow dyn r1 r2
+  unifyStruct dyn b1 b2
+-- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
+-- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
+-- latent row and is a silent laundering hole for an index.  See `unifyIndexRow`.
+unifyN dyn (TEff r1) (TEff r2) = unifyIndexRow dyn r1 r2
+-- An `Authority`-kinded type-argument index is INVARIANT (§6.4): the two
+-- authorities must cover each other, in both directions, whatever the flow.
+unifyN dyn (TAuth qa) (TAuth qb) = unifyIndex dyn.dcModule qa qb
+unifyN dyn (TQual a qa) (TQual b qb) =
+  let _ = wantAuthority dyn.dcModule qa qb
+  let _ = wantAuthority dyn.dcModule qb qa
+  unifyStruct dyn a b
+unifyN dyn (TQual a qa) b =
+  let _ = wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
+  unifyStruct dyn a b
+unifyN dyn a (TQual b qb) =
+  let _ = wantAuthority dyn.dcModule (authTop (authDomainTop qb)) qb
+  unifyStruct dyn a b
+unifyN dyn a b = typeMismatch dyn a b
+
+-- A fresh variable standing for a value takes its source's type verbatim,
+-- qualifier included: a declared parameter, a match scrutinee, a call's
+-- result.  Anything already shaped unifies as usual.
+export
+bindFrom : DynCtx -> Mono -> Mono -> Unit
+bindFrom dyn target source = match normalize target
+  TVar cell => match !cell
+    Unbound _ _ => bindVar dyn cell source
+    Link _ => unifyIn dyn target source
+  _ => unifyIn dyn target source
+
+-- `lower ⊑ upper`, as an obligation of the open inference scope, or decided
+-- on the spot outside one (an annotation checked at top level).
+-- The terms are recorded normalised: a cell already linked when the
+-- obligation is recorded (an alias parameter standing for a written index)
+-- is the written term it stands for, and only a cell the scope solves
+-- afterwards reads as a solved bound in a report (`esfWrittenUpper`).
+export
+wantAuthority : ModuleCtx -> Authority -> Authority -> Unit
+wantAuthority mctx lower upper = wantAuthorityWith mctx False lower upper
+
+-- [exact]: this obligation is one half of an index equality, so its failure
+-- is reported as an index mismatch, once for both halves.
+export
+wantAuthorityWith : ModuleCtx -> Bool -> Authority -> Authority -> Unit
+wantAuthorityWith mctx exact lower upper =
+  wantAuthorityFrom mctx None exact lower upper
+
+-- [origin]: the binding whose scheme carried this obligation as a residual,
+-- when it is one re-emitted at a use of that binding.
+-- Against a Product tuple that holds variables the obligation is one per axis
+-- (`authSplit`), so a variable on an axis is solved from its own axis.
+wantAuthorityFrom : ModuleCtx ->
+  Option String ->
+  Bool ->
+  Authority ->
+  Authority ->
+  Unit
+wantAuthorityFrom mctx origin exact lower upper =
+  fold
+    (_ pair => wantAuthorityOne mctx origin exact False (fst pair) (snd pair))
+    ()
+    (authSplit lower upper)
+
+-- An index row's atom that its other side must cover, having no tail to take
+-- it: an index obligation in one direction only, so a failure reads as the
+-- atom not covered rather than as two indices that differ.
+wantIndexCovered : ModuleCtx -> Authority -> Authority -> Unit
+wantIndexCovered mctx lower upper =
+  fold
+    (_ pair => wantAuthorityOne mctx None True True (fst pair) (snd pair))
+    ()
+    (authSplit lower upper)
+
+wantAuthorityOne : ModuleCtx ->
+  Option String ->
+  Bool ->
+  Bool ->
+  Authority ->
+  Authority ->
+  Unit
+wantAuthorityOne mctx origin exact covering lower upper
+  | EffectSolver.hasSummaryScope mctx.mcCells.effectSummaries =
+    EffectSolver.recordAuthorityFrom
+      mctx.mcCells.effectSummaries
+      origin
+      exact
+      (obligationSiteHere mctx covering)
+      (authNorm lower)
+      (authNorm upper)
+  | authSub lower upper = ()
+  | otherwise = match solveFlexibleUpper mctx lower upper
+    True => ()
+    False =>
+      if exact then
+        reportIndexFailure mctx covering mctx.mcLoc lower upper
+      else
+        reportAuthorityFailure mctx mctx.mcLoc origin lower upper
+
+-- Outside a scope, a flexible upper variable takes the lower bound as its
+-- solution, widened as the scoped solver widens a solution
+-- (`widenOpenedFor`).  Once solved it is no longer a variable, so a later
+-- obligation is checked against that solution; a variable is never linked to
+-- a join containing itself, which normalisation would follow forever.  A
+-- rigid or concrete upper that does not cover fails.
+solveFlexibleUpper : ModuleCtx -> Authority -> Authority -> Bool
+solveFlexibleUpper mctx lower upper = match authNorm upper
+  AVar cell =>
+    if IdMap.has (authvarId cell) mctx.mcCells.rigidAuthvarsRef.value then
+      False
+    else match withoutVar cell lower
+      [] => True
+      rest =>
+        let _ =
+          linkAuthvar
+            cell
+            (widenOpenedFor mctx (authvarLevel cell) (authJoinAll rest))
+        True
+  _ => False
+
+-- A term's join members other than [cell] (`κ ⊔ x ⊑ κ` asks only `x ⊑ κ`).
+withoutVar : Ref Authvar -> Authority -> List Authority
+withoutVar cell q =
+  let members = match authNorm q
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c => authvarId c /= authvarId cell
+      _ => True)
+    members
+
+-- An existential a pattern opened is scoped to its arm or clause, which runs
+-- one level deeper than anything older (`openExistentialScope`).  The arm's
+-- own close checks what the arm's inference bound to it, but an authority
+-- obligation is solved later, at the binding's close, and its solution can
+-- name the opened authority for a variable older than the arm (a clause
+-- parameter's index, a binding's row).  Such a solution is widened: the
+-- opened authority becomes its domain's top, the §4 over-approximation a
+-- sourceless opened authority publishes as.  A variable as young as the arm
+-- keeps it, since it cannot leave the arm.
+export
+widenOpenedFor : ModuleCtx -> Int -> Authority -> Authority
+widenOpenedFor mctx level q =
+  let asub =
+    flatMap
+      (c =>
+        if IdMap.has (authvarId c) mctx.mcCells.openedAuthvarsRef.value
+          && authvarLevel c > level then
+          [(authvarId c, authTop (authvarDomain c))]
+        else
+          [])
+      (authVars q)
+  substAuth asub q
+
+reportAuthorityFailure : ModuleCtx ->
+  Option Loc ->
+  Option String ->
+  Authority ->
+  Authority ->
+  Unit
+reportAuthorityFailure mctx loc origin lower upper =
+  pushTypeErrorAt
+    mctx
+    "T-AUTHORITY"
+    loc
+    (authorityFailureMsg
+      mctx
+      mctx.mcCells.currentFn.value
+      None
+      origin
+      lower
+      upper
+      (Some upper))
+
+-- Both halves of one index equality render the same message (the two terms
+-- in one order), so the second is the same (code, span, message) and is
+-- recorded once.  [covering]: the obligation is an index row's coverage of
+-- an atom, which has one direction.
+export
+reportIndexFailure : ModuleCtx ->
+  Bool ->
+  Option Loc ->
+  Authority ->
+  Authority ->
+  Unit
+reportIndexFailure mctx covering loc a b = pushTypeErrorAt
+  mctx
+  "T-AUTHORITY-INDEX-MISMATCH"
+  loc
+  (if covering then authorityCoverMsg a b else authorityIndexMsg a b)
+
+-- Against a named authority the remedy is to derive the value from the
+-- argument; against a written bound it is to stay within, or widen, the
+-- bound; against a bound the scope SOLVED — an upper term recorded as a
+-- flexible variable that this binding's other uses determined — the remedy
+-- is to make every use lie within one bound, since nothing was written.
+-- [label]: the key of the label the obligation came from, when it came from
+-- a row's atom.
+export
+authorityFailureMsg : ModuleCtx ->
+  String ->
+  Option String ->
+  Option String ->
+  Authority ->
+  Authority ->
+  Option Authority ->
+  String
+authorityFailureMsg mctx name label origin lower upper written =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let lo = authorityTermTextIn ctx cnt lower
+  let hi = ppAuthority ctx cnt upper
+  match origin
+    Some callee => residualFailureMsg callee lo hi
+    None => boundFailureMsg mctx name label lower lo hi upper written
+
+-- A bound over binders the caller chooses says what a body may do with
+-- them.  A `*` is offered only where it would help: the body extends a
+-- binder on the right, reaching the whole domain, and the binder's domain has
+-- patterns.  An interpolation through a `display` other than the prelude's
+-- is named as the cause, since the value is built as the advice says.
+boundFailureMsg : ModuleCtx ->
+  String ->
+  Option String ->
+  Authority ->
+  String ->
+  String ->
+  Authority ->
+  Option Authority ->
+  String
+boundFailureMsg mctx name label lower lo hi upper written =
+  if mentionsOpened mctx upper then
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, the authority of the value this arm or clause opened; derive the operation from the opened value, or widen the declared row to the label bare"
+  else if authHasVars upper
+    && binderIn mctx.mcCells.displayHiddenBindersRef upper then
+    "`\{name}` reaches \{lo} where only \{hi} is admitted: the interpolation uses this module's own `display`, not the prelude's, so the string is not known to derive from \{hi}; build it with `++` from the named argument"
+  else if authHasVars upper && allList authvarIsPattern (authVars upper) then
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, a pattern-ranging authority the caller chooses; build the value by appending to the named argument, `root ++ suffix`, or widen the declared row to the label bare"
+  else if authHasVars upper then
+    ordinaryBoundFailureMsg mctx name label lower lo hi upper
+  else if solvedUpper mctx written then
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, the bound this binding's other uses of the same authority determined; make every use lie within one bound, or write the bound"
+  else
+    "`\{name}` reaches \{lo} where its declared bound admits only \{hi}; stay within the bound, or widen it"
+
+-- An ordinary binder: an extension of it is the whole domain.  The `*` is
+-- offered, spelled with the program's own label, only when the body
+-- extended one whose domain has patterns.
+ordinaryBoundFailureMsg : ModuleCtx ->
+  String ->
+  Option String ->
+  Authority ->
+  String ->
+  String ->
+  Authority ->
+  String
+ordinaryBoundFailureMsg mctx name label lower lo hi upper =
+  let head =
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, an authority the caller chooses"
+  let extended =
+    filterList
+      (c => IdMap.has (authvarId c) mctx.mcCells.extendedBindersRef.value)
+      (authVars upper)
+  if authIsTop lower && isNonEmptyL extended then
+    let tail = "; an extension of it is the whole domain, so "
+    match filterList (c => domainHasPatterns (authvarDomain c)) extended
+      c :: _ =>
+        let n = optionOr hi (authvarName c)
+        let star = starSpelling n (binderLabel mctx name n label)
+        "\{head}\{tail}declare \{star}"
+      [] =>
+        "\{head}\{tail}perform the operation on the named argument and extend the value at the call site"
+  else
+    "\{head}; perform the operation on the named argument, or widen the declared row to the label bare"
+
+-- The label binder [n] of binding [fn] is written under: the binding's
+-- signature says, else the label of the atom the failed obligation came from
+-- ([key]).
+binderLabel : ModuleCtx -> String -> String -> Option String -> Option String
+binderLabel mctx fn n key =
+  let written = match omLookup fn mctx.mcCells.sigTyMapRef.value
+    Some ty => binderLabelIn mctx n ty
+    None => None
+  orElseOpt written (map labelKeyName key)
+
+-- The label a signature writes binder [n] under: its written domain
+-- (`(n : String @L)`), else the first atom naming it (`<L n>`), else the
+-- first `Authority L` index slot it fills.
+binderLabelIn : ModuleCtx -> String -> Ty -> Option String
+binderLabelIn mctx n ty = match lookupAssoc n (namedArgDomains ty)
+  Some (Some d) => Some d.eatLabel
+  _ =>
+    match (atomBindersIn (a => atomNaming n a) ty
+      ++ authSlotNamesIn mctx (slotLabelsNaming n) ty)
+      l :: _ => Some l
+      [] => None
+
+slotLabelsNaming : String -> List Kind -> List Ty -> List String
+slotLabelsNaming n ((KAuth l _) :: ks) ((TyVar m) :: as2) =
+  if m == n then
+    effLabelName l :: slotLabelsNaming n ks as2
+  else
+    slotLabelsNaming n ks as2
+slotLabelsNaming n (_ :: ks) (_ :: as2) = slotLabelsNaming n ks as2
+slotLabelsNaming _ _ _ = []
+
+atomNaming : String -> EffAtomTy -> List String
+atomNaming n a = match a.eatParam
+  EPName m => if m == n then [a.eatLabel] else []
+  _ => []
+
+-- A label's name from its key (`labelKey`), without the defining module.
+labelKeyName : String -> String
+labelKeyName key = match reverseL (splitOnChar ':' key)
+  last :: _ => last
+  [] => key
+
+binderIn : Ref (Map Int Unit) -> Authority -> Bool
+binderIn table q =
+  anyList (c => IdMap.has (authvarId c) table.value) (authVars q)
+
+mentionsOpened : ModuleCtx -> Authority -> Bool
+mentionsOpened mctx q =
+  anyList
+    (cell => IdMap.has (authvarId cell) mctx.mcCells.openedAuthvarsRef.value)
+    (authVars q)
+
+-- The upper term was recorded as a variable and has since been solved by
+-- the scope — not substituted by an index equality with a written term,
+-- which reads as the written bound it is.
+solvedUpper : ModuleCtx -> Option Authority -> Bool
+solvedUpper mctx (Some (AVar cell)) = match !cell
+  ALink _ _ _ =>
+    not (IdMap.has (authvarId cell) mctx.mcCells.indexSubstitutedRef.value)
+  AUnbound _ _ _ _ _ => False
+solvedUpper mctx _ = False
+
+-- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
+-- The arrow-row unifier's closed~closed arm demands equality, and a seam that
+-- knows its direction relaxes that to sub-effecting through `unifyInto`.  A
+-- type ARGUMENT at a non-covariant slot is where the relaxation must NOT
+-- happen, in either direction:
+--   * `#1098` — `box : Ref (Unit -> <> Unit)` assigned to `alias : Ref (Unit ->
+--     <Stdout> Unit)`, then `alias := shout` writes a `<Stdout>` closure into
+--     the cell `box` still reads as pure.  `callBox : Unit -> Unit` performs
+--     Stdout and carries no row.
+--   * `#1121` — `pureTaker : Taker (Unit -> Unit)` assigned to `wide : Taker
+--     (Unit -> <IO> Unit)`, where `data Taker a = MkTaker (a -> Int)` puts `a`
+--     in a DOMAIN.  No mutation anywhere; the laundering is pure contravariance.
+-- Both are ANNOTATED-BINDING widenings met by `preunifySigsEx`' `unify`;
+-- `unifyN`'s `TApp` arm IS the seam.  The guard unifies the argument with
+-- `dcNonCovariant` set, so `closedRowEqCheck` reports a mismatch anywhere inside
+-- it with the variance wording (`paramVarianceMismatchMsg`) rather than the
+-- generic one, and `unifyInto` treats such a slot as equality rather than
+-- descending directionally.  An open tail still has a metavariable to solve,
+-- and solving one against a written row is instantiation rather than
+-- interchange — the same caveat `unifyIndexRowN` documents
+-- (`graded_closed_row_grade_ok`) — so nothing changes for it.
+--
+-- This does narrow acceptance in the sound direction too.  A contravariant
+-- NARROWING (`Taker (Unit -> <IO> Unit)` assigned where `Taker (Unit -> <>
+-- Unit)` is declared) is genuinely safe and is rejected as well: a type
+-- argument's polarity is a property of the constructor, not of the flow, and
+-- equality is the only symmetric sound rule.
+-- A covariant slot nested inside a non-covariant one is unified in the copy the
+-- outer slot set, so it stays non-covariant.
+paramVarianceGuard : DynCtx -> Mono -> Mono -> Mono -> Unit
+paramVarianceGuard dyn hd b1 b2
+  | monoSlotNonCovariant dyn.dcModule hd =
+    unifyStruct { dyn | dcNonCovariant = True } b1 b2
+  | otherwise = unifyStruct dyn b1 b2
+
+-- The ONE read of the polarity table, and the place the WRITE-CHANNEL SEED
+-- lives.  `Ref` and `Array` are the two mutable primitives (`stdlib/runtime.mdk`
+-- — `Ref`/`setRef`, `arraySetUnsafe`/`arrayFill`); neither has a Medaka-visible
+-- `data` declaration, so neither ever reaches `registerVariants` and
+-- `inferParamPolarities` has no constructor field to derive their invariance
+-- from.  They are therefore seeded, and seeded HERE rather than into the ref
+-- itself: the Module path REPLACES that whole list per module
+-- (`declEnvSeedDataUniverse`), so a value planted in `freshModuleCtx` would survive
+-- on one entry path and be silently wiped on another — the exact
+-- single-file-vs-cross-module split a seed must not have.
+--
+-- Exactly two seeds, not four.  `Vector`/`HashMap` are ordinary Medaka
+-- types declared OVER these, so they inherit invariance transitively through
+-- `paramOccPolarities`' `TyApp` composition and must NOT be listed: a hardcoded
+-- entry would be a second, unkeyed source of the same fact.
+paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)
+paramPolaritiesOf mctx key =
+  paramPolaritiesIn mctx.mcCells.dataParamPolarityRef.value key
+
+unifyVars : DynCtx -> Ref Tyvar -> Ref Tyvar -> Unit
+unifyVars dyn c1 c2 =
+  if tyvarId c1 == tyvarId c2 then () else bindVar dyn c1 (TVar c2)
+
+bindVar : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindVar dyn cell t =
+  dyn.dcModule.mcCells.occursCheckFailed := False
+  let _ = occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) t
+  if dyn.dcModule.mcCells.occursCheckFailed.value then
+    ()
+  else
+    let _ = propagatePoison dyn.dcModule cell t
+    let shaped = takeJoinsShapedBy dyn.dcModule cell t
+    cell := Link t
+    settleShapedJoins dyn shaped
+
+-- A recorded join whose result a unification is shaping is decided by that
+-- use, as it was before joins were delayed: once the result has its shape,
+-- every alternative takes it by equality (EFFECTS-SEMANTICS §6.8).  Deciding
+-- it later would let the use first relate a row the alternatives then share
+-- to a closed row, which a caller-supplied row can meet only by equality.
+-- Linking the result to another variable shapes nothing.  The common case has
+-- nothing recorded and costs one emptiness test.  The join is settled in the
+-- context of the unification that shaped it, under the construct it was
+-- recorded for (`PendingJoin`).
+takeJoinsShapedBy : ModuleCtx -> Ref Tyvar -> Mono -> List PendingJoin
+takeJoinsShapedBy mctx cell t = match mctx.mcCells.pendingJoinsRef.value
+  [] => []
+  pending => match normalize t
+    TVar _ => []
+    _ =>
+      let id = tyvarId cell
+      let hits = filter (pj => joinResultIs id pj) pending
+      match hits
+        [] => []
+        _ =>
+          mctx.mcCells.pendingJoinsRef :=
+            filter (pj => not (joinResultIs id pj)) pending
+          hits
+
+joinResultIs : Int -> PendingJoin -> Bool
+joinResultIs id pj = match normalize pj.pjResult
+  TVar c => tyvarId c == id
+  _ => False
+
+settleShapedJoins : DynCtx -> List PendingJoin -> Unit
+settleShapedJoins dyn [] = ()
+settleShapedJoins dyn shaped =
+  fold
+    (_ pj =>
+      fold
+        (_ (loc, value) =>
+          joinValueEqual dyn pj.pjContext loc pj.pjResult value)
+        ()
+        pj.pjValues)
+    ()
+    shaped
+
+-- A poisoned variable is one an earlier diagnostic already explained; whatever
+-- it is bound to inherits that, so an obligation on a variable reached only
+-- through the poisoned one (the result of applying it, a field of its shape)
+-- is not reported as a second, unexplained error. The common case has nothing
+-- poisoned and costs one emptiness test.
+propagatePoison : ModuleCtx -> Ref Tyvar -> Mono -> Unit
+propagatePoison mctx cell t = match mctx.mcCells.poisonedVars.value
+  [] => ()
+  poisoned =>
+    if containsI (tyvarId cell) poisoned then
+      mctx.mcCells.poisonedVars := monoUnboundIds t ++ poisoned
+
+-- Chunk A: record the union-find roots of every free var on either side of a
+-- unification failure so a later obligation check can suppress a secondary
+-- `ambiguous instance` cascade on the same (already-errored) var.
+export
+poisonMismatchVars : ModuleCtx -> Mono -> Mono -> Unit
+poisonMismatchVars mctx a b =
+  let poisoned =
+    monoUnboundIds a ++ monoUnboundIds b ++ mctx.mcCells.poisonedVars.value
+  mctx.mcCells.poisonedVars := poisoned
+
+typeMismatch : DynCtx -> Mono -> Mono -> Unit
+typeMismatch dyn a b =
+  let _ = poisonMismatchVars dyn.dcModule a b
+  typeMismatchReport dyn a b
+
+-- The do-chain a mismatch is blamed on: none once a report has been made for it.
+activeDo : DynCtx -> Option DoCtx
+activeDo dyn = match dyn.dcDo
+  Some doCtx => if doCtx.doReported.value then None else Some doCtx
+  None => None
+
+typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReport dyn a b = match dyn.dcMethodMismatch
+  Some mname =>
+    pushTypeError
+      dyn.dcModule
+      "T-METHOD-MISMATCH"
+      "method `\{mname}` has type \{ppMono b} but its interface declares \{ppMono a}"
+  None => typeMismatchReportJoin dyn a b
+
+-- A mismatch inside the join of an `if` with no `else` branch is that `if`'s
+-- missing branch: the branch is `()`, so the `then` branch must be Unit too.
+-- Outside a do-lowered chain, a variable applied to arguments against a type
+-- with no application to fill it names the interface that variable stands for.
+typeMismatchReportJoin : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportJoin dyn a b = match dyn.dcJoin
+  Some JoinElselessIf =>
+    pushTypeErrorHelpFixAt
+      dyn.dcModule
+      "T-TYPE-MISMATCH"
+      dyn.dcModule.mcLoc
+      "type mismatch: \{ppMono a} vs \{ppMono b}; \{elselessIfHelp}"
+      elselessIfHelp
+      None
+  _ => match (activeDo dyn, constrainedApplicationHelp dyn.dcModule a b)
+    (None, Some help) =>
+      pushTypeErrorHelpFixAt
+        dyn.dcModule
+        "T-TYPE-MISMATCH"
+        dyn.dcModule.mcLoc
+        "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
+        help
+        None
+    _ => typeMismatchReportRest dyn a b
+
+-- One side is an unsolved variable applied to arguments (`m Unit`), the other a
+-- type with no application for that variable to take (`Unit`, an arrow).  Such
+-- a pair can only fail.  When the variable carries interface obligations, the
+-- applied side is a value of a type implementing them and the other side is
+-- not.  `unify` has no expected/actual role, and the same pair arises with the
+-- applied side on either, so the text names neither side as the position.
+constrainedApplicationHelp : ModuleCtx -> Mono -> Mono -> Option String
+constrainedApplicationHelp mctx a b =
+  map
+    ((app, plain, ifaces) => constrainedApplicationText app plain ifaces)
+    (orElseOpt (appliedVarIfaces mctx a b) (appliedVarIfaces mctx b a))
+
+appliedVarIfaces : ModuleCtx -> Mono -> Mono -> Option (Mono, Mono, List String)
+appliedVarIfaces mctx app plain = match (normalize app, normalize plain)
+  (TApp _ _, TApp _ _) => None
+  (TApp _ _, _) => match normalize (spineHead app)
+    TVar cell => match ifacesConstrainingVar mctx (tyvarId cell)
+      [] => None
+      ifaces => Some (app, plain, ifaces)
+    _ => None
+  _ => None
+
+-- The interfaces a pending call or impl obligation places on the variable
+-- whose union-find root is [id], in first-recorded order, without repeats.
+ifacesConstrainingVar : ModuleCtx -> Int -> List String
+ifacesConstrainingVar mctx id =
+  let pending = wAll mctx.mcCells.obls ++ wAll mctx.mcCells.implObls
+  let onVar = filter (o => anyList (sameRootId id) o.pred.args) pending
+  dedup (map (o => o.pred.iface.irName) onVar)
+
+typeMismatchReportRest : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportRest dyn a b = match activeDo dyn
+  Some doCtx => typeMismatchInDo dyn.dcModule a b doCtx
+  None => match firstTupleCallHint dyn.dcModule [a, b]
+    -- P0-16: one side is a tuple-call residual (e.g. `z : Int; z = add(1, 2)`
+    -- → `Type mismatch: Int vs (a, b) -> (a, b)`) — append the call-syntax hint.
+    Some (help, fix) =>
+      pushTypeErrorHelpFixAt
+        dyn.dcModule
+        "T-TYPE-MISMATCH"
+        dyn.dcModule.mcLoc
+        "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
+        help
+        fix
+    None => match sameSpellingHint a b
+      -- Two modules' unrelated `T`s now mismatch, and the message renders two
+      -- identical sides (`Type mismatch: T vs T`) — true, and useless without
+      -- this hint.
+      Some help =>
+        pushTypeErrorHelpFixAt
+          dyn.dcModule
+          "T-TYPE-MISMATCH"
+          dyn.dcModule.mcLoc
+          "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
+          help
+          None
+      None =>
+        pushTypeError
+          dyn.dcModule
+          "T-TYPE-MISMATCH"
+          "type mismatch: \{ppMono a} vs \{ppMono b}"
+
+-- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
+-- non-monad obligation, retarget to the tailored "do requires a monad" error;
+-- otherwise fall back to the plain mismatch (the loc stays the do-block's).
+typeMismatchInDo : ModuleCtx -> Mono -> Mono -> DoCtx -> Unit
+typeMismatchInDo mctx a b doCtx
+  | monoIsApp (normalize a) /= monoIsApp (normalize b) =
+    recordDoMonadError mctx doCtx
+  | otherwise =
+    pushTypeError
+      mctx
+      "T-TYPE-MISMATCH"
+      "type mismatch: \{ppMono a} vs \{ppMono b}"
+
+-- This push site routes through `recordTypeError` like every other push, so this
+-- path's detection reaches the counter too.  (The counter is not equal to the
+-- list-length delta: see `recordTypeError`.)
+recordDoMonadError : ModuleCtx -> DoCtx -> Unit
+recordDoMonadError mctx doCtx =
+  doCtx.doReported := True
+  recordTypeError
+    mctx
+    (TcDiag
+      "T-DO-NOT-MONAD"
+      1
+      (Some doCtx.doLoc)
+      (if doCtx.doDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
+      None
+      None)
+
+-- ── generalization & instantiation ────────────────────────────────────────
+-- Quantify a mono for DISPLAY (the LSP hover fallback, `mapLocalSchemes`):
+-- no defaulting, since the cells are shared with schemes already published
+-- and a default written here would rewrite them after the fact.
+export
+generalize : ModuleCtx -> Mono -> Scheme
+generalize mctx t = quantifyFree mctx [] pureRow t
+
+-- [declared] are the authority cells a written signature binds: rigid through
+-- the body and published as written, never defaulted.  [residual] are the
+-- obligations the binding's scope kept over its own quantified authorities.
+export
+generalizeBindingDeclared : DynCtx ->
+  Map Int Unit ->
+  List AuthResidual ->
+  EffRow ->
+  Mono ->
+  Scheme
+generalizeBindingDeclared dyn declared residual force t =
+  let _ = defaultDeferredPatLitsIn dyn dyn.dcModule.mcCells.currentLevel.value t
+  let _ = defaultSourcelessAuthorities dyn.dcModule declared force t
+  quantifyFree dyn.dcModule residual force t
+
+quantifyFree : ModuleCtx -> List AuthResidual -> EffRow -> Mono -> Scheme
+quantifyFree mctx residual force t =
+  Forall
+    (dedupI (freeGenVars mctx.mcCells.currentLevel.value t))
+    (dedupI (freeEffvars mctx t ++ rowFreeEffvars mctx force))
+    (dedupI (freeAuthvars mctx t ++ rowFreeAuthvars mctx force))
+    residual
+    force
+    t
+
+-- Lower every unbound var in [t] deeper than the current level down to the
+-- current level, so a value-restricted (non-generalized) binding's vars can't be
+-- picked up by an enclosing let's generalize.  Mirrors the lowering `unify`
+-- performs via occursAdjust in the non-PVar pattern path.
+export
+lowerToCurrent : ModuleCtx -> Mono -> Unit
+lowerToCurrent mctx t = match normalize t
+  TVar cell => match !cell
+    Unbound id lvl =>
+      if lvl > mctx.mcCells.currentLevel.value then
+        cell := Unbound id mctx.mcCells.currentLevel.value
+    Link t2 => lowerToCurrent mctx t2
+  TCon _ _ => ()
+  TRigid _ => ()
+  TApp a b =>
+    let _ = lowerToCurrent mctx a
+    lowerToCurrent mctx b
+  TFun a r b =>
+    let _ = lowerToCurrent mctx a
+    let _ = lowerRowLevels mctx.mcCells.currentLevel.value r
+    lowerToCurrent mctx b
+  TAuth q => lowerAuthLevels mctx.mcCells.currentLevel.value q
+  TEff r =>
+    let _ = lowerRowLevels mctx.mcCells.currentLevel.value r
+    ()
+  TQual a q =>
+    let _ = lowerAuthLevels mctx.mcCells.currentLevel.value q
+    lowerToCurrent mctx a
+
+freeGenVars : Int -> Mono -> List Int
+freeGenVars lvl t = match normalize t
+  TVar cell => if tyvarLevel cell > lvl then [tyvarId cell] else []
+  TCon _ _ => []
+  TRigid _ => []
+  TApp a b => freeGenVars lvl a ++ freeGenVars lvl b
+  TFun a _ b => freeGenVars lvl a ++ freeGenVars lvl b
+  TEff _ => []
+  TAuth _ => []
+  TQual a _ => freeGenVars lvl a
+
+export
+instantiate : ModuleCtx -> Scheme -> Mono
+instantiate mctx (Forall ids evars avars _ _ t) =
+  substMono
+    mctx.mcGraph
+    (freshSubst mctx ids)
+    (freshEffSubst mctx evars)
+    (freshAuthSubstFor mctx avars t pureRow)
+    t
+
+-- Like `freshAuthSubstFor`, returning the cells minted for the ids recorded
+-- as existential; those are made rigid here.
+export
+freshAuthSubstOpening : ModuleCtx ->
+  List Int ->
+  Mono ->
+  (List (Int, Authority), List (Ref Authvar))
+freshAuthSubstOpening mctx [] _ = ([], [])
+freshAuthSubstOpening mctx ids body =
+  freshAuthSubstOpeningIn mctx ids (authCellsIn body Tip)
+
+-- The same, given the scheme's cells already collected (a record's binder
+-- cells sit in its fields, not in its result).
+export
+freshAuthSubstOpeningIn : ModuleCtx ->
+  List Int ->
+  Map Int (Ref Authvar) ->
+  (List (Int, Authority), List (Ref Authvar))
+freshAuthSubstOpeningIn mctx [] _ = ([], [])
+freshAuthSubstOpeningIn mctx ids cells =
+  let pairs =
+    map
+      (id =>
+        let cell = freshInferenceAuthvar mctx id (IdMap.get id cells)
+        (
+          id,
+          cell,
+          IdMap.has id mctx.mcGraph.graphRun.ctorExistentialsRef.value,
+        ))
+      ids
+  let opened =
+    flatMap ((_, cell, isOpen) => if isOpen then [cell] else []) pairs
+  mctx.mcCells.rigidAuthvarsRef :=
+    fold
+      (m cell => IdMap.set (authvarId cell) () m)
+      mctx.mcCells.rigidAuthvarsRef.value
+      opened
+  mctx.mcCells.openedAuthvarsRef :=
+    fold
+      (m cell => IdMap.set (authvarId cell) () m)
+      mctx.mcCells.openedAuthvarsRef.value
+      opened
+  (map ((id, cell, _) => (id, AVar cell)) pairs, opened)
+
+export
+freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
+freshSubst mctx [] = []
+freshSubst mctx (id :: rest) =
+  let v = freshVar mctx ()
+  let _ = if id == ambiguousImportTyvarId then poisonMismatchVars mctx v v
+  (id, v) :: freshSubst mctx rest
+
+-- The one quantified id no allocation ever mints (`newTyvarId` counts up from
+-- zero). A scheme quantifying it is an error-recovery scheme for an ambiguous
+-- import: each occurrence instantiates to a fresh variable that is poisoned on
+-- arrival, so no secondary obligation diagnostic is raised on it.
+export
+ambiguousImportTyvarId : Int
+ambiguousImportTyvarId = 0 - 1
+
+export
+freshEffSubst : ModuleCtx -> List Int -> List (Int, Ref Effvar)
+freshEffSubst mctx [] = []
+freshEffSubst mctx (id :: rest) =
+  let cell = freshInferenceEffvar mctx ()
+  (id, cell) :: freshEffSubst mctx rest
+
+-- A use freshens each quantified authority to a flexible variable of the
+-- current scope.  The fresh cell copies the binder's domain and name from the
+-- scheme's own cell, found by id in the scheme body and forcing row.
+freshAuthSubstFor : ModuleCtx ->
+  List Int ->
+  Mono ->
+  EffRow ->
+  List (Int, Authority)
+freshAuthSubstFor mctx [] _ _ = []
+freshAuthSubstFor mctx ids body force =
+  let cells = authCellsIn body (authRowCells force Tip)
+  map
+    (id => (id, AVar (freshInferenceAuthvar mctx id (IdMap.get id cells))))
+    ids
+
+-- An instantiation's authority choice belongs to the current scope, at the
+-- current level, like an instantiated row tail.  The fresh cell keeps the
+-- binder's range: a pattern-ranging binder instantiates to a pattern-ranging
+-- variable, or an exact element could reach it.  A quantified id with no
+-- cell in the scheme is dead (nothing it would substitute remains), except
+-- one minted pattern-ranging (`patternAuthIdsRef`): losing its source would
+-- lose its range, so that is an internal error rather than a default.  A
+-- constructor's existential binder is the one pattern-ranging id that may
+-- have no cell: its cells are the fields', so one no field mentions is
+-- phantom, and as dead as an ordinary phantom binder.
+export
+freshInferenceAuthvar : ModuleCtx -> Int -> Option (Ref Authvar) -> Ref Authvar
+freshInferenceAuthvar mctx _ (Some source) =
+  freshAuthvarRanged
+    mctx
+    (authvarDomain source)
+    (authvarIsPattern source)
+    (authvarName source)
+freshInferenceAuthvar mctx id None =
+  if IdMap.has id mctx.mcGraph.graphRun.patternAuthIdsRef.value
+    && not (IdMap.has id mctx.mcGraph.graphRun.ctorExistentialsRef.value) then
+    panic
+      "internal error: the pattern-ranging authority variable #\{intToString id} has no cell in the scheme that quantifies it, so its range would be lost at instantiation"
+  else
+    freshAuthvar mctx PUnit None
+
+-- free generalizable authority variables: deeper than the current scope
+freeAuthvars : ModuleCtx -> Mono -> List Int
+freeAuthvars mctx t =
+  generalizableAuthvars mctx (IdMap.values (authCellsIn t Tip))
+
+rowFreeAuthvars : ModuleCtx -> EffRow -> List Int
+rowFreeAuthvars mctx row =
+  generalizableAuthvars mctx (IdMap.values (authRowCells row Tip))
+
+generalizableAuthvars : ModuleCtx -> List (Ref Authvar) -> List Int
+generalizableAuthvars mctx cells =
+  flatMap
+    (cell =>
+      if authvarLevel cell > mctx.mcCells.currentLevel.value then
+        [authvarId cell]
+      else
+        [])
+    cells
+
+-- An authority variable is quantified only where the published type gives a
+-- caller a way to supply it: a qualified argument slot.  A variable that
+-- occurs only in rows has no source, so publication takes the domain's top
+-- for it rather than claiming an authority nothing determines.
+defaultSourcelessAuthorities : ModuleCtx ->
+  Map Int Unit ->
+  EffRow ->
+  Mono ->
+  Unit
+defaultSourcelessAuthorities mctx declared force t =
+  let sources = qualifierAuthIds t declared
+  let candidates = IdMap.values (authCellsIn t (authRowCells force Tip))
+  fold
+    (_ cell =>
+      if authvarLevel cell > mctx.mcCells.currentLevel.value
+        && not (IdMap.has (authvarId cell) sources) then
+        linkAuthvar cell (authTop (authvarDomain cell)))
+    ()
+    candidates
+
+export
+lowerAuthLevels : Int -> Authority -> Unit
+lowerAuthLevels _ (AConst _) = ()
+lowerAuthLevels level q =
+  fold
+    (_ cell => match !cell
+      AUnbound id lvl top pat name =>
+        if lvl > level then cell := AUnbound id level top pat name
+      ALink _ _ _ => ())
+    ()
+    (authVars q)
+
+export
+freshTvMap : ModuleCtx -> List String -> List (String, Mono)
+freshTvMap mctx [] = []
+freshTvMap mctx (n :: rest) = (n, freshVar mctx ()) :: freshTvMap mctx rest
+
+export
+freshEffMap : ModuleCtx -> List String -> List (String, Ref Effvar)
+freshEffMap mctx [] = []
+freshEffMap mctx (n :: rest) = (n, freshEffvar mctx ()) :: freshEffMap mctx rest
+
+export
+freshAuthBinderRanged : ModuleCtx ->
+  Bool ->
+  (String, Param) ->
+  (String, Ref Authvar)
+freshAuthBinderRanged mctx pat (n, top) =
+  (n, freshAuthvarRanged mctx top pat (Some n))
+
+-- Every named argument with its written domain, if any.
+export
+namedArgDomains : Ty -> List (String, Option EffAtomTy)
+namedArgDomains (TyFun (TyNamed n _ d) b) = (n, d) :: namedArgDomains b
+namedArgDomains (TyFun _ b) = namedArgDomains b
+namedArgDomains (TyConstrained _ t) = namedArgDomains t
+namedArgDomains _ = []
+
+export
+freshAuthvar : ModuleCtx -> Param -> Option String -> Ref Authvar
+freshAuthvar mctx top name = freshAuthvarRanged mctx top False name
+
+-- [pat]: the variable ranges over the domain's patterns only (a binder
+-- written `@L*` or `Authority L*`); its id is recorded so an instantiation
+-- that cannot find its cell fails loudly (`freshInferenceAuthvar`).
+export
+freshAuthvarRanged : ModuleCtx -> Param -> Bool -> Option String -> Ref Authvar
+freshAuthvarRanged mctx top pat name =
+  let id = newEffvarId mctx.mcGraph ()
+  let _ =
+    if pat then
+      mctx.mcGraph.graphRun.patternAuthIdsRef :=
+        IdMap.set id () mctx.mcGraph.graphRun.patternAuthIdsRef.value
+  Ref (AUnbound id mctx.mcCells.currentLevel.value top pat name)
+
+-- What [readSlots] reads off every registered head's argument list, given
+-- the head's declared kinds.
+export
+authSlotNamesIn : ModuleCtx -> (List Kind -> List Ty -> List a) -> Ty -> List a
+authSlotNamesIn mctx readSlots (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+    match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
+      Some kinds if listLen kinds == listLen args =>
+        readSlots kinds args ++ flatMap (authSlotNamesIn mctx readSlots) args
+      _ => authSlotNamesIn mctx readSlots a ++ authSlotNamesIn mctx readSlots b
+  _ => authSlotNamesIn mctx readSlots a ++ authSlotNamesIn mctx readSlots b
+authSlotNamesIn mctx readSlots (TyFun a b) =
+  authSlotNamesIn mctx readSlots a ++ authSlotNamesIn mctx readSlots b
+authSlotNamesIn mctx readSlots (TyTuple ts) =
+  flatMap (authSlotNamesIn mctx readSlots) ts
+authSlotNamesIn mctx readSlots (TyEffect _ _ t) =
+  authSlotNamesIn mctx readSlots t
+authSlotNamesIn mctx readSlots (TyConstrained _ t) =
+  authSlotNamesIn mctx readSlots t
+authSlotNamesIn mctx readSlots (TyNamed _ t _) =
+  authSlotNamesIn mctx readSlots t
+authSlotNamesIn mctx readSlots (TyQual t _ _) = authSlotNamesIn mctx readSlots t
+authSlotNamesIn mctx _ _ = []
+
+-- What [readAtom] reads off every effect atom a written type holds.
+export
+atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
+atomBindersIn _ (TyVar _) = []
+atomBindersIn _ (TyCon { tyConName = _ }) = []
+atomBindersIn readAtom (TyApp a b) =
+  atomBindersIn readAtom a ++ atomBindersIn readAtom b
+atomBindersIn readAtom (TyFun a b) =
+  atomBindersIn readAtom a ++ atomBindersIn readAtom b
+atomBindersIn readAtom (TyTuple ts) = flatMap (atomBindersIn readAtom) ts
+atomBindersIn readAtom (TyEffect atoms _ t) =
+  flatMap readAtom atoms ++ atomBindersIn readAtom t
+atomBindersIn readAtom (TyRow atoms _ _) = flatMap readAtom atoms
+atomBindersIn _ (TyAuth _ _) = []
+atomBindersIn readAtom (TyConstrained _ t) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyNamed _ t _) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyQual t _ _) = atomBindersIn readAtom t
+
+-- Called by `generalize` before it quantifies [t]: a deferred literal-pattern var
+-- that is about to become a scheme variable is `Int` instead, so a literal pattern
+-- never makes a binding polymorphic.
+defaultDeferredPatLitsIn : DynCtx -> Int -> Mono -> Unit
+defaultDeferredPatLitsIn dyn lvl t =
+  match dyn.dcModule.mcCells.patLitDeferred.value
+    [] => ()
+    deferred => defaultPatLitVarsIn dyn (freeGenVars lvl t) deferred
+
+defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
+defaultPatLitVarsIn dyn _ [] = ()
+defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
+  let _ = match normalize a
+    TVar cell =>
+      if containsI (tyvarId cell) quantified then
+        unifyIn dyn (tconBuiltin "Int") a
+    _ => ()
+  defaultPatLitVarsIn dyn quantified rest
+
+export
+unifyAll : DynCtx -> Mono -> List Mono -> Unit
+unifyAll dyn _ [] = ()
+unifyAll dyn t (x :: xs) =
+  let _ = unifyIn dyn t x
+  unifyAll dyn t xs
+
+-- THE qual-entry resolution: a cross-module constrained callee's whole recorded
+-- constraint fact — slots, declared prefix, and argument vectors — from ONE
+-- `(definer module, exported name)` decision.  `None` ⇒ not an explicitly-imported name,
+-- or that name owns no qual ids entry.
+export
+qualConstraintDecl : ModuleCtx -> String -> Option CDeclared
+qualConstraintDecl mctx name = match qualConstraintKey mctx name
+  None => None
+  Some (src, origin) =>
+    map
+      (slots => qualDeclOf mctx.mcGraph src origin slots)
+      (lookupQualPayload
+        src
+        origin
+        mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+
+qualDeclOf : GraphCtx -> String -> String -> List PredicateSlot -> CDeclared
+qualDeclOf gctx src origin stored =
+  let slots = predicateSlotCSlots stored
+  CDeclared {
+    cdSlots = slots,
+    cdPrefix =
+      clampPrefix
+        slots
+        (lookupQualPayload
+          src
+          origin
+          gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value),
+    -- S-xmod-vector-supply (#1868/#1867): the vectors of the SAME entry.  An ABSENT row
+    -- is `[]`, which `zipSlotVecs` reads as "no vector recoverable" for every slot —
+    -- byte-identically the pre-slice cross-module behaviour, so a callee registered with
+    -- ids but no args is unaffected.  S-inferred-vector-supply (#1869): an INFERRED callee
+    -- is no longer automatically in that class — `registerInferredFor` writes a real row
+    -- when it recovers one, and writes none (this arm) when it recovers nothing.
+    cdArgs = predicateSlotArgs stored,
+  }
+
+-- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
+-- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
+--
+-- #739 fix follow-up: an aliased import's surface name is resolved to its ORIGINAL
+-- exported name before keying the qual tables (they are attributed under the defining
+-- name).  A plain import / non-alias defaults to the name itself.  Without this,
+-- `{set as hmSet}` of a constrained `hash_map.set` misses (qual has `(hash_map, set)`,
+-- not `(hash_map, hmSet)`), the slot lookup comes back empty and `inferDictAtFound`
+-- DROPS the Hash dict → `no matching impl for dispatch` at run/build.
+--
+-- Factored out by U1b (#1482) so `qualConstraintFor` (slots) and
+-- `qualConstraintIds` (ids only) cannot drift on WHICH entry they resolve to.  Two
+-- readers of one table that re-derive the key independently is the shape this seam
+-- already pays for elsewhere; there is one derivation.
+export
+qualConstraintKey : ModuleCtx -> String -> Option (String, String)
+qualConstraintKey mctx name =
+  map
+    (src => (
+      src,
+      optionOr name (omLookup name mctx.mcCells.currentImportOriginsRef.value),
+    ))
+    (omLookup name mctx.mcCells.currentImportDefinersRef.value)
+
+-- first-match lookup in a `(definer module, exported name)`-keyed qual table.
+--
+-- B-2.2-f (#1113): ONE polymorphic function where there were two byte-identical
+-- monomorphic copies (`lookupQualArity` / `lookupQualIfaces`).  The declared-prefix
+-- sidecar's payload is a SCALAR, so a third copy could not have shared their `List X`
+-- shape anyway — and three identical bodies is where `rule-duplicate-body` starts
+-- collecting disables.
+export
+lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
+lookupQualPayload _ _ [] = None
+lookupQualPayload src name (((m, n), v) :: rest)
+  | m == src && n == name = Some v
+  | otherwise = lookupQualPayload src name rest
+
+-- B-2.2-f (#1113): a recorded prefix, clamped to the slots it indexes into; an ABSENT
+-- one stays `CDPUnknown`, which every reader must treat as WITHHOLD (prefix 0).  Do not
+-- "simplify" the absent arm to `CDPLen 0` — `CDPLen 0` is a recorded state a real entry
+-- can hold, and collapsing the two erases the only signal that a write site is missing.
+export
+clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
+clampPrefix _ None = CDPUnknown
+clampPrefix _ (Some CDPUnknown) = CDPUnknown
+clampPrefix slots (Some (CDPLen k)) = CDPLen (minI k (listLen slots))
+
+-- instantiate a scheme, returning both the mono and the (quantified id → fresh
+-- var) substitution, so a caller can recover specific quantified variables
+export
+instantiateTracked : ModuleCtx -> Scheme -> (Mono, List (Int, Mono))
+instantiateTracked mctx scheme =
+  let inst = instantiateMethodTracked mctx scheme
+  (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
+
+export
+instantiateMethodTracked : ModuleCtx -> Scheme -> MethodTrackedInstantiation
+instantiateMethodTracked mctx (Forall ids evars avars residual force body) =
+  let typeSubst = freshSubst mctx ids
+  let effectSubst = freshEffSubst mctx evars
+  let authSubst = freshAuthSubstFor mctx avars body force
+  MethodTrackedInstantiation {
+    mtiBody = substMono mctx.mcGraph typeSubst effectSubst authSubst body,
+    mtiForce = substRow mctx.mcGraph effectSubst authSubst force,
+    mtiResidual =
+      map
+        (r => AuthResidual {
+          arLower = substAuth authSubst r.arLower,
+          arUpper = substAuth authSubst r.arUpper,
+          arExact = r.arExact,
+        })
+        residual,
+    mtiSubstitution = MethodInstantiationSubst {
+      misTypeSubst = typeSubst,
+      misEffectSubst = effectSubst,
+      misAuthSubst = authSubst,
+    },
+  }
+
+-- Only term occurrences incur the forcing row and the scheme's residual
+-- obligations, which become obligations of the using scope. Type probes,
+-- constructor patterns and dictionary elaboration use effect-neutral
+-- instantiation.
+export
+forceInstantiation : ModuleCtx -> String -> MethodTrackedInstantiation -> Mono
+forceInstantiation mctx name inst =
+  let _ = performEffect mctx mctx.mcCells.curEffect inst.mtiForce
+  let _ =
+    fold
+      (_ r => wantAuthorityFrom mctx (Some name) r.arExact r.arLower r.arUpper)
+      ()
+      inst.mtiResidual
+  inst.mtiBody
+
+export
+instantiateValueTracked : ModuleCtx ->
+  String ->
+  Scheme ->
+  MethodTrackedInstantiation
+instantiateValueTracked mctx name scheme =
+  let inst = instantiateMethodTracked mctx scheme
+  let _ = forceInstantiation mctx name inst
+  mctx.mcGraph.graphRun.grants.gsLastInst :=
+    Some (scheme, inst.mtiSubstitution.misAuthSubst)
+  inst
+
+-- pair each declared slot with the argument vector its signature recorded.  The vector
+-- list is a PREFIX (`keptConstraintArgs`; and `registerInferredFor` records `[]` for a
+-- slot whose predicate it could not recover — S-inferred-vector-supply, #1869), so a slot
+-- past its end, or with an empty vector at its position, gets `[]`, which every consumer
+-- reads as "no vector recoverable".
+export
+zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
+zipSlotVecs [] _ = []
+zipSlotVecs (s :: rest) [] = (s, []) :: zipSlotVecs rest []
+zipSlotVecs (s :: rest) (v :: vs) = (s, v) :: zipSlotVecs rest vs
+
+-- Chunk D: if one of [a]/[b] is a still-unbound literal var and the other is
+-- concrete-headed, tag that literal's loc with [kind] so the reframe can use
+-- site-specific wording.  Pure state capture — never alters unification.
+export
+noteNumlitCtx : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
+noteNumlitCtx mctx a b kind =
+  let _ = tagNumlitCtxIf mctx a b kind
+  tagNumlitCtxIf mctx b a kind
+
+-- Tag EVERY literal whose var shares [v]'s root (not just the first) when [other]
+-- has a concrete head — so a heterogeneous list forcing several literals to one
+-- type tags them all with the same [kind], letting their reframed messages dedup to
+-- a single "list elements have different types" line.
+tagNumlitCtxIf : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
+tagNumlitCtxIf mctx v other kind
+  | isSome (headTyconMono other) = tagAllLitLocs mctx v kind
+  | otherwise = ()
+
+tagAllLitLocs : ModuleCtx -> Mono -> JoinContext -> Unit
+tagAllLitLocs mctx v kind = match normalize v
+  TVar cell =>
+    tagLitLocsWithRoot mctx (tyvarId cell) kind mctx.mcCells.numlitVarLocs.value
+  _ => ()
+
+tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
+tagLitLocsWithRoot mctx _ _ [] = ()
+tagLitLocsWithRoot mctx id kind ((mv, l) :: rest) =
+  let _ =
+    if sameRootId id mv then
+      mctx.mcCells.numlitCtxTags :=
+        (l, kind) :: mctx.mcCells.numlitCtxTags.value
+  tagLitLocsWithRoot mctx id kind rest
+
+-- The arrow a callee presents, introduced when its shape is still unknown.
+export
+calleeArrow : DynCtx -> Mono -> (Mono, EffRow, Mono)
+calleeArrow dyn ft = match normalize ft
+  TFun dom row res => (dom, row, res)
+  _ =>
+    let dom = freshVar dyn.dcModule ()
+    let row = openRow dyn.dcModule ()
+    let res = freshVar dyn.dcModule ()
+    let _ = unifyIn dyn ft (TFun dom row res)
+    (dom, row, res)
+
+-- The type a `Ref` cell stores, read verbatim: the read is a directed flow out
+-- of the cell, so a stored qualifier survives it.  A cell whose shape is still
+-- unknown takes the `Ref` shape here.
+export
+refStored : DynCtx -> Mono -> Mono
+refStored dyn t = match normalize t
+  TApp (TCon "Ref" _) inner => inner
+  _ =>
+    let inner = freshVar dyn.dcModule ()
+    let _ = unifyIn dyn t (TApp (tconBuiltin "Ref") inner)
+    inner
+
+export
+instantiateLegacyVarTracked : ModuleCtx ->
+  String ->
+  Int ->
+  Scheme ->
+  MethodTrackedInstantiation
+instantiateLegacyVarTracked mctx x id s =
+  match lookupSchemeObls x id mctx.mcCells.schemeObligationsRef.value
+    Some obs =>
+      let inst = instantiateValueTracked mctx x s
+      let _ =
+        recordSchemeCallObligations
+          mctx
+          id
+          obs
+          inst.mtiSubstitution.misTypeSubst
+      inst
+    -- #673: schemeObligationsRef is a PER-MODULE ref (reset per module), so a CROSS-MODULE
+    -- constrained binding used as a plain EVar has NO entry here.  For a PRELUDE binding
+    -- (`println : Display a => …`, the #673 repro) the plain-`instantiate` fallback silently
+    -- DROPPED its call obligation, so `check` false-greened on `println (Foo 1)` / a 6-tuple
+    -- with no Display while `run`/`build` (dict elaboration is a separate net) rejected.
+    None => match declaredCrossModuleObls mctx x
+      Some obs =>
+        let inst = instantiateValueTracked mctx x s
+        let _ =
+          recordSchemeCallObligations
+            mctx
+            id
+            obs
+            inst.mtiSubstitution.misTypeSubst
+        inst
+      None => instantiateValueTracked mctx x s
+
+-- #673: the declared call obligations of a CROSS-MODULE constrained binding [x] used as a
+-- plain EVar, in schemeObligations shape (`(iface, quantified-var-id VECTOR)` list) so the
+-- caller records them exactly like the same-module `Some obs` branch.  TWO source-EXACT
+-- lookups, NEVER a name-only whole-table scan (both correctness- and perf-unsound, #673 rework):
+--
+--   (1) qualConstraintFor x — a USER import resolves through currentImportDefinersRef to the
+--       ACTUAL owning module's (src, name) qual entry, so a same-named import from a DIFFERENT
+--       module (foo's constrained `bar` vs baz's unconstrained `bar`, where `x` resolves to
+--       baz) can never be misattributed.  It also gates on the cheap currentImportDefinersRef
+--       membership, so only a genuine import pays a scan — not every unconstrained/local var.
+--   (2) coreSchemeObligationsRef — core's OWN captured schemeObligationsRef (snapshotted right
+--       after the core pass, before the first module's `freshModuleCtx`).  Prelude names are
+--       deliberately excluded from currentImportDefinersRef (importDefinersOf skips `core`),
+--       so qualConstraintFor cannot see them; this is the source-EXACT store for exactly that
+--       set (`println`/`print`), an O(log n) OrdMap lookup with ZERO wrong-module surface.
+--   (3) #1114/#845 — crossModuleSchemeOblsQualRef, the (module, name)-attributed
+--       snapshot of every USER module's own schemeObligationsRef.  Lookups (1) and (2)
+--       between them cover only DECLARED contexts (funConstraintsRef, whose inferred
+--       half is `dictEligibleSetRef`-gated and empty on the check path) and CORE.  An
+--       UNSIGNATURED constrained export of a user module — `export f x = go x where go
+--       n = n + 1`, whose `Num a =>` is inferred, not written — is in NEITHER, so its
+--       obligation was dropped at every importing call site and `check` false-greened
+--       on `f "abc"` (`run` panicked `unknown op '+'`; `build` exited 0 and the binary
+--       SEGFAULTED).  Per DICT-SEMANTICS §4.2 D6(a) a declared and an inferred context
+--       defer identically — §4 `(gen)`/`(gen-sig)` put both on the SCHEME — so the
+--       cross-module use site must read the store that holds the scheme context, which
+--       is exactly what the same-module use site reads one branch up.
+--
+-- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves exactly
+-- as it did.  (3) precedes (2) because (3) is IMPORT-SCOPED and (2) is a program-global
+-- bare-NAME table.  The disjointness does not come from `currentImportDefinersRef`
+-- (that is (1)'s gate; (3) reads `importedSchemeOblsRef`): (3)'s table is rebuilt per module from
+-- THIS module's own `DUse` decls, and `importDefinersOf` skipping `core` is irrelevant to it —
+-- what keeps prelude names out of (3) is that no module writes a `DUse` for the implicit prelude
+-- at all, so no arm of `importedSchemeOblEntries` ever emits one.  The populations are therefore
+-- disjoint by construction, and the one case where both could answer — a user module exporting a
+-- name core also defines — is exactly the case where the import-scoped answer is the right one.
+export
+declaredCrossModuleObls : ModuleCtx -> String -> Option (List VecObl)
+declaredCrossModuleObls mctx x = match qualConstraintDecl mctx x
+  -- S-xmod-vector-supply (#1868/#1867): lookup (1) reads the WHOLE qual entry, not just
+  -- its slots.  Reading the slots alone is what made this lookup the truncation point:
+  -- `vecOblsOfSlots` lifted each slot to a ONE-argument obligation, so an imported
+  -- `Ix a Bool =>` was re-checked as the unary goal `Ix Int` — which matched `impl Ix
+  -- Int Char` and ACCEPTED an unsatisfiable program (#1868), and matched two impls and
+  -- REJECTED a legal one (#1867).  The same-module branch one level up
+  -- (`schemeObligationsRef`) has carried the full vector since #1161; this is the
+  -- cross-module twin of that fact, and `substVecOblArgs` already knows how to
+  -- instantiate it.
+  Some d => Some (vecOblsOfSlotVecs (zipSlotVecs d.cdSlots d.cdArgs))
+  None => match qualSchemeOblsFor mctx x
+    Some obs => Some obs
+    None => omLookup x mctx.mcGraph.crossRun.coreSchemeObligationsRef.value
+
+-- #1114 (#845): lookup (3) of declaredCrossModuleObls — the SCHEME context of a
+-- cross-module callee, keyed by the LOCAL spelling this module writes.  The table is
+-- `importedSchemeOblsRef`, rebuilt per module from THIS module's own `DUse` decls (see
+-- `importedSchemeOblEntries`), so a hit is already source-exact: an entry exists only
+-- because one of this module's imports names the module that defines it.
+--
+-- SPELLING-complete on purpose, and that is the whole reason this is a per-module
+-- table rather than another `currentImportDefinersRef` gate.  `importDefinersOf` is
+-- populated only from `UseGroup` (`importedBindings` answers `None` for `UseWild` and
+-- `Some []` for `UseAlias`), so anything gated on it is a rule about ONE of the three
+-- import spellings.  Measured on the pre-fix binary, all three cross-module spellings
+-- dropped the obligation for an unsignatured constrained callee, and `import m.*` /
+-- `import m as A` dropped it for a SIGNATURED one too — so gating this lookup the same
+-- way would have drained exactly one cell of a 2x3 matrix and left the rule
+-- spelling-matched, which is the shape #674/#1070 warn about.  Keying by the local
+-- spelling covers all three arms with one rule and no per-spelling branch at the
+-- READ site.
+qualSchemeOblsFor : ModuleCtx -> String -> Option (List VecObl)
+qualSchemeOblsFor mctx name =
+  omLookup name mctx.mcCells.importedSchemeOblsRef.value
+
+-- lift each already-paired dict slot, WITH its recorded predicate argument vector, to a
+-- vector obligation, skipping slots with no interface.
+--
+-- The pairing of interfaces with ids happens once, in `pairSlots`, so this function
+-- cannot be handed a mispaired input.
+--
+-- The vector is the point (#1868/#1867): emitting `voArgs = []` unconditionally — the
+-- "shattered per-tyvar dict slots" reading of `funConstraintsRef` — would make
+-- `substVecOblArgs` instantiate through `substMonos o.voIds`, i.e. ONE argument per
+-- slot.  For a binary predicate that is not a weaker obligation, it is a DIFFERENT one:
+-- `Ix a Bool` re-checked as `Ix Int`.  An empty vector still means exactly what it meant
+-- (`voArgs = []` ⇒ the historical ids-only path), so a slot past the args prefix — an
+-- inferred callee whose vector `registerInferredFor` could not recover, a module with no
+-- args row — is byte-identically unchanged.
+vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
+vecOblsOfSlotVecs [] = []
+vecOblsOfSlotVecs ((s, v) :: rest)
+  | s.csIface.irName == "" = vecOblsOfSlotVecs rest
+  | otherwise = xmodVecObl s v :: vecOblsOfSlotVecs rest
+
+-- ONE cross-module slot's obligation.  The admission rule is `declaredOblMixed`'S,
+-- Deliberately and argument-FOR-ARGUMENT — this is the same fact for an IMPORTED callee
+-- that that function records for a same-module one, and a channel that admitted a wider
+-- argument class on one side of a module boundary than the other would be a new
+-- divergence, not a fix.  Exactly two classes carry:
+--   * a BARE tyvar — `substOblArgs` maps it through the call's instantiation subst, and
+--     an id that subst does not carry skips the whole predicate (fails CLOSED, as the
+--     ids-only path always did);
+--   * a GROUND argument — no tyvars anywhere, so the signature's mono IS the call's mono.
+-- #1937 adds a THIRD class, in lockstep with the same widening on the two same-module
+-- channels (`declaredOblMixed`, `residualMixedPred`) — the header's own argument is why
+-- it could not land on one side alone:
+--   * a STRUCTURED argument mentioning a tyvar (`Ix a (List b)`) — `substOblArgs` now
+--     recurses through `TApp`/`TFun` and substitutes at every tyvar LEAF, so the
+--     importer's goal is the instantiated `Ix Int (List Bool)` rather than the defining
+--     signature's cell carried across the boundary.  A leaf id the subst does not carry
+--     still skips the whole predicate, exactly as the bare class does.
+-- A slot past the args prefix still falls back to `voArgs = []`, today's per-tyvar goal.
+-- [voIds] holds the deferred-on ids IN ORDER, per `VecObl`'s invariant — NOT `[s.csId]`,
+-- which is only the LEAD one and would understate a `Ix a b =>` vector.
+xmodVecObl : CSlot -> List Mono -> VecObl
+xmodVecObl s v
+  | isEmptyL v || isEmptyL (flatMap xmodOblArgId v) =
+    VecObl { voIface = s.csIface, voIds = [s.csId], voArgs = [] }
+  | otherwise =
+    VecObl { voIface = s.csIface, voIds = flatMap xmodOblArgId v, voArgs = v }
+
+-- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
+-- call's monos, pushing ONE joint obligation per predicate onto the call channel
+-- (`Windowed UObligation`, #838 I1).  [originId] is the occurrence's own #837 binding
+-- id (threaded from instantiateVarTrackedId's [id] — the binding this re-instantiation
+-- was deferred by; 0 = anchorless), stored on the record so a later increment (I2) can
+-- read it without a second migration.  If ANY id is absent from the subst (shouldn't
+-- happen for a quantified var) the whole predicate is skipped — a partial vector would
+-- be a different predicate (#607).
+export
+recordSchemeCallObligations : ModuleCtx ->
+  Int ->
+  List VecObl ->
+  List (Int, Mono) ->
+  Unit
+recordSchemeCallObligations mctx _ [] _ = ()
+recordSchemeCallObligations mctx originId (o :: rest) subst =
+  match substVecOblArgs o subst
+    Some monos =>
+      -- `schemeObligationsRef` and its cross-module mirrors
+      -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
+      -- site never records `OriginUnresolved`.
+      let _ =
+        recordObl
+          mctx
+          Predicate {
+            iface = o.voIface,
+            args = monos,
+          }
+          originId
+          PSchemeReinst
+          mctx.mcLoc
+      recordSchemeCallObligations mctx originId rest subst
+    None => recordSchemeCallObligations mctx originId rest subst
+
+-- #1161: this predicate's goal at THIS call's instantiation.  An ids-only entry
+-- (`voArgs == []`) takes the historical `substMonos` path unchanged; a vector-carrying
+-- entry maps its tyvar LEAVES through [subst] and keeps everything else as written.
+-- `None` (an unmapped quantified id) still skips the whole predicate: a partial vector
+-- is a different predicate (#607).
+substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
+substVecOblArgs o subst
+  | isEmptyL o.voArgs = substMonos o.voIds subst
+  | otherwise = substOblArgs o.voIds o.voArgs subst
+
+-- #837: (name, id)-keyed lookup over schemeObligationsRef.  id /= 0 keys the
+-- occurrence's binding EXACTLY; id == 0 falls to the bare-name scan (today's path).
+export
+lookupSchemeObls : String ->
+  Int ->
+  List ((String, Int), List VecObl) ->
+  Option (List VecObl)
+lookupSchemeObls x 0 table = lookupSchemeOblsByName x table
+lookupSchemeObls _ _ [] = None
+lookupSchemeObls x id (((n2, i2), v) :: rest)
+  | n2 == x && i2 == id = Some v
+  | otherwise = lookupSchemeObls x id rest
+
+-- name-only scan (first match) — the bare-name fallback and the display readers
+-- (lookupSchemeIface) keep exactly this pre-#837 behaviour.
+lookupSchemeOblsByName : String ->
+  List ((String, Int), List VecObl) ->
+  Option (List VecObl)
+lookupSchemeOblsByName _ [] = None
+lookupSchemeOblsByName x (((n2, _), v) :: rest)
+  | n2 == x = Some v
+  | otherwise = lookupSchemeOblsByName x rest
+
+-- as `unifySpineResult`, but a PROBE: it performs no effect and discards the result.
+-- The dict-slot and obligation recoveries below unify only to populate a substitution.
+export
+unifySpineProbe : DynCtx -> Mono -> List Mono -> Unit
+unifySpineProbe dyn ft args =
+  let saved = wSnapshot dyn.dcModule.mcCells.fileValueFlows
+  let _ = unifySpineProbeGo dyn ft args
+  wRestore dyn.dcModule.mcCells.fileValueFlows saved
+
+unifySpineProbeGo : DynCtx -> Mono -> List Mono -> Unit
+unifySpineProbeGo dyn _ [] = ()
+unifySpineProbeGo dyn ft (a :: rest) =
+  let r = freshVar dyn.dcModule ()
+  let _ = applicationRowTyped dyn ft a r
+  unifySpineProbeGo dyn r rest
+
+-- [actual] flows INTO a slot of type [expected] — a call argument into the
+-- callee's domain, a signed body into its signature, a supplied field, an
+-- annotated expression, an impl body into its method type — so the direction is
+-- known: at a covariant position the actual's row must be within the expected's,
+-- at a contravariant one the reverse, and a non-covariant type-constructor slot
+-- demands equality (`paramVarianceGuard`). A closed lower row already covered
+-- by the upper row's known labels imposes no constraint on its tail. Closed
+-- pairs are checked directionally. Inside an inference scope, open rows become
+-- solver constraints. A flexible upper type acquires a positive envelope rather
+-- than copying the first value's closed rows. Other shape equations use ordinary
+-- `unify`, including the order a plain type mismatch names the two sides in:
+-- `unifyInto` names the slot first,
+-- as a call argument's `unify` did; `unifyIntoOrd True` names the value first,
+-- as an annotation and a supplied field do (through `argumentIntoOrd`).
+export
+unifyInto : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyInto dyn pos e a = unifyIntoOrd dyn False pos e a
+
+-- [valueFirst] is only the operand order of the fallback `unify`.
+export
+unifyIntoOrd : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoOrd dyn valueFirst pos e a =
+  let _ =
+    if monoHasArrowInSlot e || monoHasArrowInSlot a then
+      if pos then
+        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc e a
+      else
+        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc a e
+  unifyIntoStep dyn valueFirst pos e a
+
+-- Capture a directed judgment once; recursive descent does not rescan every
+-- remaining type subtree for packed arrows.
+unifyIntoStep : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoStep dyn valueFirst pos e a =
+  unifyIntoN dyn valueFirst pos (normalize e) (normalize a)
+
+unifyIntoN : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoN dyn _ True (TVar cell) (lower@(TFun _ _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ True (TVar cell) (lower@(TApp _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TFun _ _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TApp _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
+-- A qualified value reaching a flexible slot gives it a qualified shape with
+-- an allowance above the value's authority, so several values can converge.
+unifyIntoN dyn _ True (TVar cell) (lower@(TQual _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TQual _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
+-- A flexible slot the qualified value flows OUT OF keeps the qualifier as it
+-- is, so a composed or partially applied function still names its authority.
+unifyIntoN dyn _ _ (TVar cell) (t@(TQual _ _)) = bindVar dyn cell t
+unifyIntoN dyn _ _ (t@(TQual _ _)) (TVar cell) = bindVar dyn cell t
+-- Qualified into qualified: the flowing side's authority must be within the
+-- receiving side's.  Qualified into plain forgets; plain into qualified can
+-- only be admitted when the qualifier admits the domain's top, since nothing
+-- bounds the plain value (the application site refines this with α).
+unifyIntoN dyn vf pos (TQual e qe) (TQual a qa) =
+  let _ =
+    if pos then
+      wantAuthority dyn.dcModule qa qe
+    else
+      wantAuthority dyn.dcModule qe qa
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn vf pos (TQual e qe) a =
+  let _ = if pos then wantAuthority dyn.dcModule (authTop (authDomainTop qe)) qe
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn vf pos e (TQual a qa) =
+  let _ =
+    if pos then
+      ()
+    else
+      wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn _ _ (TAuth qe) (TAuth qa) = unifyIndex dyn.dcModule qa qe
+unifyIntoN dyn vf pos (TFun e1 er e2) (TFun a1 ar a2) =
+  let _ = unifyIntoStep dyn vf (not pos) e1 a1
+  let _ = rowInto dyn pos (effrowNorm er) (effrowNorm ar)
+  unifyIntoStep dyn vf pos e2 a2
+unifyIntoN dyn vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
+  | tupleUnifyClash e a || monoSlotNonCovariant dyn.dcModule e1 =
+    unifyOrdered dyn vf e a
+  | otherwise =
+    let _ = unifyIntoStep dyn vf pos e1 a1
+    unifyIntoStep dyn vf pos e2 a2
+unifyIntoN dyn vf _ e a = unifyOrdered dyn vf e a
+
+-- A flexible receiving slot acquires the value's shape, not its first closed
+-- row. Positive arrows get inference allowances with directed lower bounds;
+-- domains and invariant constructor arguments keep ordinary HM equality.
+-- This is the same structural envelope as a produced-value join, so a generic
+-- choice cannot depend on which callback happens to be supplied first.
+bindValueUpper : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindValueUpper dyn cell lower =
+  dyn.dcModule.mcCells.occursCheckFailed := False
+  let _ = occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) lower
+  if not dyn.dcModule.mcCells.occursCheckFailed.value then
+    let upper =
+      optionOrFresh
+        dyn.dcModule
+        (joinProducedEnvelope (valueJoinOps
+          dyn
+          JoinArgument
+          collectValueAllowance) [
+          (dyn.dcModule.mcLoc, lower),
+        ])
+    let _ = recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc upper lower
+    bindVar dyn cell upper
+
+collectValueAllowance : DynCtx -> List EffRow -> EffRow
+collectValueAllowance dyn rows =
+  let cell = freshInferenceEffvar dyn.dcModule ()
+  let _ =
+    EffectSolver.registerValueAllowance
+      dyn.dcModule.mcCells.effectSummaries
+      cell
+  let upper = EffRow [] (Some cell)
+  let _ = fold (_ lower => rowInto dyn True upper lower) () rows
+  upper
+
+unifyOrdered : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyOrdered dyn True e a = unifyIn dyn a e
+unifyOrdered dyn False e a = unifyIn dyn e a
+
+-- Check the known inclusion without equating the allowance with the performed
+-- row. In particular, a pure alternative must not close an allowance's tail.
+export
+rowInto : DynCtx -> Bool -> EffRow -> EffRow -> Unit
+rowInto dyn pos er ar
+  | EffectSolver.hasSummaryScope dyn.dcModule.mcCells.effectSummaries =
+    if pos then
+      deferEffectRelation dyn.dcModule False ar er
+    else
+      deferEffectRelation dyn.dcModule False er ar
+rowInto dyn True (EffRow le None) (EffRow la None) =
+  effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph la le) le
+rowInto dyn False (EffRow le None) (EffRow la None) =
+  contraRowCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph le la) le la
+rowInto dyn True (er@(EffRow le _)) (ar@(EffRow la None)) =
+  if isEmptyL (atomsEscape dyn.dcModule.mcGraph la le) then
+    ()
+  else
+    unifyRowN dyn er ar
+rowInto dyn False (er@(EffRow le None)) (ar@(EffRow la _)) =
+  if isEmptyL (atomsEscape dyn.dcModule.mcGraph le la) then
+    ()
+  else
+    unifyRowN dyn er ar
+rowInto dyn _ er ar = unifyRowN dyn er ar
+
+-- the contravariant half of `rowInto`: the expected PARAMETER row [le] admits
+-- atoms the actual's parameter row [la] does not, so a caller could hand the
+-- actual an argument it would run under too small a row.
+contraRowCheck : ModuleCtx -> List Atom -> List Atom -> List Atom -> Unit
+contraRowCheck mctx [] _ _ = ()
+contraRowCheck mctx extras le la =
+  pushTypeError mctx "T-EFFECT-LEAK" (contraRowMsg le la extras)
+
+export
+monoHasNonCovariantSlot : ModuleCtx -> Mono -> Bool
+monoHasNonCovariantSlot mctx t = match normalize t
+  TApp a b =>
+    monoSlotNonCovariant mctx a
+      || monoHasNonCovariantSlot mctx a
+      || monoHasNonCovariantSlot mctx b
+  TFun a _ b => monoHasNonCovariantSlot mctx a || monoHasNonCovariantSlot mctx b
+  _ => False
+
+-- is the slot applied at the node above [hd] (positional index = the depth of
+-- [hd]'s own spine) recorded as non-covariant for [hd]'s head?  The same read
+-- `paramVarianceGuard` makes, so the two agree on which slots count.
+monoSlotNonCovariant : ModuleCtx -> Mono -> Bool
+monoSlotNonCovariant mctx hd = match headTyconMono hd
+  Some (HkDecl key) => match paramPolaritiesOf mctx key
+    Some pols => match polarityAt pols (monoSpineDepth hd)
+      PCo => False
+      _ => True
+    None => False
+  _ => False
+
+-- unify each param type with its expected type, for the prefix both lists cover.
+export
+unifyParamsExpected : DynCtx -> List Mono -> List Mono -> Unit
+unifyParamsExpected dyn (p :: ps) (e :: es) =
+  let _ = bindFrom dyn p e
+  unifyParamsExpected dyn ps es
+unifyParamsExpected dyn _ _ = ()
+
+-- The same judgment where only the argument's type is at hand (a pipe, a
+-- composition, a dispatch spine): the type's own qualifier or the top.
+export
+applicationRowTyped : DynCtx -> Mono -> Mono -> Mono -> EffRow
+applicationRowTyped dyn ft xt result = match normalize ft
+  TFun dom row res =>
+    let _ = argumentIntoTyped dyn dom xt
+    let _ = bindFrom dyn result res
+    row
+  _ =>
+    let unknown = openRow dyn.dcModule ()
+    let _ = unifyIn dyn ft (TFun xt unknown result)
+    unknown
+
+argumentIntoTyped : DynCtx -> Mono -> Mono -> Unit
+argumentIntoTyped dyn dom xt = match normalize dom
+  TQual d q =>
+    let _ = unifyInto dyn True d xt
+    wantAuthority dyn.dcModule (typeAuthority (authDomainTop q) xt) q
+  _ => unifyInto dyn True dom xt
+
+-- Inference owns source locations and variance metadata; effect_values owns
+-- the structural join. Unknown constructor slots remain exact.
+export
+joinValueTypes : DynCtx -> JoinContext -> List (Option Loc, Mono) -> Mono
+joinValueTypes dyn context values =
+  let upper =
+    optionOrFresh
+      dyn.dcModule
+      (joinProduced
+        (valueJoinOps dyn context (_ =>
+          collectRows (joinCellOf dyn.dcModule.mcGraph)))
+        values)
+  let _ =
+    map
+      ((loc, lower) => recordFileValueFlow dyn.dcModule loc upper lower)
+      values
+  upper
+
+export
+valueJoinOps : DynCtx ->
+  JoinContext ->
+  (DynCtx -> List EffRow -> EffRow) ->
+  ValueJoinOps (Option Loc)
+valueJoinOps dyn context collector =
+  let ops = decidingJoinOps dyn context collector
+  { ops | vjoDefer = values => deferJoin dyn.dcModule context collector values }
+
+-- The join services that decide on the spot: resolving a recorded join
+-- must not record it again.
+decidingJoinOps : DynCtx ->
+  JoinContext ->
+  (DynCtx -> List EffRow -> EffRow) ->
+  ValueJoinOps (Option Loc)
+decidingJoinOps dyn context collector = ValueJoinOps {
+  vjoEqual = joinValueEqual dyn context,
+  vjoCovariants = producedSlotCovariants dyn.dcModule,
+  vjoFreshType = freshVar dyn.dcModule,
+  vjoFreshRow = openRow dyn.dcModule,
+  vjoCollectRows = collector dyn,
+  vjoFreshAuth = top => AVar (freshAuthvar dyn.dcModule top None),
+  vjoCollectAuth = collectAuthAllowance dyn.dcModule,
+  vjoDefer = _ => None,
+}
+
+-- Alternatives with no shape yet (`if c then f else g` over two parameters)
+-- are not equated: equality would give both the same latent row before a
+-- later use shapes one of them.  Inside a binding scope the join is recorded
+-- and decided when the scope closes (§6.8); outside one it is decided now.
+deferJoin : ModuleCtx ->
+  JoinContext ->
+  (DynCtx -> List EffRow -> EffRow) ->
+  List (Option Loc, Mono) ->
+  Option Mono
+deferJoin mctx context collector values =
+  if EffectSolver.hasSummaryScope mctx.mcCells.effectSummaries
+    && distinctVariables values then
+    let result = freshVar mctx ()
+    mctx.mcCells.pendingJoinsRef :=
+      PendingJoin {
+          pjResult = result,
+          pjValues = values,
+          pjLevel = mctx.mcCells.currentLevel.value,
+          pjContext = context,
+          pjCollector = collector,
+        }
+        :: mctx.mcCells.pendingJoinsRef.value
+    Some result
+  else
+    None
+
+-- At least two different unshaped alternatives: a single alternative, or one
+-- variable met on every branch, has nothing to join.
+distinctVariables : List (Option Loc, Mono) -> Bool
+distinctVariables values =
+  let roots =
+    fold
+      (acc (_, value) => match normalize value
+        TVar cell => IdMap.set (tyvarId cell) () acc
+        _ => acc)
+      Tip
+      values
+  listLen (IdMap.keys roots) >= 2
+
+-- Decide every join recorded at this level or deeper: the ones the closing
+-- scope owns, which sit at the front of the list.  A top-level group decides
+-- all of its joins, since the routes of the methods it uses are fixed when it
+-- closes.  Newest first, so an outer join shapes its alternatives before an
+-- inner join whose result is one of them is decided from that shape.
+export
+resolvePendingJoins : DynCtx -> Int -> Unit
+resolvePendingJoins dyn level = match dyn.dcModule.mcCells.pendingJoinsRef.value
+  pj :: rest =>
+    if pj.pjLevel >= level then
+      dyn.dcModule.mcCells.pendingJoinsRef := rest
+      let _ = resolvePendingJoin dyn pj
+      resolvePendingJoins dyn level
+  [] => ()
+
+-- Settle the joins a local binding scope recorded before the binding
+-- generalizes.  A join whose alternatives are all still unshaped variables of
+-- an enclosing level (the enclosing function's parameters) is handed to the
+-- enclosing scope, its result lowered to that level so the binding cannot
+-- generalize over it, exactly as equating it with those variables would; a
+-- later use there may still shape an alternative.  Any other join is decided
+-- now, including one whose result is already outer but which has a local
+-- alternative: handing it out would let the binding generalize that
+-- alternative while the join still constrains it.
+export
+settlePendingJoins : DynCtx -> Int -> Unit
+settlePendingJoins dyn level =
+  let postponed = settlePending dyn level []
+  dyn.dcModule.mcCells.pendingJoinsRef :=
+    reverseL postponed ++ dyn.dcModule.mcCells.pendingJoinsRef.value
+
+settlePending : DynCtx -> Int -> List PendingJoin -> List PendingJoin
+settlePending dyn level postponed =
+  match dyn.dcModule.mcCells.pendingJoinsRef.value
+    pj :: rest =>
+      if pj.pjLevel >= level then
+        dyn.dcModule.mcCells.pendingJoinsRef := rest
+        if joinOfOuterVariables level pj then
+          let _ = lowerTyvarLevel (level - 1) pj.pjResult
+          settlePending dyn level ({ pj | pjLevel = level - 1 } :: postponed)
+        else
+          let _ = resolvePendingJoin dyn pj
+          settlePending dyn level postponed
+      else
+        postponed
+    [] => postponed
+
+joinOfOuterVariables : Int -> PendingJoin -> Bool
+joinOfOuterVariables level pj =
+  isUnshaped pj.pjResult
+    && allList (value => isOuterVariable level (snd value)) pj.pjValues
+
+isOuterVariable : Int -> Mono -> Bool
+isOuterVariable level t = match normalize t
+  TVar cell => tyvarLevel cell < level
+  _ => False
+
+lowerTyvarLevel : Int -> Mono -> Unit
+lowerTyvarLevel level t = match normalize t
+  TVar cell => match !cell
+    Unbound id old => if old > level then cell := Unbound id level
+    Link _ => ()
+  _ => ()
+
+-- A scope whose bindings do not generalize hands its recorded joins to the
+-- enclosing scope.
+export
+postponePendingJoins : ModuleCtx -> Int -> Unit
+postponePendingJoins mctx level =
+  mctx.mcCells.pendingJoinsRef :=
+    lowerPending level mctx.mcCells.pendingJoinsRef.value
+
+lowerPending : Int -> List PendingJoin -> List PendingJoin
+lowerPending level (pj :: rest)
+  | pj.pjLevel >= level =
+    { pj | pjLevel = level - 1 } :: lowerPending level rest
+lowerPending _ pending = pending
+
+-- Decide a join at the close of its scope.  A result a unification shaped
+-- was decided then (`takeJoinsShapedBy`); one still shaped here is decided
+-- the same way.
+resolvePendingJoin : DynCtx -> PendingJoin -> Unit
+resolvePendingJoin dyn pj = match normalize pj.pjResult
+  TVar _ =>
+    unifyIn
+      dyn
+      pj.pjResult
+      (resolveDeferredJoin
+        (decidingJoinOps dyn pj.pjContext pj.pjCollector)
+        pj.pjValues)
+  _ => settleShapedJoins dyn [pj]
+
+-- A receiving qualified slot's allowance: one flexible variable of the
+-- current scope, bounded below by every value that reaches the slot.
+collectAuthAllowance : ModuleCtx -> List Authority -> Authority
+collectAuthAllowance mctx lowers =
+  let top = match lowers
+    q :: _ => authDomainTop q
+    [] => PUnit
+  let cell = freshAuthvar mctx top None
+  let _ = fold (_ q => wantAuthority mctx q (AVar cell)) () lowers
+  AVar cell
+
+export
+optionOrFresh : ModuleCtx -> Option Mono -> Mono
+optionOrFresh mctx None = freshVar mctx ()
+optionOrFresh mctx (Some value) = value
+
+joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
+joinValueEqual outer context loc left right =
+  let dyn = dynAtIfSome loc outer
+  let _ = noteNumlitCtx dyn.dcModule left right context
+  unifyIn { dyn | dcJoin = Some context } left right
+
+export
+producedSlotCovariants : ModuleCtx -> Mono -> List Bool
+producedSlotCovariants mctx head = match headTyconMono head
+  Some (HkDecl key) =>
+    let slot = monoSpineDepth head
+    match paramPolaritiesOf mctx key
+      Some polarities => map isCovariantPolarity (drop slot polarities)
+      None =>
+        if tabKeyEq key (tyTabKey OriginBuiltin "List") then
+          if slot == 0 then [True] else []
+        else match headTyconNameMono head
+          Some name => match tupleTagArity name
+            Some arity =>
+              if tabKeyEq key (tyTabKey OriginBuiltin name) then
+                replicate (arity - slot) True
+              else
+                []
+            None => []
+          None => []
+  _ => []
+
+isCovariantPolarity : Polarity -> Bool
+isCovariantPolarity PCo = True
+isCovariantPolarity _ = False
+
+export
+raiseAuthvarLevel : Int -> Ref Authvar -> Unit
+raiseAuthvarLevel level cell = match !cell
+  AUnbound id _ top pat name => cell := AUnbound id level top pat name
+  ALink _ _ _ => ()
+
+export
+polarityAt : List Polarity -> Int -> Polarity
+polarityAt [] _ = PCo
+polarityAt (q :: rest) i = if i <= 0 then q else polarityAt rest (i - 1)
+
+export
+freshVars : ModuleCtx -> Int -> List Mono
+freshVars mctx n
+  | n <= 0 = []
+  | otherwise = freshVar mctx () :: freshVars mctx (n - 1)
+
+export
+lowerOwnedRoot : ModuleCtx -> Int -> Mono -> Unit
+lowerOwnedRoot mctx owner m = match normalize m
+  TVar cell => if tyvarLevel cell == owner then lowerToCurrent mctx m
+  _ => ()
+
+-- the (id, level) of every UNBOUND tyvar in [t] (sibling of monoUnboundIds, but
+-- carrying the level so registerOneAmbiguous can tell a this-group constraint var
+-- from a deeper inner-generalized one that merely leaked into the obligation list).
+export
+monoUnboundVarLevels : Mono -> List (Int, Int)
+monoUnboundVarLevels t = match normalize t
+  TVar cell => [(tyvarId cell, tyvarLevel cell)]
+  TCon _ _ => []
+  TRigid _ => []
+  TApp a b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
+  TFun a _ b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
+  TEff _ => []
+  TAuth _ => []
+  TQual a _ => monoUnboundVarLevels a
+
+-- Container covariance cannot install a confinement wrapper on a function
+-- already packed inside the value. Retain the directed flows until the row
+-- solver closes, including the lower rows of produced-value joins.
+export
+recordFileValueFlow : ModuleCtx -> Option Loc -> Mono -> Mono -> Unit
+recordFileValueFlow mctx loc upper lower =
+  wPush mctx.mcCells.fileValueFlows (loc, upper, lower)
+
+export
+unifySourceDomains : DynCtx -> Int -> Mono -> Mono -> Unit
+unifySourceDomains dyn arity owned actual =
+  if arity <= 0 then
+    ()
+  else match (normalize owned, normalize actual)
+    (TFun domain _ result, TFun param _ body) =>
+      let _ = unifyIn dyn domain param
+      unifySourceDomains dyn (arity - 1) result body
+    _ => unifyIn dyn owned actual
+
+export
+zipBindFrom : DynCtx -> List Mono -> List Mono -> Unit
+zipBindFrom dyn (p :: ps) (q :: qs) =
+  let _ = bindFrom dyn p q
+  zipBindFrom dyn ps qs
+zipBindFrom dyn _ _ = ()

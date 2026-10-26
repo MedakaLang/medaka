@@ -390,7 +390,7 @@ if [ -n "$FROZEN_TAG" ]; then
       ALL="$(mktemp)"
       trap 'rm -f "$ALL"' EXIT
       "$CHECK_ALL" "$RUNTIME" "$CORE" "$ENTRY" "$ROOT/compiler" "$ROOT/stdlib" 2>/dev/null > "$ALL"
-      MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.visibility frontend.exhaust driver.loader types.repr types.tc_types types.scopes types.typecheck types.tc_mono types.tc_state types.tc_env types.tc_diag types.program_facts eval.eval tools.check"
+      MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.visibility frontend.exhaust driver.loader types.repr types.tc_types types.scopes types.typecheck types.tc_mono types.tc_state types.tc_env types.tc_diag types.tc_scope types.tc_unify types.tc_decls_variance types.program_facts eval.eval tools.check"
       for m in $MODULES; do
         only_match "$m" || continue
         lega_tmp="$(mktemp)"

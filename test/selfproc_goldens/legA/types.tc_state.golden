@@ -4,7 +4,9 @@ beginMethodReturnTrace : Unit -> TraceSink
 beginNumericPredicateTrace : Unit -> TraceSink
 blankModuleCtx : GraphCtx -> String -> ModuleCtx
 builtinCtors : Map String Scheme
+callUOblsWindow : ModuleCtx -> Int -> List UObligation
 carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
+checkRunResidue : ModuleCtx -> CheckRunSeed
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultReceiverOrdinal : Int
@@ -23,6 +25,7 @@ emptyOracle : Oracle
 emptyShadowDicts : ShadowDicts
 emptySigVars : SigVars
 emptyTcConfig : TcConfig
+enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
 envAt : Option Loc -> TcEnv -> TcEnv
 envAtIfSome : Option Loc -> TcEnv -> TcEnv
 evCellsSpanProbe : GraphCtx -> Int
@@ -46,6 +49,7 @@ mctxAtIfSome : Option Loc -> ModuleCtx -> ModuleCtx
 mintGraphCtx : DriveInputs -> Map String (List (String, String)) -> GraphCtx
 moduleCellsFrom : Bool -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells
 moduleCtxFrom : Bool -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
+moduleWindow : Int -> Int -> List a -> List a
 noteInterners : GraphCtx -> Unit
 offTraceSink : Unit -> TraceSink
 probeGraphCtx : Unit -> GraphCtx

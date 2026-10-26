@@ -1,9 +1,11 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
-ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
-ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasVisibleTo : Int -> AliasDecl -> Bool
 anyArgMentions : List String -> List Ty -> Bool
 anyKRow : List Kind -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
+attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
+bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
 buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
@@ -69,18 +71,11 @@ classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option Kind
 constraintSlotDispatchVar : List String -> Constraint -> List String
 ctorExportsIndex : GraphCtx -> Unit -> Map String (List (String, String, Ident))
 declEnvDeclsOf : List DeclEnvModule -> List Decl
-declEnvDefinerIndex : Map String (List (String, (String, String))) -> Map String (List (String, List String)) -> List DeclEnvModule -> (Map String (List (String, (String, String))), Map String (List (String, List String)))
 declEnvDirectImports : Map String (List String) -> String -> List String
-declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
 declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
-declEnvModulesFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
-declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
-declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
-declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
-declEnvReachSeed : String -> Map String Unit
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
@@ -91,8 +86,9 @@ declMethodIdents : List Decl -> List (String, Ident)
 declMethodIdentsOf : Decl -> List (String, Ident)
 declParamKinds : GraphCtx -> List String -> List (Option KindAnn) -> List Kind
 declTopFnNames : List Decl -> List String
-definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
+depExportsStandalone : GraphCtx -> String -> String -> Bool
+depExportsUnknown : GraphCtx -> String -> Bool
 dispHeadTab : HeadKey -> TabKey
 dispatchTyparams : List String -> List String
 domainHasPatterns : Param -> Bool
@@ -105,7 +101,6 @@ emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String),
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envFor : ModuleCtx -> TcEnv
 envVarType : TcEnv -> String -> Option Mono
-exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
@@ -114,11 +109,10 @@ extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendTermBindings : TcEnv -> List (String, Scheme) -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
-firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 funClausePair : FunClause -> (List Pat, Expr)
 funDefs : List Decl -> List (String, (List Pat, Expr))
+graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
-groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 headBucketKey : Option HeadKey -> RegKey
 headTabEq : Option HeadKey -> Option TabKey -> Bool
@@ -161,6 +155,7 @@ ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
 ieRowAnswersMethod : GraphCtx -> ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
+ieRowIface : ImplRow -> IfaceRef
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInheritsDefault : GraphCtx -> ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
@@ -183,6 +178,7 @@ ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
 ieTyBlob : Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
+ifaceExportsIndex : GraphCtx -> Unit -> Map String (List (String, List String))
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodRowOf : Decl -> List (String, List String)
@@ -193,7 +189,6 @@ ifaceParamKindsDeclAll : GraphCtx -> List String -> List (Option KindAnn) -> Lis
 ifaceParamKindsFor : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> String -> List Kind
 ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
 ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
-ifaceSortKey : IfaceRef -> String
 ifaceTabKey : TyConOrigin -> String -> TabKey
 implAccFinish : ImplAcc -> ImplEnv
 implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
@@ -202,15 +197,18 @@ implKeyTc : String -> List Ty -> String
 implMethodNameTc : ImplMethod -> String
 implRowHasReqs : List Require -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String, Option Loc) -> List ImplRow
-importFormRows : UsePath -> List (String, a) -> List (String, a)
 importTableMid : UsePath -> String
 importedBindings : UsePath -> Option (List (String, String))
+importerEdgeIndex : List (String, List Decl) -> Map String (List String) -> Map String (List String)
+importerReachGo : Map String (List String) -> List (String, List Decl) -> Map String (Map String Unit) -> Map String (Map String Unit)
+importerReachIndex : List (String, List Decl) -> Map String (Map String Unit)
 insertUnivImpl : ImplUniverse -> (IfaceRef, List Ty, List Require) -> ImplUniverse
 insertUnivImplAt : TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 keyEntryIdx : KeyEntry -> Int
+keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
 kindAnnAtom : GraphCtx -> KindAnn -> Kind
 kindAnnSlots : GraphCtx -> KindAnn -> List Kind
@@ -232,7 +230,6 @@ lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
 lookupStandaloneVar : TcEnv -> String -> Option Scheme
 lookupVar : TcEnv -> String -> Option Scheme
 memberBinding : UseMember -> (String, String)
-memberSuffix : String -> String
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 methodArgs : Ty -> List Ty
 methodEnvBinding : MethodSchemeRow -> EnvBinding
@@ -258,7 +255,6 @@ methodRowsByIdentity : Bool -> List MethodSchemeRow -> Registry MethodSchemeRow 
 methodRowsInto : GraphCtx -> Int -> List Decl -> Map String (List MethodRow) -> Map String (List MethodRow)
 methodRowsOfIface : Int -> IfaceRef -> RegKey -> List String -> List (String, List Kind) -> List IfaceMethod -> Map String (List MethodRow) -> Map String (List MethodRow)
 methodSlotKey : IfaceRef -> String -> String
-modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 namesToSet : List String -> Map String Unit -> Map String Unit
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 nthKindList : Int -> List (List Kind) -> Option (List Kind)
@@ -268,15 +264,11 @@ ordOfIndex : String -> Map String Int -> Int
 ordinaryEnvBinding : Scheme -> EnvBinding
 ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : ModuleCtx -> String -> String
-ownMethodIdent : List Decl -> String -> Option Ident
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
-pubTopFnNames : List Decl -> List String
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
-publicStandaloneNames : List Decl -> List String
 rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
-reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
 reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)
@@ -284,19 +276,15 @@ reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List 
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
 removeAllS : List String -> List String -> List String
 requiredMethodNames : List IfaceMethod -> List String
-resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
-sortIfaceRefs : List IfaceRef -> List IfaceRef
-sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
-sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
+standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
+superLookup : GraphCtx -> IfaceRef -> Option (List String, List Super)
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tyTabKey : TyConOrigin -> String -> TabKey
 univReceiverTag : List Ty -> Option HeadKey
 useModuleId : Decl -> List String
-usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
-usePathBindsName : UsePath -> String -> Bool
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 variantNamed : String -> List Variant -> Bool

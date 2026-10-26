@@ -82,12 +82,11 @@ import driver.build_cmd.{
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
+  TcDiag(..),
   driveInputsFor,
   elaborateModules,
   elaborateModulesChainReport,
   elaborateModulesWithReport,
-  TcDiag(..),
-  tcDiagGoalKey,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult}
 import types.publish.{TcReport}
@@ -270,6 +269,7 @@ import tools.lint.{splitLintNames}
 import string.{toInt}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
+import types.tc_diag.{tcDiagGoalKey}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared

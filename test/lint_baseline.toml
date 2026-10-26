@@ -112,6 +112,11 @@ rule = "rule-clone-type"
 count = 2
 
 [[entry]]
+file = "compiler/types/tc_unify.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
 file = "compiler/types/typecheck.mdk"
 rule = "rule-clause-map"
 count = 2
@@ -124,7 +129,7 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 rule = "rule-stdlib-reimpl"
-count = 2
+count = 1
 
 [[entry]]
 file = "stdlib/http.mdk"

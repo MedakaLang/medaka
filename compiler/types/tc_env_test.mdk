@@ -25,18 +25,17 @@ import types.tc_env.{
   addCtor,
   buildClassEnvGo,
   buildImplEnvGo,
-  classEnvFinish,
-  emptyDeclEnvAcc,
-  implAccFinish,
   ceLookupAt,
   ceLookupGraph,
   ceRowIfaceName,
   ceRowOrd,
   ceRowsOwnedBy,
   ceRowsVisibleAt,
+  classEnvFinish,
   declEnvModule,
   declEnvVisibleAt,
   declEnvVisibleTo,
+  emptyDeclEnvAcc,
   envFor,
   extendLocalVar,
   extendTermBindings,
@@ -47,8 +46,8 @@ import types.tc_env.{
   ieRowsAll,
   ieRowsOwnedBy,
   ieRowsVisibleAt,
-  ifaceSortKey,
   ifaceTabKey,
+  implAccFinish,
   instRefMid,
   lastComponent,
   lookupCtor,
@@ -57,7 +56,6 @@ import types.tc_env.{
   lookupVar,
   ordOfIndex,
   removeAllS,
-  sortIfaceRefs,
   tyTabKey,
 }
 import types.tc_mono.{monoScheme, tconBuiltin}
@@ -314,17 +312,6 @@ test "a constructor is found by lookupVar and lookupCtor, and a variable of its 
     expectEqual "Bool" (schemeText (lookupVar hidden "Mk")),
     expectEqual "Int" (schemeText (lookupCtor hidden "Mk")),
     expectEqual "<none>" (schemeText (lookupCtor withCtor "Nope")),
-  ]
-
-test "sortIfaceRefs orders by identity then name whatever the input order" =
-  let a = IfaceRef { irName = "Alpha", irOrigin = OriginModule "amod" }
-  let b = IfaceRef { irName = "Alpha", irOrigin = OriginModule "zmod" }
-  let c = IfaceRef { irName = "Beta", irOrigin = OriginModule "amod" }
-  let keys = refs => map ifaceSortKey (sortIfaceRefs refs)
-  expectAll [
-    expectEqual (keys [a, b, c]) (keys [c, b, a]),
-    expectEqual (keys [a, b, c]) (keys [b, a, c]),
-    expectEqual 3 (length (keys [a, b, c])),
   ]
 
 test "lastComponent is the final element of a module path" = expectAll [

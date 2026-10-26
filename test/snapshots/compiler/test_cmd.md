@@ -86,12 +86,11 @@ import driver.build_cmd.{
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
+  TcDiag(..),
   driveInputsFor,
   elaborateModules,
   elaborateModulesChainReport,
   elaborateModulesWithReport,
-  TcDiag(..),
-  tcDiagGoalKey,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult}
 import types.publish.{TcReport}
@@ -274,6 +273,7 @@ import tools.lint.{splitLintNames}
 import string.{toInt}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
+import types.tc_diag.{tcDiagGoalKey}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -4932,7 +4932,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "FileVerdict" false) (mem "SideFile" true) (mem "PreludeInputs" true) (mem "staleLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "elaborateModulesWithReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false) (mem "ElabResult" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -4968,6 +4968,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "tcDiagGoalKey" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -5609,7 +5610,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "FileVerdict" false) (mem "SideFile" true) (mem "PreludeInputs" true) (mem "staleLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "elaborateModulesWithReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false) (mem "ElabResult" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -5645,6 +5646,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
+(DUse false (UseGroup ("types" "tc_diag") ((mem "tcDiagGoalKey" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))

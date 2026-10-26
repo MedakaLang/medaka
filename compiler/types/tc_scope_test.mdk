@@ -1,0 +1,435 @@
+-- Tests of `types.tc_scope`'s own API: the method-scope ladder (own, imported-by-method,
+-- imported-by-interface, prelude, alias) read through the `ModuleCtx` readers, the admission
+-- predicate (`resolveMemberRows`, `importFormRows`, and `usePathAdmitsDecl` through the two
+-- rungs that differ in its `wide` flag), the alias-qualified supply and its ambiguity, and
+-- the ctor scope override.  Each ladder test mints a small graph of modules from source: the
+-- LAST module of the list is the reader, the others are what it may import.  The graphs are
+-- built with the envelope's own builders, so each test needs a minted `ModuleCtx` and none
+-- is a doctest.
+
+import list.{last}
+import test.{
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectTrue,
+}
+import frontend.ast.{
+  Decl(..),
+  Ident(..),
+  Loc(..),
+  TyConOrigin(..),
+  UseMember(..),
+  UsePath(..),
+  Ns(..),
+  ifaceIdentity,
+  mkIdent,
+}
+import frontend.parser.{parse}
+import support.ordmap.{omEmpty, omInsert, omLookup}
+import types.publish.{tcCode}
+import types.repr.{IfaceRef(..), ppScheme}
+import types.registry.{spEmpty}
+import types.tc_env.{addCtor, declEnvModule, envFor, lookupCtor, methodEnvGo}
+import types.tc_mono.{monoScheme, tconUnresolved}
+import types.tc_scope.{
+  aliasMethodSpellings,
+  aliasQualifiedMethodEntries,
+  applyCtorScopeOverrides,
+  ifaceSortKey,
+  importFormRows,
+  insertCtorPop,
+  memberAliasCands,
+  memberBindsCtorName,
+  methodAdmissionHere,
+  methodAdmittedHere,
+  methodIfaceHere,
+  methodNameDeclaredAt,
+  methodVisibleHere,
+  resolveMemberRows,
+  sortIfaceRefs,
+}
+import types.tc_state.{
+  blankModuleCtx,
+  probeGraphCtx,
+  wAll,
+}
+import types.tc_types.{
+  DeclEnvModule,
+  DeclEnvs(..),
+  GraphCtx,
+  MethodRow(..),
+  ModuleCtx(..),
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- Every interface declaration of [src] stamped as declared in module [mid].
+stampIfaces : String -> List Decl -> List Decl
+stampIfaces mid ds = map (stampIface mid) ds
+
+stampIface : String -> Decl -> Decl
+stampIface mid (d@(DInterface { ifaceOrigin = _ })) =
+  DInterface { d | ifaceOrigin = OriginModule mid }
+stampIface _ d = d
+
+-- One module of a test graph: its ordinal, its id and its source.
+data Mod = Mod Int String String
+
+modDecls : Mod -> List Decl
+modDecls (Mod _ mid src) = stampIfaces mid (parse src)
+
+-- A reader's context over [mods] (the last one is the reader, at its own ordinal): the
+-- graph's method environment is built dependency-first, and the reader's own declarations
+-- and ordinal are installed the way `checkBodyImpl` installs them.
+readerOf : List Mod -> ModuleCtx
+readerOf mods =
+  let g = probeGraphCtx ()
+  let rows = map (m => rowOf g m) mods
+  let empty = g.declEnvsRef.value
+  g.declEnvsRef := { empty |
+    deMethods = methodEnvGo g rows empty.deMethods,
+  }
+  match last mods
+    Some reader => readerIn g reader
+    None => panic "readerOf: no modules"
+
+rowOf : GraphCtx -> Mod -> DeclEnvModule
+rowOf g (m@(Mod ord mid _)) = declEnvModule g ord mid (modDecls m)
+
+readerIn : GraphCtx -> Mod -> ModuleCtx
+readerIn g (m@(Mod ord mid _)) =
+  let mctx = blankModuleCtx g mid
+  mctx.mcCells.methodScopeCtxRef := Some (modDecls m, ord)
+  mctx
+
+-- The admitted set of [n], as identity strings.
+admitted : ModuleCtx -> String -> List String
+admitted m n = map identityOf (methodAdmittedHere m n)
+
+-- The module id an interface was declared in.
+identityOf : IfaceRef -> String
+identityOf ir = ifaceIdentity ir.irOrigin ir.irName
+
+originOf : Option IfaceRef -> Option String
+originOf o = map identityOf o
+
+ifaceSrc : String -> String
+ifaceSrc name = "interface \{name} a where\n  mth : a -> Int\n"
+
+-- Two modules each declaring `mth` in a differently named interface.
+twoIfaces : List Mod
+twoIfaces = [
+  Mod 1 "ma" (ifaceSrc "IA"),
+  Mod 2 "mb" (ifaceSrc "IB"),
+]
+
+-- The reader of `twoIfaces` with source [src] at ordinal 3.
+readTwo : String -> ModuleCtx
+readTwo src = readerOf (twoIfaces ++ [Mod 3 "user" src])
+
+dummyLoc : Loc
+dummyLoc = Loc "probe.mdk" 1 1 1 9
+
+-- ── sorting ───────────────────────────────────────────────────────────────
+
+test "sortIfaceRefs orders by identity then name whatever the input order" =
+  let a = IfaceRef { irName = "Alpha", irOrigin = OriginModule "amod" }
+  let b = IfaceRef { irName = "Alpha", irOrigin = OriginModule "zmod" }
+  let c = IfaceRef { irName = "Beta", irOrigin = OriginModule "amod" }
+  let keys = refs => map ifaceSortKey (sortIfaceRefs refs)
+  expectAll [
+    expectEqual (keys [a, b, c]) (keys [c, b, a]),
+    expectEqual (keys [a, b, c]) (keys [b, a, c]),
+    expectEqual 3 (length (keys [a, b, c])),
+  ]
+
+test "sortIfaceRefs keeps two refs of one sort key, so equal keys never merge declarations" =
+  let a = IfaceRef { irName = "Same", irOrigin = OriginModule "m" }
+  expectEqual 2 (length (sortIfaceRefs [a, a]))
+
+-- ── the admission predicate ───────────────────────────────────────────────
+
+test "resolveMemberRows finds a member by its origin name and binds it under its local name" =
+  let rows = [("get", 1), ("put", 2)]
+  expectAll [
+    expectEqual [("fetch", 1)] (resolveMemberRows ("get", "fetch") rows),
+    expectEqual [("get", 1)] (resolveMemberRows ("get", "get") rows),
+    expectEqual [] (resolveMemberRows ("missing", "missing") rows),
+  ]
+
+test "resolveMemberRows falls back to the mangled suffix key and keeps the mangled key" =
+  let rows = [("dep__get", 1), ("dep__put", 2)]
+  expectAll [
+    expectEqual [("dep__get", 1)] (resolveMemberRows ("get", "fetch") rows),
+    expectEqual [] (resolveMemberRows ("et", "et") rows),
+  ]
+
+test "importFormRows admits every row for a wildcard, the named rows for a member list, none for an alias" =
+  let rows = [("get", 1), ("put", 2), ("size", 3)]
+  let named =
+    UseGroup
+      ["m"]
+      [
+        UseMember "put" False dummyLoc None,
+        UseMember "size" False dummyLoc (Some "n"),
+      ]
+  expectAll [
+    expectEqual rows (importFormRows (UseWild ["m"]) rows),
+    expectEqual [("put", 2), ("n", 3)] (importFormRows named rows),
+    expectEqual [] (importFormRows (UseAlias ["m"] "A") rows),
+  ]
+
+test "a constructor name is bound by the member that names it or by its type's constructor list" = expectAll
+  [
+    expectTrue
+      (memberBindsCtorName "Mk" "T" (UseMember "Mk" False dummyLoc None)),
+    expectTrue
+      (memberBindsCtorName "Mk" "T" (UseMember "T" True dummyLoc None)),
+    expectFalse
+      (memberBindsCtorName "Mk" "T" (UseMember "T" False dummyLoc None)),
+    expectFalse
+      (memberBindsCtorName "Mk" "T" (UseMember "U" True dummyLoc None)),
+  ]
+
+-- ── the method-scope ladder ───────────────────────────────────────────────
+
+test "a declaration is visible from its own ordinal onward and not before" =
+  let m = readTwo ""
+  let env = m.mcGraph.declEnvsRef.value.deMethods
+  expectAll [
+    expectFalse (methodNameDeclaredAt 0 env "mth"),
+    expectTrue (methodNameDeclaredAt 1 env "mth"),
+    expectTrue (methodNameDeclaredAt 3 env "mth"),
+    expectFalse (methodNameDeclaredAt 3 env "other"),
+  ]
+
+test "the visible declarations of a spelling are the ordinal prefix, in ordinal order" =
+  let m = readTwo ""
+  let at =
+    cur =>
+      map
+        (r => identityOf (iface r.mrEntry))
+        (methodVisibleHere (withOrd m cur) "mth")
+  expectAll [
+    expectEqual [] (at 0),
+    expectEqual ["ma::IA"] (at 1),
+    expectEqual ["ma::IA", "mb::IB"] (at 3),
+  ]
+
+withOrd : ModuleCtx -> Int -> ModuleCtx
+withOrd m ord =
+  m.mcCells.methodScopeCtxRef := Some ([], ord)
+  m
+
+test "a single visible declaration decides without any import" =
+  let m = readerOf [Mod 1 "ma" (ifaceSrc "IA"), Mod 2 "user" ""]
+  expectAll [
+    expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth")),
+    expectEqual [] (admitted m "mth"),
+  ]
+
+test "a spelling no module declares has no declaration" =
+  let m = readTwo ""
+  expectAll [
+    expectEqual None (originOf (methodIfaceHere m "nothing")),
+    expectEqual [] (admitted m "nothing"),
+    expectTrue (isNone (methodAdmissionHere m "nothing")),
+  ]
+
+test "the reader's own interface beats an imported one" =
+  let m =
+    readerOf
+      (twoIfaces
+        ++ [
+          Mod
+            3
+            "user"
+            "import ma.{mth}\ninterface IU a where\n  mth : a -> Int\n",
+        ])
+  expectEqual (Some "user::IU") (originOf (methodIfaceHere m "mth"))
+
+test "rung 1: a use-path that names the method decides" = expectAll [
+  expectEqual
+    (Some "mb::IB")
+    (originOf (methodIfaceHere (readTwo "import mb.{mth}\n") "mth")),
+  expectEqual
+    (Some "ma::IA")
+    (originOf (methodIfaceHere (readTwo "import ma.{mth}\n") "mth")),
+]
+
+test "rung 2: a use-path that names only the interface decides when no path names the method" = expectAll
+  [
+    expectEqual
+      (Some "mb::IB")
+      (originOf (methodIfaceHere (readTwo "import mb.{IB}\n") "mth")),
+    expectEqual
+      (Some "ma::IA")
+      (originOf (methodIfaceHere (readTwo "import ma.{IA}\n") "mth")),
+  ]
+
+test "rung 1 outranks rung 2 when both witness a declaration" =
+  let m = readTwo "import ma.{mth}\nimport mb.{IB}\n"
+  expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth"))
+
+test "a path that names neither the method nor an interface of it admits nothing" =
+  let m = readTwo "import mb.{other}\n"
+  expectAll [
+    expectEqual None (originOf (methodIfaceHere m "mth")),
+    expectEqual [] (admitted m "mth"),
+  ]
+
+test "two wildcard imports admit both declarations: no single winner, the set sorted" =
+  let m = readTwo "import ma.*\nimport mb.*\n"
+  let swapped = readTwo "import mb.*\nimport ma.*\n"
+  expectAll [
+    expectEqual None (originOf (methodIfaceHere m "mth")),
+    expectEqual ["ma::IA", "mb::IB"] (admitted m "mth"),
+    expectEqual (admitted m "mth") (admitted swapped "mth"),
+    expectEqual (Some []) (map (map ifaceSortKey) (methodAdmissionHere m "mth")),
+  ]
+
+test "a same-named interface in another module is refused by identity, not by spelling" =
+  let m = readerOf [
+    Mod 1 "ma" (ifaceSrc "Same"),
+    Mod 2 "mb" (ifaceSrc "Same"),
+    Mod 3 "user" "import mb.{mth}\n",
+  ]
+  expectEqual (Some "mb::Same") (originOf (methodIfaceHere m "mth"))
+
+test "the prelude's declaration answers when no import names a declaration" =
+  let m = readerOf [
+    Mod 0 "core" (ifaceSrc "Core"),
+    Mod 1 "ma" (ifaceSrc "IA"),
+    Mod 2 "user" "",
+  ]
+  expectEqual (Some "core::Core") (originOf (methodIfaceHere m "mth"))
+
+test "an import that names the method outranks the prelude's declaration" =
+  let m = readerOf [
+    Mod 0 "core" (ifaceSrc "Core"),
+    Mod 1 "ma" (ifaceSrc "IA"),
+    Mod 2 "user" "import ma.{mth}\n",
+  ]
+  expectEqual (Some "ma::IA") (originOf (methodIfaceHere m "mth"))
+
+test "a module alias is the last rung: it decides only when nothing else does" = expectAll
+  [
+    expectEqual
+      (Some "ma::IA")
+      (originOf (methodIfaceHere (readTwo "import ma as A\n") "mth")),
+    expectEqual
+      (Some "mb::IB")
+      (originOf
+        (methodIfaceHere (readTwo "import ma as A\nimport mb.{mth}\n") "mth")),
+  ]
+
+-- ── the alias-qualified supply ────────────────────────────────────────────
+
+aliasTable : ModuleCtx -> List Decl -> List (Option String)
+aliasTable m prog =
+  let tab = aliasQualifiedMethodEntries m prog omEmpty
+  map (k => originOf (map (e => iface e) (omLookup k tab))) ["A.mth", "B.mth"]
+
+iface : (IfaceRef, a, b, c) -> IfaceRef
+iface (i, _, _, _) = i
+
+readerProg : ModuleCtx -> List Decl
+readerProg m = match m.mcCells.methodScopeCtxRef.value
+  Some (prog, _) => prog
+  None => []
+
+test "an alias-qualified method spelling resolves to the aliased module's declaration" =
+  let m = readTwo "import ma as A\nimport mb as B\n"
+  expectEqual [Some "ma::IA", Some "mb::IB"] (aliasTable m (readerProg m))
+
+test "two modules aliased under one name give no entry and one ambiguity, in either import order" =
+  let ab = readTwo "import ma as A\nimport mb as A\n"
+  let ba = readTwo "import mb as A\nimport ma as A\n"
+  let codes = m => map tcCode (wAll m.mcCells.typeErrors)
+  let rowsAb = aliasTable ab (readerProg ab)
+  let rowsBa = aliasTable ba (readerProg ba)
+  expectAll [
+    expectEqual [None, None] rowsAb,
+    expectEqual rowsAb rowsBa,
+    expectEqual ["T-AMBIGUOUS-ALIAS-METHOD"] (codes ab),
+    expectEqual (codes ab) (codes ba),
+  ]
+
+test "aliasMethodSpellings lists the local spelling and the origin name of each alias row" =
+  let m = readTwo "import ma as A\nimport mb.{mth as loc}\n"
+  expectEqual
+    [("A.mth", "mth"), ("loc", "mth")]
+    (aliasMethodSpellings m.mcGraph (readerProg m))
+
+test "a member alias is dropped when the module declares the local name itself" =
+  let m = readTwo "import mb.{mth as loc}\nloc = 1\n"
+  let kept = readTwo "import mb.{mth as loc}\n"
+  expectAll [
+    expectEqual [] (map aliasKey (memberAliasCands m.mcGraph (readerProg m))),
+    expectEqual
+      ["loc"]
+      (map aliasKey (memberAliasCands kept.mcGraph (readerProg kept))),
+  ]
+
+aliasKey : (String, String, String, a, Loc) -> String
+aliasKey (k, _, _, _, _) = k
+
+-- ── the constructor scope override ────────────────────────────────────────
+
+-- `export data <ty> = Mk` declared in module [mid].
+ctorDecls : String -> String -> List Decl
+ctorDecls mid ty = map (stampData mid) (parse "export data \{ty} = Mk")
+
+stampData : String -> Decl -> Decl
+stampData mid (d@(DData { dataOrigin = _ })) =
+  DData { d | dataOrigin = OriginModule mid }
+stampData _ d = d
+
+ctorRow : String -> String -> List (String, String, Ident)
+ctorRow mid ty = match mkIdent NsCtor (OriginModule mid) "Mk"
+  Some i => [("Mk", ty, i)]
+  None => []
+
+-- The scheme `Mk` carries after the override for a reader whose source is [src], in a graph
+-- where module `ma` declares `Mk` of type `T` and module `mb` declares `Mk` of type `U`.
+-- The environment's own `Mk` is the type `Base`, so a left-alone entry reads `Base`.
+ctorAfter : String -> String
+ctorAfter src =
+  let g = probeGraphCtx ()
+  let empty = g.declEnvsRef.value
+  let exports =
+    omInsert "ma" (ctorRow "ma" "T") (omInsert "mb" (ctorRow "mb" "U") omEmpty)
+  g.declEnvsRef :=
+    { empty | deData = { empty.deData | deCtorExports = exports } }
+  let env0 = envFor (blankModuleCtx g "user")
+  let withT = addCtor env0 "Mk" (monoScheme (tconUnresolved "T"))
+  let withU = addCtor env0 "Mk" (monoScheme (tconUnresolved "U"))
+  let pop =
+    insertCtorPop
+      withU
+      (ctorDecls "mb" "U")
+      (insertCtorPop withT (ctorDecls "ma" "T") spEmpty)
+  g.crossRun.universeCtorPop := pop
+  let env = addCtor env0 "Mk" (monoScheme (tconUnresolved "Base"))
+  let prog = parse src
+  match lookupCtor (applyCtorScopeOverrides prog env) "Mk"
+    Some s => ppScheme s
+    None => "<none>"
+
+test "a constructor an import names replaces the environment's entry for that spelling" = expectAll
+  [
+    expectEqual "U" (ctorAfter "import mb.{Mk}\n"),
+    expectEqual "T" (ctorAfter "import ma.{Mk}\n"),
+    expectEqual "U" (ctorAfter "import mb.{U(..)}\n"),
+  ]
+
+test "a constructor the reader declares itself is left to the environment" =
+  expectEqual "Base" (ctorAfter "import mb.{Mk}\ndata V = Mk\n")
+
+test "two imports that both witness a constructor leave the environment's entry" = expectAll
+  [
+    expectEqual "Base" (ctorAfter "import ma.*\nimport mb.*\n"),
+    expectEqual "Base" (ctorAfter ""),
+    expectEqual "Base" (ctorAfter "import mb.{other}\n"),
+  ]

@@ -38,16 +38,18 @@ import types.tc_state.{probeGraphCtx}
 
 -- The model: a constructor leaf, a numbered variable leaf, an application, an arrow.
 -- A term with no `MVar` is closed.
-data MTy =
+public export data MTy =
   | MCon String
   | MVar Int
   | MApp MTy MTy
   | MFun MTy MTy
   deriving (Eq, Debug)
 
+export
 conNames : List String
 conNames = ["Int", "Bool", "List", "Pair"]
 
+export
 genLeaf : Unit -> <Rand> MTy
 genLeaf () =
   let k = randomInt 0 7
@@ -56,6 +58,7 @@ genLeaf () =
   else
     MVar (k - 4)
 
+export
 genMTy : Int -> <Rand> MTy
 genMTy depth
   | depth <= 0 = genLeaf ()
@@ -73,8 +76,9 @@ impl Arbitrary MTy where
 
 -- A closed model type: constructor leaves only, so no precondition filter is needed
 -- where a law requires closed ranges or closed targets.
-data Closed = Closed MTy deriving (Eq, Debug)
+public export data Closed = Closed MTy deriving (Eq, Debug)
 
+export
 genClosed : Int -> <Rand> MTy
 genClosed depth
   | depth <= 0 =
@@ -84,6 +88,7 @@ genClosed depth
     1 => MApp (genClosed (depth - 1)) (genClosed (depth - 1))
     _ => MFun (genClosed (depth - 1)) (genClosed (depth - 1))
 
+export
 closedTy : Closed -> MTy
 closedTy (Closed t) = t
 
@@ -93,12 +98,14 @@ impl Arbitrary Closed where
   shrink (Closed (MFun a b)) = [Closed a, Closed b]
   shrink _ = []
 
+export
 varsOf : MTy -> List Int
 varsOf (MCon _) = []
 varsOf (MVar k) = [k]
 varsOf (MApp a b) = varsOf a ++ varsOf b
 varsOf (MFun a b) = varsOf a ++ varsOf b
 
+export
 isClosed : MTy -> Bool
 isClosed t = varsOf t == []
 
@@ -200,16 +207,14 @@ prop "substitutions with disjoint domains and closed ranges compose in either or
 -- Law: a pattern abstracted from a closed term unifies with the term, and applying the
 -- recorded bindings to the pattern gives the term back.  Precondition: the target is
 -- closed.
-prop "matching a pattern against its closed target and applying the bindings gives the target" (t : MTy) =
-  if isClosed t then
-    let (_, pat) = abstractLeaves 0 t
-    let patMono = toMono pat
-    let target = toMono t
-    let bindings = Ref []
-    cohOverlapGo bindings [(patMono, target)]
-      && cohEqMono (cohApply bindings patMono) target
-  else
-    True
+prop "matching a pattern against its closed target and applying the bindings gives the target" (c : Closed) =
+  let t = closedTy c
+  let (_, pat) = abstractLeaves 0 t
+  let patMono = toMono pat
+  let target = toMono t
+  let bindings = Ref []
+  cohOverlapGo bindings [(patMono, target)]
+    && cohEqMono (cohApply bindings patMono) target
 
 -- Law: for two closed types, overlap is structural equality (rows are not compared).
 -- `same` makes the second type a copy of the first about half the time, since two
