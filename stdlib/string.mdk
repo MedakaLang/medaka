@@ -812,3 +812,54 @@ center n c s =
   else
     let k = n - stringLength s
     repeat (k / 2) (charToStr c) ++ s ++ repeat (k - k / 2) (charToStr c)
+
+-- # Cursors
+
+{- | A position in a string, on a codepoint boundary.
+
+   Walk a string with `nextChar` and cut pieces out with `sliceBetween`.
+   The position is a UTF-8 byte offset, so a step costs the width of one
+   character however long the string is. A cursor can only come from
+   `startCursor` and `nextChar`, never from a number. -}
+export data StrCursor = StrCursor String Int
+
+-- | A cursor at the start of the string.
+export
+startCursor : String -> StrCursor
+startCursor s = StrCursor s 0
+
+{- | The character at the cursor and the cursor after it, or `None` at the
+   end of the string.
+
+   > nextChar (startCursor "")
+   None -}
+export
+nextChar : StrCursor -> Option (Char, StrCursor)
+nextChar (StrCursor s off) =
+  if off >= stringByteLength s then
+    None
+  else
+    let (c, w) = codepointAt s off
+    Some (c, StrCursor s (off + w))
+
+-- The codepoint at byte offset `off` and its width in bytes; `off` must lie
+-- inside the string. The extern packs both as `codepoint * 8 + width`.
+codepointAt : String -> Int -> (Char, Int)
+codepointAt s off =
+  let packed = stringCodepointAtByte s off
+  let cp = packed / 8
+  match charFromCode cp
+    Some c => (c, packed - cp * 8)
+    None => panic "string.nextChar: the string holds a non-scalar codepoint"
+
+{- | The text between two cursors, from the first up to the second.
+
+   Both cursors must come from the same string. Cursors from different
+   strings that happen to bound a valid range of this one give that slice;
+   otherwise this panics, and the result is never an invalid string.
+
+   > sliceBetween (startCursor "héllo") (startCursor "héllo")
+   "" -}
+export
+sliceBetween : StrCursor -> StrCursor -> String
+sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s

@@ -110,6 +110,7 @@ arrayMakeWith	PENDING	#476 negative / zero length is the edge
 arrayBlit	PENDING	#476 out-of-range src/dst offsets and length
 bytesToFloat64	PENDING	#476 out-of-range byte offset into the Array Int
 stringSlice	PENDING	#476 out-of-range / inverted start/end indices
+stringSliceBytes	PENDING	#4490 out-of-range / inverted / mid-codepoint byte offsets panic (native, eval) or trap (wasm)
 stringFromUtf8Bytes	PENDING	#476 invalid / truncated UTF-8 byte sequences
 byteBlockMake	PENDING	#476 negative length is the edge; now internal-extern-only (internalExterns, compiler/frontend/resolve.mdk) — reachable only via stdlib or --allow-internal
 byteBlockGetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
@@ -178,6 +179,7 @@ hashString	TOTAL	total over String (incl. "")
 # String ops with a total domain.
 stringLength	TOTAL	total: length of any String
 stringByteLength	TOTAL	total: UTF-8 byte count of any String
+stringCodepointAtByte	TOTAL	total: packed codepoint * 8 + width at a byte offset, 0 outside the string
 stringConcat	TOTAL	total: concatenation of any list of Strings
 stringCompare	TOTAL	total three-way compare of any two Strings
 stringIndexOf	TOTAL	total: Option Int, None when the needle is absent

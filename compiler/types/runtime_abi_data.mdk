@@ -1948,6 +1948,26 @@ runtimeAbiRows = [
     },
   ),
   (
+    "stringCodepointAtByte",
+    CallableShape {
+      writtenValueArity = 2,
+      loweredCoreArity = 2,
+      parameterHeads = ["String", "Int"],
+      resultHead = "Int",
+      canonicalSignature = "v1:String -> Int -> Int",
+    },
+  ),
+  (
+    "stringSliceBytes",
+    CallableShape {
+      writtenValueArity = 3,
+      loweredCoreArity = 3,
+      parameterHeads = ["Int", "Int", "String"],
+      resultHead = "String",
+      canonicalSignature = "v1:Int -> Int -> String -> String",
+    },
+  ),
+  (
     "stringConcat",
     CallableShape {
       writtenValueArity = 1,

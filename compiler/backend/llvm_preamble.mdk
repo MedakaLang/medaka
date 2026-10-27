@@ -121,6 +121,8 @@ preambleLines = [
   "declare double @mdk_atan2(double, double)",
   "declare double @mdk_hypot(double, double)",
   "declare i64 @mdk_string_slice(i64, i64, i64)",
+  "declare i64 @mdk_string_codepoint_at_byte(i64, i64)",
+  "declare i64 @mdk_string_slice_bytes(i64, i64, i64)",
   "declare i64 @mdk_char_is_alpha(i64)",
   "declare i64 @mdk_char_is_space(i64)",
   "declare i64 @mdk_char_is_upper(i64)",
