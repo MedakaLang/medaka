@@ -1,0 +1,217 @@
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic(..), ParseDiagnosticKind(..), ParseEdit(..),
+  EditApplicability(..), UnicodeProblem(..), diagnosticCode, diagnosticLoc,
+  diagnosticEdits, diagnosticHelp, renderParseDiagnostic, locateParseProblem
+}
+import frontend.parser.{
+  parseResult, parseLocatedResult, parseResultPairs, parseErrorDiagnostic
+}
+import frontend.lexer.{tokenizeWithOffsetPairs}
+import support.source_index.{indexSource, sourcePositionToOffset}
+import test.{Expectation, expectEqual, expectEach, expectAll, fail}
+
+spanText : Loc -> (Int, Int, Int, Int)
+spanText (Loc _ sl sc el ec) = (sl, sc, el, ec)
+
+editText : ParseEdit -> ((Int, Int, Int, Int), String, String, Bool)
+editText (ParseEdit loc old new applicability) =
+  (spanText loc, old, new, applicability == MachineApplicable)
+
+problem : ParseDiagnosticKind -> ParseDiagnostic
+problem kind = locateParseProblem (indexSource "bad") 0 3 kind
+
+test "the established frontend code roster is assigned by kinds" =
+  expectEach
+    (map
+      ((kind, code) => (code, expectEqual code (diagnosticCode (problem kind))))
+      [
+        (UnterminatedString, "L-UNTERMINATED-STRING"),
+        (UnterminatedComment, "L-UNTERMINATED-COMMENT"),
+        (UnterminatedChar, "L-BAD-CHAR-LITERAL"),
+        (InvalidEscape "\\v" False, "L-BAD-ESCAPE"),
+        (BadUnicodeEscape UnicodeEmpty, "L-BAD-UNICODE-ESCAPE"),
+        (BareUnicodeEscape "\\u0041" "\\u{0041}", "L-BARE-UNICODE-ESCAPE"),
+        (HsLambda, "L-HS-LAMBDA"),
+        (HsDollar, "L-HS-DOLLAR"),
+        (UnexpectedCharacter "?", "L-BAD-CHAR"),
+        (IntegerOverflow, "L-INT-OVERFLOW"),
+        (FloatOverflow, "L-FLOAT-OVERFLOW"),
+        (MalformedRadix "0x_FF" "0x" "FF", "L-MALFORMED-RADIX"),
+        (MalformedFloat "5." "5.0" False, "L-MALFORMED-FLOAT"),
+        (UnexpectedEnd, "P-UNEXPECTED-EOF"),
+        (BadNeq, "P-BAD-NEQ"),
+        (HsCase, "P-HS-CASE"),
+        (MatchWith, "P-OCAML-MATCH-WITH"),
+        (NoPow, "P-NO-POW-OPERATOR"),
+        (HsSignature, "P-HS-SIG"),
+        (BlockComment, "L-BLOCKCOMMENT"),
+        (BraceBlock, "P-BRACE-BLOCK"),
+        (ForeignKeyword "for", "P-FOR-WHILE"),
+        (ForeignKeyword "def", "P-DEF-KEYWORD"),
+        (Semicolon, "L-SEMICOLON"),
+        (MissingWhere "impl", "P-MISSING-WHERE"),
+        (WhereSameLine "interface", "P-WHERE-BODY-SAME-LINE"),
+        (BlockEndsBinding "do", "P-DO-ENDS-IN-BINDING"),
+        (MatchGuardBar, "P-GUARD-BAR-IN-MATCH"),
+        (EquationGuardIf, "P-GUARD-IF-IN-EQUATION"),
+        (ReservedKeyword "type", "P-RESERVED-KEYWORD"),
+        (GenericParse "expected an expression", "P-PARSE"),
+      ])
+
+test "generic wording cannot impersonate a specialized diagnostic or edit" =
+  let diagnostic = problem (GenericParse "unexpected `!=`; did you mean `/=`?")
+  expectAll [
+    expectEqual "P-PARSE" (diagnosticCode diagnostic),
+    expectEqual [] (map editText (diagnosticEdits diagnostic)),
+    expectEqual None (diagnosticHelp diagnostic),
+  ]
+
+test "differently worded typed cases retain the same code and edit rule" =
+  expectEach
+    (map
+      ((old, new) =>
+        let diagnostic =
+          locateParseProblem
+            (indexSource old)
+            0
+            (stringLength old)
+            (BareUnicodeEscape old new)
+        (
+          old,
+          expectAll [
+            expectEqual "L-BARE-UNICODE-ESCAPE" (diagnosticCode diagnostic),
+            expectEqual
+              [((1, 0, 1, 6), old, new, True)]
+              (map editText (diagnosticEdits diagnostic)),
+            expectEqual
+              ("bare unicode escape `"
+                ++ old
+                ++ "` is not valid; did you mean `"
+                ++ new
+                ++ "`?")
+              (renderParseDiagnostic diagnostic),
+          ],
+        ))
+      [("\\u0041", "\\u{0041}"), ("\\u0062", "\\u{0062}")])
+
+expectSource : String ->
+  String ->
+  (Int, Int, Int, Int) ->
+  List (String, String) ->
+  Expectation
+expectSource source code span edits =
+  let check result = match result
+    Ok _ => fail ("unexpected acceptance of " ++ source)
+    Err error =>
+      let diagnostic = parseErrorDiagnostic error
+      expectAll [
+        expectEqual code (diagnosticCode diagnostic),
+        expectEqual span (spanText (diagnosticLoc diagnostic)),
+        expectEqual
+          (map ((old, new) => (span, old, new, True)) edits)
+          (map editText (diagnosticEdits diagnostic)),
+      ]
+  let (tokens, pairs) = tokenizeWithOffsetPairs source
+  expectAll [
+    check (parseResult source),
+    check (parseLocatedResult source),
+    check (parseResultPairs source tokens pairs),
+  ]
+
+test "malformed radix and Unicode spans preserve the written codepoints" = expectEach
+  [
+    (
+      "radix",
+      expectSource
+        "x = 0x_FF"
+        "L-MALFORMED-RADIX"
+        (1, 4, 1, 9)
+        [("0x_FF", "0xFF")],
+    ),
+    (
+      "radix without digits",
+      expectSource "x = 0x_" "L-MALFORMED-RADIX" (1, 4, 1, 7) [],
+    ),
+    (
+      "bare unicode after emoji",
+      expectSource
+        "x = \"😀\\u0041\""
+        "L-BARE-UNICODE-ESCAPE"
+        (1, 6, 1, 12)
+        [("\\u0041", "\\u{0041}")],
+    ),
+    (
+      "surrogate",
+      expectSource "x = \"😀\\u{D800}\"" "L-BAD-UNICODE-ESCAPE" (1, 6, 1, 14) [],
+    ),
+    (
+      "unicode separator",
+      expectSource "x = \"😀\\u{4_1}\"" "L-BAD-UNICODE-ESCAPE" (1, 6, 1, 13) [],
+    ),
+    (
+      "invalid string escape",
+      expectSource "x = \"😀\\v\"" "L-BAD-ESCAPE" (1, 6, 1, 8) [],
+    ),
+    (
+      "invalid char escape",
+      expectSource "x = '\\v'" "L-BAD-ESCAPE" (1, 5, 1, 7) [],
+    ),
+    (
+      "leading float",
+      expectSource "x = .5" "L-MALFORMED-FLOAT" (1, 4, 1, 6) [(".5", "0.5")],
+    ),
+    (
+      "trailing float",
+      expectSource "x = 5." "L-MALFORMED-FLOAT" (1, 4, 1, 6) [("5.", "5.0")],
+    ),
+  ]
+
+test "safe parser edits cover only the offending token after Unicode" = expectEach
+  [
+    (
+      "inequality",
+      expectSource "x = \"😀\" != \"a\"" "P-BAD-NEQ" (1, 8, 1, 10) [("!=", "/=")],
+    ),
+    (
+      "signature",
+      expectSource "f :: Int" "P-HS-SIG" (1, 2, 1, 4) [("::", ":")],
+    ),
+    (
+      "keyword",
+      expectSource
+        "f type = 1"
+        "P-RESERVED-KEYWORD"
+        (1, 2, 1, 6)
+        [("type", "type_")],
+    ),
+    ("semicolon", expectSource "x = 1;" "L-SEMICOLON" (1, 5, 1, 6) []),
+    (
+      "multi-step case rewrite",
+      expectSource "x = case y of" "P-HS-CASE" (1, 4, 1, 8) [],
+    ),
+  ]
+
+test "committed and recoverable failures retain their diagnostic identity" = expectEach
+  [
+    (
+      "committed guard",
+      expectSource
+        """
+f x
+  if true = x
+"""
+        "P-GUARD-IF-IN-EQUATION"
+        (2, 2, 2, 4)
+        [("if", "|")],
+    ),
+    (
+      "committed reserved name",
+      expectSource
+        "f = match 1\n  type => 1"
+        "P-RESERVED-KEYWORD"
+        (2, 2, 2, 6)
+        [("type", "type_")],
+    ),
+    ("recoverable", expectSource "f x = = 1" "P-PARSE" (1, 6, 1, 7) []),
+  ]

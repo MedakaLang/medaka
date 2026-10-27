@@ -23,6 +23,9 @@
 -- reference rejects that too ("Unterminated string literal"), so it isn't valid
 -- Medaka; there is nothing to mirror.
 
+import frontend.parse_diagnostic.{
+  ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
+}
 import support.stage_count.{stageBump}
 import support.char.{
   isSp,
@@ -144,7 +147,7 @@ public export data Token =
   | TIndent
   | TDedent
   | TEof
-  | TLexError String
+  | TLexError ParseDiagnosticKind
   deriving (Eq)
 
 -- String-bearing tokens use
@@ -246,7 +249,8 @@ tokenToString TNewline = "NEWLINE"
 tokenToString TIndent = "INDENT"
 tokenToString TDedent = "DEDENT"
 tokenToString TEof = "EOF"
-tokenToString (TLexError s) = "LEX_ERROR " ++ debugStringLit s
+tokenToString (TLexError s) =
+  "LEX_ERROR " ++ debugStringLit (renderParseProblem s)
 
 -- User-facing rendering of a token for error messages (e.g. "unexpected
 -- `println`"), as opposed to `tokenToString`'s debug format ("IDENT
@@ -351,7 +355,7 @@ describeToken TNewline = "a line break"
 describeToken TIndent = "an indent"
 describeToken TDedent = "a dedent"
 describeToken TEof = "end of input"
-describeToken (TLexError s) = s
+describeToken (TLexError s) = renderParseProblem s
 
 -- ── Raw scanner output ──────────────────────────────────────────────────
 -- The scanner produces real tokens interleaved with `RNewline col` markers
@@ -491,9 +495,7 @@ wideHalvesGo base (d :: rest) hi lo =
   else
     wideHalvesGo base rest hi2 (lo2 % 4294967296)
 
--- The token for a literal that overflowed `Int`: a `TWideInt` up to 2^64 - 1, the
--- lexer error beyond.  The message keeps the "integer literal too large" prefix
--- `parseErrCode` keys `L-INT-OVERFLOW` on.
+-- Literals beyond Int become TWideInt up to 2^64 - 1, then an overflow error.
 wideIntTok : Array Char ->
   Int ->
   Int ->
@@ -506,7 +508,7 @@ wideIntTok src len pos e depth id digits =
   match wideHalves (wideBase src pos) digits
     Some (hi, lo) =>
       RTok (TWideInt hi lo (substr src pos e)) pos e :: scan src len e depth id
-    None => lexErrorTok pos "integer literal too large for U64 (max 2^64 - 1)"
+    None => lexErrorTok pos e IntegerOverflow
 
 wideBase : Array Char -> Int -> Int
 wideBase src pos
@@ -606,7 +608,7 @@ scanAt src len pos depth id c
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipBlockComment src len (pos + 2) 1
     if e < 0 then
-      lexErrorTok pos "unterminated block comment"
+      lexErrorTok pos len UnterminatedComment
     else
       RComment pos e :: scan src len e depth id
   | isDigit c = scanNumber src len pos depth id
@@ -631,8 +633,8 @@ skipLineComment src len p
 -- SAME located path a structured parse error flows through (rendered `file:L:C:`
 -- by the driver).  Terminates the raw stream: valid code never reaches here, so
 -- the token stream for well-formed input is byte-identical.
-lexErrorTok : Int -> String -> List RawTok
-lexErrorTok p msg = [RTok (TLexError msg) p p]
+lexErrorTok : Int -> Int -> ParseDiagnosticKind -> List RawTok
+lexErrorTok p end kind = [RTok (TLexError kind) p end]
 
 -- nestable `{- … -}` block comments; `p` is just past the opening `{-`, `d` the
 -- open-comment nesting depth. Returns the position just past the matching `-}`.
@@ -879,15 +881,8 @@ stripLeadingUs src p e
   | otherwise = substr src p e
 
 malformedRadixErr : Int -> String -> String -> String -> List RawTok
-malformedRadixErr pos bad prefix digits
-  | stringLength digits == 0 =
-    lexErrorTok
-      pos
-      "malformed radix literal `\{bad}`: no digits follow the \{prefix} prefix; an underscore may only separate digits"
-  | otherwise =
-    lexErrorTok
-      pos
-      "malformed radix literal `\{bad}`: an underscore cannot follow the \{prefix} prefix; write `\{prefix}\{digits}`"
+malformedRadixErr pos bad prefix digits =
+  lexErrorTok pos (pos + stringLength bad) (MalformedRadix bad prefix digits)
 
 isFloatAt : Array Char -> Int -> Int -> Bool
 isFloatAt src len e1 =
@@ -940,9 +935,7 @@ malformedExpDotTok src len pos e1 =
   let expE = expEnd src len (e1 + 1)
   let bad = substr src pos expE
   let good = "\{substr src pos (e1 + 1)}0\{substr src (e1 + 1) expE}"
-  lexErrorTok
-    pos
-    "malformed float literal `\{bad}`: a digit must follow the decimal point; write `\{good}`"
+  lexErrorTok pos expE (MalformedFloat bad good False)
 
 -- `<digits>.`-shaped (#677, e.g. `5.`): a bare `.` right after a just-scanned
 -- digit run with nothing after it that could continue a (possibly ill-typed
@@ -971,9 +964,7 @@ dotContinuesAccess src len p =
 malformedTrailingDotTok : Array Char -> Int -> Int -> List RawTok
 malformedTrailingDotTok src pos e1 =
   let bad = substr src pos (e1 + 1)
-  lexErrorTok
-    pos
-    "malformed float literal `\{bad}`: a digit must follow the decimal point; write `\{bad}0`"
+  lexErrorTok pos (e1 + 1) (MalformedFloat bad (bad ++ "0") False)
 
 floatTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 floatTok src len pos e1 depth id =
@@ -997,7 +988,7 @@ floatTokEnd src len pos endp depth id =
   if floatIsFinite f then
     RTok (TFloat f) pos endp :: scan src len endp depth id
   else
-    lexErrorTok pos "float literal out of range (overflows to infinity)"
+    lexErrorTok pos endp FloatOverflow
 
 -- strings (escapes processed into the content; `\{` opens an interpolation).
 -- `startQ` is the offset of the OPENING quote (captured at the call site in
@@ -1007,12 +998,12 @@ floatTokEnd src len pos endp depth id =
 -- offset field, never the token stream itself.
 scanStr : Array Char -> Int -> Int -> Int -> Int -> Int -> String -> List RawTok
 scanStr src len p startQ depth id acc
-  | p >= len = lexErrorTok p "unterminated string literal"
+  | p >= len = lexErrorTok p len UnterminatedString
   | isQuote (at src p) =
     RTok (TString acc) startQ (p + 1) :: scan src len (p + 1) depth id
   | isBackslash (at src p) && p + 1 < len =
     scanStrEsc src len p startQ depth id acc (at src (p + 1))
-  | isBackslash (at src p) = lexErrorTok p "unterminated string literal"
+  | isBackslash (at src p) = lexErrorTok p len UnterminatedString
   | otherwise =
     let q = plainRunEnd src len (p + 1)
     scanStr src len q startQ depth id (acc ++ substr src p q)
@@ -1047,9 +1038,8 @@ commonEscDecode e
 -- string scanner (plain, triple-quoted, and both interpolation continuations)
 -- reports it through this one text, so the spelling and the message cannot
 -- drift apart between them.
-invalidStrEscMsg : Char -> String
-invalidStrEscMsg e =
-  "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
+invalidStrEscMsg : Char -> ParseDiagnosticKind
+invalidStrEscMsg e = InvalidEscape ("\\" ++ charToStr e) False
 
 scanStrEsc : Array Char ->
   Int ->
@@ -1063,14 +1053,18 @@ scanStrEsc : Array Char ->
 scanStrEsc src len p startQ depth id acc e
   | e == '{' = RTok (TInterpOpen acc) p (p + 2) :: scan src len (p + 2) depth 1
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None => lexErrorTok p (uniEscErr src len p)
+    None =>
+      lexErrorTok
+        p
+        (unicodeErrorEnd src len p)
+        (BadUnicodeEscape (uniEscErr src len p))
     Some c =>
       scanStr src len (uniEscEnd src len p) startQ depth id (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
-    lexErrorTok p (bareUnicodeEscMsgStr src len p)
+    lexErrorTok p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
   | otherwise = match commonEscDecode e
     Some s => scanStr src len (p + 2) startQ depth id (acc ++ s)
-    None => lexErrorTok p (invalidStrEscMsg e)
+    None => lexErrorTok p (p + 2) (invalidStrEscMsg e)
 
 -- string part after an interpolation's `}` closes (`\{`→INTERP_MID, `"`→INTERP_END)
 scanInterpCont : Array Char -> Int -> Int -> Int -> String -> List RawTok
@@ -1101,12 +1095,16 @@ scanInterpEsc src len p depth acc e
       depth
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None => lexErrorTok p (uniEscErr src len p)
+    None =>
+      lexErrorTok
+        p
+        (unicodeErrorEnd src len p)
+        (BadUnicodeEscape (uniEscErr src len p))
     Some c =>
       scanInterpCont src len (uniEscEnd src len p) depth (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
-    lexErrorTok p (bareUnicodeEscMsgStr src len p)
-  | otherwise = lexErrorTok p (invalidStrEscMsg e)
+    lexErrorTok p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (p + 2) (invalidStrEscMsg e)
 
 -- ── Triple-quoted strings (`""" … """`) ─────────────────────────────────
 -- Only `"""` closes (single/double
@@ -1211,7 +1209,11 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
       leadingNl
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None => lexErrorTok p (uniEscErr src len p)
+    None =>
+      lexErrorTok
+        p
+        (unicodeErrorEnd src len p)
+        (BadUnicodeEscape (uniEscErr src len p))
     Some c =>
       scanTriple
         src
@@ -1223,8 +1225,8 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
         leadingNl
         (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
-    lexErrorTok p (bareUnicodeEscMsgStr src len p)
-  | otherwise = lexErrorTok p (invalidStrEscMsg e)
+    lexErrorTok p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (p + 2) (invalidStrEscMsg e)
 
 -- string part after an interpolation opened from a triple string closes
 -- (`"""`→INTERP_END, `\{`→INTERP_MID re-marking id = -1). Emitted RAW (no
@@ -1274,7 +1276,11 @@ scanInterpTripleEsc src len p depth acc e
       depth
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None => lexErrorTok p (uniEscErr src len p)
+    None =>
+      lexErrorTok
+        p
+        (unicodeErrorEnd src len p)
+        (BadUnicodeEscape (uniEscErr src len p))
     Some c =>
       scanInterpTripleCont
         src
@@ -1283,8 +1289,8 @@ scanInterpTripleEsc src len p depth acc e
         depth
         (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
-    lexErrorTok p (bareUnicodeEscMsgStr src len p)
-  | otherwise = lexErrorTok p (invalidStrEscMsg e)
+    lexErrorTok p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (p + 2) (invalidStrEscMsg e)
 
 -- Strip the common leading indentation from a multiline string that opens with
 -- '\n'; blank lines are ignored when
@@ -1528,21 +1534,18 @@ scanChar src len pos depth id = readChar src len (pos + 1) depth id
 -- (an S0 run≠build divergence), `''` as an empty one, and `'\v'` as bare `v`.
 readChar : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 readChar src len p depth id
-  | p >= len = lexErrorTok (p - 1) charUntermMsg
-  | isBackslash (at src p) && p + 1 >= len = lexErrorTok (p - 1) charUntermMsg
+  | p >= len = lexErrorTok (p - 1) len charUntermMsg
+  | isBackslash (at src p) && p + 1 >= len =
+    lexErrorTok (p - 1) len charUntermMsg
   | isBackslash (at src p)
     && at src (p + 1) == 'u'
     && p + 2 < len
     && at src (p + 2) == '{' = readCharUnicode src len p depth id
   | isBackslash (at src p) = escChar src len p depth id (at src (p + 1))
-  | isApos (at src p) =
-    lexErrorTok
-      (p - 1)
-      "character literal is empty; a character is exactly one codepoint, such as `'a'`"
+  | isApos (at src p) = lexErrorTok (p - 1) (p + 1) EmptyChar
   | otherwise = rawChar src len p depth id
-
-charUntermMsg : String
-charUntermMsg = "unterminated character literal"
+charUntermMsg : ParseDiagnosticKind
+charUntermMsg = UnterminatedChar
 
 -- `\<e>'` escape forms: three source chars (`\`, e, `'`), so advance by 3.
 -- The closing quote at `p + 2` is REQUIRED — a valid escape followed by more
@@ -1550,17 +1553,14 @@ charUntermMsg = "unterminated character literal"
 escChar : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
 escChar src len p depth id e
   | isBareUnicodeEsc src len p e =
-    lexErrorTok p (bareUnicodeEscMsgChar src len p)
+    lexErrorTok p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgChar src len p)
   | otherwise = match charEscDecode e
-    None =>
-      lexErrorTok
-        p
-        "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\u{...}"
+    None => lexErrorTok p (p + 2) (InvalidEscape ("\\" ++ charToStr e) True)
     Some s =>
       if p + 2 < len && isApos (at src (p + 2)) then
         RTok (TChar s) p (p + 3) :: scan src len (p + 3) depth id
       else
-        lexErrorTok (p - 1) charUntermMsg
+        lexErrorTok (p - 1) len charUntermMsg
 
 -- A single RAW codepoint, which must be immediately closed by `'`. `at src p` is
 -- one codepoint (the source is a codepoint array), so a multi-BYTE codepoint is
@@ -1573,11 +1573,9 @@ rawChar src len p depth id
   | otherwise =
     let e = charClose src len p
     if e >= len then
-      lexErrorTok (p - 1) charUntermMsg
+      lexErrorTok (p - 1) len charUntermMsg
     else
-      lexErrorTok
-        (p - 1)
-        "character literal `'\{substr src p e}'` has more than one codepoint; write a `\"...\"` string for text"
+      lexErrorTok (p - 1) (e + 1) (LongChar (substr src p e))
 
 charClose : Array Char -> Int -> Int -> Int
 charClose src len p
@@ -1687,28 +1685,34 @@ uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 -- notation (U+10FFFF) is unbroken. See docs/spec/SYNTAX.md, which states this grammar.
 -- WHY the run is ill-formed. `s` is the first digit position, `he` the char that
 -- stopped the run — the one `uniEscEnd` must not step blindly past.
-uniEscTermErr : Array Char -> Int -> Int -> Int -> String
+uniEscTermErr : Array Char -> Int -> Int -> Int -> UnicodeProblem
 uniEscTermErr src len s he
-  | he >= len =
-    "unicode escape is not terminated; the file ends before its closing `}`"
-  | at src he == '_' =
-    "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
-  | he == s && at src he == '}' =
-    "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
-  | he == s =
-    "unicode escape expects a hex digit after `\\u{` but found `\{charToStr (at src he)}`"
-  | otherwise =
-    "unicode escape expects `}` after its hex digits but found `\{charToStr (at src he)}`"
+  | he >= len = UnicodeUnterminated
+  | at src he == '_' = UnicodeSeparator
+  | he == s && at src he == '}' = UnicodeEmpty
+  | he == s = UnicodeExpectedDigit (charToStr (at src he))
+  | otherwise = UnicodeExpectedClose (charToStr (at src he))
 
-uniEscErr : Array Char -> Int -> Int -> String
+uniEscErr : Array Char -> Int -> Int -> UnicodeProblem
 uniEscErr src len p
   | not (uniEscWellFormed src len p) =
     uniEscTermErr src len (p + 3) (uHexEnd src len (p + 3))
   | otherwise = match uniEscCode src len p
-    Some cp if uniIsSurrogate cp =>
-      "unicode escape `\{uniEscText src len p}` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
-    _ =>
-      "unicode escape `\{uniEscText src len p}` is out of range; a codepoint is at most 10FFFF"
+    Some cp if uniIsSurrogate cp => UnicodeSurrogate (uniEscText src len p)
+    _ => UnicodeOutOfRange (uniEscText src len p)
+
+unicodeErrorEnd : Array Char -> Int -> Int -> Int
+unicodeErrorEnd src len p = unicodeErrorEndGo src len (p + 3)
+
+unicodeErrorEndGo : Array Char -> Int -> Int -> Int
+unicodeErrorEndGo src len p
+  | p >= len = len
+  | at src p == '}' = p + 1
+  | isQuote (at src p)
+    || isApos (at src p)
+    || isNL (at src p)
+    || isCR (at src p) = p
+  | otherwise = unicodeErrorEndGo src len (p + 1)
 
 -- `\u{HEX}'` : the hex codepoint, then `}` (`he`), then the closing `'` (`he + 1`).
 -- The closing quote is REQUIRED, exactly as in `escChar`/`rawChar`: a `\u{…}` escape
@@ -1716,13 +1720,17 @@ uniEscErr src len p
 -- codepoint after the escape) are rejected rather than resumed mid-literal (#668).
 readCharUnicode : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 readCharUnicode src len p depth id = match uniEscChar src len p
-  None => lexErrorTok p (uniEscErr src len p)
+  None =>
+    lexErrorTok
+      p
+      (unicodeErrorEnd src len p)
+      (BadUnicodeEscape (uniEscErr src len p))
   Some c =>
     let he = uHexEnd src len (p + 3)
     if he + 1 < len && isApos (at src (he + 1)) then
       RTok (TChar (charToStr c)) p (he + 2) :: scan src len (he + 2) depth id
     else
-      lexErrorTok (p - 1) charUntermMsg
+      lexErrorTok (p - 1) len charUntermMsg
 
 uHexEnd : Array Char -> Int -> Int -> Int
 uHexEnd src len p
@@ -1777,15 +1785,13 @@ bareUnicodeEscWritten src len p = substr src p (uHexEnd src len (p + 2))
 bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
 bareUnicodeEscSuggested src len p =
   "\\u{\{substr src (p + 2) (uHexEnd src len (p + 2))}}"
-
--- The written spelling comes first and the braced one second: `parseErrHelpFix`
--- reads the first two backtick pairs as the (old, new) of its `fix`.
-bareUnicodeEscMsgStr : Array Char -> Int -> Int -> String
+bareUnicodeEscMsgStr : Array Char -> Int -> Int -> ParseDiagnosticKind
 bareUnicodeEscMsgStr src len p =
-  "bare unicode escape `\{bareUnicodeEscWritten src len p}` is not valid; did you mean `\{bareUnicodeEscSuggested src len p}`?"
+  BareUnicodeEscape
+    (bareUnicodeEscWritten src len p)
+    (bareUnicodeEscSuggested src len p)
 
--- The same message in a character literal.
-bareUnicodeEscMsgChar : Array Char -> Int -> Int -> String
+bareUnicodeEscMsgChar : Array Char -> Int -> Int -> ParseDiagnosticKind
 bareUnicodeEscMsgChar src len p = bareUnicodeEscMsgStr src len p
 
 -- ── `\u{HEX}` unicode escapes inside *strings* (the
@@ -1930,15 +1936,13 @@ singleOp src len pos depth id '@' =
 -- string/char literal escapes, which are consumed by the string/char lexer
 -- before `singleOp` ever sees a bare `\`) — a stray top-level `\` is always a
 -- Haskell lambda (`\x -> e`) written by reflex. Zero false-positive risk.
-singleOp src len pos depth id '\\' =
-  lexErrorTok pos "Medaka has no `\\x -> e` lambdas; write `x => e`"
+singleOp src len pos depth id '\\' = lexErrorTok pos (pos + 1) HsLambda
 -- `$` is likewise never a valid Medaka character — Haskell's low-precedence
 -- application operator has no Medaka equivalent; direct application, parens,
 -- or `|>` all cover it. Zero false-positive risk.
-singleOp src len pos depth id '$' =
-  lexErrorTok pos "Medaka has no `$`; write `f (g x)`"
+singleOp src len pos depth id '$' = lexErrorTok pos (pos + 1) HsDollar
 singleOp src len pos depth id c =
-  lexErrorTok pos "unexpected character `\{charToStr c}`"
+  lexErrorTok pos (pos + 1) (UnexpectedCharacter (charToStr c))
 
 -- A `[` lexes as TLBracketTight (postfix indexing, `a[i]`) when it
 -- immediately follows an expr-ender (alnum/`_`/`)`/`]`/`"`) with no
@@ -1972,9 +1976,7 @@ malformedLeadingDotTok src len pos =
   let d = digitsEnd src len (pos + 1)
   let e = expEnd src len d
   let bad = substr src pos e
-  lexErrorTok
-    pos
-    "malformed float literal `\{bad}`: a digit must precede the decimal point; write `0\{bad}`"
+  lexErrorTok pos e (MalformedFloat bad ("0" ++ bad) True)
 
 -- `@` is the adjacent operator (AS_AT) when it immediately follows an
 -- identifier character, whatever its case — the as-pattern `x@(…)`, and the
