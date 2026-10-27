@@ -36,6 +36,13 @@ converting it to a protocol position; it reuses the same line arrays.
 The immutable index holds line starts, line ends and UTF-16 prefix widths.
 Construction scans the source once; endpoint lookup uses binary search. It is
 owned by the request and does not retain a parser context or session state.
+Project diagnostic publication resolves each destination against the open
+buffer, then the exact source captured by that analysis, then disk. The loader
+returns an invocation-owned immutable map of sources it actually parsed, even
+when loading fails; its long-lived last-good source cache is not provenance.
+If no source is available, a nonempty diagnostic retains its message and uses
+an explicitly imprecise zero-width range at 0:0. Only an empty diagnostic
+bucket clears a client's prior diagnostics.
 
 ## Decisions (locked 2026-07-22 by Val)
 

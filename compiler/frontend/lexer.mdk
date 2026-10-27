@@ -3186,16 +3186,20 @@ offsetsToLinesGo src [] p line = []
 offsetsToLinesGo src (off :: rest) p line = match advanceLine src off p line
   (line2, p2) => line2 :: offsetsToLinesGo src rest p2 line2
 
+isLineBreakAt : Array Char -> Int -> Bool
+isLineBreakAt src p =
+  p < arrayLength src
+    && (arrayGetUnsafe p src == '\n'
+      || arrayGetUnsafe p src == '\r'
+        && (p + 1 >= arrayLength src || arrayGetUnsafe (p + 1) src /= '\n'))
+
 -- Walk forward from char `p` (1-based `line`) to `target`, counting newlines.
 -- Offsets arrive in non-decreasing order so each call resumes from the last.
 advanceLine : Array Char -> Int -> Int -> Int -> (Int, Int)
 advanceLine src target p line
   | p >= target = (line, p)
   | p >= arrayLength src = (line, p)
-  | arrayGetUnsafe p src == '\r'
-    && (p + 1 >= arrayLength src || arrayGetUnsafe (p + 1) src /= '\n') =
-    advanceLine src target (p + 1) (line + 1)
-  | arrayGetUnsafe p src == '\n' = advanceLine src target (p + 1) (line + 1)
+  | isLineBreakAt src p = advanceLine src target (p + 1) (line + 1)
   | otherwise = advanceLine src target (p + 1) line
 
 -- ── Comment side channel ─────────────────────────────────────────────────
@@ -3227,9 +3231,7 @@ commentText (Comment _ _ t) = t
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
 posLineColFrom src target p line lineStart
   | p >= target = (line, target - lineStart)
-  | at src p == '\r' && (p + 1 >= arrayLength src || at src (p + 1) /= '\n') =
-    posLineColFrom src target (p + 1) (line + 1) (p + 1)
-  | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
+  | isLineBreakAt src p = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
 -- Turn each `RComment startPos endPos` into a `Comment line col text`.

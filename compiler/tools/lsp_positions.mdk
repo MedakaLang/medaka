@@ -10,18 +10,12 @@ position (line, col) = jObject [("line", JInt line), ("character", JInt col)]
 
 export
 locToLspRange : SourceIndex -> Loc -> Option Json
-locToLspRange index (Loc _ sl sc el ec) = match (
-  sourcePositionToOffset index sl sc,
-  sourcePositionToOffset index el ec,
-)
-  (Some start, Some end) => match (
-    offsetToUtf16Position index start,
-    offsetToUtf16Position index end,
-  )
-    (Some a, Some b) =>
-      Some (jObject [("start", position a), ("end", position b)])
-    _ => None
-  _ => None
+locToLspRange index (Loc _ sl sc el ec) = do
+  start <- sourcePositionToOffset index sl sc
+  end <- sourcePositionToOffset index el ec
+  a <- offsetToUtf16Position index start
+  b <- offsetToUtf16Position index end
+  Some (jObject [("start", position a), ("end", position b)])
 
 export
 lspPositionToOffset : SourceIndex -> Json -> Option Int

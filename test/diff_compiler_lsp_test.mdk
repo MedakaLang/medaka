@@ -102,7 +102,7 @@ import json.{
 import list.{nub, reverse, somes, sort}
 import path.{basename}
 import string.{contains, join, lines, startsWith, trim, unlines}
-import test.{fail, pass, expectEach, expectEqual}
+import test.{fail, pass, expectEach, expectEqual, expectTextContainsAll}
 import test_process.{medakaBin, medakaRoot, withScratchDir}
 
 -- # Framing
@@ -1411,14 +1411,91 @@ coordRange line start end = jObject [
 coordLocation : String -> Int -> Int -> Int -> Json
 coordLocation uri line start end = jObject [
   ("uri", JString uri),
-  (
-    "range",
-    jObject [
-      ("start", coordPos line start),
-      ("end", coordPos line end),
-    ],
-  ),
+  ("range", coordRange line start end),
 ]
+
+test "unreadable manifest publishes a source-less diagnostic" = withScratchDir
+  (dir => match mkdirAll (dir ++ "/medaka.toml")
+    Err e => fail e
+    Ok _ =>
+      let uri = "file://" ++ dir ++ "/main.mdk"
+      let manifestUri = "file://" ++ dir ++ "/medaka.toml"
+      let (errors, out) = drive [didOpenMsg uri "main = 1\n", bye]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let diagnostics =
+            publishes objs
+              |> filter (p => uriOf p == manifestUri)
+              |> flatMap diagsOf
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("diagnostic count", expectEqual 1 (length diagnostics)),
+            (
+              "zero range",
+              expectEqual
+                [Some (coordRange 0 0 0)]
+                (map (get "range") diagnostics),
+            ),
+            (
+              "severity",
+              expectEqual [Some (JInt 1)] (map (get "severity") diagnostics),
+            ),
+            (
+              "message retained",
+              expectTextContainsAll
+                ["cannot read `[target]`", "medaka.toml"]
+                (join "\n" (map (strField "message") diagnostics)),
+            ),
+          ])
+
+test "project diagnostic empty bucket clears an earlier error" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", """[project]
+name = "clear"
+"""),
+    ("main.mdk", "main = 1\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let uri = "file://" ++ dir ++ "/main.mdk"
+      let (errors, out) = drive [
+        didOpenMsg uri "main = 1 + \"x\"\n",
+        didChangeMsg uri "main = 1\n",
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let counts =
+            publishes objs
+              |> filter (p => uriOf p == uri)
+              |> map (p => length (diagsOf p))
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("error then clear", expectEqual [1, 0] counts),
+          ])
+
+test "malformed editor sources do not crash semantic token requests" =
+  let uri = "file:///malformed-tokens.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = \"😀",
+    rpc 1 "textDocument/semanticTokens/full" (docParams uri),
+    didChangeMsg uri "main = (\r\n",
+    rpc 2 "textDocument/semanticTokens/full" (docParams uri),
+    didChangeMsg uri "main = \"\"\"😀\r\n",
+    rpc 3 "textDocument/semanticTokens/full" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "responses",
+        expectEqual 3 (length (filter (obj => isSome (get "id" obj)) objs)),
+      ),
+    ]
 
 formatEdit : Int -> Int -> String -> Json
 formatEdit line col text = jArray [
@@ -1509,7 +1586,9 @@ test "formatting edits end at EOF" =
 
 test "cross-file coordinates use unsaved destination source" = withScratchDir
   (dir => match layOut dir [
-    ("medaka.toml", "[project]\nname = \"coords\"\n"),
+    ("medaka.toml", """[project]
+name = "coords"
+"""),
     ("lib.mdk", "export value = 1\n"),
     ("main.mdk", """import lib.{value}
 main = value
@@ -1557,11 +1636,10 @@ main = ("😀", value + "x")
             "destination diagnostics",
             expectEqual
               [Some (coordRange 1 14 25)]
-              (map
-                (get "range")
-                (flatMap
-                  diagsOf
-                  (filter (p => uriOf p == main) (publishes objs)))),
+              (publishes objs
+                |> filter (p => uriOf p == main)
+                |> flatMap diagsOf
+                |> map (get "range")),
           ),
           (
             "highlight",
