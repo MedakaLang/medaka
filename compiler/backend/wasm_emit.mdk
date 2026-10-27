@@ -2449,38 +2449,23 @@ intOpCanOverflow op = contains op ["+", "-", "*", "/"]
 -- A call to the checked `Int` operator for `op` (`$mdk_int_add`… in
 -- `intRuntimeLines`): it leaves the exact result on the stack, or stops the
 -- program with E-INT-OVERFLOW.  Operands and result are raw 63-bit i64s, so the
--- same call serves scalar and ref mode (ref mode reboxes after it).  Demands the
--- runtime block and the stderr/decimal trap seam its trap path writes through.
+-- same call serves scalar and ref mode (ref mode reboxes after it).  The plan
+-- selects the helper (`intHelpers`); the registry refuses the call otherwise.
 intChkCall : Prog -> String -> Int -> List String
-intChkCall prog op site =
-  let _ = noteIntRt (progEmit prog) (intChkName op)
-  [
-    "i64.const " ++ intToString site,
-    rtCallW prog ("mdk_int_" ++ intChkName op) 3,
-  ]
-
--- demand the `intRuntimeLines` helper `name`, and the stderr/decimal trap seam
--- every one of them writes through.
-noteIntRt : WasmEmit -> String -> Unit
-noteIntRt emit name =
-  if contains name (emitDemandW emit).intHelpers then
-    ()
-  else
-    panic ("internal error: unplanned-wasm-helper: Int " ++ name)
+intChkCall prog op site = [
+  "i64.const " ++ intToString site,
+  rtCallW prog ("mdk_int_" ++ intChkName op) 3,
+]
 
 -- `Int` negation, checked the same way (`$mdk_int_neg`).
 intChkNegCall : Prog -> List String
-intChkNegCall prog =
-  let _ = noteIntRt (progEmit prog) "neg"
-  [rtCallW prog "mdk_int_neg" 1]
+intChkNegCall prog = [rtCallW prog "mdk_int_neg" 1]
 
 -- An `Int` shift (`$mdk_shift_left`/`$mdk_shift_right`, "left"/"right"): raw i64
 -- value and amount in, raw i64 out.  Its negative-amount panic streams the amount
 -- through the decimal trap seam.
 intShiftCall : Prog -> String -> List String
-intShiftCall prog dir =
-  let _ = noteIntRt (progEmit prog) dir
-  [rtCallW prog ("mdk_shift_" ++ dir) 2]
+intShiftCall prog dir = [rtCallW prog ("mdk_shift_" ++ dir) 2]
 
 intChkName : String -> String
 intChkName "+" = "add"
@@ -5295,8 +5280,6 @@ emitBinRef prog env d op l r tag site =
     "compare-number" => emitValueCmpNumRef prog env d op l r
     _ =>
       if startsWith "value-" branch then
-        let _ =
-          if intOpCanOverflow op then noteIntRt (progEmit prog) (intChkName op)
         emitRefExpr prog env d l
           ++ emitRefExpr prog env d r
           ++ [rtCallW prog ("mdk_value_" ++ valueArithName op) 2]

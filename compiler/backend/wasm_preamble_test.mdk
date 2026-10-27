@@ -320,7 +320,41 @@ test "a helper the plan does not select is undefined where it is called" = expec
         (seeded (strBlocks ++ ["valueEqRuntimeLines"]) [
           checkCall (WasmFunc "mdk_str_compare") 2 (at "f"),
         ])),
+    labelFail
+      "a checked Int operator or shift the plan's intHelpers leaves out"
+      (expectEqual
+        [
+          UndefinedReference
+            (WasmFunc "mdk_int_add")
+            (helperAt "valueAddRuntimeLines"),
+          UndefinedReference (WasmFunc "mdk_shift_left") (at "f"),
+        ]
+        (intSteps ["sub", "right"])),
+    labelFail
+      "the same calls, every one planned"
+      (expectEqual [] (intSteps ["add", "sub", "left", "right"])),
   ]
+
+-- the checked Int blocks and `$mdk_value_add` under the operators [ints], then
+-- a body calling two checked operators and both shifts
+intSteps : List String -> List SymbolDefect
+intSteps ints =
+  let blocks = [
+    "ioRuntimeLines", "valueAddRuntimeLines", "siteRuntimeLines",
+    "trapIntRuntimeLines", "intRuntimeLines"
+  ]
+  verdict
+    ([
+        declareSymbol (WasmFunc "mdk_write_byte") FuncImported (at "module"),
+        declareSymbol (WasmFunc "mdk_write_err_byte") FuncImported (at "module"),
+      ]
+      ++ declarePlannedHelpers (planOf blocks ints True)
+      ++ [
+        checkCall (WasmFunc "mdk_int_add") 3 (at "f"),
+        checkCall (WasmFunc "mdk_int_sub") 3 (at "f"),
+        checkCall (WasmFunc "mdk_shift_left") 2 (at "f"),
+        checkCall (WasmFunc "mdk_shift_right") 2 (at "f"),
+      ])
 
 -- every function some row calls that no row defines: the host imports
 importSteps : WasmDemandPlan ->
