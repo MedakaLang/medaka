@@ -2797,10 +2797,9 @@ publishProducedResults dyn owned values =
       (joinProducedEnvelope
         (valueJoinOps dyn JoinClause (_ => collectProducedSummary dyn.dcModule))
         results)
-  let _ =
-    map
-      ((loc, lower) => recordFileValueFlow dyn.dcModule loc produced lower)
-      results
+  each
+    ((loc, lower) => recordFileValueFlow dyn.dcModule loc produced lower)
+    results
   match resultAfterArrows owned.bsArity owned.bsValue
     Some expected => bindFrom dyn expected produced
     None => panic "binding source arity differs from its allocated shape"
