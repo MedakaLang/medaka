@@ -190,7 +190,7 @@ for required in \
   'emitElemDeclare : WasmEmit -> String' \
   'let n = freshLamId (progEmit prog)' \
   'let gid = freshLamId (progEmit prog)' \
-  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured (envMarksOf captured env) body)' \
+  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured (envRestrict captured env) body)' \
   'addLifted (progEmit prog) def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
   'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
