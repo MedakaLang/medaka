@@ -1,4 +1,3 @@
-anyContainsI : List Int -> List Int -> Bool
 appSpineArgCount : Expr -> Int
 argPerformableOccs : ModuleCtx -> List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
@@ -35,7 +34,6 @@ effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> 
 effVarChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
 effVarOccAtoms : GraphCtx -> Ty -> List (String, List Atom)
 effVarOccEscape : GraphCtx -> String -> List Atom -> List (String, List Atom) -> List Atom
-effVarTailIds : List (String, Ref Effvar) -> List Int
 effectSiteOf : ModuleCtx -> String -> Option String -> Option Authority -> Option Loc
 evOrdinal : EvId -> Int
 expandReturnSpine : ModuleCtx -> Ty -> Ty
@@ -60,14 +58,12 @@ grantOccOf : GraphCtx -> EvId -> Option GrantOcc
 grantOnlyBindingId : ModuleCtx -> String -> Int
 grantOrder : Scheme -> List Int
 grantsEnabled : GraphCtx -> Unit -> Bool
-hasDupI : List Int -> Bool
 hasFileBoundValue : Mono -> Bool
 indexOnlyEffVars : ModuleCtx -> List (String, List Kind) -> Ty -> List String
 krowSlotOccs : ModuleCtx -> List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotVarOccs : ModuleCtx -> List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 launderEscapeFromLog : GraphCtx -> List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : GraphCtx -> EffRow -> List AbsorptionEvent -> List Atom
-liveTailId : Ref Effvar -> Int
 localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
 markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markSourceless : GraphCtx -> List Int -> Unit

@@ -1,9 +1,9 @@
 # META
-source_lines=2229
+source_lines=2267
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
--- graph-run counter: head inspection, variable ids, substitution, one-way matching and overlap, the
+-- graph-run counter: head inspection, variable ids (including the live tail ids of effect variables), substitution, one-way matching and overlap, the
 -- builtin tycons, the `Scheme` projections (`schemeIds`, `schemeMono`, `schemeBodyOf`,
 -- `schemeAuthIds`), and the signature-slot and obligation-argument readings of a `Mono`
 -- (`unrigidSig`, `abstractSlotIds`, `declaredOblArgOk`, `oblArgKey`).
@@ -70,6 +70,7 @@ import types.effect_rows.{
   findAtom,
   pureRow,
   rowFlat,
+  isJoinCell,
 }
 import types.tc_types.{
   AbsorptionEvent(..), GoalPayload(..), GraphCtx(..), HeadVarRoot(..),
@@ -132,6 +133,43 @@ export
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
 containsI x (y :: ys) = x == y || containsI x ys
+
+-- true if the list has any duplicate Int
+export
+hasDupI : List Int -> Bool
+hasDupI [] = False
+hasDupI (x :: xs) = containsI x xs || hasDupI xs
+
+-- any member of [xs] present in [ys] (tiny per-method var lists)
+export
+anyContainsI : List Int -> List Int -> Bool
+anyContainsI [] _ = False
+anyContainsI (x :: xs) ys = containsI x ys || anyContainsI xs ys
+
+-- resolve an absorbing tail CELL to its live effvar id (post-unify the cell has ELinked
+-- into a shared tail); -1 for a cell that resolved to a CLOSED row (no live tail).  Same
+-- idiom as effVarTailIds.
+export
+liveTailId : Ref Effvar -> Int
+liveTailId cell = match effrowNorm (EffRow [] (Some cell))
+  EffRow _ (Some t) => effvarId t
+  EffRow _ None => 0 - 1
+
+-- the still-open tail id of each method effect var's row, post-unify (a closed
+-- row contributes nothing: closing a var to the empty row performs LESS than
+-- any caller instantiation — the safe direction, not a pin).
+export
+effVarTailIds : List (String, Ref Effvar) -> List Int
+effVarTailIds [] = []
+effVarTailIds ((_, cell) :: rest) = match effrowNorm (EffRow [] (Some cell))
+  -- #821: a var whose cell became a JOIN is still its own (unidentified)
+  -- variable; only a plain single surviving tail counts toward the dup set.
+  EffRow _ (Some t) =>
+    if isJoinCell t then
+      effVarTailIds rest
+    else
+      effvarId t :: effVarTailIds rest
+  EffRow _ None => effVarTailIds rest
 
 export
 invocationHeadKey : Mono -> String
@@ -2235,7 +2273,7 @@ implDeclWithReqs _ = []
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "Ident" true) (mem "Lit" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "RecPatField" true) (mem "Require" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "identOriginFold" false) (mem "propParamName" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "normalizeLink" false) (mem "ppGo" false) (mem "tupleHeadTagTc" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSub" false) (mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false) (mem "isJoinCell" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
@@ -2258,6 +2296,17 @@ implDeclWithReqs _ = []
 (DTypeSig true "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
+(DTypeSig true "hasDupI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "hasDupI" ((PList)) (EVar "False"))
+(DFunDef false "hasDupI" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "xs")) (EApp (EVar "hasDupI") (EVar "xs"))))
+(DTypeSig true "anyContainsI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "anyContainsI" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyContainsI" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyContainsI") (EVar "xs")) (EVar "ys"))))
+(DTypeSig true "liveTailId" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
+(DFunDef false "liveTailId" ((PVar "cell")) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EApp (EVar "effvarId") (EVar "t"))) (arm (PCon "EffRow" PWild (PCon "None")) () (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))
+(DTypeSig true "effVarTailIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "effVarTailIds" ((PList)) (EListLit))
+(DFunDef false "effVarTailIds" ((PCons (PTuple PWild (PVar "cell")) (PVar "rest"))) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EIf (EApp (EVar "isJoinCell") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest")) (EBinOp "::" (EApp (EVar "effvarId") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest"))))) (arm (PCon "EffRow" PWild (PCon "None")) () (EApp (EVar "effVarTailIds") (EVar "rest")))))
 (DTypeSig true "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "invocationHeadKey" ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (ELit (LString "?")))))
 (DTypeSig true "instantiateFields" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono"))))))
@@ -2822,7 +2871,7 @@ implDeclWithReqs _ = []
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "Ident" true) (mem "Lit" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "RecPatField" true) (mem "Require" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "identOriginFold" false) (mem "propParamName" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "normalizeLink" false) (mem "ppGo" false) (mem "tupleHeadTagTc" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSub" false) (mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false) (mem "isJoinCell" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
@@ -2845,6 +2894,17 @@ implDeclWithReqs _ = []
 (DTypeSig true "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
+(DTypeSig true "hasDupI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "hasDupI" ((PList)) (EVar "False"))
+(DFunDef false "hasDupI" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "xs")) (EApp (EVar "hasDupI") (EVar "xs"))))
+(DTypeSig true "anyContainsI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "anyContainsI" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyContainsI" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyContainsI") (EVar "xs")) (EVar "ys"))))
+(DTypeSig true "liveTailId" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
+(DFunDef false "liveTailId" ((PVar "cell")) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EApp (EVar "effvarId") (EVar "t"))) (arm (PCon "EffRow" PWild (PCon "None")) () (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))
+(DTypeSig true "effVarTailIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "effVarTailIds" ((PList)) (EListLit))
+(DFunDef false "effVarTailIds" ((PCons (PTuple PWild (PVar "cell")) (PVar "rest"))) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EIf (EApp (EVar "isJoinCell") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest")) (EBinOp "::" (EApp (EVar "effvarId") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest"))))) (arm (PCon "EffRow" PWild (PCon "None")) () (EApp (EVar "effVarTailIds") (EVar "rest")))))
 (DTypeSig true "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "invocationHeadKey" ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (ELit (LString "?")))))
 (DTypeSig true "instantiateFields" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono"))))))

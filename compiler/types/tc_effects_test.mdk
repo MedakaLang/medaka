@@ -32,7 +32,6 @@ import types.effect_rows.{
 import types.effect_solver.{noScopeRoles}
 import types.repr.{AuthResidual(..), Mono(..), Scheme(..)}
 import types.tc_effects.{
-  anyContainsI,
   appSpineArgCount,
   beginEffectSummaryScope,
   checkMethodEffVarRigidity,
@@ -49,7 +48,6 @@ import types.tc_effects.{
   finishEffectSummaryScopeKeeping,
   grantOccOf,
   grantOrder,
-  hasDupI,
   hasFileBoundValue,
   markBinders,
   markSourceless,
@@ -145,19 +143,6 @@ test "a spine's argument count is the applications under located, annotated and 
     expectEqual 1 (appSpineArgCount (EDoOrigin here (EApp f (EVar "a")))),
     expectEqual 0 (appSpineArgCount (ELam [] f)),
   ]
-
-test "a list has a duplicate exactly when some id repeats" = expectAll [
-  expectTrue (hasDupI [1, 2, 1]),
-  expectFalse (hasDupI [1, 2, 3]),
-  expectFalse (hasDupI []),
-]
-
-test "two id lists meet when they share a member" = expectAll [
-  expectTrue (anyContainsI [1, 2] [2, 9]),
-  expectFalse (anyContainsI [1, 2] [3, 4]),
-  expectFalse (anyContainsI [] [1]),
-  expectFalse (anyContainsI [1] []),
-]
 
 test "a clause table answers a name's clauses in source order, and an unknown name has none" =
   let table =

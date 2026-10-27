@@ -3,6 +3,7 @@ allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
 anyConcreteHead : List Mono -> Bool
+anyContainsI : List Int -> List Int -> Bool
 anyListM : (a -> Bool) -> List a -> Bool
 anyMember : List String -> List String -> Bool
 applyParams : Mono -> List Mono -> Mono
@@ -48,6 +49,7 @@ declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 domainIsTupleOfArity : Mono -> Int -> Bool
+effVarTailIds : List (String, Ref Effvar) -> List Int
 effectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRoots : Mono -> Map Int Unit -> Map Int Unit
 effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -66,6 +68,7 @@ firstOrZero : List Int -> Int
 firstTvar : Mono -> Mono -> Int -> Option Mono
 foldrFun : List Mono -> Mono -> Mono
 funArity : Mono -> Int
+hasDupI : List Int -> Bool
 headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 headMonoNode : Mono -> Mono
 headTyNode : Ty -> Ty
@@ -87,6 +90,7 @@ isUnboundTvar : Mono -> Bool
 isUnshaped : Mono -> Bool
 joinCellOf : GraphCtx -> List (Ref Effvar) -> Ref Effvar
 litType : Lit -> Mono
+liveTailId : Ref Effvar -> Int
 locEq : Loc -> Loc -> Bool
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 matchCol0Type : Mono -> Option TabKey

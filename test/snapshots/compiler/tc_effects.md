@@ -1,5 +1,5 @@
 # META
-source_lines=2006
+source_lines=1974
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -15,6 +15,9 @@ stages=DESUGAR,MARK
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
 import types.tc_types.{
+  grantTopKey,
+  methodGrantKey,
+  setGrantIds,
   AbsorptionEvent(..),
   GrantBinder(..),
   GrantCallee(..),
@@ -54,6 +57,10 @@ import types.tc_mono.{
   schemeIds,
   tyAppSpine,
   tyArrowCount,
+  liveTailId,
+  anyContainsI,
+  effVarTailIds,
+  hasDupI,
 }
 import types.tc_diag_text.{
   aliasesHeadRowMsg,
@@ -124,10 +131,7 @@ import types.effect_rows.{
   atomLabelOf,
   atomsDiff,
   effrowLabels,
-  effrowNorm,
-  effvarId,
   findAtom,
-  isJoinCell,
   rowFlat,
 }
 import types.repr.{
@@ -175,7 +179,6 @@ import support.util.{
   reverseL,
 }
 import list.{findMap}
-import types.module_interface.{grantTopKey, methodGrantKey, setGrantIds}
 import types.route_key.{ifaceWordOf}
 import frontend.desugar.{mapChildren, mapExpr}
 import types.effect_values.{producedInputTypes}
@@ -1562,14 +1565,6 @@ atomsAbsorbedInto tid (ev :: rest) =
   else
     atomsAbsorbedInto tid rest
 
--- resolve an absorbing tail CELL to its live effvar id (post-unify the cell has ELinked
--- into a shared tail); -1 for a cell that resolved to a CLOSED row (no live tail).  Same
--- idiom as effVarTailIds.
-liveTailId : Ref Effvar -> Int
-liveTailId cell = match effrowNorm (EffRow [] (Some cell))
-  EffRow _ (Some t) => effvarId t
-  EffRow _ None => 0 - 1
-
 -- The effect axis of W3 rigidity, one call shape for both kinds of method body:
 -- every [effVars] effect var's row carries no concrete atom beyond what the
 -- declared row at EVERY occurrence of that var in [mty] already covers
@@ -1613,12 +1608,6 @@ checkMethodEffVarRigidity mctx subject headMonos gscope mty effVars launderFlagg
     launderFlagged
     eager
     loc
-
--- any member of [xs] present in [ys] (tiny per-method var lists)
-export
-anyContainsI : List Int -> List Int -> Bool
-anyContainsI [] _ = False
-anyContainsI (x :: xs) ys = containsI x ys || anyContainsI xs ys
 
 -- the effect half of the rigidity check: atom containment per declared
 -- occurrence, then tail distinctness among the METHOD's own effect vars.
@@ -1888,21 +1877,6 @@ effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
 effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
 effVarOccAtoms gctx _ = []
 
--- the still-open tail id of each method effect var's row, post-unify (a closed
--- row contributes nothing: closing a var to the empty row performs LESS than
--- any caller instantiation — the safe direction, not a pin).
-effVarTailIds : List (String, Ref Effvar) -> List Int
-effVarTailIds [] = []
-effVarTailIds ((_, cell) :: rest) = match effrowNorm (EffRow [] (Some cell))
-  -- #821: a var whose cell became a JOIN is still its own (unidentified)
-  -- variable; only a plain single surviving tail counts toward the dup set.
-  EffRow _ (Some t) =>
-    if isJoinCell t then
-      effVarTailIds rest
-    else
-      effvarId t :: effVarTailIds rest
-  EffRow _ None => effVarTailIds rest
-
 export
 clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
 clausesAt n m = match omLookup n m
@@ -2002,15 +1976,9 @@ flushPendingEscapes mctx (Some group) =
 
 concreteAtom : Atom -> Bool
 concreteAtom a = not (authHasVars (atomAuth a))
-
--- true if the list has any duplicate Int
-export
-hasDupI : List Int -> Bool
-hasDupI [] = False
-hasDupI (x :: xs) = containsI x xs || hasDupI xs
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasesHeadRowMsg" false) (mem "argAtomsMsgFor" false) (mem "argOnlyEffVarMsg" false) (mem "collapsesEffvarsMsg" false) (mem "effectEscapeMsg" false) (mem "effectInclusionMsg" false) (mem "effectUndeterminedMsg" false) (mem "effVarLaunderMsg" false) (mem "indexEagerMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "mctxAt" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declGradedScope" false) (mem "effTailNames" false) (mem "funClausePair" false) (mem "lookupBinding" false) (mem "lookupVar" false) (mem "methodArgs" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
@@ -2021,7 +1989,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "registerLocalAbs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authHasVars" false) (mem "authIsTop" false) (mem "authSub" false) (mem "authvarId" false) (mem "authvarName" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "atomsDiff" false) (mem "effrowLabels" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "atomsDiff" false) (mem "effrowLabels" false) (mem "findAtom" false) (mem "rowFlat" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppEachShared" false) (mem "ppMonosShared" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true) (mem "newBindingSummary" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "firstTyLoc" false) (mem "lookupTab" false) (mem "orElseLoc" false))))
@@ -2031,7 +1999,6 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
-(DUse false (UseGroup ("types" "module_interface") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "producedInputTypes" false))))
@@ -2267,13 +2234,8 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DTypeSig false "atomsAbsorbedInto" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsAbsorbedInto" (PWild (PList)) (EListLit))
 (DFunDef false "atomsAbsorbedInto" ((PVar "tid") (PCons (PVar "ev") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "liveTailId") (EFieldAccess (EVar "ev") "cell")) (EVar "tid")) (EBinOp "::" (EFieldAccess (EVar "ev") "atom") (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))))
-(DTypeSig false "liveTailId" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
-(DFunDef false "liveTailId" ((PVar "cell")) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EApp (EVar "effvarId") (EVar "t"))) (arm (PCon "EffRow" PWild (PCon "None")) () (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))
 (DTypeSig true "checkMethodEffVarRigidity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))))))
 (DFunDef false "checkMethodEffVarRigidity" ((PVar "mctx") (PVar "subject") (PVar "headMonos") (PVar "gscope") (PVar "mty") (PVar "effVars") (PVar "launderFlagged") (PVar "eager") (PVar "loc")) (EBlock (DoExpr (EIf (EApp (EApp (EVar "anyContainsI") (EApp (EVar "effVarTailIds") (EVar "effVars"))) (EApp (EApp (EVar "flatMap") (EVar "monoIndexEffvarIds")) (EVar "headMonos"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EVar "aliasesHeadRowMsg") (EVar "subject")) (EVar "mty"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffVarRigidity") (EVar "mctx")) (EVar "subject")) (EVar "gscope")) (EVar "mty")) (EVar "effVars")) (EVar "launderFlagged")) (EVar "eager")) (EVar "loc")))))
-(DTypeSig true "anyContainsI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "anyContainsI" ((PList) PWild) (EVar "False"))
-(DFunDef false "anyContainsI" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyContainsI") (EVar "xs")) (EVar "ys"))))
 (DTypeSig false "checkImplEffVarRigidity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))))
 (DFunDef false "checkImplEffVarRigidity" ((PVar "mctx") (PVar "subject") (PVar "scope") (PVar "mty") (PVar "effMap") (PVar "launderFlagged") (PVar "eager") (PVar "loc")) (EBlock (DoLet false false (PVar "occs") (EBinOp "++" (EApp (EApp (EVar "effVarOccAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mty")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "mty"))))) (DoExpr (EIf (EVar "launderFlagged") (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "checkEffVarAtoms") (EVar "mctx")) (EVar "subject")) (EVar "occs")) (EVar "effMap")) (EVar "loc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIndexOnlyEffVarsOpen") (EVar "mctx")) (EVar "subject")) (EVar "effMap")) (EVar "loc")) (EVar "eager"))) (DoExpr (EIf (EApp (EVar "hasDupI") (EApp (EVar "effVarTailIds") (EVar "effMap"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EVar "collapsesEffvarsMsg") (EVar "subject")) (EVar "mty"))) (ELit LUnit)))))
 (DTypeSig false "checkIndexOnlyEffVarsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
@@ -2322,9 +2284,6 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "effVarOccAtoms") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") PWild) (EListLit))
-(DTypeSig false "effVarTailIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "effVarTailIds" ((PList)) (EListLit))
-(DFunDef false "effVarTailIds" ((PCons (PTuple PWild (PVar "cell")) (PVar "rest"))) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EIf (EApp (EVar "isJoinCell") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest")) (EBinOp "::" (EApp (EVar "effvarId") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest"))))) (arm (PCon "EffRow" PWild (PCon "None")) () (EApp (EVar "effVarTailIds") (EVar "rest")))))
 (DTypeSig true "clausesAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "clausesAt" ((PVar "n") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "xs")) () (EVar "xs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "clausesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
@@ -2343,12 +2302,9 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "Some" (PVar "group"))) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-EFFECT-LEAK"))) (EVar "loc")) (EVar "msg"))))))) (ELit LUnit)) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "concreteAtom" ((PVar "a")) (EApp (EVar "not") (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a")))))
-(DTypeSig true "hasDupI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
-(DFunDef false "hasDupI" ((PList)) (EVar "False"))
-(DFunDef false "hasDupI" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "xs")) (EApp (EVar "hasDupI") (EVar "xs"))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasesHeadRowMsg" false) (mem "argAtomsMsgFor" false) (mem "argOnlyEffVarMsg" false) (mem "collapsesEffvarsMsg" false) (mem "effectEscapeMsg" false) (mem "effectInclusionMsg" false) (mem "effectUndeterminedMsg" false) (mem "effVarLaunderMsg" false) (mem "indexEagerMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "mctxAt" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declGradedScope" false) (mem "effTailNames" false) (mem "funClausePair" false) (mem "lookupBinding" false) (mem "lookupVar" false) (mem "methodArgs" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
@@ -2359,7 +2315,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "registerLocalAbs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authHasVars" false) (mem "authIsTop" false) (mem "authSub" false) (mem "authvarId" false) (mem "authvarName" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "atomsDiff" false) (mem "effrowLabels" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "atomsDiff" false) (mem "effrowLabels" false) (mem "findAtom" false) (mem "rowFlat" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppEachShared" false) (mem "ppMonosShared" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true) (mem "newBindingSummary" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "firstTyLoc" false) (mem "lookupTab" false) (mem "orElseLoc" false))))
@@ -2369,7 +2325,6 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
-(DUse false (UseGroup ("types" "module_interface") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "producedInputTypes" false))))
@@ -2605,13 +2560,8 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DTypeSig false "atomsAbsorbedInto" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsAbsorbedInto" (PWild (PList)) (EListLit))
 (DFunDef false "atomsAbsorbedInto" ((PVar "tid") (PCons (PVar "ev") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "liveTailId") (EFieldAccess (EVar "ev") "cell")) (EVar "tid")) (EBinOp "::" (EFieldAccess (EVar "ev") "atom") (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))))
-(DTypeSig false "liveTailId" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
-(DFunDef false "liveTailId" ((PVar "cell")) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EApp (EVar "effvarId") (EVar "t"))) (arm (PCon "EffRow" PWild (PCon "None")) () (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))
 (DTypeSig true "checkMethodEffVarRigidity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))))))
 (DFunDef false "checkMethodEffVarRigidity" ((PVar "mctx") (PVar "subject") (PVar "headMonos") (PVar "gscope") (PVar "mty") (PVar "effVars") (PVar "launderFlagged") (PVar "eager") (PVar "loc")) (EBlock (DoExpr (EIf (EApp (EApp (EVar "anyContainsI") (EApp (EVar "effVarTailIds") (EVar "effVars"))) (EApp (EApp (EDictApp "flatMap") (EVar "monoIndexEffvarIds")) (EVar "headMonos"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EVar "aliasesHeadRowMsg") (EVar "subject")) (EVar "mty"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffVarRigidity") (EVar "mctx")) (EVar "subject")) (EVar "gscope")) (EVar "mty")) (EVar "effVars")) (EVar "launderFlagged")) (EVar "eager")) (EVar "loc")))))
-(DTypeSig true "anyContainsI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "anyContainsI" ((PList) PWild) (EVar "False"))
-(DFunDef false "anyContainsI" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyContainsI") (EVar "xs")) (EVar "ys"))))
 (DTypeSig false "checkImplEffVarRigidity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))))
 (DFunDef false "checkImplEffVarRigidity" ((PVar "mctx") (PVar "subject") (PVar "scope") (PVar "mty") (PVar "effMap") (PVar "launderFlagged") (PVar "eager") (PVar "loc")) (EBlock (DoLet false false (PVar "occs") (EBinOp "++" (EApp (EApp (EVar "effVarOccAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "mty"))))) (DoExpr (EIf (EVar "launderFlagged") (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "checkEffVarAtoms") (EVar "mctx")) (EVar "subject")) (EVar "occs")) (EVar "effMap")) (EVar "loc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIndexOnlyEffVarsOpen") (EVar "mctx")) (EVar "subject")) (EVar "effMap")) (EVar "loc")) (EVar "eager"))) (DoExpr (EIf (EApp (EVar "hasDupI") (EApp (EVar "effVarTailIds") (EVar "effMap"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EVar "collapsesEffvarsMsg") (EVar "subject")) (EVar "mty"))) (ELit LUnit)))))
 (DTypeSig false "checkIndexOnlyEffVarsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
@@ -2660,9 +2610,6 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "effVarOccAtoms") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") PWild) (EListLit))
-(DTypeSig false "effVarTailIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "effVarTailIds" ((PList)) (EListLit))
-(DFunDef false "effVarTailIds" ((PCons (PTuple PWild (PVar "cell")) (PVar "rest"))) (EMatch (EApp (EVar "effrowNorm") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "EffRow" PWild (PCon "Some" (PVar "t"))) () (EIf (EApp (EVar "isJoinCell") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest")) (EBinOp "::" (EApp (EVar "effvarId") (EVar "t")) (EApp (EVar "effVarTailIds") (EVar "rest"))))) (arm (PCon "EffRow" PWild (PCon "None")) () (EApp (EVar "effVarTailIds") (EVar "rest")))))
 (DTypeSig true "clausesAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "clausesAt" ((PVar "n") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "xs")) () (EVar "xs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "clausesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
@@ -2681,6 +2628,3 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "Some" (PVar "group"))) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EListLit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-EFFECT-LEAK"))) (EVar "loc")) (EVar "msg"))))))) (ELit LUnit)) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "concreteAtom" ((PVar "a")) (EApp (EVar "not") (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a")))))
-(DTypeSig true "hasDupI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
-(DFunDef false "hasDupI" ((PList)) (EVar "False"))
-(DFunDef false "hasDupI" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "xs")) (EApp (EVar "hasDupI") (EVar "xs"))))

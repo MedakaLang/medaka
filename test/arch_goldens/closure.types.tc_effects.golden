@@ -24,8 +24,6 @@ types.evidence_complete
 types.evidence_coverage
 types.invocation_basis
 types.manifest_publish
-types.module_interface
-types.prelude_interface
 types.publish
 types.registry
 types.repr

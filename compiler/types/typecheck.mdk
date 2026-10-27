@@ -214,6 +214,7 @@ import types.effect_values.{
 }
 import types.effect_invocation.{InvocationOps(..)}
 import types.tc_types.{
+  grantTopKey,
   StandaloneOrigin(..),
   SiteKind(..),
   ServeStep(..),
@@ -556,7 +557,6 @@ import types.module_interface.{
   servedEntriesFrom,
   setServedArity,
   forgetLocalRows,
-  grantTopKey,
 }
 import types.prelude_interface.{
   PreludeInterface,
@@ -666,6 +666,8 @@ import types.tc_mono.{
   unrigidSig,
   abstractSlotIds,
   declaredOblArgOk,
+  anyContainsI,
+  hasDupI,
 }
 import types.tc_state.{
   builtinCtors,
@@ -813,6 +815,7 @@ import types.tc_env.{
   superLookup,
   tyTabKey,
   withCtors,
+  hasImportDefiner,
 }
 import types.tc_diag.{
   boundaryOwnsOpen,
@@ -1218,7 +1221,6 @@ import types.tc_shadow.{
   enforceStandaloneDomainAt,
   groundAdmittedReceivers,
   groundShadowReceiver,
-  hasImportDefiner,
   importerAdmittedVerdict,
   importerShadowDomain,
   importerShadowDomainAt,
@@ -1255,7 +1257,6 @@ import types.tc_shadow.{
   standaloneValuePinned,
 }
 import types.tc_effects.{
-  anyContainsI,
   appSpineArgCount,
   beginEffectContract,
   beginEffectSummaryScope,
@@ -1280,7 +1281,6 @@ import types.tc_effects.{
   grantOccOf,
   grantOnlyBindingId,
   grantOrder,
-  hasDupI,
   hasFileBoundValue,
   indexOnlyEffVars,
   launderEscapeFromLog,

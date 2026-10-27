@@ -51,10 +51,8 @@ import types.tc_env.{
   graphPubDefiners,
   ieImplExistsForHeadOf,
   ifaceExportsIndex,
-  ifaceMethodNames,
   ifaceMethodRows,
   importedBindings,
-  lookupBinding,
   lookupIdxById,
   lookupStandaloneValue,
   lookupStandaloneVar,
@@ -62,8 +60,10 @@ import types.tc_env.{
   methodRowIface,
   namesToSet,
   removeAllS,
-  selectIfaceRows,
   standaloneValueFor,
+  hasImportDefiner,
+  lookupImportedStandalone,
+  allIfaceMethodNames,
 }
 import types.tc_diag.{pushTypeErrorAt, pushTypeErrorHelpFixAt}
 import types.tc_scope.{
@@ -73,6 +73,7 @@ import types.tc_scope.{
   methodDispatchIdx,
   methodEntryHere,
   methodVisibleHere,
+  importedIfaceRows,
 }
 import types.tc_unify.{
   clampPrefix,
@@ -179,13 +180,6 @@ methodCellLookup gctx (EvId m n) =
     Some c => Ok c
     None => Err "method cell \{m}#\{intToString n} was never minted"
 
-lookupImportedStandalone : TcEnv -> String -> Option Scheme
-lookupImportedStandalone env name = match lookupBinding env name
-  Some binding => match binding.ebStandalone
-    Some (ImportedStandalone, value) => Some value.vsScheme
-    _ => None
-  None => None
-
 -- Slot projection below applies the type substitution after superclass expansion;
 -- effect-index arguments use the same occurrence's row substitution here.
 export
@@ -287,17 +281,6 @@ localDeclaredConstraintFor mctx name =
         (lookupAssoc name mctx.mcCells.funConstraintDeclaredRef.value),
     cdArgs = predicateSlotArgs stored,
   }
-
--- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
--- the qual constraint table for such a name is authoritative ("unconstrained in its
--- source"), so `declaredConstraintFor` must NOT fall through to the source-blind bare-name
--- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
-export
-hasImportDefiner : ModuleCtx -> String -> Bool
-hasImportDefiner mctx name =
-  match omLookup name mctx.mcCells.currentImportDefinersRef.value
-    Some _ => True
-    None => False
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
 -- SAME slot list against the SAME [subst] and applies the SAME drop rule (an id absent
@@ -1433,15 +1416,6 @@ resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs =
         tagRef :=
           RLocal sym (routesOfMonosTopV sx encl scope monos ifaces argVecs)
 
--- C5: every interface method name declared anywhere in [decls] (unwrapping DAttrib).
-allIfaceMethodNames : List Decl -> List String
-allIfaceMethodNames [] = []
-allIfaceMethodNames ((DAttrib _ d) :: rest) =
-  allIfaceMethodNames [d] ++ allIfaceMethodNames rest
-allIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
-  ifaceMethodNames methods ++ allIfaceMethodNames rest
-allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
-
 -- True for either spelling of the prelude's module id.  The export indexes
 -- (`meExports`, `deCtorExports`) key the prelude under "core", but the `mid` the core
 -- pass receives is "" on both output selections, so a test of one spelling alone never
@@ -1617,19 +1591,6 @@ nameableIfaceRowsIn idx prog =
   optionOr [] (omLookup "core" idx)
     ++ ifaceMethodRows prog
     ++ importedIfaceRows idx prog
-
-importedIfaceRows : OrdMap (List (String, List String)) ->
-  List Decl ->
-  List (String, List String)
-importedIfaceRows _ [] = []
-importedIfaceRows idx ((DAttrib _ d) :: rest) =
-  importedIfaceRows idx [d] ++ importedIfaceRows idx rest
-importedIfaceRows idx ((DUse _ path _) :: rest) =
-  (match omLookup (useModId path) idx
-      None => []
-      Some src => selectIfaceRows path src)
-    ++ importedIfaceRows idx rest
-importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 
 -- ── #2738: a selectively imported standalone displaced by a nameable method ──
 -- The peer of `frontend/marker.mdk`'s `preludeStandaloneShadows` for the IMPORTER

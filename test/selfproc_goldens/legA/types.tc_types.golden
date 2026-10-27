@@ -1,5 +1,8 @@
 dynFor : ModuleCtx -> DynCtx
 emptyDriveOutputs : Unit -> DriveOutputs
+grantTopKey : String -> String -> String
 manifestDriverFor : DriveInputs -> Option String -> Option EntryKey
+methodGrantKey : String -> String -> String
+setGrantIds : Ref (Map String (List Int)) -> (String, List Int) -> Unit
 siteFor : ModuleCtx -> SiteCtx
 withPublishedManifests : List ManifestRequest -> List CapabilityManifest -> DriveOutputs -> DriveOutputs

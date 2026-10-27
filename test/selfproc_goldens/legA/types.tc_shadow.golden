@@ -2,7 +2,6 @@ admittedDeclHits : ModuleCtx -> ImplEnv -> String -> IfaceRef -> List Mono -> Op
 admittedDeclHitters : ModuleCtx -> ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
 admittedIdxMax : ModuleCtx -> String -> List IfaceRef -> Option Int
 admittedReceiverMono : ModuleCtx -> String -> List IfaceRef -> Mono -> Option Mono
-allIfaceMethodNames : List Decl -> List String
 appSpineHead : Expr -> Expr
 appSpineNodes : Expr -> List Expr
 appSpineNodesGo : Expr -> List Expr -> List Expr
@@ -35,14 +34,12 @@ groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
 groundShadowReceiver : DynCtx -> Option Mono -> Mono -> Bool -> Option Loc -> Unit
 groupMonos : DynCtx -> List (String, Mono)
-hasImportDefiner : ModuleCtx -> String -> Bool
 ifaceMethodName : ModuleCtx -> String -> Bool
 ifaceMethodSigFor : String -> Option Ty -> List (String, List String) -> List Decl -> Option (String, Ty)
 ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
 ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
-importedIfaceRows : Map String (List (String, List String)) -> List Decl -> List (String, List String)
 importedStandaloneShadows : DriveOutputs -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
 importedStandaloneShadowsIn : Map String (List (String, List String)) -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
 importerAdmittedVerdict : ModuleCtx -> ImplEnv -> String -> List Mono -> AdmittedVerdict
@@ -55,7 +52,6 @@ isPreludeMid : String -> Bool
 isShadowStandalone : TcEnv -> String -> Bool
 leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
 localDeclaredConstraintFor : ModuleCtx -> String -> CDeclared
-lookupImportedStandalone : TcEnv -> String -> Option Scheme
 methodCellLookup : GraphCtx -> EvId -> Result String EvCell
 methodCellOf : GraphCtx -> EvId -> EvCell
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
