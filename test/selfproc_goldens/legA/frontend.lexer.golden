@@ -224,8 +224,8 @@ uHexEnd : Array Char -> Int -> Int -> Int
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscCode : Array Char -> Int -> Int -> Option Int
 uniEscEnd : Array Char -> Int -> Int -> Int
-uniEscErr : Array Char -> Int -> Int -> UnicodeProblem
-uniEscTermErr : Array Char -> Int -> Int -> Int -> UnicodeProblem
+uniEscErr : Array Char -> Int -> Int -> List RawTok
+uniEscTermErr : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 uniEscText : Array Char -> Int -> Int -> String
 uniEscWellFormed : Array Char -> Int -> Int -> Bool
 uniHexSigLen : Array Char -> Int -> Int -> Int

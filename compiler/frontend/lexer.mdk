@@ -1050,11 +1050,7 @@ scanStrEsc : Array Char ->
 scanStrEsc src len p startQ depth id acc e
   | e == '{' = RTok (TInterpOpen acc) p (p + 2) :: scan src len (p + 2) depth 1
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None =>
-      lexErrorTok
-        p
-        (unicodeErrorEnd src len p)
-        (BadUnicodeEscape (uniEscErr src len p))
+    None => uniEscErr src len p
     Some c =>
       scanStr src len (uniEscEnd src len p) startQ depth id (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
@@ -1092,11 +1088,7 @@ scanInterpEsc src len p depth acc e
       depth
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None =>
-      lexErrorTok
-        p
-        (unicodeErrorEnd src len p)
-        (BadUnicodeEscape (uniEscErr src len p))
+    None => uniEscErr src len p
     Some c =>
       scanInterpCont src len (uniEscEnd src len p) depth (acc ++ charToStr c)
   | isBareUnicodeEsc src len p e =
@@ -1206,11 +1198,7 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
       leadingNl
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None =>
-      lexErrorTok
-        p
-        (unicodeErrorEnd src len p)
-        (BadUnicodeEscape (uniEscErr src len p))
+    None => uniEscErr src len p
     Some c =>
       scanTriple
         src
@@ -1273,11 +1261,7 @@ scanInterpTripleEsc src len p depth acc e
       depth
       (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
-    None =>
-      lexErrorTok
-        p
-        (unicodeErrorEnd src len p)
-        (BadUnicodeEscape (uniEscErr src len p))
+    None => uniEscErr src len p
     Some c =>
       scanInterpTripleCont
         src
@@ -1679,21 +1663,41 @@ uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 -- notation (U+10FFFF) is unbroken. See docs/spec/SYNTAX.md, which states this grammar.
 -- WHY the run is ill-formed. `s` is the first digit position, `he` the char that
 -- stopped the run — the one `uniEscEnd` must not step blindly past.
-uniEscTermErr : Array Char -> Int -> Int -> Int -> UnicodeProblem
-uniEscTermErr src len s he
-  | he >= len = UnicodeUnterminated
-  | at src he == '_' = UnicodeSeparator
-  | he == s && at src he == '}' = UnicodeEmpty
-  | he == s = UnicodeExpectedDigit (charToStr (at src he))
-  | otherwise = UnicodeExpectedClose (charToStr (at src he))
+-- Terminal Unicode failures stay on the scanner tail path: putting their
+-- classification in a token argument expands the dispatch-TMC helper closure.
+uniEscTermErr : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
+uniEscTermErr src len s he p endp
+  | he >= len = lexErrorTok p endp (BadUnicodeEscape UnicodeUnterminated)
+  | at src he == '_' = lexErrorTok p endp (BadUnicodeEscape UnicodeSeparator)
+  | he == s && at src he == '}' =
+    lexErrorTok p endp (BadUnicodeEscape UnicodeEmpty)
+  | he == s =
+    lexErrorTok
+      p
+      endp
+      (BadUnicodeEscape (UnicodeExpectedDigit (charToStr (at src he))))
+  | otherwise =
+    lexErrorTok
+      p
+      endp
+      (BadUnicodeEscape (UnicodeExpectedClose (charToStr (at src he))))
 
-uniEscErr : Array Char -> Int -> Int -> UnicodeProblem
-uniEscErr src len p
-  | not (uniEscWellFormed src len p) =
-    uniEscTermErr src len (p + 3) (uHexEnd src len (p + 3))
-  | otherwise = match uniEscCode src len p
-    Some cp if uniIsSurrogate cp => UnicodeSurrogate (uniEscText src len p)
-    _ => UnicodeOutOfRange (uniEscText src len p)
+uniEscErr : Array Char -> Int -> Int -> List RawTok
+uniEscErr src len p =
+  let endp = unicodeErrorEnd src len p
+  if not (uniEscWellFormed src len p) then
+    uniEscTermErr src len (p + 3) (uHexEnd src len (p + 3)) p endp
+  else match uniEscCode src len p
+    Some cp if uniIsSurrogate cp =>
+      lexErrorTok
+        p
+        endp
+        (BadUnicodeEscape (UnicodeSurrogate (uniEscText src len p)))
+    _ =>
+      lexErrorTok
+        p
+        endp
+        (BadUnicodeEscape (UnicodeOutOfRange (uniEscText src len p)))
 
 unicodeErrorEnd : Array Char -> Int -> Int -> Int
 unicodeErrorEnd src len p = unicodeErrorEndGo src len (p + 3)
@@ -1714,11 +1718,7 @@ unicodeErrorEndGo src len p
 -- codepoint after the escape) are rejected rather than resumed mid-literal (#668).
 readCharUnicode : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 readCharUnicode src len p depth id = match uniEscChar src len p
-  None =>
-    lexErrorTok
-      p
-      (unicodeErrorEnd src len p)
-      (BadUnicodeEscape (uniEscErr src len p))
+  None => uniEscErr src len p
   Some c =>
     let he = uHexEnd src len (p + 3)
     if he + 1 < len && isApos (at src (he + 1)) then

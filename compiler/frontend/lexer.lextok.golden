@@ -5649,26 +5649,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
-IDENT "unicodeErrorEnd"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-RPAREN
-LPAREN
-UPPER "BadUnicodeEscape"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6135,26 +6119,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
-IDENT "unicodeErrorEnd"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-RPAREN
-LPAREN
-UPPER "BadUnicodeEscape"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6874,26 +6842,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
-IDENT "unicodeErrorEnd"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-RPAREN
-LPAREN
-UPPER "BadUnicodeEscape"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -7429,26 +7381,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
-IDENT "unicodeErrorEnd"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-RPAREN
-LPAREN
-UPPER "BadUnicodeEscape"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -9609,20 +9545,33 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "UnicodeProblem"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscTermErr"
 IDENT "src"
 IDENT "len"
 IDENT "s"
 IDENT "he"
+IDENT "p"
+IDENT "endp"
 INDENT
 PIPE
 IDENT "he"
 GEQ
 IDENT "len"
 EQUAL
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
 UPPER "UnicodeUnterminated"
+RPAREN
 NEWLINE
 PIPE
 IDENT "at"
@@ -9631,7 +9580,13 @@ IDENT "he"
 EQ_EQ
 CHAR "_"
 EQUAL
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
 UPPER "UnicodeSeparator"
+RPAREN
 NEWLINE
 PIPE
 IDENT "he"
@@ -9644,13 +9599,29 @@ IDENT "he"
 EQ_EQ
 CHAR "}"
 EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
 UPPER "UnicodeEmpty"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "he"
 EQ_EQ
 IDENT "s"
 EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
 UPPER "UnicodeExpectedDigit"
 LPAREN
 IDENT "charToStr"
@@ -9660,10 +9631,21 @@ IDENT "src"
 IDENT "he"
 RPAREN
 RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
 UPPER "UnicodeExpectedClose"
 LPAREN
 IDENT "charToStr"
@@ -9673,6 +9655,10 @@ IDENT "src"
 IDENT "he"
 RPAREN
 RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -9685,14 +9671,24 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "UnicodeProblem"
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
+EQUAL
 INDENT
-PIPE
+LET
+IDENT "endp"
+EQUAL
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+IF
 IDENT "not"
 LPAREN
 IDENT "uniEscWellFormed"
@@ -9700,7 +9696,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 RPAREN
-EQUAL
+THEN
 INDENT
 IDENT "uniEscTermErr"
 IDENT "src"
@@ -9720,12 +9716,11 @@ PLUS
 INT 3
 RPAREN
 RPAREN
+IDENT "p"
+IDENT "endp"
 NEWLINE
 DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
+ELSE
 MATCH
 IDENT "uniEscCode"
 IDENT "src"
@@ -9738,6 +9733,13 @@ IF
 IDENT "uniIsSurrogate"
 IDENT "cp"
 FAT_ARROW
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
 UPPER "UnicodeSurrogate"
 LPAREN
 IDENT "uniEscText"
@@ -9745,9 +9747,20 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
 UPPER "UnicodeOutOfRange"
 LPAREN
 IDENT "uniEscText"
@@ -9755,6 +9768,10 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -9895,26 +9912,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
-IDENT "unicodeErrorEnd"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-RPAREN
-LPAREN
-UPPER "BadUnicodeEscape"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "c"
