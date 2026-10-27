@@ -41,13 +41,15 @@ import frontend.ast.{
 import frontend.parser.{
   parseResult,
   ParseError,
-  parseWithPositions,
+  parseSourceSyntaxPairs,
   positionsDecls,
   positionsVariantLines,
-  trailingCommaLocs,
-  unitStarts,
 }
-import frontend.lexer.{collectComments}
+import frontend.lexer.{collectComments, tokenizeWithOffsetPairs}
+import frontend.parse_result.{
+  parsedDecls, parsedPositions, parsedMetadata, metadataTrailingCommas,
+  metadataUnitStarts
+}
 import tools.fmt.{formatProgram}
 import support.util.{
   escStr,
@@ -151,9 +153,13 @@ codemodSource : (Decl -> (Decl, Bool)) ->
 codemodSource xf src = match parseResult src
   Err e => Err e
   Ok _ =>
-    -- parseResult already proved the source parses, so parseWithPositions
-    -- (which panics on failure) is safe here.
-    let (decls, pos) = parseWithPositions src
+    let (toks, pairs) = tokenizeWithOffsetPairs src
+    let parsed = match parseSourceSyntaxPairs src toks pairs
+      Some value => value
+      None => panic "parse error"
+    let decls = parsedDecls parsed
+    let pos = parsedPositions parsed
+    let metadata = parsedMetadata parsed
     let (decls2, changed) = mapDeclsChanged xf decls
     if not changed then
       Ok None
@@ -165,8 +171,8 @@ codemodSource xf src = match parseResult src
             decls2
             (positionsDecls pos)
             (positionsVariantLines pos)
-            (trailingCommaLocs ())
-            (unitStarts ())
+            (metadataTrailingCommas metadata)
+            (metadataUnitStarts metadata)
             comments
             src))
 

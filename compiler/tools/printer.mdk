@@ -842,7 +842,7 @@ bracedPieces open_ forced ps =
 
 -- ── Magic trailing comma ──────────────────────────
 -- The parser records the source position of every trailing comma it consumed
--- (`trailingCommaLocs`, a (line, col) list); `medaka fmt` installs them here.
+-- (a (line, col) list in ParseMetadata); `medaka fmt` installs them here.
 -- A collection literal whose last element is followed by one of them explodes
 -- one element per line.
 

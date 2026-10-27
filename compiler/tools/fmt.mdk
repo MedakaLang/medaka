@@ -54,7 +54,7 @@ import frontend.lexer.{
   tokenizeWithOffsetPairs,
 }
 import frontend.parser.{
-  parseWithPositionsOptPairs,
+  parseSourceSyntaxPairs,
   parseResultPairs,
   prescanErrorPairs,
   ParseError(..),
@@ -65,8 +65,10 @@ import frontend.parser.{
   positionsLastContentLine,
   declPosLine,
   declPosEndLine,
-  trailingCommaLocs,
-  unitStarts,
+}
+import frontend.parse_result.{
+  ParsedSource, parsedDecls, parsedPositions, parsedMetadata,
+  metadataTrailingCommas, metadataUnitStarts
 }
 import support.util.{
   listLen,
@@ -712,18 +714,19 @@ formatSource src = match tokenizeWithOffsetPairs src
 -- again. Panics on a parse failure, as `parseWithPositions` does.
 export
 formatSourcePairs : String -> List Token -> List (Int, Int) -> String
-formatSourcePairs src toks pairs =
-  match parseWithPositionsOptPairs src toks pairs
-    Some parsed => formatParsed src parsed
-    None => panic "parse error"
+formatSourcePairs src toks pairs = match parseSourceSyntaxPairs src toks pairs
+  Some parsed => formatParsed src parsed
+  None => panic "parse error"
 
--- The formatter proper, over the result of a successful
--- `parseWithPositionsOptPairs`.  Reads the side-channel refs that parse just
--- filled, so it must run before any other parse.
-formatParsed : String -> (List Decl, Positions) -> String
-formatParsed src (decls, pos) =
-  let commas = trailingCommaLocs ()
-  let arms = unitStarts ()
+-- Format using the immutable positions and cues from this source parse.
+export
+formatParsed : String -> ParsedSource -> String
+formatParsed src parsed =
+  let decls = parsedDecls parsed
+  let pos = parsedPositions parsed
+  let metadata = parsedMetadata parsed
+  let commas = metadataTrailingCommas metadata
+  let arms = metadataUnitStarts metadata
   restoreTripleQuotedStrings
     src
     (formatProgram
@@ -749,7 +752,7 @@ formatSourceChecked : String ->
   Result ParseError String
 formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
   Some e => Err e
-  None => match parseWithPositionsOptPairs src toks pairs
+  None => match parseSourceSyntaxPairs src toks pairs
     Some parsed => Ok (formatParsed src parsed)
     None =>
       map

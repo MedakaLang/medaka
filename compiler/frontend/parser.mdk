@@ -1,8 +1,22 @@
+import frontend.parse_engine.{
+  PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
+  ParseMode(..), newParseContext, newParseContextWith, runPWith, runP,
+  contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
+  peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
+  fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepThen,
+  sepBy1, mark, rewind, locOfSpan, spanLoc, tokLineCol, depthOf, withDepth,
+  recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
+  unexpectedTokenMsg
+}
+import frontend.parse_result.{
+  ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
+  parsedPositions
+}
 -- Self-hosted Medaka parser.  A monadic
 -- *combinator* parser over `List Token` from the lexer: a `ParserE` monad
 -- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
 -- `defer`-notation, and
--- combinators (`many`/`sepBy1`/`orElse`).  Precedence is the stratified
+-- combinators (`many`/`sepBy1`/`parseOrElse`).  Precedence is the stratified
 -- ladder from parser.mly.  Validated by the
 -- `parse_fixtures` family (test/diff_compiler_snapshot_frontend_test.mdk).
 --
@@ -121,264 +135,13 @@ import support.util.{reverseL, joinWith}
 import list.{last}
 import support.char.{isUpper}
 
--- ── The Parser monad ────────────────────────────────────────────────────
--- `PErr` is a RECOVERABLE failure: `orElse` may try the other alternative and
--- `many` may treat it as "no more items".  `PFatal` is a COMMITTED failure: the
--- input is unambiguously this production and unambiguously wrong, so no
--- alternative may paper over it and no `many` may swallow it — it propagates
--- straight out to `resultDeclsResult`, which locates it like any other error.
--- Without this channel a deep, well-worded rejection (e.g. the #171 bare-2^62
--- literal) is discarded by the enclosing `many (appArg …)` and the user sees a
--- generic "unexpected INT" from the leftover-token path instead.
-public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int
-
--- A recoverable failure, kept unrendered: `orElse`/`many` discard almost all of
--- them, so the message text is built only where one becomes a diagnostic
--- (`renderFail`).
-public export data PFail =
-  | FailMsg String
-  | FailExpect Token Token
-  | FailProblem ParseDiagnosticKind
-
-export
-renderFail : PFail -> String
-renderFail (FailMsg m) = m
-renderFail (FailProblem kind) = renderParseProblem kind
-renderFail (FailExpect x t) =
-  "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
-
-failProblem : PFail -> ParseDiagnosticKind
-failProblem (FailProblem kind) = kind
-failProblem (FailExpect TEof expected) =
-  UnexpectedEndExpected (expectedTokenMsg expected)
-failProblem other = GenericParse (renderFail other)
-
--- A parser STORES its continuation under the stepping arrow rather than running
--- it, so the honest type indexes the container by the row that arrow performs:
--- `ParserE e a` is the DEFERRED family's shape (core.mdk `Deferred*`, #825), and
--- the plain `Mappable`/`Applicative`/`Thenable` family cannot describe it — those
--- charge a callback's row on the method's own arrow, which forces the stored
--- arrow to be pure and would let an effectful callback run inside a value typed
--- `<>`.  The compiler's own parsing performs nothing, so every signature below
--- reads `Parser X` and means `ParserE <> X` through the alias.
-public export data ParserE (e : Effect) a =
-  ParserE (Array Token -> Int -> <e> PR a)
-
-export type Parser a = ParserE <> a
-
-export
-runP : ParserE e a -> Array Token -> Int -> <e> PR a
-runP (ParserE f) toks pos = f toks pos
-
-mapPR : (a -> <e> b) -> PR a -> <e> PR b
-mapPR f (POk a pos) = POk (f a) pos
-mapPR _ (PErr e pos) = PErr e pos
-mapPR _ (PFatal e pos) = PFatal e pos
-
-impl DeferredMappable ParserE where
-  deferMap f pa = ParserE (toks pos => mapPR f (runP pa toks pos))
-
-apPR : ParserE e (a -> b) -> ParserE e a -> Array Token -> Int -> <e> PR b
-apPR pf pa toks pos = match runP pf toks pos
-  POk f pos1 => mapPR f (runP pa toks pos1)
-  PErr e pos1 => PErr e pos1
-  PFatal e pos1 => PFatal e pos1
-
-impl DeferredApplicative ParserE where
-  deferPure x = ParserE (toks pos => POk x pos)
-  deferAp pf pa = ParserE (toks pos => apPR pf pa toks pos)
-
-bindPR : ParserE e a -> (a -> <e> ParserE e b) -> Array Token -> Int -> <e> PR b
-bindPR pa k toks pos = match runP pa toks pos
-  POk a pos1 => runP (k a) toks pos1
-  PErr e pos1 => PErr e pos1
-  PFatal e pos1 => PFatal e pos1
-
-impl DeferredThenable ParserE where
-  deferThen pa k = ParserE (toks pos => bindPR pa k toks pos)
-
--- ── Primitives ──────────────────────────────────────────────────────────
-peekTok : Array Token -> Int -> Token
-peekTok toks pos
-  | pos < arrayLength toks = arrayGetUnsafe pos toks
-  | otherwise = TEof
-
-export
-failP : String -> Parser a
-failP msg = ParserE (toks pos => PErr (FailMsg msg) pos)
-
-fatalP : ParseDiagnosticKind -> Parser a
-fatalP kind = ParserE (_toks pos => PFatal (FailProblem kind) pos)
-
-fatalProblemAtP : ParseDiagnosticKind -> Int -> Parser a
-fatalProblemAtP kind pos0 =
-  ParserE (_toks _pos => PFatal (FailProblem kind) pos0)
-
--- A COMMITTED failure reported at an EXPLICIT, previously-captured token index
--- rather than the current position — for when the offending construct starts
--- earlier than where the parser actually notices the problem (e.g. `public` on
--- a non-`data` decl: the mistake is the leading `public` token, not whatever
--- follows `public export`).  `pos0` comes from a `getPos` taken before the
--- construct was consumed; the current position is discarded (never consumes).
--- Must be `PFatal`, not `PErr`: a `PErr` reported at `pos0` (the decl's own
--- start position) is indistinguishable from "no progress" to `many`'s
--- swallow-and-retry / `deepenLeftover` recovery (`pos2 > pos` fails when
--- pos2 == the decl start), which discards the message for a generic
--- "unexpected `public`" instead.  `PFatal` bypasses that recovery machinery
--- entirely (`manyGo`'s `PFatal e q => PFatal e q` propagates straight out),
--- so it is only safe where — as here — no alternative production could ever
--- have claimed this token (see `fatalP` above).
-fatalAtP : String -> Int -> Parser a
-fatalAtP msg pos0 = ParserE (toks _pos => PFatal (FailMsg msg) pos0)
-
-peekP : Parser Token
-peekP = ParserE (toks pos => POk (peekTok toks pos) pos)
-
--- Peek the token ONE PAST the current (lookahead-2) without consuming.  Used by
--- the WS-4 product effect-param clause to disambiguate a product axis (`Host=`)
--- from a comma-separated next atom: a `TUpper` immediately FOLLOWED by `TEqual`
--- starts a product axis.  Pure read of `pos + 1` (no advance).
-peek2P : Parser Token
-peek2P = ParserE (toks pos => POk (peekTok toks (pos + 1)) pos)
-
-peek3P : Parser Token
-peek3P = ParserE (toks pos => POk (peekTok toks (pos + 2)) pos)
-
--- Read the current token index without consuming.  Used by the position
--- side-channel (`parseWithPositions`) to capture per-decl / per-variant token
--- spans; does not affect parsing (it's a pure read of `pos`).
-getPos : Parser Int
-getPos = ParserE (toks pos => POk pos pos)
-
--- ── Source-location capture (Phase B.10.2) ──────────────────────────────────
--- The `located` combinator wraps an expr production in a transparent `ELoc`,
--- mirroring parser.mly's `ELoc (of_pos $startpos $endpos, …)`.  parser.mly gets
--- line/col from Menhir's positions; here we recover them out of band from the
--- token→char-offset array (`tokenizeWithOffsets`) + the source chars, the same
--- machinery the structured parse-error path (`mkLocated`) already uses.  Both
--- are stashed in module refs by the parse entry points before parsing; the
--- Parser monad itself is untouched (its token stream stays byte-identical).
--- When unset (a caller that didn't populate them, e.g. a bare `runP`), `located`
--- falls back to a zero loc — still transparent, just position-less.
-locSrcRef : Ref String
-locSrcRef = Ref ""
-
-locOffsRef : Ref (Array (Int, Int))
-locOffsRef = Ref (arrayFromList [])
-
--- Precomputed sorted line-start char offsets for `locSrcRef`'s source, so
--- `locOfSpan` resolves each offset in O(log N) via binary search instead of
--- re-walking the whole source from 0 (which made the located-parse pass O(N²)).
-locLineStartsRef : Ref (Array Int)
-locLineStartsRef = Ref (arrayFromList [0])
-
-setLocState : String -> Array (Int, Int) -> Unit
-setLocState src offs = setLocStateWith src (lineStartsOf src) offs
-
--- `setLocState` with the caller's already-computed `lineStartsOf src`, so a
--- caller that needs the line starts too does not rescan the source.
-setLocStateWith : String -> Array Int -> Array (Int, Int) -> Unit
-setLocStateWith src lineStarts offs =
-  guardOffsRef := arrayFromList []
-  locSrcRef := src
-  locLineStartsRef := lineStarts
-  locOffsRef := offs
-
--- The state no located parse has touched.  The non-located entry points restore
--- it, so what they produce is a function of their source alone.
-resetLocState : Unit -> Unit
-resetLocState _ = setLocStateWith "" (arrayFromList [0]) (arrayFromList [])
-
--- start char offset of token `i` (0 when out of range / unset).
-tokOffsetAt : Int -> Int
-tokOffsetAt i =
-  let offs = !locOffsRef
-  if i >= 0 && i < arrayLength offs then fst (arrayGetUnsafe i offs) else 0
-
--- end char offset of token `i` — one past its last character (0 when out of range / unset).
-tokEndOffsetAt : Int -> Int
-tokEndOffsetAt i =
-  let offs = !locOffsRef
-  if i >= 0 && i < arrayLength offs then snd (arrayGetUnsafe i offs) else 0
-
--- Build a `Loc` from a [start, end) token-index span.  start → the span's first
--- token's START offset; end → the last consumed token's END offset (one past its
--- last character), matching Menhir's `$endpos`.  Both start and end offsets are
--- now exact: `tokenizeWithOffsetPairs` threads the lexer-computed end (the next
--- scan position after each token) through the layout pass.  For a single-token
--- expr (`"x"`) start_col < end_col = start_col + token_length, matching the
--- OCaml LSP's range exactly.  `file` is left "" for the caller to fill.
-locOfSpan : Int -> Int -> Loc
-locOfSpan startIdx endIdx =
-  let lineStarts = !locLineStartsRef
-  let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
-  let so = tokOffsetAt startIdx
-  let eo = tokEndOffsetAt lastIdx
-  let si = lineStartIndex lineStarts so
-  let ei = lineStartIndex lineStarts eo
-  Loc
-    ""
-    (si + 1)
-    (so - arrayGetUnsafe si lineStarts)
-    (ei + 1)
-    (eo - arrayGetUnsafe ei lineStarts)
-
--- Wrap an expr production in a transparent ELoc capturing its token span.
 located : Parser Expr -> Parser Expr
 located p = defer
   s <- getPos
   e <- p
   q <- getPos
-  deferPure (ELoc (locOfSpan s q) e)
-
-advance : Parser Token
-advance = ParserE (toks pos => advanceR (peekTok toks pos) pos)
-
-advanceR : Token -> Int -> PR Token
-advanceR TEof pos = PErr (FailProblem UnexpectedEnd) pos
-advanceR t pos = POk t (pos + 1)
-
--- consume one token, yield the given value
-emit : a -> Parser a
-emit x = defer
-  advance
-  deferPure x
-
-export
-expectTok : Token -> Parser Unit
-expectTok t = defer
-  x <- peekP
-  expectGo t x
-
-expectGo : Token -> Token -> Parser Unit
-expectGo t x =
-  if x == t then emit () else ParserE (_toks pos => PErr (FailExpect x t) pos)
-
--- The "unexpected X" half of a parse error.  A description that carries an
--- article (`a number`) or names a layout event (`a dedent`) reads badly after
--- "unexpected", so those tokens get a bare noun phrase here.
-unexpectedTokenMsg : Token -> String
-unexpectedTokenMsg t = "unexpected " ++ unexpectedTokenText t
-
-unexpectedTokenText : Token -> String
-unexpectedTokenText (TInt _ _) = "number"
-unexpectedTokenText (TWideInt _ _ _) = "number"
-unexpectedTokenText (TFloat _) = "number"
-unexpectedTokenText (TString _) = "string"
-unexpectedTokenText (TInterpOpen _) = "string"
-unexpectedTokenText (TInterpMid _) = "string"
-unexpectedTokenText (TInterpEnd _) = "string"
-unexpectedTokenText (TChar _) = "character literal"
-unexpectedTokenText TNewline = "line break"
-unexpectedTokenText TIndent = "indentation"
-unexpectedTokenText TDedent = "end of block"
-unexpectedTokenText t = describeToken t
-
--- The "expected Y" half: a layout token is named by what the user would write.
-expectedTokenMsg : Token -> String
-expectedTokenMsg TIndent = "an indented block"
-expectedTokenMsg TDedent = "the end of the block"
-expectedTokenMsg t = describeToken t
+  loc <- spanLoc s q
+  deferPure (ELoc loc e)
 
 identNameP : Parser String
 identNameP = defer
@@ -388,58 +151,6 @@ identNameP = defer
 identNameFor : Token -> Parser String
 identNameFor (TIdent x) = emit x
 identNameFor _ = failP "expected an identifier"
-
--- ── Combinators ─────────────────────────────────────────────────────────
-export
-orElse : Parser a -> Parser a -> Parser a
-orElse pa pb = ParserE (toks pos => orElseR pa pb toks pos)
-
--- On a double failure, keep the FURTHEST-reached error (larger token index)
--- rather than always the second alternative's.  This is the classic
--- recursive-descent furthest-failure heuristic: the alternative that consumed
--- more input before failing is almost always the intended parse, so its error
--- (the offending token deep in the body) is the useful one to surface — instead
--- of the shallow re-report at the construct's head.  Ties prefer `pb` (the prior
--- behaviour).  Success of either branch is returned unchanged, so parse results
--- are byte-identical; only which message a doomed parse carries changes.
-orElseR : Parser a -> Parser a -> Array Token -> Int -> PR a
-orElseR pa pb toks pos = match runP pa toks pos
-  POk x q => POk x q
-  PFatal ea qa => PFatal ea qa
-  PErr ea qa => orElseRb ea qa (runP pb toks pos)
-
-orElseRb : PFail -> Int -> PR a -> PR a
-orElseRb _ _ (POk y q) = POk y q
-orElseRb _ _ (PFatal eb qb) = PFatal eb qb
-orElseRb ea qa (PErr eb qb)
-  | qa > qb = PErr ea qa
-  | otherwise = PErr eb qb
-
--- zero or more; primitive + progress-guarded so it can never loop
-many : Parser a -> Parser (List a)
-many p = ParserE (toks pos => manyGo p toks pos [])
-
-manyGo : Parser a -> Array Token -> Int -> List a -> PR (List a)
-manyGo p toks pos acc = match runP p toks pos
-  POk x pos2 => manyStep p toks pos pos2 acc x
-  PFatal e q => PFatal e q
-  PErr _ _ => POk (reverseL acc) pos
-
-manyStep : Parser a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
-manyStep p toks pos pos2 acc x
-  | pos2 > pos = manyGo p toks pos2 (x :: acc)
-  | otherwise = POk (reverseL (x :: acc)) pos2
-
-sepThen : Parser b -> Parser a -> Parser a
-sepThen sep p = defer
-  sep
-  p
-
-sepBy1 : Parser a -> Parser b -> Parser (List a)
-sepBy1 p sep = defer
-  x <- p
-  xs <- many (sepThen sep p)
-  deferPure (x :: xs)
 
 -- Consume an OPTIONAL trailing comma that `sepBy1` left positioned at (a
 -- trailing comma backtracks the failed element parse, leaving the parser AT the
@@ -458,24 +169,6 @@ optTrailingCommaFor TComma = defer
   advance
   recordTrailingComma p
 optTrailingCommaFor _ = deferPure ()
-
--- Source positions (line, col) of every trailing comma consumed by the last
--- parse, in source order — the formatter's "magic trailing comma" signal (a
--- collection literal the author ended with a comma stays one-element-per-line).
--- Real positions only on the located path (`parseWithPositions`); a bare
--- `parse` records zero locs, which the formatter never consults.
-trailingCommaLocsRef : Ref (List (Int, Int))
-trailingCommaLocsRef = Ref []
-
-recordTrailingComma : Int -> Parser Unit
-recordTrailingComma p = match locOfSpan p (p + 1)
-  Loc _ sl sc _ _ =>
-    trailingCommaLocsRef := (sl, sc) :: !trailingCommaLocsRef
-    deferPure ()
-
-export
-trailingCommaLocs : Unit -> List (Int, Int)
-trailingCommaLocs _ = reverseL !trailingCommaLocsRef
 
 -- Like `optTrailingComma`, but a no-op for a single-element paren group — a
 -- trailing comma after one element (`(x,)`) is NOT accepted, so `(x)` keeps its
@@ -545,18 +238,18 @@ assignTailRaw lhs = defer
 -- other next token makes the tail fail without consuming (at this same pos), so
 -- the result is `POk e pos` and the tail's chain need not be built.
 annotOpt : Expr -> Parser Expr
-annotOpt e = ParserE (toks pos => match peekTok toks pos
-  TColon => runP (orElse (annotTail e) (deferPure e)) toks pos
+annotOpt e = ParserE (ctx pos => match peekTok (contextTokens ctx) pos
+  TColon => runPWith ctx (parseOrElse (annotTail e) (deferPure e)) pos
   _ => POk e pos)
 
 assignOpt : Expr -> Parser Expr
-assignOpt e = ParserE (toks pos => match peekTok toks pos
-  TColonEq => runP (orElse (assignTail e) (deferPure e)) toks pos
+assignOpt e = ParserE (ctx pos => match peekTok (contextTokens ctx) pos
+  TColonEq => runPWith ctx (parseOrElse (assignTail e) (deferPure e)) pos
   _ => POk e pos)
 
 lamOpt : Expr -> Parser Expr
-lamOpt e = ParserE (toks pos => match peekTok toks pos
-  TFatArrow => runP (orElse (lamTail e) (deferPure e)) toks pos
+lamOpt e = ParserE (ctx pos => match peekTok (contextTokens ctx) pos
+  TFatArrow => runPWith ctx (parseOrElse (lamTail e) (deferPure e)) pos
   _ => POk e pos)
 
 -- expression type annotation `e : ty` (loosest level)
@@ -778,21 +471,22 @@ parseOr = ParserE (binLevel orLevel)
 -- `defer`-notation: an operand that no operator of this level follows passes
 -- up as the very `PR` its level returned, so a descent through all nine levels
 -- allocates nothing of its own.
-binLevel : Int -> Array Token -> Int -> PR Expr
-binLevel lvl toks pos
-  | lvl > mulLevel = runP parseUnary toks pos
-  | otherwise = binLevelRest lvl toks (binLevel (lvl + 1) toks pos)
+binLevel : Int -> ParseContext -> Int -> PR Expr
+binLevel lvl ctx pos
+  | lvl > mulLevel = runPWith ctx parseUnary pos
+  | otherwise = binLevelRest lvl ctx (binLevel (lvl + 1) ctx pos)
 
-binLevelRest : Int -> Array Token -> PR Expr -> PR Expr
-binLevelRest lvl toks (r@(POk x pos)) =
-  binTry lvl toks r x pos (peekTok toks pos)
+binLevelRest : Int -> ParseContext -> PR Expr -> PR Expr
+binLevelRest lvl ctx (r@(POk x pos)) =
+  binTry lvl ctx r x pos (peekTok (contextTokens ctx) pos)
 binLevelRest _ _ r = r
 
 -- `r` is `POk x pos`, handed back unchanged when `t` is not this level's.
-binTry : Int -> Array Token -> PR Expr -> Expr -> Int -> Token -> PR Expr
-binTry lvl toks r x pos t
+binTry : Int -> ParseContext -> PR Expr -> Expr -> Int -> Token -> PR Expr
+binTry lvl ctx r x pos t
   | binLevelOf t == lvl =
-    binRhs lvl toks x pos t (binLevel (binRhsLevel lvl) toks (pos + 1))
+    let saved = mark ctx
+    binRhs saved lvl ctx x pos t (binLevel (binRhsLevel lvl) ctx (pos + 1))
   | otherwise = r
 
 binRhsLevel : Int -> Int
@@ -805,16 +499,27 @@ binRhsLevel lvl
 -- tries that token, since each operator belongs to exactly one level.  `::`
 -- stops after one operator because its right operand already took the rest
 -- of the chain.
-binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
-binRhs lvl toks x _ t (POk y q) =
-  binNext lvl toks (POk (EBinOp (binOpName t) x y unminted) q)
-binRhs _ _ x pos _ (PErr _ _) = POk x pos
-binRhs _ _ _ _ _ ry = ry
+binRhs : ParseMark ->
+  Int ->
+  ParseContext ->
+  Expr ->
+  Int ->
+  Token ->
+  PR Expr ->
+  PR Expr
+binRhs _ lvl ctx x _ t (POk y q) =
+  binNext lvl ctx (POk (EBinOp (binOpName t) x y unminted) q)
+binRhs saved _ _ x pos _ (PErr _ _) =
+  rewind saved
+  POk x pos
+binRhs saved _ _ _ _ _ ry =
+  rewind saved
+  ry
 
-binNext : Int -> Array Token -> PR Expr -> PR Expr
-binNext lvl toks r
+binNext : Int -> ParseContext -> PR Expr -> PR Expr
+binNext lvl ctx r
   | lvl == consLevel = r
-  | otherwise = binLevelRest lvl toks r
+  | otherwise = binLevelRest lvl ctx r
 
 -- ── The 2^62 int literal: legal only under a unary `-` (#171) ───────────────
 -- `Int` is 63-bit (`word = (n << 1) | 1`), spanning [-2^62, 2^62-1].  The lexer
@@ -916,19 +621,23 @@ parseApp = defer
 -- head (`5 -1`) never grabs, so the TMinusTight falls through to the
 -- binary-minus level (`binLevel`) and stays subtraction (Rule C, head-gated).
 appArg : Expr -> Parser Expr
-appArg head = ParserE (toks pos => appArgR head toks pos)
+appArg head = ParserE (ctx pos => appArgR head ctx pos)
 
 -- End-of-arguments fast path.  `many (appArg …)` ends every application with a
 -- failing attempt whose error it discards, so for a token that cannot start an
 -- argument the whole chain is a PErr at `pos`.  The one exception is the nesting
 -- cap: `parseAtomNestGo` returns PFatal before it looks at the token, so the
 -- chain runs whenever the depth counter is at the cap.
-appArgR : Expr -> Array Token -> Int -> PR Expr
-appArgR head toks pos =
-  if appArgStops (peekTok toks pos) && !nestDepthRef < maxNestDepth then
+appArgR : Expr -> ParseContext -> Int -> PR Expr
+appArgR head ctx pos =
+  if appArgStops (peekTok (contextTokens ctx) pos)
+    && depthOf ctx < maxNestDepth then
     PErr (FailMsg "expected an application argument") pos
   else
-    runP (orElse (negLitArg head) (orElse derefArg parseAspat)) toks pos
+    runPWith
+      ctx
+      (parseOrElse (negLitArg head) (parseOrElse derefArg parseAspat))
+      pos
 
 -- Tokens that no argument alternative accepts without a fatal outcome.
 appArgStops : Token -> Bool
@@ -1017,7 +726,7 @@ headIsNumeric _ = False
 -- (a binding-LHS as-pattern, e.g. a lambda param `xs@rest =>`); else a postfix.
 -- AS_AT is only emitted by the lexer when `@` directly follows an identifier.
 parseAspat : Parser Expr
-parseAspat = orElse parseAspatAt parsePostfix
+parseAspat = parseOrElse parseAspatAt parsePostfix
 
 parseAspatAt : Parser Expr
 parseAspatAt = located parseAspatAtRaw
@@ -1039,19 +748,20 @@ parsePostfix = defer
   postfixTail e
 
 postfixTail : Expr -> Parser Expr
-postfixTail e = ParserE (toks pos => postfixTailR e toks pos)
+postfixTail e = ParserE (ctx pos => postfixTailR e ctx pos)
 
 -- Only `[`-tight and `.` can continue a postfix chain.  For any other next
 -- token both tails fail without consuming (at this same pos), so the chain
 -- would pick `deferPure e`: return that directly and skip building the chain.
-postfixTailR : Expr -> Array Token -> Int -> PR Expr
-postfixTailR e toks pos = match peekTok toks pos
-  TLBracketTight => runP (postfixChain e) toks pos
-  TDot => runP (postfixChain e) toks pos
+postfixTailR : Expr -> ParseContext -> Int -> PR Expr
+postfixTailR e ctx pos = match peekTok (contextTokens ctx) pos
+  TLBracketTight => runPWith ctx (postfixChain e) pos
+  TDot => runPWith ctx (postfixChain e) pos
   _ => POk e pos
 
 postfixChain : Expr -> Parser Expr
-postfixChain e = orElse (bracketIndexTail e) (orElse (dotTail e) (deferPure e))
+postfixChain e =
+  parseOrElse (bracketIndexTail e) (parseOrElse (dotTail e) (deferPure e))
 
 -- bare `a[i]` postfix indexing (no dot) — fires only on the adjacency-lexed
 -- TLBracketTight token, so a spaced `a [i]` (application to a list literal)
@@ -1122,9 +832,6 @@ sliceHi e lo incl = defer
 -- and `parseTyAtom`'s own wrappers below, closing the pattern- and
 -- type-grammar gaps the end-of-sprint review found; an expr-only input still
 -- only ever increments here, so `parseAtom`'s own boundary does not move.
-nestDepthRef : Ref Int
-nestDepthRef = Ref 0
-
 -- Comfortably above any depth a hand-written or generated program plausibly
 -- needs (this repo's own deepest perf-corpus shape nests a few thousand
 -- levels) while staying well inside the 256MB GC-worker stack every `medaka`
@@ -1143,39 +850,17 @@ nestTooDeepMsg =
 -- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
 -- implicit from their wrapped leaf operands.
 --
--- Depth tracking is written directly over the raw `ParserE` representation
--- (not `defer`-notation) so the counter is restored on EVERY outcome — including
--- a non-fatal `PErr` from a failed speculative atom attempt, routine under
--- `orElse` throughout this file. A `defer`-sequenced decrement after
--- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
--- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
--- increment on every backtrack and eventually trip the cap on an ordinary
--- (shallow) program.
+-- The engine restores the shared invocation depth on success and both failure
+-- constructors; a decrement sequenced through a bind would miss failures.
 parseAtom : Parser Expr
-parseAtom = ParserE parseAtomNestGo
+parseAtom =
+  withDepth maxNestDepth (FailMsg nestTooDeepMsg) (ParserE atomRawLocated)
 
-parseAtomNestGo : Array Token -> Int -> PR Expr
-parseAtomNestGo toks pos =
-  let d = !nestDepthRef + 1
-  if d > maxNestDepth then
-    PFatal (FailMsg nestTooDeepMsg) pos
-  else
-    parseAtomNestRun toks pos d
-
-parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
-parseAtomNestRun toks pos d =
-  nestDepthRef := d
-  let r = atomRawLocated toks pos
-  nestDepthRef := d - 1
-  r
-
--- `located parseAtomRaw`, run directly: the same ELoc (span from `pos` to the
--- position after the atom) on success, the raw failure unchanged otherwise.
-atomRawLocated : Array Token -> Int -> PR Expr
-atomRawLocated toks pos = match runP parseAtomRaw toks pos
-  POk e q => POk (ELoc (locOfSpan pos q) e) q
-  PErr ef q => PErr ef q
-  PFatal m q => PFatal m q
+atomRawLocated : ParseContext -> Int -> PR Expr
+atomRawLocated ctx pos = match runPWith ctx parseAtomRaw pos
+  POk e q => POk (ELoc (locOfSpan ctx pos q) e) q
+  PErr f q => PErr f q
+  PFatal f q => PFatal f q
 
 parseAtomRaw : Parser Expr
 parseAtomRaw = defer
@@ -1218,12 +903,12 @@ upperTail x _ = deferPure (EVar x)
 -- (a `|` follows the leading expr), or the unified `Con { kv_or_e, … }` form,
 -- which classifies into a record create (`f = v`
 -- fields + puns), a map literal (`k => v` entries), or a set literal (bare
--- elements).  `orElse` backtracks, so try the update form first — its leading
+-- elements).  `parseOrElse` backtracks, so try the update form first — its leading
 -- `parseExpr` fails fast at the first `=`/`=>`/`,`/`}` (no `|`).
 upperBrace : String -> Parser Expr
 upperBrace x = defer
   expectTok TLBrace
-  orElse (variantUpdateTail x) (braceItems x)
+  parseOrElse (variantUpdateTail x) (braceItems x)
 
 variantUpdateTail : String -> Parser Expr
 variantUpdateTail x = defer
@@ -1257,7 +942,8 @@ braceItemsFor x _ = defer
 -- key is parsed at the pipe level (like the reference `expr_pipe`) so a `=>`
 -- ends the key rather than starting a lambda.
 parseKvOrE : Parser KvItem
-parseKvOrE = orElse parseKvField (orElse parseKvBlockElem parseKvKVorElem)
+parseKvOrE =
+  parseOrElse parseKvField (parseOrElse parseKvBlockElem parseKvKVorElem)
 
 -- Gate B: a bare-INDENT block as a record-field / set-element value.
 parseKvBlockElem : Parser KvItem
@@ -1431,14 +1117,12 @@ parseBracketBlock = defer
 -- for it, or the formatter would take a hung body's first line for the start
 -- of the statement that owns it.
 unrecordSoleStmt : List DoStmt -> Parser Unit
-unrecordSoleStmt [DoExpr _] =
-  unitStartsRef := dropFirst !unitStartsRef
-  deferPure ()
+unrecordSoleStmt [DoExpr _] = forgetLatestUnitStart
 unrecordSoleStmt _ = deferPure ()
 
 -- a bracket element: a bare-INDENT block, or an ordinary expression.
 parseBracketElem : Parser Expr
-parseBracketElem = orElse parseBracketBlock parseExpr
+parseBracketElem = parseOrElse parseBracketBlock parseExpr
 
 parseParen : Parser Expr
 parseParen = defer
@@ -1450,8 +1134,8 @@ parseParen = defer
 -- a tuple, or a plain parenthesised expression
 parenFor : Token -> Parser Expr
 parenFor TRParen = emit (ELit LUnit)
-parenFor TMinus = orElse bareMinusSection parseParenExpr
-parenFor TMinusTight = orElse bareMinusSection parseParenExpr
+parenFor TMinus = parseOrElse bareMinusSection parseParenExpr
+parenFor TMinusTight = parseOrElse bareMinusSection parseParenExpr
 parenFor t = parenSectionOr t
 
 parenSectionOr : Token -> Parser Expr
@@ -1459,7 +1143,7 @@ parenSectionOr t = match sectionOpStr t
   Some op => parseSectionOp op
   None => parseParenExpr
 
--- `(-)` is a bare section; `(-e)` is a parenthesised unary minus (orElse falls
+-- `(-)` is a bare section; `(-e)` is a parenthesised unary minus (parseOrElse falls
 -- through). MINUS is excluded from the SecRight form, matching the grammar.
 bareMinusSection : Parser Expr
 bareMinusSection = defer
@@ -1680,7 +1364,7 @@ ifPlain = defer
 -- without an `ELoc` so the typechecker can tell it from a written `()`
 -- (`isOmittedElse`, `compiler/types/typecheck.mdk`)
 elseBranch : Parser Expr
-elseBranch = orElse elsePresent (deferPure (ELit LUnit))
+elseBranch = parseOrElse elsePresent (deferPure (ELit LUnit))
 
 elsePresent : Parser Expr
 elsePresent = defer
@@ -1689,7 +1373,7 @@ elsePresent = defer
 
 -- a then/else branch is either an inline expr or an indented statement block
 parseBranch : Parser Expr
-parseBranch = orElse branchBlock parseExpr
+parseBranch = parseOrElse branchBlock parseExpr
 
 -- Same offside-block production as `parseBracketBlock`/`indentedBody` (#602).
 branchBlock : Parser Expr
@@ -1700,11 +1384,12 @@ branchBlock = parseBracketBlock
 -- mutually-recursive `let rec f = … with g = … in e2` (→ ELetGroup).
 parseLet : Parser Expr
 parseLet = defer
+  ctx <- contextP
   s <- getPos
   expectTok TLet
   t <- peekP
   e <- letExprKind t
-  deferPure (atLetSite (locOfSpan s (s + 1)) e)
+  deferPure (atLetSite (locOfSpan ctx s (s + 1)) e)
 
 letExprKind : Token -> Parser Expr
 -- beta mutability model: `let mut` has been removed (bindings are immutable).
@@ -1741,11 +1426,12 @@ functionRemovedMsg =
 -- `let x : ty = e`, or plain `let x = e`, each followed by `in e2`
 letIdentExpr : String -> Parser Expr
 letIdentExpr name = defer
+  ctx <- contextP
   s <- getPos
   advance
   params <- many parseParamPat
   t <- peekP
-  letIdentExprRest name (locOfSpan s (s + 1)) params t
+  letIdentExprRest name (locOfSpan ctx s (s + 1)) params t
 
 letIdentExprRest : String -> Loc -> List Pat -> Token -> Parser Expr
 letIdentExprRest name nameLoc [] TColon = defer
@@ -1795,12 +1481,13 @@ letRecExpr = defer
 
 letRecInlineClause : Parser (String, List Pat, Expr, Loc)
 letRecInlineClause = defer
+  ctx <- contextP
   s <- getPos
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseExpr
-  deferPure (name, pats, body, locOfSpan s (s + 1))
+  deferPure (name, pats, body, locOfSpan ctx s (s + 1))
 
 parseMatch : Parser Expr
 parseMatch = defer
@@ -1835,78 +1522,57 @@ matchScrutContinuationMsg =
   "a `match` scrutinee cannot continue onto an indented line; the first indented line after `match` opens the arms, so wrap the scrutinee in parentheses"
 
 matchContinuationAhead : Int -> Parser Bool
-matchContinuationAhead matchPos = ParserE (toks pos =>
+matchContinuationAhead matchPos = ParserE (ctx pos =>
   POk
-    (startsExprAt toks pos
-      && continuationBlockShape toks pos 0 (lineIndentCol toks matchPos))
+    (startsExprAt ctx pos
+      && continuationBlockShape ctx pos 0 (lineIndentCol ctx matchPos))
     pos)
 
-startsExprAt : Array Token -> Int -> Bool
-startsExprAt toks pos = match runP parseAspat toks pos
-  POk _ _ => True
-  _ => False
+startsExprAt : ParseContext -> Int -> Bool
+startsExprAt ctx pos =
+  let saved = mark ctx
+  let r = runPWith ctx parseAspat pos
+  rewind saved
+  match r
+    POk _ _ => True
+    _ => False
 
--- Column of the first real token on the source line holding token `i`.
-lineIndentCol : Array Token -> Int -> Int
-lineIndentCol toks i = tokCol i |> lineIndentGo toks i (tokLine i)
+lineIndentCol : ParseContext -> Int -> Int
+lineIndentCol ctx i = tokCol ctx i |> lineIndentGo ctx i (tokLine ctx i)
 
-lineIndentGo : Array Token -> Int -> Int -> Int -> Int
-lineIndentGo toks i line col
+lineIndentGo : ParseContext -> Int -> Int -> Int -> Int
+lineIndentGo ctx i line col
   | i <= 0 = col
-  | isLayoutTok (peekTok toks (i - 1)) = lineIndentGo toks (i - 1) line col
-  | tokLine (i - 1) == line = lineIndentGo toks (i - 1) line (tokCol (i - 1))
+  | isLayoutTok (peekTok (contextTokens ctx) (i - 1)) =
+    lineIndentGo ctx (i - 1) line col
+  | tokLine ctx (i - 1) == line =
+    lineIndentGo ctx (i - 1) line (tokCol ctx (i - 1))
   | otherwise = col
 
--- Source and per-token start offsets for the match-scrutinee guard's column
--- arithmetic.  Primed only by `parseResultWith`; every other entry clears them,
--- and an empty offset array makes `tokLineCol` report (0, 0), which keeps the guard
--- silent.
-guardSrcRef : Ref String
-guardSrcRef = Ref ""
+tokLine : ParseContext -> Int -> Int
+tokLine ctx i = fst (tokLineCol ctx i)
 
-guardOffsRef : Ref (Array Int)
-guardOffsRef = Ref (arrayFromList [])
+tokCol : ParseContext -> Int -> Int
+tokCol ctx i = snd (tokLineCol ctx i)
 
--- (line, column) of token `i`, or (0, 0) when no offsets are primed.
-tokLineCol : Int -> (Int, Int)
-tokLineCol i =
-  let offs = !guardOffsRef
-  if i >= 0 && i < arrayLength offs then
-    offsetToLineCol !guardSrcRef (arrayGetUnsafe i offs)
-  else
-    (0, 0)
+continuationBlockShape : ParseContext -> Int -> Int -> Int -> Bool
+continuationBlockShape ctx i depth matchCol =
+  match peekTok (contextTokens ctx) i
+    TEof => False
+    TFatArrow => False
+    TArrow => False
+    TIndent => continuationBlockShape ctx (i + 1) (depth + 1) matchCol
+    TDedent =>
+      if depth == 0 then
+        armsLineAhead ctx (i + 1) matchCol
+      else
+        continuationBlockShape ctx (i + 1) (depth - 1) matchCol
+    _ => continuationBlockShape ctx (i + 1) depth matchCol
 
-primeGuardPos : String -> Array Int -> Unit
-primeGuardPos src offs =
-  guardSrcRef := src
-  guardOffsRef := offs
-
-tokLine : Int -> Int
-tokLine i = fst (tokLineCol i)
-
-tokCol : Int -> Int
-tokCol i = snd (tokLineCol i)
-
--- Tokens from `i` (just inside an INDENT) up to the matching DEDENT hold no
--- `=>` or `->`, and the logical line right after that DEDENT does hold a `=>`
--- and starts deeper than `matchCol`: the real arms follow the block.
-continuationBlockShape : Array Token -> Int -> Int -> Int -> Bool
-continuationBlockShape toks i depth matchCol = match peekTok toks i
-  TEof => False
-  TFatArrow => False
-  TArrow => False
-  TIndent => continuationBlockShape toks (i + 1) (depth + 1) matchCol
-  TDedent =>
-    if depth == 0 then
-      armsLineAhead toks (i + 1) matchCol
-    else
-      continuationBlockShape toks (i + 1) (depth - 1) matchCol
-  _ => continuationBlockShape toks (i + 1) depth matchCol
-
-armsLineAhead : Array Token -> Int -> Int -> Bool
-armsLineAhead toks i matchCol = match peekTok toks i
-  TNewline => armsLineAhead toks (i + 1) matchCol
-  _ => lineHasFatArrow toks i && tokCol i > matchCol
+armsLineAhead : ParseContext -> Int -> Int -> Bool
+armsLineAhead ctx i matchCol = match peekTok (contextTokens ctx) i
+  TNewline => armsLineAhead ctx (i + 1) matchCol
+  _ => lineHasFatArrow (contextTokens ctx) i && tokCol ctx i > matchCol
 
 lineHasFatArrow : Array Token -> Int -> Bool
 lineHasFatArrow toks i = match peekTok toks i
@@ -1923,7 +1589,7 @@ parseArms = defer
   armsLoop
 
 armsLoop : Parser (List Arm)
-armsLoop = orElse armsCons (deferPure [])
+armsLoop = parseOrElse armsCons (deferPure [])
 
 armsCons : Parser (List Arm)
 armsCons = defer
@@ -1938,27 +1604,9 @@ parseArm = defer
   pat <- parsePat
   guards <- armGuardOpt
   expectTok TFatArrow
-  body <- orElse branchBlock parseBodyExpr
+  body <- parseOrElse branchBlock parseBodyExpr
   recordUnitStart 0 p
   deferPure (Arm pat guards body)
-
--- (kind, line, col) of the first token of every match arm (kind 0), block
--- statement (1), impl method (2), where-clause (3) and record field (4) — the
--- formatter's anchor for a unit whose AST carries no location of its own
--- (`None =>`, a `let` keyword, a method name).  Real only on the located path;
--- see `trailingCommaLocs`.
-unitStartsRef : Ref (List (Int, Int, Int))
-unitStartsRef = Ref []
-
-recordUnitStart : Int -> Int -> Parser Unit
-recordUnitStart k p = match locOfSpan p (p + 1)
-  Loc _ sl sc _ _ =>
-    unitStartsRef := (k, sl, sc) :: !unitStartsRef
-    deferPure ()
-
-export
-unitStarts : Unit -> List (Int, Int, Int)
-unitStarts _ = reverseL !unitStartsRef
 
 -- optional match-arm guard: `if g, g…` (NB: uses `if`, not `|`)
 armGuardOpt : Parser (List Guard)
@@ -1971,7 +1619,7 @@ armGuardOpt = defer
 -- above and SYNTAX.md "Match-arm guards").  `|` never validly follows a pattern
 -- in a match arm — Medaka has neither `|` guards nor or-patterns there — so this
 -- is unambiguous.  Commit with `fatalP` (at the `|`) so the targeted message
--- reaches the user instead of being swallowed by `armsLoop`'s `orElse … (deferPure [])`
+-- reaches the user instead of being swallowed by `armsLoop`'s `parseOrElse … (deferPure [])`
 -- and re-surfacing as the misleading "expected the end of the block" caret on
 -- the PATTERN (#591).  The message names the guard fix, the likelier intent;
 -- an or-pattern (`1 | 2 => …`) spells the same `pat | … => …` and is also absent.
@@ -1988,7 +1636,7 @@ matchArmBarGuardMsg = MatchGuardBar
 -- ── Patterns ────────────────────────────────────────────────────────────
 -- A full pattern is a cons-pattern; the as-pattern `x@p` is a cons HEAD, so `@`
 -- binds tighter than `::` (see parsePatCons/parseAsPat below).  AS_AT is the
--- lexer's `@`-adjacent-to-ident token; if it doesn't follow, orElse backtracks.
+-- lexer's `@`-adjacent-to-ident token; if it doesn't follow, parseOrElse backtracks.
 parsePat : Parser Pat
 parsePat = parsePatCons
 
@@ -1998,17 +1646,18 @@ parsePat = parsePatCons
 -- does NOT swallow a following `::` tail.
 parseAsPat : Parser Pat
 parseAsPat = defer
+  ctx <- contextP
   s <- getPos
   x <- identNameP
   q <- getPos
   expectTok TAsAt
   sub <- parsePatApp
-  deferPure (PAs x (locOfSpan s q) noBinderId sub)
+  deferPure (PAs x (locOfSpan ctx s q) noBinderId sub)
 
 parsePatCons : Parser Pat
 parsePatCons = defer
-  p <- orElse parseAsPat parsePatApp
-  orElse (patConsTail p) (deferPure p)
+  p <- parseOrElse parseAsPat parsePatApp
+  parseOrElse (patConsTail p) (deferPure p)
 
 patConsTail : Pat -> Parser Pat
 patConsTail p = defer
@@ -2077,10 +1726,11 @@ consField f (fs, rest) = (f :: fs, rest)
 
 recordPatField : Parser RecPatField
 recordPatField = defer
+  ctx <- contextP
   s <- getPos
   name <- identNameP
   t <- peekP
-  recordPatFieldRest name (locOfSpan s (s + 1)) t
+  recordPatFieldRest name (locOfSpan ctx s (s + 1)) t
 
 recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField
 recordPatFieldRest name nameLoc TEqual = defer
@@ -2092,7 +1742,7 @@ recordPatFieldRest name nameLoc _ =
 
 -- A reserved keyword sitting where a pattern-variable / identifier is expected is
 -- ALWAYS an error — no keyword starts a legal pattern — and the generic "expected
--- pattern" (or a downstream layout/`: or =` complaint, once `many`/`orElse` has
+-- pattern" (or a downstream layout/`: or =` complaint, once `many`/`parseOrElse` has
 -- swallowed the recoverable failure) hides the real cause: the NAME is reserved.
 -- `reservedIdentKeyword` returns the SOURCE SPELLING of any lowercase-lexeme
 -- keyword token (the full `keywordOrIdent` table in lexer.mdk — the identifiers a
@@ -2150,14 +1800,14 @@ reservedKeywordMsg : String -> ParseDiagnosticKind
 reservedKeywordMsg name = ReservedKeyword name
 
 -- Committed (`fatalP`) so the message reaches the user through the enclosing
--- `many`/`orElse` (which discard a recoverable `PErr`) — the same channel
+-- `many`/`parseOrElse` (which discard a recoverable `PErr`) — the same channel
 -- `intLitTooBigMsg` uses.  A structural token stays a recoverable `failP`.
 reservedOrPatFail : Token -> Parser Pat
 reservedOrPatFail t = match reservedIdentKeyword t
   Some name => fatalP (reservedKeywordMsg name)
   None => failP "expected a pattern"
 
--- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — a
+-- #77 F1: shares the invocation depth/`maxNestDepth` with `parseAtom` above — a
 -- pattern's own recursive re-entry (`parsePatParen`/`parsePatList` calling back
 -- into `parsePat` -> ... -> `parsePatAtom`) was NOT reached by the expression
 -- cap, so pathologically deep pattern nesting (e.g. `((((...(x)...))))` in a
@@ -2167,31 +1817,17 @@ reservedOrPatFail t = match reservedIdentKeyword t
 -- `parseAtom`'s own already-verified boundary: an expr-only input still only
 -- ever increments at `parseAtom`.
 parsePatAtom : Parser Pat
-parsePatAtom = ParserE parsePatAtomNestGo
-
-parsePatAtomNestGo : Array Token -> Int -> PR Pat
-parsePatAtomNestGo toks pos =
-  let d = !nestDepthRef + 1
-  if d > maxNestDepth then
-    PFatal (FailMsg nestTooDeepMsg) pos
-  else
-    parsePatAtomNestRun toks pos d
-
-parsePatAtomNestRun : Array Token -> Int -> Int -> PR Pat
-parsePatAtomNestRun toks pos d =
-  nestDepthRef := d
-  let r = runP parsePatAtomRaw toks pos
-  nestDepthRef := d - 1
-  r
+parsePatAtom = withDepth maxNestDepth (FailMsg nestTooDeepMsg) parsePatAtomRaw
 
 parsePatAtomRaw : Parser Pat
 parsePatAtomRaw = defer
+  ctx <- contextP
   t <- peekP
   match t
     TIdent x => defer
       s <- getPos
       advance
-      deferPure (PVar x (locOfSpan s (s + 1)) noBinderId)
+      deferPure (PVar x (locOfSpan ctx s (s + 1)) noBinderId)
     TUnderscore => emit PWild
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
     TInt n _ => intPatRest (LInt n)
@@ -2217,19 +1853,20 @@ upperAtomRest c TLBrace = recordPat c
 upperAtomRest c _ = deferPure (PCon c [])
 
 -- A function-definition parameter: a `pat_atom`, plus the `@` as-pattern
--- (`x@atom`).  `orElse` backtracks, so a plain-ident / non-`@` param falls
+-- (`x@atom`).  `parseOrElse` backtracks, so a plain-ident / non-`@` param falls
 -- through to parsePatAtom.
 parseParamPat : Parser Pat
-parseParamPat = orElse parseParamAsPat parsePatAtom
+parseParamPat = parseOrElse parseParamAsPat parsePatAtom
 
 parseParamAsPat : Parser Pat
 parseParamAsPat = defer
+  ctx <- contextP
   s <- getPos
   x <- identNameP
   q <- getPos
   expectTok TAsAt
   sub <- parsePatAtom
-  deferPure (PAs x (locOfSpan s q) noBinderId sub)
+  deferPure (PAs x (locOfSpan ctx s q) noBinderId sub)
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
@@ -2361,7 +1998,7 @@ patListFor _ = defer
 parseTy : Parser Ty
 parseTy = defer
   lhs <- parseTyFun
-  orElse (constraintTail lhs) (deferPure lhs)
+  parseOrElse (constraintTail lhs) (deferPure lhs)
 
 constraintTail : Ty -> Parser Ty
 constraintTail lhs = defer
@@ -2420,8 +2057,8 @@ tyFor _ = defer
 -- no "rest" for the name to scope over.
 tyAfterApp : Ty -> Parser Ty
 tyAfterApp (left@(TyNamed _ _ _)) =
-  orElse (tyArrowTail left) (failP namedArgNeedsArrowMsg)
-tyAfterApp left = orElse (tyArrowTail left) (deferPure left)
+  parseOrElse (tyArrowTail left) (failP namedArgNeedsArrowMsg)
+tyAfterApp left = parseOrElse (tyArrowTail left) (deferPure left)
 
 namedArgNeedsArrowMsg : String
 namedArgNeedsArrowMsg =
@@ -2463,11 +2100,12 @@ effectBodyFor _ = deferPure ([], [])
 -- (a product).  The identity is acquired by resolve.
 effAtomP : Parser EffAtomTy
 effAtomP = defer
+  ctx <- contextP
   s <- getPos
   l <- upperNameP
   p <- effParamP
   q <- getPos
-  deferPure (effAtomAt l p (locOfSpan s q))
+  deferPure (effAtomAt l p (locOfSpan ctx s q))
 
 effParamP : Parser EffParamTy
 effParamP = defer
@@ -2667,18 +2305,21 @@ tyQualTail ty = defer
 
 tyQualTailFor : Ty -> Token -> Token -> Parser Ty
 tyQualTailFor ty TAt (TIdent n) = defer
+  ctx <- contextP
   s <- getPos
   advance
   advance
   q <- getPos
-  tyQualDone (TyQual ty [EPName n] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [EPName n] (Some (locOfSpan ctx s q)))
 tyQualTailFor ty TAt (TString _) = defer
+  ctx <- contextP
   s <- getPos
   advance
   p <- authTermP
   q <- getPos
-  tyQualDone (TyQual ty [p] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [p] (Some (locOfSpan ctx s q)))
 tyQualTailFor ty TAt TLParen = defer
+  ctx <- contextP
   s <- getPos
   advance
   advance
@@ -2686,7 +2327,7 @@ tyQualTailFor ty TAt TLParen = defer
   rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  tyQualDone (TyQual ty (first :: rest) (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty (first :: rest) (Some (locOfSpan ctx s q)))
 tyQualTailFor _ TAsAt (TIdent n) = defer
   pos <- getPos
   fatalAtP
@@ -2755,7 +2396,7 @@ tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
 tyApplyAll head (a :: rest) = tyApplyAll (TyApp head a) rest
 
--- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — see
+-- #77 F1: shares the invocation depth/`maxNestDepth` with `parseAtom` above — see
 -- the comment on `parsePatAtom`'s own wrapper for why a shared counter, and
 -- why it can't move `parseAtom`'s already-verified boundary. The type
 -- parser's own recursive re-entry (`parseTyParen` calling back into
@@ -2763,25 +2404,11 @@ tyApplyAll head (a :: rest) = tyApplyAll (TyApp head a) rest
 -- so pathologically deep type nesting (e.g. `f : ((((Int)))) -> Int`) still
 -- exhausted the native stack with an unlocated exit 134.
 parseTyAtom : Parser Ty
-parseTyAtom = ParserE parseTyAtomNestGo
-
-parseTyAtomNestGo : Array Token -> Int -> PR Ty
-parseTyAtomNestGo toks pos =
-  let d = !nestDepthRef + 1
-  if d > maxNestDepth then
-    PFatal (FailMsg nestTooDeepMsg) pos
-  else
-    parseTyAtomNestRun toks pos d
-
-parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
-parseTyAtomNestRun toks pos d =
-  nestDepthRef := d
-  let r = runP parseTyAtomRaw toks pos
-  nestDepthRef := d - 1
-  r
+parseTyAtom = withDepth maxNestDepth (FailMsg nestTooDeepMsg) parseTyAtomRaw
 
 parseTyAtomRaw : Parser Ty
 parseTyAtomRaw = defer
+  ctx <- contextP
   t <- peekP
   match t
     TUpper c => defer
@@ -2789,7 +2416,7 @@ parseTyAtomRaw = defer
       advance
       n <- tyConQualTail c
       q <- getPos
-      deferPure (tyConUnresolved n (Some (locOfSpan s q)))
+      deferPure (tyConUnresolved n (Some (locOfSpan ctx s q)))
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
     TLt => parseBareEffectAtom
@@ -2807,27 +2434,30 @@ parseTyAtomRaw = defer
 -- one the node is diagnosed there, as a bare row in a `Type` slot is.
 parseTyAuthTop : Parser Ty
 parseTyAuthTop = defer
+  ctx <- contextP
   s <- getPos
   expectTok TStar
   q <- getPos
-  deferPure (TyAuth [EPTop] (Some (locOfSpan s q)))
+  deferPure (TyAuth [EPTop] (Some (locOfSpan ctx s q)))
 
 parseTyAuthLit : Parser Ty
 parseTyAuthLit = defer
+  ctx <- contextP
   s <- getPos
   p <- effParamP
   q <- getPos
-  deferPure (TyAuth [p] (Some (locOfSpan s q)))
+  deferPure (TyAuth [p] (Some (locOfSpan ctx s q)))
 
 -- A parenthesised authority join in an index slot whose first term is a
 -- literal: `("a.com/*" | "b.com/*")`, `("cfg/*" | p)`.
 parseTyAuthJoin : Int -> Parser Ty
 parseTyAuthJoin s = defer
+  ctx <- contextP
   first <- authTermP
   rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  deferPure (TyAuth (first :: rest) (Some (locOfSpan s q)))
+  deferPure (TyAuth (first :: rest) (Some (locOfSpan ctx s q)))
 
 -- `M.Map` in type position: a module alias qualifies a TYPE name, not only a
 -- value (#2412).  The grammar has no notion of a qualified name, so the two
@@ -2865,12 +2495,13 @@ tyConQualFor head _ _ = deferPure head
 -- `TyRow`'s doc comment, ast.mdk).
 parseBareEffectAtom : Parser Ty
 parseBareEffectAtom = defer
+  ctx <- contextP
   s <- getPos
   expectTok TLt
   body <- effectBody
   expectTok TGt
   q <- getPos
-  deferPure (mkRow body (locOfSpan s q))
+  deferPure (mkRow body (locOfSpan ctx s q))
 
 mkRow : (List EffAtomTy, List String) -> Loc -> Ty
 mkRow (labels, tail) loc = TyRow labels tail (Some loc)
@@ -2927,24 +2558,26 @@ parseTyParenIdent TColon = defer
 -- `(a | b)` of names only stays a row join, as an `Effect` slot reads it; a
 -- literal among the terms makes it an authority join.
 parseTyParenIdent TPipe = defer
+  ctx <- contextP
   s <- getPos
   v <- identNameP
   rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  deferPure (namesOrAuthJoin v rest (Some (locOfSpan s q)))
+  deferPure (namesOrAuthJoin v rest (Some (locOfSpan ctx s q)))
 parseTyParenIdent _ = parseTyParenTuple
 
 -- A binder's written domain, `@Label` after its type, held as a label-only
 -- atom so resolve acquires the label's identity as it does for a row's.
 binderDomainP : Token -> Token -> Parser (Option EffAtomTy)
 binderDomainP TAt (TUpper _) = defer
+  ctx <- contextP
   s <- getPos
   advance
   l <- upperNameP
   pat <- patternMarkP
   q <- getPos
-  let atom = effAtomAt l EPTop (locOfSpan s q)
+  let atom = effAtomAt l EPTop (locOfSpan ctx s q)
   deferPure (Some EffAtomTy { atom | eatPattern = pat })
 binderDomainP TAsAt (TUpper l) = defer
   pos <- getPos
@@ -3094,9 +2727,10 @@ afterPublicFor pubPos _ = fatalProblemAtP (PublicDataOnly False) pubPos
 
 parseFunOrSig : Bool -> Parser Decl
 parseFunOrSig pub = defer
+  ctx <- contextP
   s <- getPos
   name <- identNameP
-  let site = locOfSpan s (s + 1)
+  let site = locOfSpan ctx s (s + 1)
   params <- many parseParamPat
   t <- peekP
   match t
@@ -3141,6 +2775,7 @@ parseExternFor pub TData = defer
   d <- externDataEnd pub name ps t
   deferPure (setDeclNameLoc nameLoc d)
 parseExternFor pub _ = defer
+  ctx <- contextP
   s <- getPos
   name <- externName
   expectTok TColon
@@ -3155,7 +2790,7 @@ parseExternFor pub _ = defer
       edPub = pub,
       edName = name,
       edTy = ty,
-      edLoc = locOfSpan s e,
+      edLoc = locOfSpan ctx s e,
       edBinds = binds,
     })
 
@@ -3182,6 +2817,7 @@ externBindLines = defer
 -- parses.
 externBindP : Parser ExternBind
 externBindP = defer
+  ctx <- contextP
   s <- getPos
   t <- peekP
   _ <- if t == TIdent "bind" then advance else failP "expected `bind`"
@@ -3192,7 +2828,7 @@ externBindP = defer
   deferPure ExternBind {
     ebHost = host,
     ebSymbol = symbol,
-    ebLoc = locOfSpan s e,
+    ebLoc = locOfSpan ctx s e,
   }
 
 bindHostFor : Token -> Parser String
@@ -3219,10 +2855,11 @@ externDataEnd pub name ps _ = defer
 -- declaration (a duplicate, a reserved name) are located at.
 locatedUpperNameP : Parser (String, Loc)
 locatedUpperNameP = defer
+  ctx <- contextP
   s <- getPos
   name <- upperNameP
   q <- getPos
-  deferPure (name, locOfSpan s q)
+  deferPure (name, locOfSpan ctx s q)
 
 -- ── type alias / newtype / top-level let-group / attributes ──────────────
 -- `type Name a… = ty`
@@ -3282,12 +2919,13 @@ parseLetGroupDecl pub = defer
 
 letRecDeclClause : Parser (String, List Pat, Expr, Loc)
 letRecDeclClause = defer
+  ctx <- contextP
   s <- getPos
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseBody
-  deferPure (name, pats, body, locOfSpan s (s + 1))
+  deferPure (name, pats, body, locOfSpan ctx s (s + 1))
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` / `@noinline` wrapping
 -- the following decl.  `atPos` is the `@`, where an unknown or ill-formed
@@ -3342,6 +2980,7 @@ externNameFor _ = failP "expected a name after `extern`"
 
 parseImport : Bool -> Parser Decl
 parseImport pub = defer
+  ctx <- contextP
   s <- getPos
   expectTok TImport
   quals <- importQuals
@@ -3349,7 +2988,7 @@ parseImport pub = defer
   e <- getPos
   noExportedAlias pub path
   skipNewlines
-  deferPure (DUse pub path (locOfSpan s e))
+  deferPure (DUse pub path (locOfSpan ctx s e))
 
 -- An `export import` may NOT be aliased, in either form.  Both would re-export a name
 -- that does not exist in the module that actually defines it:
@@ -3480,16 +3119,18 @@ withAllOrNot s x = defer
 -- rename.  Reject it here rather than accept-and-ignore.
 withAllFor : Int -> String -> Token -> Parser UseMember
 withAllFor s x TLParen = defer
+  ctx <- contextP
   advance
   expectTok TDotDot
   expectTok TRParen
   q <- getPos
   noMemberAlias x
-  deferPure (UseMember x True (locOfSpan s q) None)
+  deferPure (UseMember x True (locOfSpan ctx s q) None)
 withAllFor s x _ = defer
+  ctx <- contextP
   q <- getPos
   noMemberAlias x
-  deferPure (UseMember x False (locOfSpan s q) None)
+  deferPure (UseMember x False (locOfSpan ctx s q) None)
 
 noMemberAlias : String -> Parser Unit
 noMemberAlias x = defer
@@ -3510,13 +3151,15 @@ memberAliasOrNot s x allCtors = defer
 
 memberAliasFor : Int -> String -> Bool -> Token -> Parser UseMember
 memberAliasFor s x allCtors TAs = defer
+  ctx <- contextP
   advance
   a <- memberAliasName
   q <- getPos
-  deferPure (UseMember x allCtors (locOfSpan s q) (Some a))
+  deferPure (UseMember x allCtors (locOfSpan ctx s q) (Some a))
 memberAliasFor s x allCtors _ = defer
+  ctx <- contextP
   q <- getPos
-  deferPure (UseMember x allCtors (locOfSpan s q) None)
+  deferPure (UseMember x allCtors (locOfSpan ctx s q) None)
 
 -- A value member's alias is itself a value name ⇒ lowercase.
 memberAliasName : Parser String
@@ -3580,13 +3223,14 @@ parseProp pub = defer
 
 propParam : Parser PropParam
 propParam = defer
+  ctx <- contextP
   expectTok TLParen
   s <- getPos
   name <- identNameP
   expectTok TColon
   ty <- parseTy
   expectTok TRParen
-  deferPure (PropParam name (locOfSpan s (s + 1)) ty)
+  deferPure (PropParam name (locOfSpan ctx s (s + 1)) ty)
 
 -- `TTest` at a decl head is ambiguous between the two things `test` can mean:
 -- the start of a `test "…" = …` block, or an ordinary (but reserved, so
@@ -3635,6 +3279,7 @@ parseBench _ = defer
 -- domain is a bare UPPER after the label; only `Prefix` is accepted in v2.
 parseEffect : Bool -> Parser Decl
 parseEffect pub = defer
+  ctx <- contextP
   expectTok TEffect
   s <- getPos
   name <- upperNameP
@@ -3642,7 +3287,7 @@ parseEffect pub = defer
   dom <- effDomainP
   axes <- effAxesP
   skipNewlines
-  deferPure (effectDeclUnstamped pub name dom axes (Some (locOfSpan s q)))
+  deferPure (effectDeclUnstamped pub name dom axes (Some (locOfSpan ctx s q)))
 
 -- A Product label's axis schema, `(Host : Prefix, Method : Set)`: each axis
 -- named with the domain it is drawn from, in the order written, the first
@@ -3801,7 +3446,7 @@ ifaceMembers = defer
   ifaceMembersLoop
 
 ifaceMembersLoop : Parser (List IfaceMethod)
-ifaceMembersLoop = orElse ifaceMembersCons (deferPure [])
+ifaceMembersLoop = parseOrElse ifaceMembersCons (deferPure [])
 
 ifaceMembersCons : Parser (List IfaceMethod)
 ifaceMembersCons = defer
@@ -3814,17 +3459,17 @@ ifaceMembersCons = defer
 -- #1499 / D2: the [s, q) token span brackets the method NAME alone, so a
 -- declaration-site diagnostic about the method (`W-PRELUDE-METHOD-SHADOW`)
 -- lands on the name token rather than on the enclosing `interface` header.
--- Like `located`, this reads the loc side-channel: under the plain `parse`
--- entry points (no `setLocState`) it degrades to a zero span, exactly as every
--- `ELoc` on that path does.
+-- Like `located`, this follows the invocation location policy: `parse` uses
+-- placeholder spans for method names and expression locations alike.
 ifaceMember : Parser IfaceMethod
 ifaceMember = defer
+  ctx <- contextP
   s <- getPos
   name <- identNameP
   q <- getPos
   pats <- many parseParamPat
   t <- peekP
-  ifaceMemberRest name (Some (locOfSpan s q)) pats t
+  ifaceMemberRest name (Some (locOfSpan ctx s q)) pats t
 
 ifaceMemberRest : String ->
   Option Loc ->
@@ -3855,12 +3500,13 @@ parseImpl pub = defer
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
 implHead : Bool -> Int -> Token -> Parser Decl
 implHead pub kw (TUpper u) = defer
+  ctx <- contextP
   s <- getPos
   advance
   n <- upperQualTail u
   q <- getPos
   d <- implRest pub kw n
-  deferPure (setDeclNameLoc (locOfSpan s q) d)
+  deferPure (setDeclNameLoc (locOfSpan ctx s q) d)
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected an interface name after `impl`"
 
@@ -3934,7 +3580,7 @@ implMethods = defer
   implMethodsLoop
 
 implMethodsLoop : Parser (List ImplMethod)
-implMethodsLoop = orElse implMethodsCons (deferPure [])
+implMethodsLoop = parseOrElse implMethodsCons (deferPure [])
 
 implMethodsCons : Parser (List ImplMethod)
 implMethodsCons = defer
@@ -4001,7 +3647,7 @@ parseGuardArms = defer
   guardArmsLoop
 
 guardArmsLoop : Parser (List GuardArm)
-guardArmsLoop = orElse guardArmsCons (deferPure [])
+guardArmsLoop = parseOrElse guardArmsCons (deferPure [])
 
 guardArmsCons : Parser (List GuardArm)
 guardArmsCons = defer
@@ -4070,7 +3716,8 @@ isLineEndTok TEof = True
 isLineEndTok _ = False
 
 eqGuardShapeP : Parser Bool
-eqGuardShapeP = ParserE (toks pos => POk (eqGuardShapeFrom toks pos 0) pos)
+eqGuardShapeP =
+  ParserE (ctx pos => POk (eqGuardShapeFrom (contextTokens ctx) pos 0) pos)
 
 -- A guard qualifier parses at the `expr_or` level (mirrors the reference
 -- `guard_qual`): NOT full `parseExpr`, so a trailing `=>` in a match-arm guard
@@ -4171,12 +3818,13 @@ kindExpectedMsg =
 -- named effect label (EFFECTS-SEMANTICS §6.1).
 kindAuthorityP : Parser KindAnn
 kindAuthorityP = defer
+  ctx <- contextP
   advance
   s <- getPos
   l <- upperNameP
   pat <- patternMarkP
   q <- getPos
-  deferPure (kindAuthorityUnstamped l pat (Some (locOfSpan s q)))
+  deferPure (kindAuthorityUnstamped l pat (Some (locOfSpan ctx s q)))
 
 -- The `*` after a label that makes a binder range over the domain's patterns
 -- only: `Authority FileWrite*`, `(dir : String @FileWrite*)`.
@@ -4460,26 +4108,27 @@ derivingFor _ = deferPure []
 
 -- One name in a `deriving (…)` list, wrapped with its own token span so a
 -- "cannot derive" diagnostic underlines the NAME.  Real only on the
--- `parseLocated` path (`parse` leaves the loc refs unset → placeholder), the
+-- `parseLocated` path (`parse` uses placeholder locations), the
 -- same convention `TyCon`'s `Option Loc` already follows.
 derivedNameP : Parser DeriveRef
 derivedNameP = defer
+  ctx <- contextP
   s <- getPos
   n <- upperNameP
   q <- getPos
-  deferPure (DeriveRef n (Some (locOfSpan s q)))
+  deferPure (DeriveRef n (Some (locOfSpan ctx s q)))
 
 -- a decl body is an inline expr, or an INDENT block of statements: a single
 -- expression statement unwraps to that expr; anything else becomes an EBlock
 parseBody : Parser Expr
-parseBody = orElse indentedBody parseBodyExpr
+parseBody = parseOrElse indentedBody parseBodyExpr
 
 -- an inline body expr, optionally followed by a Haskell-style `where` block:
 -- `<expr> INDENT where INDENT bindings DEDENT NEWLINE DEDENT` → ELetGroup
 parseBodyExpr : Parser Expr
 parseBodyExpr = defer
   e <- parseExpr
-  orElse (whereEol e) (orElse (whereTail e) (deferPure e))
+  parseOrElse (whereEol e) (parseOrElse (whereTail e) (deferPure e))
 
 -- end-of-line `where` (the `where` sits on the body line):
 -- `<expr> WHERE INDENT bindings DEDENT` → ELetGroup
@@ -4508,7 +4157,7 @@ parseWhereBindings = defer
   whereBindingsLoop
 
 whereBindingsLoop : Parser (List (String, List Pat, Expr, Loc))
-whereBindingsLoop = orElse whereBindingsCons (deferPure [])
+whereBindingsLoop = parseOrElse whereBindingsCons (deferPure [])
 
 whereBindingsCons : Parser (List (String, List Pat, Expr, Loc))
 whereBindingsCons = defer
@@ -4519,13 +4168,14 @@ whereBindingsCons = defer
 
 parseWhereBinding : Parser (String, List Pat, Expr, Loc)
 parseWhereBinding = defer
+  ctx <- contextP
   p <- getPos
   name <- identNameP
   pats <- many parseParamPat
   t <- peekP
   b <- whereBindRest name pats t
   recordUnitStart 3 p
-  deferPure (withBindSite (locOfSpan p (p + 1)) b)
+  deferPure (withBindSite (locOfSpan ctx p (p + 1)) b)
 
 withBindSite : Loc -> (String, List Pat, Expr) -> (String, List Pat, Expr, Loc)
 withBindSite site (name, pats, body) = (name, pats, body, site)
@@ -4624,7 +4274,7 @@ doStmtsFrom p0 = defer
   doStmtsLoop p0
 
 doStmtsLoop : Int -> Parser (Int, List DoStmt)
-doStmtsLoop lastStart = orElse doStmtsCons (deferPure (lastStart, []))
+doStmtsLoop lastStart = parseOrElse doStmtsCons (deferPure (lastStart, []))
 
 doStmtsCons : Parser (Int, List DoStmt)
 doStmtsCons = defer
@@ -4659,7 +4309,7 @@ blockWord _ = "do"
 -- be an indented block.  Without this the lexer's (correct, oracle-identical)
 -- `LET n EQUAL INDENT … DEDENT` stream had no parser rule and failed to parse.
 parseRhsExpr : Parser Expr
-parseRhsExpr = orElse parseBracketBlock parseExpr
+parseRhsExpr = parseOrElse parseBracketBlock parseExpr
 
 parseStmts : Parser (List DoStmt)
 parseStmts = defer
@@ -4667,7 +4317,7 @@ parseStmts = defer
   stmtsLoop
 
 stmtsLoop : Parser (List DoStmt)
-stmtsLoop = orElse stmtsCons (deferPure [])
+stmtsLoop = parseOrElse stmtsCons (deferPure [])
 
 stmtsCons : Parser (List DoStmt)
 stmtsCons = defer
@@ -4696,11 +4346,12 @@ stmtFor _ = parseExprStmt
 -- `let p = e`, let-in (→ DoExpr), or let-else `let p = e else alt`
 parseLetStmt : Parser DoStmt
 parseLetStmt = defer
+  ctx <- contextP
   s <- getPos
   expectTok TLet
   t <- peekP
   stmt <- letKind t
-  deferPure (letStmtAt (locOfSpan s (s + 1)) stmt)
+  deferPure (letStmtAt (locOfSpan ctx s (s + 1)) stmt)
 
 -- `letKind`'s productions build a statement `DoLet` or a `let … in` with
 -- `noDeclLoc`; the site of either is the `let` keyword, which only
@@ -4731,6 +4382,7 @@ letKind _ = letPat
 -- `letFunTailFor` rather than duplicating its `in`/no-`in` tail dispatch.
 letRecStmt : Parser DoStmt
 letRecStmt = defer
+  ctx <- contextP
   expectTok TRec
   s <- getPos
   name <- identNameP
@@ -4739,17 +4391,18 @@ letRecStmt = defer
   expectTok TEqual
   e1 <- parseRhsExpr
   t <- peekP
-  letFunTailFor name (locOfSpan s q) pats e1 t
+  letFunTailFor name (locOfSpan ctx s q) pats e1 t
 
 -- IDENT-led: function-let `let f a… = e` (params present), annotated
 -- `let x : ty = e`, or plain `let x = e [in/else]`
 letIdent : String -> Parser DoStmt
 letIdent name = defer
+  ctx <- contextP
   s <- getPos
   advance
   pats <- many parseParamPat
   t <- peekP
-  letIdentBody name (locOfSpan s (s + 1)) pats t
+  letIdentBody name (locOfSpan ctx s (s + 1)) pats t
 
 -- annotation (`: ty`) only on the no-params case, mirroring the let-in path
 letIdentBody : String -> Loc -> List Pat -> Token -> Parser DoStmt
@@ -5018,26 +4671,105 @@ parseWithPositionsOptPairs : String ->
   List (Int, Int) ->
   Option (List Decl, Positions)
 parseWithPositionsOptPairs src tokList offPairList =
-  -- One tokenize pass feeds the token array, the (start,end) offsets and the
-  -- per-token lines: `tokenizeWithOffsetPairs` yields the same token stream as
-  -- the line-only entry, and its pair starts are the offsets the lines are
-  -- derived from.  The SAME offsets prime `setLocState`, so `located`'s
-  -- expression `ELoc`s carry real spans for every caller (LSP included).
+  map
+    (parsed => (parsedDecls parsed, parsedPositions parsed))
+    (parseSourceSyntaxPairs src tokList offPairList)
+
+export
+parseSourceSyntaxPairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Option ParsedSource
+parseSourceSyntaxPairs src tokList offPairList =
+  let ctx =
+    newParseContextWith
+      LocatedSyntax
+      src
+      (arrayFromList tokList)
+      (arrayFromList offPairList)
+  match runPWith ctx programWithSpans 0
+    POk spans pos if isEofTok (peekTok (contextTokens ctx) pos) =>
+      Some (publishSource ctx spans)
+    _ => None
+
+publishSource : ParseContext -> List (Decl, Int, Int) -> ParsedSource
+publishSource ctx spans =
+  let (commas, units) = contextCues ctx
+  makeParsedSource
+    (map ((d, _s, _e) => d) spans)
+    (positionsFromSpans
+      (contextLineStarts ctx)
+      (contextTokens ctx)
+      (contextOffsets ctx)
+      spans)
+    (makeParseMetadata commas units)
+
+export
+parseSource : String -> Result ParseDiagnostic ParsedSource
+parseSource src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => parseSourcePairs src toks pairs
+
+export
+parseSourcePairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseDiagnostic ParsedSource
+parseSourcePairs src tokList offPairs =
   let toks = arrayFromList tokList
-  let offs = arrayFromList offPairList
-  let nameLineStarts = lineStartsOf src
-  let _ = setLocStateWith src nameLineStarts offs
-  trailingCommaLocsRef := []
-  unitStartsRef := []
-  match runP programWithSpans toks 0
-    PErr _ _ => None
-    PFatal _ _ => None
-    POk spans pos =>
-      if isEofTok (peekTok toks pos) then
-        let decls = map ((d, _s, _e) => d) spans
-        Some (decls, positionsFromSpans nameLineStarts toks offs spans)
-      else
-        None
+  let offs = arrayFromList (map fst offPairs)
+  let ends = arrayFromList (map snd offPairs)
+  let index () = indexSource src
+  match prescanError src index toks offs ends
+    Some e => Err (parseErrorDiagnostic e)
+    None =>
+      let ctx = newParseContext src toks (arrayFromList offPairs)
+      match runPWith ctx programWithSpans 0
+        POk spans pos if isEofTok (peekTok toks pos) =>
+          Ok (publishSource ctx spans)
+        POk _ pos =>
+          Err
+            (parseErrorDiagnostic
+              (deepenLeftover
+                ctx
+                src
+                index
+                toks
+                offs
+                ends
+                (stringLength src)
+                pos))
+        PErr f pos =>
+          Err
+            (parseErrorDiagnostic
+              (mkLocated
+                index
+                toks
+                offs
+                ends
+                (stringLength src)
+                (failProblem f)
+                pos))
+        PFatal f pos =>
+          Err
+            (parseErrorDiagnostic
+              (mkLocated
+                index
+                toks
+                offs
+                ends
+                (stringLength src)
+                (failProblem f)
+                pos))
+
+export
+parseDeclAt : ParseContext -> Int -> PR Decl
+parseDeclAt ctx pos =
+  let saved = mark ctx
+  match runPWith ctx parseDecl pos
+    r@(POk _ _) => r
+    r =>
+      rewind saved
+      r
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 resultDecls : Array Token -> PR (List Decl) -> List Decl
@@ -5063,22 +4795,17 @@ parse src =
   let toks = arrayFromList (tokenize src)
   match firstLexError toks 0
     Some (_, kind) => panic (renderParseProblem kind)
-    None =>
-      resetLocState ()
-      resultDecls toks (runP parseProgram toks 0)
+    None => resultDecls toks (runP parseProgram toks 0)
 
--- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
--- (src + token offsets) so the ELoc wrappers carry REAL line/col, then parses.
--- Separate from `parse` (which stays pure / placeholder-loc) because `setRef`
--- is effectful and `parse` is called from pure contexts across the pipeline; the
--- token stream is byte-identical (`tokenizeWithOffsets` vs `tokenize`).
+-- Parse with real expression locations and the syntax-only guard policy.
 export
 parseLocated : String -> List Decl
 parseLocated src = match tokenizeWithOffsetPairs src
   (tokList, offPairs) =>
-    let _ = setLocState src (arrayFromList offPairs)
     let toks = arrayFromList tokList
-    resultDecls toks (runP parseProgram toks 0)
+    let ctx =
+      newParseContextWith LocatedSyntax src toks (arrayFromList offPairs)
+    resultDecls toks (runPWith ctx parseProgram 0)
 
 -- ── Structured parse errors (non-panicking entry) ───────────────────────────
 -- The LSP prerequisite (Stage 4 task #24): a parser should yield errors as
@@ -5114,7 +4841,8 @@ locateOffset toks offs srcLen pos
 -- result.  `PErr msg pos` → located error at `pos`; a `POk` that did not consume
 -- through `TEof` → "parse error" at the first leftover token (mirroring the
 -- OCaml oracle, which reports the cursor where the grammar got stuck).
-resultDeclsResult : String ->
+resultDeclsResult : ParseContext ->
+  String ->
   (Unit -> SourceIndex) ->
   Array Token ->
   Array Int ->
@@ -5122,15 +4850,16 @@ resultDeclsResult : String ->
   Int ->
   PR (List Decl) ->
   Result ParseError (List Decl)
-resultDeclsResult _ index toks offs ends srcLen (PErr f pos) =
+resultDeclsResult _ _ index toks offs ends srcLen (PErr f pos) =
   Err (mkLocated index toks offs ends srcLen (failProblem f) pos)
-resultDeclsResult _ index toks offs ends srcLen (PFatal f pos) =
+resultDeclsResult _ _ index toks offs ends srcLen (PFatal f pos) =
   Err (mkLocated index toks offs ends srcLen (failProblem f) pos)
-resultDeclsResult src index toks offs ends srcLen (POk ds pos)
+resultDeclsResult ctx src index toks offs ends srcLen (POk ds pos)
   | isEofTok (peekTok toks pos) = Ok ds
-  | otherwise = Err (deepenLeftover src index toks offs ends srcLen pos)
+  | otherwise = Err (deepenLeftover ctx src index toks offs ends srcLen pos)
 
-deepenLeftover : String ->
+deepenLeftover : ParseContext ->
+  String ->
   (Unit -> SourceIndex) ->
   Array Token ->
   Array Int ->
@@ -5138,8 +4867,11 @@ deepenLeftover : String ->
   Int ->
   Int ->
   ParseError
-deepenLeftover src index toks offs ends srcLen pos =
-  match runP parseDecl toks pos
+deepenLeftover ctx src index toks offs ends srcLen pos =
+  let saved = mark ctx
+  let result = runPWith ctx parseDecl pos
+  rewind saved
+  match result
     PFatal f pos2 => mkLocated index toks offs ends srcLen (failProblem f) pos2
     PErr f pos2 if pos2 > pos =>
       mkLocated index toks offs ends srcLen (failProblem f) pos2
@@ -5618,9 +5350,7 @@ semicolonMsg = Semicolon
 export
 parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsetPairs src
-  (tokList, offList) =>
-    resetLocState ()
-    parseResultWith src tokList offList
+  (tokList, offList) => parseResultWith UnlocatedChecked src tokList offList
 
 -- `parseResult` over an ALREADY-tokenized stream: `tokList` and `offPairs` must
 -- be `tokenizeWithOffsetPairs src` (its pair starts are `tokenizeWithOffsets`'s
@@ -5631,25 +5361,13 @@ parseResultPairs : String ->
   List (Int, Int) ->
   Result ParseError (List Decl)
 parseResultPairs src tokList offPairs =
-  resetLocState ()
-  parseResultWith src tokList offPairs
+  parseResultWith UnlocatedChecked src tokList offPairs
 
--- Non-panicking located parse: the `parseResult` of `parseLocated`.  Sets the
--- loc-state refs from the (start, end) offset pairs — so the ELoc wrappers carry
--- REAL line/col, exactly as `parseLocated` does — then runs the SAME scanners and
--- grammar as `parseResult` via the shared `parseResultWith` body.  The loader
--- uses this so a parse/lex error in an imported module surfaces as located DATA
--- (issue #100) instead of `parseLocated`'s `panic "parse error"`.
---
--- `tokenizeWithOffsetPairs` yields the byte-identical token stream
--- `tokenizeWithOffsets` does (both are `layout*` over the same chars) and its
--- pair starts are the same offsets; retaining both ends also locates edits.
+-- Strict parsing with real expression locations and structured errors.
 export
 parseLocatedResult : String -> Result ParseError (List Decl)
 parseLocatedResult src = match tokenizeWithOffsetPairs src
-  (tokList, offPairs) =>
-    let _ = setLocState src (arrayFromList offPairs)
-    parseResultWith src tokList offPairs
+  (tokList, offPairs) => parseResultWith LocatedChecked src tokList offPairs
 
 -- First-hit index per pre-scan rule (-1 = not hit), filled by one walk over the
 -- token stream.  `phWith` / `phMatchWith` split `with` by whether a `match`
@@ -6008,11 +5726,12 @@ prescanErrorPairs src tokList offPairs =
 -- grammar, over an ALREADY-tokenized stream.  Split out so the located entry
 -- does not have to tokenize a second time (the loader parses every module in
 -- the graph through it).
-parseResultWith : String ->
+parseResultWith : ParseMode ->
+  String ->
   List Token ->
   List (Int, Int) ->
   Result ParseError (List Decl)
-parseResultWith src tokList offList =
+parseResultWith mode src tokList offList =
   let toks = arrayFromList tokList
   let offs = arrayFromList (map fst offList)
   let ends = arrayFromList (map snd offList)
@@ -6020,15 +5739,16 @@ parseResultWith src tokList offList =
   match prescanError src index toks offs ends
     Some e => Err e
     None =>
-      let _ = primeGuardPos src offs
+      let ctx = newParseContextWith mode src toks (arrayFromList offList)
       resultDeclsResult
+        ctx
         src
         index
         toks
         offs
         ends
         (stringLength src)
-        (runP parseProgram toks 0)
+        (runPWith ctx parseProgram 0)
 
 foreignKwName : Token -> String
 foreignKwName (TIdent word) = word

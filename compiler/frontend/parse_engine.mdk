@@ -1,0 +1,351 @@
+import frontend.lex_token.{Token(..), describeToken}
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
+import frontend.parse_positions.{locOfSpanWith}
+import support.source_index.{lineStartsOf, offsetToLineColFast}
+import support.util.{reverseL}
+
+public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int
+public export data PFail =
+  | FailMsg String
+  | FailExpect Token Token
+  | FailProblem ParseDiagnosticKind
+
+public export data ParseMode =
+  | UnlocatedSyntax
+  | LocatedSyntax
+  | UnlocatedChecked
+  | LocatedChecked
+
+export data ParseContext = {
+  pcTokens : Array Token,
+  pcOffsets : Array (Int, Int),
+  pcLineStarts : Array Int,
+  pcLocated : Bool,
+  pcGuardPositions : Bool,
+  pcDepth : Ref Int,
+  pcCommas : Ref (List (Int, Int)),
+  pcUnits : Ref (List (Int, Int, Int)),
+}
+
+export data ParseMark =
+  ParseMark ParseContext Int (List (Int, Int)) (List (Int, Int, Int))
+
+public export data ParserE (e : Effect) a =
+  ParserE (ParseContext -> Int -> <e> PR a)
+export type Parser a = ParserE <> a
+
+export
+newParseContext : String -> Array Token -> Array (Int, Int) -> ParseContext
+newParseContext = newParseContextWith LocatedChecked
+
+export
+newParseContextWith : ParseMode ->
+  String ->
+  Array Token ->
+  Array (Int, Int) ->
+  ParseContext
+newParseContextWith mode src toks offs = ParseContext {
+  pcTokens = toks,
+  pcOffsets = offs,
+  pcLineStarts = lineStartsOf src,
+  pcLocated = match mode
+    LocatedSyntax => True
+    LocatedChecked => True
+    _ => False,
+  pcGuardPositions = match mode
+    UnlocatedChecked => True
+    LocatedChecked => True
+    _ => False,
+  pcDepth = Ref 0,
+  pcCommas = Ref [],
+  pcUnits = Ref [],
+}
+
+export
+contextTokens : ParseContext -> Array Token
+contextTokens ctx = ctx.pcTokens
+
+export
+contextOffsets : ParseContext -> Array (Int, Int)
+contextOffsets ctx = ctx.pcOffsets
+
+export
+contextLineStarts : ParseContext -> Array Int
+contextLineStarts ctx = ctx.pcLineStarts
+
+export
+runPWith : ParseContext -> ParserE e a -> Int -> <e> PR a
+runPWith ctx (ParserE f) pos = f ctx pos
+
+export
+runP : ParserE e a -> Array Token -> Int -> <e> PR a
+runP p toks pos =
+  runPWith
+    (newParseContextWith UnlocatedSyntax "" toks (arrayFromList []))
+    p
+    pos
+
+mapPR : (a -> <e> b) -> PR a -> <e> PR b
+mapPR f (POk a pos) = POk (f a) pos
+mapPR _ (PErr e pos) = PErr e pos
+mapPR _ (PFatal e pos) = PFatal e pos
+
+impl DeferredMappable ParserE where
+  deferMap f pa = ParserE (ctx pos => mapPR f (runPWith ctx pa pos))
+
+apPR : ParserE e (a -> b) -> ParserE e a -> ParseContext -> Int -> <e> PR b
+apPR pf pa ctx pos = match runPWith ctx pf pos
+  POk f pos1 => mapPR f (runPWith ctx pa pos1)
+  PErr e pos1 => PErr e pos1
+  PFatal e pos1 => PFatal e pos1
+
+impl DeferredApplicative ParserE where
+  deferPure x = ParserE (_ctx pos => POk x pos)
+  deferAp pf pa = ParserE (ctx pos => apPR pf pa ctx pos)
+
+bindPR : ParserE e a ->
+  (a -> <e> ParserE e b) ->
+  ParseContext ->
+  Int ->
+  <e> PR b
+bindPR pa k ctx pos = match runPWith ctx pa pos
+  POk a pos1 => runPWith ctx (k a) pos1
+  PErr e pos1 => PErr e pos1
+  PFatal e pos1 => PFatal e pos1
+
+impl DeferredThenable ParserE where
+  deferThen pa k = ParserE (ctx pos => bindPR pa k ctx pos)
+
+export
+contextP : ParserE e ParseContext
+contextP = ParserE (ctx pos => POk ctx pos)
+
+export
+getPos : ParserE e Int
+getPos = ParserE (_ctx pos => POk pos pos)
+
+export
+peekTok : Array Token -> Int -> Token
+peekTok toks pos
+  | pos < arrayLength toks = arrayGetUnsafe pos toks
+  | otherwise = TEof
+
+export
+peekP : ParserE e Token
+peekP = ParserE (ctx pos => POk (peekTok ctx.pcTokens pos) pos)
+
+export
+peek2P : ParserE e Token
+peek2P = ParserE (ctx pos => POk (peekTok ctx.pcTokens (pos + 1)) pos)
+
+export
+peek3P : ParserE e Token
+peek3P = ParserE (ctx pos => POk (peekTok ctx.pcTokens (pos + 2)) pos)
+
+export
+advance : ParserE e Token
+advance = ParserE (ctx pos => match peekTok ctx.pcTokens pos
+  TEof => PErr (FailProblem UnexpectedEnd) pos
+  t => POk t (pos + 1))
+
+export
+emit : a -> ParserE e a
+emit x = defer
+  advance
+  deferPure x
+
+export
+expectTok : Token -> ParserE e Unit
+expectTok t = ParserE (ctx pos =>
+  let x = peekTok ctx.pcTokens pos
+  if x == t then match x
+    TEof => PErr (FailProblem UnexpectedEnd) pos
+    _ => POk () (pos + 1)
+  else
+    PErr (FailExpect x t) pos)
+
+export
+failP : String -> ParserE e a
+failP msg = ParserE (_ctx pos => PErr (FailMsg msg) pos)
+
+export
+fatalP : ParseDiagnosticKind -> ParserE e a
+fatalP kind = ParserE (_ctx pos => PFatal (FailProblem kind) pos)
+
+export
+fatalProblemAtP : ParseDiagnosticKind -> Int -> ParserE e a
+fatalProblemAtP kind pos0 =
+  ParserE (_ctx _pos => PFatal (FailProblem kind) pos0)
+
+export
+fatalAtP : String -> Int -> ParserE e a
+fatalAtP msg pos0 = ParserE (_ctx _pos => PFatal (FailMsg msg) pos0)
+
+export
+renderFail : PFail -> String
+renderFail (FailMsg m) = m
+renderFail (FailProblem kind) = renderParseProblem kind
+renderFail (FailExpect x t) =
+  "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
+
+export
+failProblem : PFail -> ParseDiagnosticKind
+failProblem (FailProblem kind) = kind
+failProblem (FailExpect TEof expected) =
+  UnexpectedEndExpected (expectedTokenMsg expected)
+failProblem other = GenericParse (renderFail other)
+
+export
+mark : ParseContext -> ParseMark
+mark ctx = ParseMark ctx !ctx.pcDepth !ctx.pcCommas !ctx.pcUnits
+
+export
+rewind : ParseMark -> Unit
+rewind (ParseMark ctx depth commas units) =
+  ctx.pcDepth := depth
+  ctx.pcCommas := commas
+  ctx.pcUnits := units
+
+export
+orElse : ParserE e a -> ParserE e a -> ParserE e a
+orElse pa pb = ParserE (ctx pos =>
+  let saved = mark ctx
+  match runPWith ctx pa pos
+    r@(POk _ _) => r
+    r@(PFatal _ _) =>
+      rewind saved
+      r
+    PErr ea qa =>
+      rewind saved
+      match runPWith ctx pb pos
+        r@(POk _ _) => r
+        r@(PFatal _ _) =>
+          rewind saved
+          r
+        PErr eb qb =>
+          rewind saved
+          if qa > qb then PErr ea qa else PErr eb qb)
+
+export
+many : ParserE e a -> ParserE e (List a)
+many p = ParserE (ctx pos => manyGo p ctx pos [])
+
+manyGo : ParserE e a -> ParseContext -> Int -> List a -> <e> PR (List a)
+manyGo p ctx pos acc =
+  let saved = mark ctx
+  match runPWith ctx p pos
+    POk x q =>
+      if q > pos then
+        manyGo p ctx q (x :: acc)
+      else
+        rewind saved
+        POk (reverseL (x :: acc)) q
+    PFatal e q =>
+      rewind saved
+      PFatal e q
+    PErr _ _ =>
+      rewind saved
+      POk (reverseL acc) pos
+
+export
+sepThen : ParserE e b -> ParserE e a -> ParserE e a
+sepThen sep p = defer
+  sep
+  p
+
+export
+sepBy1 : ParserE e a -> ParserE e b -> ParserE e (List a)
+sepBy1 p sep = defer
+  x <- p
+  xs <- many (sepThen sep p)
+  deferPure (x :: xs)
+
+export
+locOfSpan : ParseContext -> Int -> Int -> Loc
+locOfSpan ctx start end =
+  if ctx.pcLocated then
+    locOfSpanWith ctx.pcOffsets ctx.pcLineStarts start end
+  else
+    Loc "" 1 0 1 0
+
+export
+spanLoc : Int -> Int -> ParserE e Loc
+spanLoc start end = ParserE (ctx pos => POk (locOfSpan ctx start end) pos)
+
+export
+tokLineCol : ParseContext -> Int -> (Int, Int)
+tokLineCol ctx i =
+  if ctx.pcGuardPositions && i >= 0 && i < arrayLength ctx.pcOffsets then
+    offsetToLineColFast ctx.pcLineStarts (fst (arrayGetUnsafe i ctx.pcOffsets))
+  else
+    (0, 0)
+
+export
+depthOf : ParseContext -> Int
+depthOf ctx = !ctx.pcDepth
+
+export
+withDepth : Int -> PFail -> ParserE e a -> ParserE e a
+withDepth limit problem p = ParserE (ctx pos =>
+  let depth = !ctx.pcDepth
+  if depth >= limit then
+    PFatal problem pos
+  else
+    ctx.pcDepth := depth + 1
+    let r = runPWith ctx p pos
+    ctx.pcDepth := depth
+    r)
+
+export
+recordTrailingComma : Int -> ParserE e Unit
+recordTrailingComma p = ParserE (ctx pos =>
+  let (Loc _ sl sc _ _) = locOfSpan ctx p (p + 1)
+  ctx.pcCommas := (sl, sc) :: !ctx.pcCommas
+  POk () pos)
+
+export
+recordUnitStart : Int -> Int -> ParserE e Unit
+recordUnitStart k p = ParserE (ctx pos =>
+  let (Loc _ sl sc _ _) = locOfSpan ctx p (p + 1)
+  ctx.pcUnits := (k, sl, sc) :: !ctx.pcUnits
+  POk () pos)
+
+export
+forgetLatestUnitStart : ParserE e Unit
+forgetLatestUnitStart = ParserE (ctx pos =>
+  ctx.pcUnits := match !ctx.pcUnits
+    [] => []
+    _ :: rest => rest
+  POk () pos)
+
+export
+contextCues : ParseContext -> (List (Int, Int), List (Int, Int, Int))
+contextCues ctx = (reverseL !ctx.pcCommas, reverseL !ctx.pcUnits)
+
+-- The "unexpected X" half of a parse error.  A description that carries an
+-- article (`a number`) or names a layout event (`a dedent`) reads badly after
+-- "unexpected", so those tokens get a bare noun phrase here.
+export
+unexpectedTokenMsg : Token -> String
+unexpectedTokenMsg t = "unexpected " ++ unexpectedTokenText t
+
+unexpectedTokenText : Token -> String
+unexpectedTokenText (TInt _ _) = "number"
+unexpectedTokenText (TWideInt _ _ _) = "number"
+unexpectedTokenText (TFloat _) = "number"
+unexpectedTokenText (TString _) = "string"
+unexpectedTokenText (TInterpOpen _) = "string"
+unexpectedTokenText (TInterpMid _) = "string"
+unexpectedTokenText (TInterpEnd _) = "string"
+unexpectedTokenText (TChar _) = "character literal"
+unexpectedTokenText TNewline = "line break"
+unexpectedTokenText TIndent = "indentation"
+unexpectedTokenText TDedent = "end of block"
+unexpectedTokenText t = describeToken t
+
+-- The "expected Y" half: a layout token is named by what the user would write.
+expectedTokenMsg : Token -> String
+expectedTokenMsg TIndent = "an indented block"
+expectedTokenMsg TDedent = "the end of the block"
+expectedTokenMsg t = describeToken t
