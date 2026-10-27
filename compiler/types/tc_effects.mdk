@@ -1,0 +1,1954 @@
+-- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
+-- summary failures, rigidity, index-only variables), grant and authority recording, and file-bound
+-- values (authority bounds at binding boundaries: recording, flow and settle checks); wires the
+-- `effect_*` leaves into inference.
+--
+-- Spec: EFFECTS section 2.3, section 5, section 6.2-6.9, section 8.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_occurrence`,
+-- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+
+import types.tc_types.{
+  grantTopKey,
+  methodGrantKey,
+  setGrantIds,
+  AbsorptionEvent(..),
+  GrantBinder(..),
+  GrantCallee(..),
+  GrantOcc(..),
+  MethodGrant(..),
+  DynCtx,
+  GraphCtx,
+  GroupCtx,
+  Kind,
+  MethodSchemeRow,
+  ModuleCtx,
+  ObligationSite,
+  ScopedMember,
+  SelectedValueOccurrence,
+  TcEnv,
+}
+import types.tc_mono.{
+  allArrowEffs,
+  arrowArity,
+  authCellsIn,
+  authOrderIn,
+  authOrderRow,
+  authRoots,
+  authRowCells,
+  authRowRoots,
+  containsI,
+  effectCells,
+  effectRoots,
+  effectRowRoots,
+  funArity,
+  joinCellOf,
+  monoIndexEffvarIds,
+  newEffvarId,
+  peelQual,
+  rowTailId,
+  schemeAuthIds,
+  schemeIds,
+  tyAppSpine,
+  tyArrowCount,
+  liveTailId,
+  anyContainsI,
+  effVarTailIds,
+  hasDupI,
+}
+import types.tc_diag_text.{
+  aliasesHeadRowMsg,
+  argAtomsMsgFor,
+  argOnlyEffVarMsg,
+  collapsesEffvarsMsg,
+  effectEscapeMsg,
+  effectInclusionMsg,
+  effectUndeterminedMsg,
+  effVarLaunderMsg,
+  indexEagerMsg,
+}
+import types.tc_state.{
+  currentScopeStore, mctxAt, wPushAll, wRestore, wSnapshot, wWindow
+}
+import types.tc_env.{
+  declGradedScope,
+  effTailNames,
+  funClausePair,
+  lookupBinding,
+  lookupVar,
+  methodArgs,
+  removeAllS,
+  tyTabKey,
+}
+import types.tc_diag.{
+  pushTypeError,
+  pushTypeErrorAt,
+  pushTypeErrorOnceAt,
+  pushTypeErrorOncePerSite,
+}
+import types.tc_unify.{
+  atomsEscape,
+  authorityFailureMsg,
+  captureScope,
+  effectLeakCheck,
+  effectSiteKey,
+  freshEffvarAt,
+  freshVar,
+  producedSlotCovariants,
+  reportIndexFailure,
+  resolvePendingJoins,
+  widenOpenedFor,
+}
+import types.tc_decls_types.{
+  atomsOfWritten, expandAliasHeadTy, rowArgNames, rowArgNamesIn
+}
+import types.tc_decls.{krowArgVarAtoms, paramRowAtomsOf, rowArgAtomsIn}
+import types.tc_solve.{isLocalAbsName}
+import types.tc_solve_check.{registerLocalAbs}
+import types.effect_authority.{
+  Authority(..),
+  Authvar(..),
+  authHasVars,
+  authIsTop,
+  authSub,
+  authvarId,
+  authvarName,
+  authVars,
+}
+import types.effect_rows.{
+  Atom(..),
+  EffLabel(..),
+  EffRow(..),
+  Effvar(..),
+  atomAuth,
+  atomKey,
+  atomLabelOf,
+  atomsDiff,
+  effrowLabels,
+  findAtom,
+  rowFlat,
+}
+import types.repr.{
+  AuthResidual(..),
+  Mono(..),
+  Scheme(..),
+  lookupAssocI,
+  normalize,
+  ppEachShared,
+  ppMonosShared,
+}
+import types.effect_bindings.{BindingSummary(..), newBindingSummary}
+import frontend.ast.{
+  Decl(..),
+  EffAtomTy(..),
+  EvId(..),
+  Expr(..),
+  IfaceMethod(..),
+  LetBind(..),
+  Loc(..),
+  Pat(..),
+  Ty(..),
+  TyConOrigin(..),
+  firstTyLoc,
+  lookupTab,
+  orElseLoc,
+}
+import map.{Map(..)}
+import support.ordmap.{
+  omDelete, omFromNames, omHasKey, omInsert, omLookup, OrdMap
+}
+import types.evidence.{ScopeId(..)}
+import types.effect_solver.{ScopeRoles(..), noScopeRoles, SummaryFailure}
+import support.util.{
+  anyList,
+  contains,
+  dedup,
+  filterList,
+  isEmptyL,
+  isNonEmptyL,
+  isSome,
+  joinWith,
+  listLen,
+  lookupAssoc,
+  reverseL,
+}
+import list.{findMap, reverse}
+import types.route_key.{ifaceWordOf}
+import frontend.desugar.{mapChildren, mapExpr}
+import types.effect_values.{producedInputTypes}
+import types.scopes as Scopes
+import types.runtime_grants.{fileGrantExterns}
+import types.effect_solver as EffectSolver
+import map as IdMap
+import types.scopes.{ScopeOwner(..)}
+
+-- The site a binding performed a label at that the report is about: the
+-- first, in source order, whose authority does not lie within the bound
+-- the label was admitted at, else the first site.  Two reads under
+-- `<FileRead "config/*">`, the second of `/etc/passwd`, report the second.
+effectSiteOf : ModuleCtx ->
+  String ->
+  Option String ->
+  Option Authority ->
+  Option Loc
+effectSiteOf mctx _ None _ = None
+effectSiteOf mctx fn (Some label) bound =
+  match omLookup (effectSiteKey fn label) mctx.mcCells.effectSitesRef.value
+    Some sites =>
+      let ordered = reverseL sites
+      let offending = match bound
+        Some hi => filterList (site => not (authSub (fst site) hi)) ordered
+        None => []
+      match offending ++ ordered
+        site :: _ => snd site
+        [] => None
+    None => None
+
+export
+beginEffectSummaryScope : ModuleCtx -> Unit -> Unit
+beginEffectSummaryScope mctx _ =
+  mctx.mcCells.fileValueScopes :=
+    wSnapshot mctx.mcCells.fileValueFlows :: mctx.mcCells.fileValueScopes.value
+  EffectSolver.openSummaryScope
+    mctx.mcCells.effectSummaries
+    (newEffvarId mctx.mcGraph ())
+    mctx.mcCells.currentLevel.value
+
+export
+freshEffectSummary : ModuleCtx -> Unit -> EffRow
+freshEffectSummary mctx _ =
+  EffectSolver.newSummary
+    mctx.mcCells.effectSummaries
+    (newEffvarId mctx.mcGraph ())
+
+export
+recordEffectBody : ModuleCtx -> EffRow -> EffRow -> Unit
+recordEffectBody mctx summary lower =
+  EffectSolver.recordBodyLower mctx.mcCells.effectSummaries summary lower
+
+summaryEscape : GraphCtx -> Bool -> List Atom -> List Atom -> List Atom
+summaryEscape gctx True lower upper = atomsDiff lower upper
+summaryEscape gctx False lower upper = atomsEscape gctx lower upper
+
+finishEffectSummaryScope : ModuleCtx ->
+  Map Int Unit ->
+  Map Int (Ref Effvar) ->
+  Unit
+finishEffectSummaryScope mctx retained borrowed =
+  let _ = finishEffectSummaryScopeKeeping mctx noScopeRoles retained borrowed
+  ()
+
+-- Close the scope, keeping as residuals the unproven obligations over the
+-- authorities [roles] quantifies at a member (`rlQuantified`, see
+-- `closeSummaryScope`); each comes back with its member index.
+export
+finishEffectSummaryScopeKeeping : ModuleCtx ->
+  ScopeRoles ->
+  Map Int Unit ->
+  Map Int (Ref Effvar) ->
+  List (Int, AuthResidual)
+finishEffectSummaryScopeKeeping mctx roles retained borrowed =
+  let outcome =
+    EffectSolver.closeSummaryScope
+      mctx.mcCells.effectSummaries
+      mctx.mcCells.rigidEffvarsRef.value
+      mctx.mcCells.rigidAuthvarsRef.value
+      roles
+      retained
+      borrowed
+      (summaryEscape mctx.mcGraph)
+      (joinCellOf mctx.mcGraph)
+      (freshEffvarAt mctx.mcGraph)
+      (widenOpenedFor mctx)
+  reportEffectSummaryFailures mctx outcome.esoFailures
+  finishFileValueScope mctx ()
+  map
+    ((member, w) => (
+      member,
+      AuthResidual {
+        arLower = w.awLower,
+        arUpper = w.awUpper,
+        arExact = w.awExact,
+      },
+    ))
+    outcome.esoResiduals
+
+export
+reportEffectSummaryFailures : ModuleCtx ->
+  List (SummaryFailure ObligationSite) ->
+  Unit
+reportEffectSummaryFailures mctx [] = ()
+reportEffectSummaryFailures outer (failure :: rest) =
+  let fn = failure.esfContext.osFn
+  let mctx =
+    mctxAt
+      (orElseLoc
+        (effectSiteOf outer fn failure.esfLabel (failureBound failure))
+        failure.esfContext.osLoc)
+      outer
+  match failure.esfAuthority
+    Some (lo, hi) =>
+      if mentionsEscaped mctx lo || mentionsEscaped mctx hi then
+        ()
+      else if failure.esfExact then
+        reportIndexFailure mctx failure.esfContext.osCovering mctx.mcLoc lo hi
+      else
+        pushTypeErrorAt
+          mctx
+          "T-AUTHORITY"
+          mctx.mcLoc
+          (authorityFailureMsg
+            mctx
+            fn
+            failure.esfLabel
+            failure.esfResidualOf
+            lo
+            hi
+            failure.esfWrittenUpper)
+    None =>
+      mctx.mcCells.rowFailureReportedRef :=
+        omInsert fn () mctx.mcCells.rowFailureReportedRef.value
+      reportRowFailure mctx failure
+  reportEffectSummaryFailures outer rest
+
+-- The authority the failing label was admitted at: the obligation's upper
+-- term, or the upper row's atom of that label.
+failureBound : SummaryFailure ObligationSite -> Option Authority
+failureBound failure = match failure.esfAuthority
+  Some (_, hi) => Some hi
+  None => match failure.esfLabel
+    Some label => map atomAuth (findAtom label (fst (rowFlat failure.esfUpper)))
+    None => None
+
+reportRowFailure : ModuleCtx -> SummaryFailure ObligationSite -> Unit
+reportRowFailure mctx failure =
+  let (upper, upperCells) = rowFlat failure.esfUpper
+  let escaping = atomsEscape mctx.mcGraph (fst (rowFlat failure.esfLower)) upper
+  if failure.esfExact then
+    let rows = ppEachShared (Ref []) (Ref 0) [
+      TEff failure.esfLower,
+      TEff failure.esfUpper,
+    ]
+    pushTypeError
+      mctx
+      "T-EFFECT-INDEX-MISMATCH"
+      ("effect index mismatch: "
+        ++ joinWith " vs " rows
+        ++ "; an effect row in a type argument is invariant, so write the same row on both sides")
+  else if isNonEmptyL escaping && isEmptyL upperCells then
+    effectLeakCheck mctx escaping upper
+  else
+    pushTypeError
+      mctx
+      "T-EFFECT-LAUNDER"
+      (effectInclusionMsg
+        failure.esfContext.osFn
+        escaping
+        (ppEachShared (Ref []) (Ref 0) [
+          TEff failure.esfLower,
+          TEff failure.esfUpper,
+        ]))
+  ()
+
+export
+borrowedEffectCells : ModuleCtx ->
+  Mono ->
+  Map Int (Ref Effvar) ->
+  Map Int (Ref Effvar)
+borrowedEffectCells mctx mono cells =
+  fold
+    (acc input => effectCells input acc)
+    cells
+    (producedInputTypes (producedSlotCovariants mctx) mono)
+
+-- A contract's effect variables are universal throughout its body judgment.
+-- The same boundary is used for supplied methods and generic default bodies.
+export
+beginEffectContract : ModuleCtx ->
+  EffRow ->
+  Mono ->
+  (Map Int Unit, Map Int Unit)
+beginEffectContract mctx force value =
+  let saved = mctx.mcCells.rigidEffvarsRef.value
+  let savedAuths = mctx.mcCells.rigidAuthvarsRef.value
+  beginEffectSummaryScope mctx ()
+  mctx.mcCells.rigidEffvarsRef := effectRoots value (effectRowRoots force saved)
+  mctx.mcCells.rigidAuthvarsRef :=
+    authRoots value (authRowRoots force savedAuths)
+  (saved, savedAuths)
+
+export
+finishEffectContract : DynCtx -> (Map Int Unit, Map Int Unit) -> Unit
+finishEffectContract dyn (saved, savedAuths) =
+  resolvePendingJoins dyn dyn.dcModule.mcCells.currentLevel.value
+  finishEffectSummaryScope dyn.dcModule Tip Tip
+  dyn.dcModule.mcCells.rigidEffvarsRef := saved
+  dyn.dcModule.mcCells.rigidAuthvarsRef := savedAuths
+
+-- #784 (Option A): reject an interface method whose signature has a free effect
+-- tail var in RETURN position but in NO ROW-KINDED argument position — it is
+-- under-determined, so a caller can instantiate it to `<>` and LAUNDER the
+-- dispatched impl's real effect (a pure-typed wrapper silently performs it).
+-- SCOPED to interface methods (the scope of this check); a top-level return-only
+-- effect var is #797's separate territory.
+--
+-- This runs as a SEPARATE pass from checkEffectParams, deliberately AFTER
+-- registerAllData has populated `dataParamKindsRef` (see the call site in
+-- checkBodyImpl). The predicate's kind-awareness (rowArgNames) consults that
+-- table to tell a row-kinded ctor arg (`Async e a`) from a type-kinded one
+-- (`List e`); running it in the early checkEffectParams pre-pass — before data
+-- registration — would leave the table empty and spuriously reject `Async e a`.
+export
+checkUndeterminedRetEffVars : ModuleCtx -> List Decl -> Unit
+checkUndeterminedRetEffVars mctx [] = ()
+checkUndeterminedRetEffVars mctx (d :: rest) =
+  checkUndeterminedRetEffVarsDecl mctx d
+  checkUndeterminedRetEffVars mctx rest
+
+checkUndeterminedRetEffVarsDecl : ModuleCtx -> Decl -> Unit
+checkUndeterminedRetEffVarsDecl mctx (DInterface { name, typarams, typaramKinds, methods, ... }) =
+  checkIfaceMethodEffs
+    mctx
+    name
+    (declGradedScope mctx.mcGraph typarams typaramKinds methods)
+    methods
+-- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
+-- comment (below) says post-unify inspection cannot catch these shapes because
+-- `unifyRowN`'s same-tail arm (`<e>` ~ `<Stdout | e>`) succeeds without
+-- recording the atom anywhere — and that arm is reached from an ORDINARY
+-- top-level arrow just as readily as from a method.  `launderArrow : (Unit ->
+-- <Stdout | e> Unit) -> (Unit -> <e> Unit)` was accepted, and applying it to an
+-- effectful callback produced a `Unit -> Unit` scheme that prints.  So the
+-- coverage check runs over plain `DTypeSig` signatures too, with an EMPTY graded
+-- scope (a non-interface signature has no graded typaram table — `scope` is the
+-- only channel by which an abstract head can be row-kinded, see `rowArgNamesIn`).
+-- Deliberately NOT widened alongside it: `undeterminedRetEffVars` (#784's
+-- RETURN-only rule) stays interface-scoped — a top-level return-only effect var
+-- is #797's separate territory, and the comment above says so.
+checkUndeterminedRetEffVarsDecl mctx (DTypeSig _ n t _) =
+  checkArgEffVarCoverage mctx None [] n t
+checkUndeterminedRetEffVarsDecl mctx (DAttrib _ d) =
+  checkUndeterminedRetEffVarsDecl mctx d
+checkUndeterminedRetEffVarsDecl mctx _ = ()
+
+checkIfaceMethodEffs : ModuleCtx ->
+  String ->
+  List (String, List Kind) ->
+  List IfaceMethod ->
+  Unit
+checkIfaceMethodEffs mctx _ _ [] = ()
+checkIfaceMethodEffs mctx iface scope ((IfaceMethod mname mty _ _) :: rest) =
+  match undeterminedRetEffVars mctx scope mty
+    [] => ()
+    bad =>
+      pushTypeErrorOnceAt
+        mctx
+        "T-EFFECT-UNDETERMINED"
+        (firstTyLoc mty)
+        (effectUndeterminedMsg iface mname bad)
+  checkArgEffVarCoverage mctx (Some iface) scope mname mty
+  checkIfaceMethodEffs mctx iface scope rest
+
+-- The DUAL of the #784 rule, closing the adversarial review's break 4 (and the
+-- argument-only variant): an effect var's ARGUMENT-position occurrences are
+-- rows an impl can PERFORM by using that argument, so the method's own rows
+-- must account for them.  Two ill-formed shapes, both rejected at the
+-- interface declaration:
+--   * argument-only — `use : a -> (Unit -> <e> Unit) -> Int`: e rides an
+--     argument but no non-argument row, so an impl applying the callback
+--     performs e with no row charging it (verified launder: a pure-typed
+--     wrapper prints);
+--   * uncovered atoms — `act1 : a -> (Unit -> <Stdout | e> Unit) -> <e> Unit`:
+--     the callback's concrete <Stdout> pours into a row declared bare <e>,
+--     which a caller instantiates to <> (verified launder).  Sound iff every
+--     non-argument occurrence of e covers the union of its argument-side
+--     atoms, IO-expanded (`<Stdout | e>` callback with `<Stdout | e>` return
+--     is accepted; so is an `<IO | e>` return).
+-- Post-unify inspection CANNOT catch these: the same-tail row-unification arm
+-- (`<e>` ~ `<Stdout | e>`) succeeds without recording the atom anywhere, so
+-- the declaration is the only seam with the information intact.
+-- [iface] is `Some` the enclosing interface for a method signature and `None`
+-- for an ordinary top-level `DTypeSig` (#1103); it selects the diagnostic's
+-- wording and nothing else — the RULE is identical either way.
+checkArgEffVarCoverage : ModuleCtx ->
+  Option String ->
+  List (String, List Kind) ->
+  String ->
+  Ty ->
+  Unit
+checkArgEffVarCoverage mctx iface scope mname mty =
+  checkArgEffVars
+    mctx
+    iface
+    mname
+    mty
+    (methodEffArgOccs mctx scope mty)
+    (methodEffRetOccs mctx scope mty)
+    (dedup (map fst (methodEffArgOccs mctx scope mty)))
+
+-- The two arms have different scopes, and [iface] is what selects between
+-- them.  Both arms apply to an interface method (`Some iface`); only the
+-- UNCOVERED-ATOMS arm applies to an ordinary top-level signature (`None`).
+--
+-- Why the ARGUMENT-ONLY arm is method-only.  Its hazard is "an impl uses the
+-- argument and performs <e> with no row charging it", and at an INTERFACE
+-- declaration the declaration really is the only seam — the impl arrives later,
+-- and #1100's `gtake : f e a -> a` launders for exactly that reason.  A
+-- DIRECT call to a top-level function does not get there: the CALL SITE rejects
+-- it.  MEASURED, both shapes, on this build — the reason is the call site, NOT
+-- the callee's body (a first pass at this comment claimed the body check caught
+-- it and that was falsified: `use : (Unit -> <e> Unit) -> Int` with a body that
+-- calls `f ()` checks CLEAN, reported as `use : (Unit -> Unit) -> Int`):
+--   * callback arg — `use : (Unit -> <e> Unit) -> Int`, body `let _ = f ()`,
+--     applied to an effectful `shout`: "Effectful value used where <> is
+--     allowed, but it performs <Stdout>", at `use shout`;
+--   * row-kinded ctor arg — `force : Box e a -> a` forcing its `Susp` thunk,
+--     applied to `Susp loud`: the same diagnostic, at `force (Susp loud)`.
+-- Applying the arm to top-level signatures anyway buys no soundness and rejects
+-- every honest INSPECTOR of a row-kinded value — also measured: 34 declarations
+-- in this compiler's own sources (`unInt : Value e -> Int`, `isPartial : Value e
+-- -> Bool`, … which pattern-match a `Value e` and never invoke the closure
+-- inside it) plus `stdlib/async.mdk`'s `isDone`/`forceVal`.  Nothing at a
+-- declaration tells an inspector from a forcer; for a method that uncertainty IS
+-- the hazard, for a directly-called function the call site settles it.
+--
+-- Why the UNCOVERED-ATOMS arm is NOT method-only (#1103).  Its hazard survives
+-- the body check: `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+-- Unit)` with body `launderArrow f = f` type-checks, because `unifyRowN`'s
+-- same-tail arm accepts `<Stdout | e>` against `<e>` without recording <Stdout>
+-- anywhere (see this function's header comment).  Effect inference therefore
+-- CANNOT catch it, and the declaration is the only seam here too.
+checkArgEffVars : ModuleCtx ->
+  Option String ->
+  String ->
+  Ty ->
+  List (String, List Atom) ->
+  List (String, List Atom) ->
+  List String ->
+  Unit
+checkArgEffVars mctx _ _ _ _ _ [] = ()
+checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
+  let vrets = filterList (o => fst o == v) retOccs
+  let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
+  if isEmptyL vrets then match iface
+    Some i =>
+      pushTypeErrorOnceAt
+        mctx
+        "T-EFFECT-ARG-UNCOVERED"
+        (firstTyLoc mty)
+        (argOnlyEffVarMsg i mname v)
+    None => ()
+  else match retOccsEscape mctx.mcGraph vatoms vrets
+    [] => ()
+    esc =>
+      pushTypeErrorOnceAt
+        mctx
+        "T-EFFECT-ARG-UNCOVERED"
+        (firstTyLoc mty)
+        (argAtomsMsgFor iface mname v esc)
+  checkArgEffVars mctx iface mname mty argOccs retOccs rest
+
+-- first non-empty escape of the argument-side atoms against a non-argument
+-- occurrence's declared atoms (IO-expanded via atomsEscape)
+retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
+retOccsEscape gctx _ [] = []
+retOccsEscape gctx vatoms ((_, declAtoms) :: rest) =
+  if isNonEmptyL (atomsEscape gctx vatoms declAtoms) then
+    atomsEscape gctx vatoms declAtoms
+  else
+    retOccsEscape gctx vatoms rest
+
+-- effect-var occurrences (name, written atoms) inside ARGUMENT positions of a
+-- method signature that an impl can PERFORM: rows of functions the impl can
+-- CALL (odd contravariant depth) and row-kinded values it can RUN.  The
+-- arrow's own row is NOT an argument position, and — round-2 adversarial
+-- FP 7 — a row at EVEN depth (`((Unit -> <e> Unit) -> Int)` argument: the
+-- impl receives a CONSUMER of e-callbacks and can only SUPPLY callbacks) is
+-- excluded: the impl cannot perform e there, and a malicious effectful supply
+-- pours its atoms into e's own cell where the post-unify atom check reads
+-- them.
+-- [scope] mirrors `methodEffRetOccs`' parameter of the same name exactly: the
+-- graded typaram map of the interface whose method signature this type IS
+-- (`declGradedScope`), and `[]` for every non-method signature.  Before #1100 the
+-- ARGUMENT half took no scope at all, so an abstract head (`gtake : f e a -> a`)
+-- resolved no row-kinded slot and raised no obligation, while the RETURN half —
+-- which has had the scope channel since #822 — did.
+methodEffArgOccs : ModuleCtx ->
+  List (String, List Kind) ->
+  Ty ->
+  List (String, List Atom)
+methodEffArgOccs mctx scope (TyConstrained _ t) = methodEffArgOccs mctx scope t
+methodEffArgOccs mctx scope (TyEffect _ _ t) = methodEffArgOccs mctx scope t
+methodEffArgOccs mctx scope (TyFun a b) =
+  argPerformableOccs mctx scope True a ++ methodEffArgOccs mctx scope b
+methodEffArgOccs mctx _ _ = []
+
+-- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
+-- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
+-- collector below reports them all: a caller reads the row at each var
+-- independently, so a var left out would be a var nothing constrains.
+occsOfTails : GraphCtx ->
+  List String ->
+  List EffAtomTy ->
+  List (String, List Atom)
+occsOfTails gctx tails labels =
+  let atoms = atomsOfWritten gctx labels
+  map (n => (n, atoms)) tails
+
+-- rows in an argument subtree, collected only where [perf] (the impl can call
+-- or run the value at this position); each arrow-LHS descent flips it.
+argPerformableOccs : ModuleCtx ->
+  List (String, List Kind) ->
+  Bool ->
+  Ty ->
+  List (String, List Atom)
+argPerformableOccs mctx scope perf (TyEffect labels tails t) =
+  (if perf then occsOfTails mctx.mcGraph tails labels else [])
+    ++ argPerformableOccs mctx scope perf t
+-- A bare row atom (#997) carries its own tail var + labels directly (no
+-- wrapped type to recurse into) — same treatment as the `TyEffect` arms
+-- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
+-- (as opposed to a bare `Box e Int`) was invisible to this collector, which
+-- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
+-- `effVarOccAtoms` below, which shares this gap).
+argPerformableOccs mctx _ perf (TyRow labels tails _) =
+  if perf then occsOfTails mctx.mcGraph tails labels else []
+argPerformableOccs mctx scope perf (TyFun a b) =
+  argPerformableOccs mctx scope (not perf) a
+    ++ argPerformableOccs mctx scope perf b
+argPerformableOccs mctx scope perf (TyTuple ts) =
+  flatMap (argPerformableOccs mctx scope perf) ts
+argPerformableOccs mctx scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
+  -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
+  -- the same record pattern as its name so the two cannot drift apart.
+  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+    krowSlotOccs mctx scope perf o n args
+  -- #1100, the abstract-head half — symmetric with `rowArgNamesVarApp` on the
+  -- RETURN side.  An interface typaram of graded kind, in scope, is row-kinded
+  -- in exactly the same way a registered ctor's KRow slot is; without this arm
+  -- `gtake : f e a -> a` collected NOTHING and the coverage rule never fired.
+  (TyVar h, args) => krowSlotVarOccs mctx scope perf h args
+  _ =>
+    argPerformableOccs mctx scope perf a ++ argPerformableOccs mctx scope perf b
+argPerformableOccs mctx scope perf (TyConstrained _ t) =
+  argPerformableOccs mctx scope perf t
+argPerformableOccs mctx _ _ _ = []
+
+-- one ctor node: its bare row-kinded slots (if performable) + recurse the args
+--
+-- THE SLOT'S atoms come from the head'S DECLARATION, not from the use site.
+-- Padding every performable KRow slot to `(e, [])` — "the impl can perform `e` here
+-- and nothing else is guaranteed" — is the blind pad `methodEffRetOccs` avoids
+-- (#2110).  On this argument side the pad is not an over-rejection but a LAUNDER: for
+--   `data Slot e = Slot (Unit -> <Stdout | e> Unit)`
+-- a `Slot e` ARGUMENT lets the callee run a field the declaration guarantees
+-- performs <Stdout> at EVERY instantiation, `Slot <>` included, so
+--   `unslot : Slot e -> (Unit -> <e> Unit)`
+-- under-claims: it hands back a function typed `<e>` that really performs
+-- <Stdout>, and at `e := <>` the caller gets a pure-typed printer (measured —
+-- `check` and `run` both exited 0 and the program printed).  Reading the
+-- guarantee out of `dataParamRowAtomsRef` through `krowArgVarAtoms` — the same
+-- table and the same walker the RETURN side already consults — makes those
+-- <Stdout> atoms argument-side evidence, and the coverage rule ("every
+-- non-argument occurrence of `e` covers the union of its argument-side atoms")
+-- then rejects `unslot` while still accepting `widen : Slot e -> Slot e`, whose
+-- return occurrence carries the same atoms.  Both halves are pinned:
+-- `test/typecheck_error_fixtures/effect_arg_slot_launder.mdk` and its
+-- `effect_arg_slot_unrelated_ok.mdk` accept-side twin.
+-- A written-row slot (`Slot <Log | e>`) has its WRITTEN labels reported
+-- twice — once here by `krowArgVarAtoms`, once by the `flatMap` below through
+-- `argPerformableOccs`' `TyRow` arm.  Harmless, and NOT the return side's
+-- double-count hazard: `checkArgEffVars` UNIONS the argument-side atoms
+-- (`flatMap snd`), where the return side takes a first-non-empty escape and so
+-- lets an atom-less copy veto a faithful one.
+krowSlotOccs : ModuleCtx ->
+  List (String, List Kind) ->
+  Bool ->
+  TyConOrigin ->
+  String ->
+  List Ty ->
+  List (String, List Atom)
+krowSlotOccs mctx scope perf o n args =
+  match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
+    Some kinds if listLen kinds == listLen args =>
+      (if perf then
+          krowArgVarAtoms
+            mctx.mcGraph
+            kinds
+            (optionOr [] (paramRowAtomsOf mctx (tyTabKey o n)))
+            args
+        else
+          [])
+        ++ flatMap (argPerformableOccs mctx scope perf) args
+    _ => flatMap (argPerformableOccs mctx scope perf) args
+
+-- the ABSTRACT-HEAD sibling of `krowSlotOccs` (#1100): same shape, but the
+-- kinds come from the graded typaram [scope] instead of `dataParamKindsRef`.
+-- This is `rowArgNamesVarApp`'s counterpart on the argument side; a miss falls
+-- through to the args exactly as `krowSlotOccs`' miss does.
+-- An abstract head has no declaration to read, so its guarantee list is `[]`
+-- and every slot still reports `(e, [])` — `krowArgVarAtoms kinds []` is the
+-- old blind pad, occurrence for occurrence.  It is written this way rather than
+-- left as the `map`, so the two arms stay ONE walker: the next atom fact an
+-- abstract head can offer (a graded typaram's declared row, #820) lands in one
+-- place instead of two.
+krowSlotVarOccs : ModuleCtx ->
+  List (String, List Kind) ->
+  Bool ->
+  String ->
+  List Ty ->
+  List (String, List Atom)
+krowSlotVarOccs mctx scope perf h args = match lookupAssoc h scope
+  Some kinds if listLen kinds == listLen args =>
+    (if perf then krowArgVarAtoms mctx.mcGraph kinds [] args else [])
+      ++ flatMap (argPerformableOccs mctx scope perf) args
+  _ => flatMap (argPerformableOccs mctx scope perf) args
+
+-- effect-var occurrences in NON-argument positions: each spine arrow's own row,
+-- plus every occurrence inside the final return type (nested rows and bare
+-- row-kinded ctor-arg slots).
+--
+-- The two terms of the last arm can describe the same occurrence, and only
+-- one of them carries its atoms.  For a return `Box <Stdout | e> Unit`,
+-- `effVarOccAtoms` descends into the KRow slot's written row and reports
+-- `(e, [Stdout])`; `rowArgAtomsIn` reports the same occurrence again, carrying
+-- only what the HEAD'S DECLARATION guarantees at that slot (`(e, [])` for a
+-- `Box` declared bare).  `retOccsEscape` takes the FIRST NON-EMPTY escape
+-- over this list and does not dedupe, so the atom-less copy vetoes the faithful
+-- one and an HONESTLY CHARGED declaration is rejected:
+--   `widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit`
+-- covers <Stdout> on both sides and must be ACCEPTED — it is the named
+-- over-correction control in `test/typecheck_error_fixtures/
+-- effect_index_unrelated_ok.mdk` (its header, "rejecting those instead would be
+-- the obvious over-correction").  So a name `effVarOccAtoms` has already
+-- reported is DROPPED from the padded term rather than added beside it.
+-- This does NOT weaken any real rejection: the dropped entry is a strictly
+-- less informative record of an occurrence still in the list, never an
+-- occurrence the list would otherwise lose.  The rule stays "every non-argument
+-- occurrence of e covers the union of its argument-side atoms"; this only stops
+-- one occurrence from being counted twice, once with its labels erased.
+-- Latent since the padded term was introduced — it mis-rejected interface
+-- methods of this shape too, and #1103's widening to ordinary signatures is
+-- merely what made it reachable from `effect_index_unrelated_ok.mdk`.
+methodEffRetOccs : ModuleCtx ->
+  List (String, List Kind) ->
+  Ty ->
+  List (String, List Atom)
+methodEffRetOccs mctx scope (TyConstrained _ t) = methodEffRetOccs mctx scope t
+methodEffRetOccs mctx scope (TyEffect labels tails t) =
+  occsOfTails mctx.mcGraph tails labels ++ methodEffRetOccs mctx scope t
+methodEffRetOccs mctx scope (TyFun _ b) = methodEffRetOccs mctx scope b
+methodEffRetOccs mctx scope t =
+  let occs = effVarOccAtoms mctx.mcGraph t
+  occs
+    ++ filterList
+      (o2 => not (anyList (o => fst o == fst o2) occs))
+      (rowArgAtomsIn mctx scope t)
+
+-- The predicate: return-position effect tail vars minus argument-carried ones.
+-- An effect var is argument-carried — hence soundly pinned at every call site —
+-- ONLY by a ROW-KINDED occurrence in an argument. The test is kind-aware, NOT
+-- name-based: a Row-kinded effect var and a Type-kinded type var may share a
+-- spelling yet be independent variables, so a Type-kinded `e` in `List e` /
+-- `Box e` pins NOTHING about the return row `<e>` — counting it would relaunder
+-- the effect (#784). The two sound argument-carriers:
+--   * a callback's latent arrow effect (`(a -> <e> b)`) — a Row-kinded effect
+--     row, captured by effTailNames over each arg;
+--   * a row-kinded type-CONSTRUCTOR argument (`Async e a`, where Async's first
+--     param has kind Row) — captured by rowArgNames, which consults the ctor's
+--     recorded param kinds (dataParamKindsRef) and takes ONLY the tyvars sitting
+--     in a KRow slot. `List e`/`Box e` (Type-kinded param) contribute nothing.
+-- An effect tail var in the RETURN row and in no such Row-kinded argument slot
+-- is the laundering hazard (map/fold/traverse/`Async e a` are pinned;
+-- `speak : a -> <e> String` and `speak : a -> List e -> <e> String` are not).
+-- An abstract row-ctor arg (`r e a`, `r` a type variable) is conservatively
+-- rejected — no real interface method has that shape, and matching it soundly
+-- would need per-argument kind inference we do not run here.
+undeterminedRetEffVars : ModuleCtx ->
+  List (String, List Kind) ->
+  Ty ->
+  List String
+undeterminedRetEffVars mctx scope sig =
+  let args = methodArgs sig
+  let argCarried =
+    dedup (flatMap effTailNames args ++ flatMap (rowArgNamesIn mctx scope) args)
+  let retTail = dedup (effTailNames (methodRet sig))
+  removeAllS argCarried retTail
+
+-- return type of a method: strip leading constraint wrappers and arrows, but
+-- KEEP a trailing effect row so its tail var is visible (unlike methodArgs,
+-- which peels it).
+methodRet : Ty -> Ty
+methodRet (TyConstrained _ t) = methodRet t
+methodRet (TyFun _ b) = methodRet b
+methodRet t = t
+
+-- The signature the declared-row walks below read: every alias on the return
+-- spine expanded, so the declared row is the row `fromAstTypeE` elaborates.
+-- `d : Tick` with `type Tick = Int -> <Stdout> Unit` declares `<Stdout>`, and
+-- so do `v : S` and `f : Int -> S` with `type S = <Stdout> Int`
+-- (`writtenBindingForce`, `returnRowE`).  An alias that expands to any other
+-- type stays unexpanded, since it carries no row to read.
+expandReturnSpine : ModuleCtx -> Ty -> Ty
+expandReturnSpine mctx ty = match expandAliasHeadTy mctx ty
+  TyFun a ret => TyFun a (expandReturnSpine mctx ret)
+  TyConstrained cs t => TyConstrained cs (expandReturnSpine mctx t)
+  row@(TyEffect _ _ _) => row
+  _ => ty
+
+-- the declared concrete effect set of a signature: labels on the first `<…>`
+-- reached walking down the return side (Phase 79e escape check)
+declaredEffects : GraphCtx -> Ty -> List Atom
+declaredEffects gctx (TyFun _ ret) = declaredEffects gctx ret
+declaredEffects gctx (TyEffect effs _ _) = atomsOfWritten gctx effs
+declaredEffects gctx (TyConstrained _ t) = declaredEffects gctx t
+declaredEffects gctx _ = []
+
+-- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
+-- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
+-- one (`<e>`, `<Stdout | e>`, `<Stdout | e | e2>`).  Arms mirror
+-- `declaredEffects` exactly, stopping at the same node, so the two always
+-- describe ONE row.
+declaredEffectTail : Ty -> List String
+declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
+declaredEffectTail (TyEffect _ tail _) = tail
+declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
+declaredEffectTail _ = []
+
+-- #797: effect-tail names occurring in ARGUMENT positions of the signature,
+-- walking the same return spine `declaredEffects` walks and stopping at the same
+-- node.  A name here is one the CALLER also constrains, so the declared return
+-- row is not free even though it is syntactically open.
+--
+-- Deliberately BROADER than `methodEffArgOccs`: that collector answers "can
+-- the BODY perform this row" and so excludes an even-contravariant-depth
+-- occurrence (`((Unit -> <e> Unit) -> Int)`).  The question here is the
+-- different one "does the caller pin this var", for which ANY argument-side
+-- occurrence counts — an even-depth `e` is still unified with the caller's
+-- chosen row.  `effTailNames`' documented name-based over-counting (`List <e>`)
+-- is likewise conservative in the safe direction here: it can only make a row
+-- read as argument-carried, i.e. keep the pre-#797 rejection, never widen.
+declaredArgEffNames : ModuleCtx -> Ty -> List String
+declaredArgEffNames mctx (TyFun a ret) =
+  effTailNames a ++ rowArgNames mctx a ++ declaredArgEffNames mctx ret
+declaredArgEffNames mctx (TyConstrained _ t) = declaredArgEffNames mctx t
+declaredArgEffNames mctx _ = []
+
+-- #797: is the declared return row genuinely OPEN — a free tail var that appears
+-- NOWHERE on the argument side?  Such a var is chosen by nothing but the callee's
+-- own body: `f : Int -> <e> String` means "f performs whatever it performs", so a
+-- body performing <Stdout> is not an escape and must not be reported as one.
+-- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
+-- sense — the caller instantiates it, so a body adding <Stdout> would launder,
+-- and the pre-existing escape rejection stands unchanged.
+-- A JOIN is open when SOME member is free of the argument side: that member
+-- alone already admits whatever the body performs.
+declaredEffectsOpen : ModuleCtx -> Ty -> Bool
+declaredEffectsOpen mctx ty =
+  let argNames = declaredArgEffNames mctx ty
+  anyList (v => not (contains v argNames)) (declaredEffectTail ty)
+
+export
+evOrdinal : EvId -> Int
+evOrdinal (EvId _ i) = i
+
+mentionsEscaped : ModuleCtx -> Authority -> Bool
+mentionsEscaped mctx q =
+  anyList
+    (cell =>
+      IdMap.has (authvarId cell) mctx.mcCells.escapedExistentialsRef.value)
+    (authVars q)
+
+export
+registerLocalAbsIf : ModuleCtx ->
+  String ->
+  Option ScopeId ->
+  Scheme ->
+  Int ->
+  Int ->
+  Unit
+registerLocalAbsIf mctx name lscope sch oblN0 callN0 =
+  recordLocalQuantified mctx.mcGraph sch
+  match lscope
+    Some scope =>
+      registerLocalGrants mctx.mcGraph name sch
+      registerLocalAbs mctx name scope sch oblN0 callN0
+    None => ()
+
+-- A generalized local's quantified variables stay in the enclosing binding's
+-- obligation window, but they are the scheme's now: each use instantiates them
+-- afresh, and the enclosing boundary's defaulting must reach those instances,
+-- never the scheme's own variables.  Grounding one would fix the local at one
+-- type behind every use and select one dictionary for two predicates (#3516).
+recordLocalQuantified : GraphCtx -> Scheme -> Unit
+recordLocalQuantified gctx sch = match schemeIds sch
+  [] => ()
+  ids =>
+    let st = gctx.graphRun.localAbs
+    st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
+
+-- Grants are passed only on a graph whose driver ran the marking preamble: a
+-- driver that never marks has no use that could carry one.
+grantsEnabled : GraphCtx -> Unit -> Bool
+grantsEnabled gctx _ = isSome gctx.markSetsRef.value
+
+-- What a use of [name] in the module being marked denotes.  An extern the module
+-- declares or imports is a foreign declaration, and one spelled like a catalog
+-- file extern binds that same runtime operation (a redeclaration must agree with
+-- the catalog row); any other value the module defines or imports is a source
+-- binding; a name the module neither defines nor imports is the catalog extern
+-- when the catalog declares it.
+grantCalleeOf : ModuleCtx -> String -> GrantCallee
+grantCalleeOf mctx name
+  | isLocalAbsName name = SourceCallee
+  | otherwise = match mctx.mcCells.markingRef.value
+    Some mm =>
+      if omHasKey name mm.mmExterns then
+        externCallee name
+      else if omHasKey name mm.mmUserNames then
+        SourceCallee
+      else
+        catalogCallee mctx.mcGraph name
+    None => catalogCallee mctx.mcGraph name
+
+catalogCallee : GraphCtx -> String -> GrantCallee
+catalogCallee gctx name =
+  if omHasKey name gctx.builtinExternNamesRef.value then
+    externCallee name
+  else
+    SourceCallee
+
+externCallee : String -> GrantCallee
+externCallee name =
+  if omHasKey name fileGrantExterns then FileExternCallee else NoGrantCallee
+
+-- Whether the marker gives a use of [n] a grant identity: the binding [n] denotes
+-- in [env] is a value, not an interface method (whose uses are method
+-- occurrences), that takes grants, and its own scheme quantifies an authority.
+export
+grantNameIn : TcEnv -> String -> Bool
+grantNameIn env n
+  | not (grantsEnabled env.teDyn.dcModule.mcGraph ()) = False
+  | otherwise = match lookupBinding env n
+    Some b => match b.ebMethodRow
+      Some _ => False
+      None =>
+        calleeTakesGrants (grantCalleeOf env.teDyn.dcModule n)
+          && isNonEmptyL (schemeAuthIds b.ebValue.vsScheme)
+    None => False
+
+calleeTakesGrants : GrantCallee -> Bool
+calleeTakesGrants SourceCallee = True
+calleeTakesGrants FileExternCallee = True
+calleeTakesGrants NoGrantCallee = False
+
+-- A scheme's quantified authorities in grant order: first occurrence in the
+-- type read left to right (an arrow's domain, its row, its result), so a
+-- scheme and every copy of it list them alike whatever ids they carry.
+export
+grantOrder : Scheme -> List Int
+grantOrder (Forall _ _ [] _ _ _) = []
+grantOrder (Forall _ _ avars _ force body) =
+  let seen = reverseL (authOrderRow force (authOrderIn body []))
+  let quantified = filterList (i => containsI i avars) seen
+  quantified ++ filterList (i => not (containsI i quantified)) avars
+
+export
+grantOccOf : GraphCtx -> EvId -> Option GrantOcc
+grantOccOf gctx ev = IdMap.get (evOrdinal ev) gctx.graphRun.grants.gsOccs.value
+
+setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
+setGrantOcc gctx ev occ =
+  let st = gctx.graphRun.grants
+  st.gsOccs := IdMap.set (evOrdinal ev) occ st.gsOccs.value
+
+-- The binding id resolve's stamp would have given this use: its top-level
+-- binder's, or 0 for an imported name.
+export
+grantOnlyBindingId : ModuleCtx -> String -> Int
+grantOnlyBindingId mctx name = match mctx.mcCells.markingRef.value
+  Some mm => optionOr 0 (omLookup name mm.mmTop)
+  None => 0
+
+export
+recordGrantOcc : ModuleCtx ->
+  String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Unit
+recordGrantOcc mctx name ev (scheme@(Forall _ _ _ _ _ body)) subst =
+  match grantCalleeOf mctx name
+    NoGrantCallee => ()
+    SourceCallee => recordOccWith mctx name ev scheme subst None False
+    FileExternCallee =>
+      recordOccWith mctx name ev scheme subst (Some (arrowArity body)) False
+
+-- A method candidate's use: its grants follow its value arguments.
+export
+recordMethodGrantOcc : ModuleCtx ->
+  String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Unit
+recordMethodGrantOcc mctx name ev (scheme@(Forall _ _ _ _ _ body)) subst =
+  recordOccWith mctx name ev scheme subst (Some (arrowArity body)) False
+
+-- A method occurrence typed as the standalone binding its name shadows: that
+-- binding's grants, leading its arguments.
+export
+recordStandaloneGrantOcc : ModuleCtx ->
+  String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Int ->
+  Unit
+recordStandaloneGrantOcc mctx name ev scheme subst arity =
+  recordOccWith mctx name ev scheme subst (Some arity) True
+
+recordOccWith : ModuleCtx ->
+  String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Option Int ->
+  Bool ->
+  Unit
+recordOccWith mctx name ev scheme subst trailing standalone =
+  match grantOrder scheme
+    [] => ()
+    ids => setGrantOcc mctx.mcGraph ev GrantOcc {
+      goCallee = name,
+      goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
+      goRecIds = [],
+      goTrailing = trailing,
+      goChain = grantChainAt mctx.mcGraph (captureScope mctx ()),
+      goStandalone = standalone,
+    }
+
+-- The evidence id of the method occurrence heading an application spine.
+export
+spineHeadEv : Expr -> Option EvId
+spineHeadEv (ELoc _ e) = spineHeadEv e
+spineHeadEv (EApp f _) = spineHeadEv f
+spineHeadEv (EMethodAt _ _ ev) = Some ev
+-- any other head is not a method occurrence
+spineHeadEv _ = None
+
+-- A shadow application's head, typed as the standalone [occurrence] selected.
+export
+recordStandaloneAt : ModuleCtx ->
+  String ->
+  Expr ->
+  SelectedValueOccurrence ->
+  Unit
+recordStandaloneAt mctx name hd occurrence = match spineHeadEv hd
+  Some ev =>
+    recordStandaloneGrantOcc
+      mctx
+      name
+      ev
+      occurrence.svoScheme
+      occurrence.svoInstance.mtiSubstitution.misAuthSubst
+      (funArity occurrence.svoInstance.mtiBody)
+  None => ()
+
+export
+methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
+methodGrantOf gctx ifaceWord method =
+  omLookup
+    (methodGrantKey ifaceWord method)
+    gctx.graphRun.grants.gsMethods.value
+
+-- The interface methods a module declares whose type quantifies authorities; any
+-- other method it declares has no row, whatever an earlier check of the module id
+-- left.  The grants follow the arrows the written type spells, since that declared
+-- arity is what the backends read; a result an alias names a function stays the
+-- result.
+export
+recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
+recordMethodGrants gctx rows =
+  let st = gctx.graphRun.grants
+  st.gsMethods :=
+    fold
+      (acc row =>
+        let key =
+          methodGrantKey
+            (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
+            row.msrName
+        match methodGrantOfRow row
+          Some mg => omInsert key mg acc
+          None => omDelete key acc)
+      st.gsMethods.value
+      rows
+
+methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
+methodGrantOfRow row = match row.msrScheme
+  Forall _ _ _ _ force body => match grantOrder row.msrScheme
+    [] => None
+    ids =>
+      let cells = authCellsIn body (authRowCells force Tip)
+      Some MethodGrant {
+        mgArity = tyArrowCount row.msrType,
+        mgNames =
+          map
+            (i => match IdMap.get i cells
+              Some cell => optionOr "" (authvarName cell)
+              None => "")
+            ids,
+      }
+
+-- Authority variables no caller supplies, whose grant is the whole domain: the
+-- escape check has already held every declaration they reach to its label's top.
+export
+markSourceless : GraphCtx -> List Int -> Unit
+markSourceless gctx ids =
+  let st = gctx.graphRun.grants
+  st.gsSourceless := fold (m i => IdMap.set i () m) st.gsSourceless.value ids
+
+-- The binders around [sid] whose authority parameters a grant may forward,
+-- innermost first.
+grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
+grantChainAt gctx (sid@(ScopeId i)) =
+  let frame = Scopes.scopeFrame (currentScopeStore gctx ()) sid
+  let outer = match frame.sfParent
+    Some parent => grantChainAt gctx parent
+    None => []
+  let own = match frame.sfOwner
+    BindingOwner n => TopGrantBinder frame.sfModuleId n :: outer
+    LocalBindingOwner n => LocalGrantBinder n :: outer
+    _ => outer
+  match IdMap.get i gctx.graphRun.grants.gsBodies.value
+    Some body => body :: own
+    None => own
+
+-- A generalized top-level group: each member whose scheme quantifies
+-- authorities takes them as parameters, and each use of such a member inside
+-- the group that instantiated nothing (its type was the member's own) forwards
+-- them.  A member that takes none has no row, whatever an earlier check of the
+-- module id left.
+export
+recordTopGrants : GraphCtx ->
+  String ->
+  List (String, Scheme) ->
+  OrdMap (List (List Pat, Expr)) ->
+  Unit
+recordTopGrants gctx mid schemes grouped =
+  let st = gctx.graphRun.grants
+  let enabled = grantsEnabled gctx ()
+  let granted =
+    map ((n, sch) => (n, if enabled then grantOrder sch else [])) schemes
+  each (e => setGrantIds st.gsTopIds (grantTopKey mid (fst e), snd e)) granted
+  let taking = filterList (e => isNonEmptyL (snd e)) granted
+  match taking
+    [] => ()
+    _ =>
+      st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
+      each
+        ((m, _) =>
+          each
+            (clause => recordRecursiveGrants gctx mid m taking (snd clause))
+            (clausesOf m grouped))
+        schemes
+
+recordRecursiveGrants : GraphCtx ->
+  String ->
+  String ->
+  List (String, List Int) ->
+  Expr ->
+  Unit
+recordRecursiveGrants gctx mid m taking body =
+  let visit =
+    e => match e
+      EDictAt n ev => match (lookupAssoc n taking, grantOccOf gctx ev)
+        (Some ids, None) =>
+          setGrantOcc gctx ev GrantOcc {
+            goCallee = n,
+            goCells = [],
+            goRecIds = ids,
+            goTrailing = None,
+            goChain = [TopGrantBinder mid m],
+            goStandalone = False,
+          }
+          e
+        _ => e
+      _ => e
+  let _ = mapExpr visit body
+  ()
+
+-- A generalized candidate local: its quantified authorities become its
+-- parameters, and its uses inside its own right-hand side forward them.
+registerLocalGrants : GraphCtx -> String -> Scheme -> Unit
+registerLocalGrants gctx name sch = match grantOrder sch
+  [] => ()
+  ids =>
+    let st = gctx.graphRun.grants
+    st.gsLocalIds := omInsert name ids st.gsLocalIds.value
+    let recOccs =
+      optionOr [] (omLookup name gctx.graphRun.localAbs.lasRecOccs.value)
+    each
+      (occ => setGrantOcc gctx (fst occ) GrantOcc {
+        goCallee = name,
+        goCells = [],
+        goRecIds = ids,
+        goTrailing = None,
+        goChain = grantChainAt gctx (snd occ),
+        goStandalone = False,
+      })
+      recOccs
+
+-- Chunk C: number of arguments applied in this spine (`f a b c` ⇒ 3).
+export
+appSpineArgCount : Expr -> Int
+appSpineArgCount (ELoc _ e) = appSpineArgCount e
+appSpineArgCount (EDoOrigin _ e) = appSpineArgCount e
+appSpineArgCount (EAnnot e _) = appSpineArgCount e
+appSpineArgCount (EApp f _) = 1 + appSpineArgCount f
+appSpineArgCount _ = 0
+
+-- Inside a body that collects them (`dcPerformSites`), each variable tail of the
+-- row a call runs, with the span of the call: [env] is located at the call.
+export
+notePerformSite : TcEnv -> EffRow -> Unit
+notePerformSite env eff = match env.teDyn.dcPerformSites
+  None => ()
+  Some sites =>
+    sites :=
+      map (cell => (cell, env.teDyn.dcModule.mcLoc)) (snd (rowFlat eff))
+        ++ sites.value
+
+export
+markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
+markBinders table cells =
+  table := fold (m c => IdMap.set (authvarId c) () m) table.value cells
+
+export
+collectProducedSummary : ModuleCtx -> List EffRow -> EffRow
+collectProducedSummary mctx rows =
+  let summary = freshEffectSummary mctx ()
+  each (row => recordEffectBody mctx summary row) rows
+  summary
+
+export
+registerLocalGroupAbs : TcEnv ->
+  Int ->
+  Int ->
+  List (LetBind, Option ScopeId) ->
+  Unit
+registerLocalGroupAbs env _ _ [] = ()
+registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _ _ _), lscope) :: rest) =
+  match lookupVar genv name
+    Some sch =>
+      registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
+    None => ()
+  registerLocalGroupAbs genv oblN0 callN0 rest
+
+export
+localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
+localBindingSummary mctx (LetBind name clauses _ _) =
+  let arity = match map funClausePair clauses
+    (pats, _) :: _ => listLen pats
+    [] => 0
+  (name, newBindingSummary arity (freshVar mctx) (freshEffectSummary mctx))
+
+-- A declared file row bounds every operation performed while its body runs,
+-- including operations in helpers and callbacks. The bound is checked in
+-- addition to each extern's own grant; a statically named symlink can change
+-- the physical order between the two authorities.
+fileBoundKey : Loc -> String
+fileBoundKey (Loc file line col endLine endCol) =
+  "\{file}:\{intToString line}:\{intToString col}:\{intToString endLine}:\{intToString endCol}"
+
+-- Some application and block roots carry locations only on their children.
+-- Key the body by its first source node, and guard the whole body at its
+-- binding/lambda seam, rather than guarding that child alone.
+export
+fileBodyLoc : Expr -> Option Loc
+fileBodyLoc (ELoc l _) = Some l
+fileBodyLoc e =
+  let found = Ref None
+  let _ =
+    mapChildren
+      (child =>
+        match found.value
+          None => found := fileBodyLoc child
+          Some _ => ()
+        child)
+      e
+  found.value
+
+export
+fileBoundSite : String -> Loc -> String
+-- Parsed locations may have an empty file field; the module keeps equal
+-- source spans in different modules from sharing a bound.
+fileBoundSite mid loc =
+  "\{intToString (stringLength mid)}:\{mid}:\{fileBoundKey loc}"
+
+scopeFileBoundModule : ModuleCtx -> Unit -> String
+scopeFileBoundModule mctx _ =
+  (Scopes.scopeFrame
+    (currentScopeStore mctx.mcGraph ())
+    (captureScope mctx ())).sfModuleId
+
+export
+fileValueKey : String -> Expr -> Option String
+fileValueKey mid e =
+  map (loc => "\{fileBoundSite mid loc}:\{fileValueShape e}") (fileBodyLoc e)
+
+fileValueShape : Expr -> String
+fileValueShape (ELoc _ _) = "loc"
+fileValueShape (EApp f _) = "app" ++ intToString (appSpineArgCount f + 1)
+fileValueShape (ELam _ _) = "lambda"
+fileValueShape _ = "value"
+
+finishFileValueScope : ModuleCtx -> Unit -> Unit
+finishFileValueScope mctx _ = match mctx.mcCells.fileValueScopes.value
+  saved :: rest =>
+    mctx.mcCells.fileValueScopes := rest
+    let flows = wWindow mctx.mcCells.fileValueFlows (snd saved)
+    wRestore mctx.mcCells.fileValueFlows saved
+    each
+      (flow =>
+        if isEmptyL rest || not (unsettledFileValueFlow flow) then
+          checkFileValueFlow mctx flow)
+      flows
+    -- A local result can be shaped by a later use in its enclosing scope.
+    -- Keep its producer evidence until that receiving type is determined.
+    match rest
+      [] => ()
+      _ =>
+        wPushAll
+          mctx.mcCells.fileValueFlows
+          (reverseL (filterList unsettledFileValueFlow flows))
+    ()
+  [] => ()
+
+unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
+unsettledFileValueFlow (_, upper, lower) =
+  unsettledPackedFileBound False upper lower
+
+unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
+unsettledPackedFileBound packed upper lower = match (
+  normalize upper,
+  normalize lower,
+)
+  (TVar _, _) => True
+  (_, TVar _) => True
+  (TQual u _, l) => unsettledPackedFileBound packed u l
+  (u, TQual l _) => unsettledPackedFileBound packed u l
+  (TApp uf ux, TApp lf lx) =>
+    unsettledPackedFileBound True uf lf || unsettledPackedFileBound True ux lx
+  (TFun ud ur ux, TFun ld lr lx) =>
+    packed && unsettledFileRow ur lr
+      || unsettledPackedFileBound packed ld ud
+      || unsettledPackedFileBound packed ux lx
+  _ => False
+
+unsettledFileRow : EffRow -> EffRow -> Bool
+unsettledFileRow upper lower =
+  let (ua, ut) = rowFlat upper
+  let (la, lt) = rowFlat lower
+  isNonEmptyL ut
+    || isNonEmptyL lt
+    || anyList (a => narrowFileAtom a && authHasVars (atomAuth a)) (ua ++ la)
+
+checkFileValueFlow : ModuleCtx -> (Option Loc, Mono, Mono) -> Unit
+checkFileValueFlow mctx (loc, upper, lower) =
+  if changesPackedFileBound False upper lower then
+    pushTypeErrorOncePerSite
+      mctx
+      "T-FILE-BOUND-VALUE"
+      loc
+      ("a function's file bound cannot change inside a container: "
+        ++ ppMonosShared [lower, upper]
+        ++ "; annotate the function with the container's FileRead or FileWrite bound before packing it")
+
+changesPackedFileBound : Bool -> Mono -> Mono -> Bool
+changesPackedFileBound packed upper lower = match (
+  normalize upper,
+  normalize lower,
+)
+  (TQual u _, l) => changesPackedFileBound packed u l
+  (u, TQual l _) => changesPackedFileBound packed u l
+  (TApp uf ux, TApp lf lx) =>
+    changesPackedFileBound True uf lf || changesPackedFileBound True ux lx
+  (TFun ud ur ux, TFun ld lr lx) =>
+    packed && changesFileRow ur lr
+      || changesPackedFileBound packed ld ud
+      || changesPackedFileBound packed ux lx
+  _ => False
+
+changesFileRow : EffRow -> EffRow -> Bool
+changesFileRow upper lower =
+  let (ua, ut) = rowFlat upper
+  let (la, lt) = rowFlat lower
+  isEmptyL ut
+    && anyList
+      (u =>
+        narrowFileAtom u
+          && (isNonEmptyL lt
+            || anyList
+              (l =>
+                atomKey l == atomKey u
+                  && not
+                    (authSub (atomAuth l) (atomAuth u)
+                      && authSub (atomAuth u) (atomAuth l)))
+              la))
+      ua
+
+export
+hasFileBoundValue : Mono -> Bool
+hasFileBoundValue t = match normalize t
+  TFun _ row result =>
+    let (atoms, tails) = rowFlat row
+    isEmptyL tails && anyList narrowFileAtom atoms || hasFileBoundValue result
+  TQual inner _ => hasFileBoundValue inner
+  _ => False
+
+export
+recordValueFileBound : ModuleCtx -> Expr -> Mono -> Unit
+recordValueFileBound mctx e ty =
+  if hasFileBoundValue
+    ty then match fileValueKey (scopeFileBoundModule mctx ()) e
+    Some key =>
+      let st = mctx.mcGraph.graphRun.grants
+      st.gsValueBounds :=
+        omInsert
+          key
+          ((ty, grantChainAt mctx.mcGraph (captureScope mctx ()))
+            :: optionOr [] (omLookup key st.gsValueBounds.value))
+          st.gsValueBounds.value
+    None => ()
+
+export
+recordFileBound : ModuleCtx -> Expr -> EffRow -> Unit
+recordFileBound mctx body row =
+  let (atoms, tails) = rowFlat row
+  if isEmptyL tails && anyList narrowFileAtom atoms then match fileBodyLoc body
+    None => ()
+    Some loc =>
+      let st = mctx.mcGraph.graphRun.grants
+      let key = fileBoundSite (scopeFileBoundModule mctx ()) loc
+      st.gsBounds :=
+        omInsert
+          key
+          ((row, grantChainAt mctx.mcGraph (captureScope mctx ()))
+            :: optionOr [] (omLookup key st.gsBounds.value))
+          st.gsBounds.value
+
+export
+narrowFileAtom : Atom -> Bool
+narrowFileAtom atom = match atomLabelOf atom
+  EffLabel label OriginBuiltin =>
+    (label == "FileRead" || label == "FileWrite")
+      && not (authIsTop (atomAuth atom))
+  _ => False
+
+export
+recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
+recordClauseFileBound mctx body arity ty
+  | arity <= 0 = ()
+  | otherwise = match normalize ty
+    TFun _ row result =>
+      if arity == 1 then
+        recordFileBound mctx body row
+      else
+        recordClauseFileBound mctx body (arity - 1) result
+    TQual inner _ => recordClauseFileBound mctx body arity inner
+    _ => ()
+
+-- #803 (S0, silent wrongness): the impl-body effect-LAUNDER check.  Sound rule, per
+-- arrow of the method's DECLARED type down to its final return:
+--
+--     ∀ arrow i ≤ methodArity.  atoms(body_arrow_effect_i) ⊆ atoms(declared_effect_i)
+--
+-- i.e. the impl's concrete latent atoms at each arrow must be bounded by the method's
+-- declared concrete atoms at that same arrow (the general form of
+-- `body_latent ⊆ decl(φ) ∪ argContributable`).  Argument-contributed effects are free
+-- and exact: at impl-check every parameter is still a fresh variable, so an effect the
+-- body performs by USING an argument (applying a callback, running a row-kinded `Async e`
+-- arg) appears as that VARIABLE — never a concrete atom — at every arrow.  Hence the
+-- body's *concrete atoms* on any arrow are exactly the INTRINSIC effects, and per-arrow
+-- `atomsEscape` against the declared row (IO-expanded via the same expandIoInBound the
+-- binding-boundary check uses) is precisely the laundered set — a variable is
+-- caller-visible and cannot lie, so only a concrete atom can launder.
+--
+-- #839 2b: sourced from the absorption event trail (increment 2a), POST-unify, rather
+-- than arrowLaunderEscape's pre-unify walk over [expected]/[actual] arrow rows.  The
+-- pre-unify walk existed only because `unify` then merges an intrinsic atom into the
+-- shared open tail (both-open arm, no effectLeakCheck), after which effrowLabels can no
+-- longer see it; 2a records that merge, so a post-unify query recovers it.
+--
+-- [declArrows]/[actualArrows] = the declared method type's and the inferred body's arrow
+-- effect rows, BOTH captured PRE-unify and zipped (same spine, bounded at the shorter —
+-- the methodArity bound arrowLaunderEscape had).  [evts] = the events `unify expected
+-- actual` recorded in this body's trail window.  The per-arrow residual is
+-- `atomsEscape (actual atoms) (declared WRITTEN atoms)`, recovered by two DISJOINT routes
+-- keyed on whether the ACTUAL arrow is OPEN or CLOSED:
+--
+--  * OPEN actual arrow (the common inferred case): an intrinsic atom is ABSORBED at unify
+--    (both-open / same-tail arm merges it into a shared tail, no effectLeakCheck), so
+--    effrowLabels can no longer see it — recover it from the TRAIL.  Resolve the declared
+--    arrow's tail LIVE (post-unify the fresh cell has ELinked into a shared v3 — a record-
+--    time id names the old cell, not its current representative), gather atoms absorbed into that same
+--    live tail (the per-cell key — risk 3, recovering arrowLaunderEscape's which-arrow
+--    precision), and `atomsEscape` them against the declared row.  For a CLOSED declared
+--    arrow met by an OPEN actual, the guarded closed~open arm already fired effectLeakCheck
+--    (T-EFFECT-LEAK) during the SAME unify, so the trail route yields nothing and the leak
+--    line stands alone (the pre-unify walk only ever DOUBLE-reported there).
+--    WHY the trail equals the walk here: the both-open arm records the SYMMETRIC diff
+--    (actual\declared ++ declared\actual) against the shared v3 both tails link to;
+--    `atomsEscape absorbed declared` drops the declared\actual side (⊆ declared) and any
+--    IO-covered atom, leaving actual \ expandIo(declared) — arrowLaunderEscape's residual.
+--
+--  * CLOSED actual arrow (a body type ANNOTATION — `(f : Unit -> <Stdout> Unit)` — or
+--    a point-free body): nothing to recover here.  The seam's `unifyInto` checks a
+--    closed~closed pair directionally as it meets it (T-EFFECT-LEAK when the actual's
+--    atoms escape the declared row, nothing when the impl is PURER than declared), so
+--    the query yields nothing for it and the one report stands alone.  (An annotated
+--    closed actual met by an OPEN declared arrow lands in the open~closed arm and
+--    reports the same launder the #816 effect-var rigidity check would — one report, via
+--    launderFlagged suppression — matching the pre-unify walk.)
+export
+launderEscapeFromLog : GraphCtx ->
+  List EffRow ->
+  List EffRow ->
+  List AbsorptionEvent ->
+  List Atom
+launderEscapeFromLog gctx [] _ _ = []
+launderEscapeFromLog gctx _ [] _ = []
+launderEscapeFromLog gctx (der :: dRest) (aer :: aRest) evts =
+  let here = match aer
+    EffRow _ None => []
+    EffRow _ (Some _) => launderOpenActualArrow gctx der evts
+  here ++ launderEscapeFromLog gctx dRest aRest evts
+
+-- OPEN actual arrow: recover the absorbed launder atom from the trail, keyed on an OPEN
+-- declared arrow's live tail; a CLOSED declared arrow's leak was already reported by the
+-- closed~open arm's effectLeakCheck during the unify, so yield nothing.
+launderOpenActualArrow : GraphCtx -> EffRow -> List AbsorptionEvent -> List Atom
+launderOpenActualArrow gctx (EffRow declAtoms (Some cell)) evts =
+  let tid = liveTailId cell
+  if tid == 0 - 1 then
+    []
+  else
+    atomsEscape gctx (atomsAbsorbedInto tid evts) declAtoms
+launderOpenActualArrow gctx (EffRow _ None) _ = []
+
+-- the concrete atoms the window recorded as absorbed into the live tail [tid]
+-- (resolving each event's stored cell live, per risk 2).
+atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
+atomsAbsorbedInto _ [] = []
+atomsAbsorbedInto tid (ev :: rest) =
+  if liveTailId ev.cell == tid then
+    ev.atom :: atomsAbsorbedInto tid rest
+  else
+    atomsAbsorbedInto tid rest
+
+-- The effect axis of W3 rigidity, one call shape for both kinds of method body:
+-- every [effVars] effect var's row carries no concrete atom beyond what the
+-- declared row at EVERY occurrence of that var in [mty] already covers
+-- (IO-expanded, as the §5 escape check) — an atom unification poured into the var
+-- from a position whose declared row lacks it is an intrinsic effect the caller
+-- erases by instantiating the var to <> — and the vars' tails are pairwise
+-- distinct; see checkImplEffVarRigidity.
+-- #817 carve-out RETIRED (#823): a method effect variable may no longer alias an
+-- INSTANCE-HEAD row parameter (`impl Mappable (Async e)`, whose `Suspend` arm
+-- stored the callback and forced method `e'` ~ head `e`, charging the effect at
+-- build time and performing it at force time).  With the `Deferred*` family the
+-- head is the bare constructor and the callback row rides the index, so the
+-- identification is never needed; the type-variable half never had the exception.
+-- A default body has no instance head and passes [] for [headMonos].
+export
+checkMethodEffVarRigidity : ModuleCtx ->
+  String ->
+  List Mono ->
+  List (String, List Kind) ->
+  Ty ->
+  List (String, Ref Effvar) ->
+  Bool ->
+  List String ->
+  Option Loc ->
+  Unit
+checkMethodEffVarRigidity mctx subject headMonos gscope mty effVars launderFlagged eager loc =
+  if anyContainsI
+    (effVarTailIds effVars)
+    (flatMap monoIndexEffvarIds headMonos) then
+    pushTypeErrorOnceAt
+      mctx
+      "T-IMPL-TOO-SPECIFIC"
+      loc
+      (aliasesHeadRowMsg subject mty)
+  checkImplEffVarRigidity
+    mctx
+    subject
+    gscope
+    mty
+    effVars
+    launderFlagged
+    eager
+    loc
+
+-- the effect half of the rigidity check: atom containment per declared
+-- occurrence, then tail distinctness among the METHOD's own effect vars.
+-- A method effect var aliasing an INSTANCE-HEAD row parameter is REJECTED, not
+-- admitted: `checkMethodRigidityCore` pushes `T-IMPL-TOO-SPECIFIC` when a
+-- method effect var's tail is among `monoIndexEffvarIds` of the head monos,
+-- before it calls this function.  No legal impl needs that identification: with
+-- the `Deferred*` family the head is the bare constructor and the callback row
+-- rides the index.  This function's own dup set is therefore the METHOD's
+-- own effect vars only — impl-head row tails never enter it.  (The TYPE-var
+-- half never had an exception either: a method type var may never alias an
+-- impl-head type var.)
+checkImplEffVarRigidity : ModuleCtx ->
+  String ->
+  List (String, List Kind) ->
+  Ty ->
+  List (String, Ref Effvar) ->
+  Bool ->
+  List String ->
+  Option Loc ->
+  Unit
+checkImplEffVarRigidity mctx subject scope mty effMap launderFlagged eager loc =
+  let occs =
+    effVarOccAtoms mctx.mcGraph mty
+      ++ map (n => (n, [])) (rowArgNamesIn mctx scope mty)
+  if launderFlagged then () else checkEffVarAtoms mctx subject occs effMap loc
+  checkIndexOnlyEffVarsOpen mctx subject effMap loc eager
+  -- DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
+  -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
+  -- that applies its <e>-callback inside a value whose declared row is pure
+  -- (`act d k = (u => k ())` under `-> <e> (Unit -> Unit)`) closes e := <>,
+  -- and a caller's effectful callback then runs inside a pure-typed thunk.
+  -- Rejecting it here is CORRECT but outlaws the compiler's own Parser monad
+  -- (`impl Mappable Parser` stores the callback under Parser's pure arrows —
+  -- the identical shape, latent because the compiler only passes pure
+  -- callbacks) and every pure-container deferred-application impl with it.
+  -- Like #817, the honest result type needs grading (`Parser e a`, #820), so
+  -- the channel is admitted for now and owned by #825 (pinned).
+  if hasDupI (effVarTailIds effMap) then
+    pushTypeErrorOnceAt
+      mctx
+      "T-IMPL-TOO-SPECIFIC"
+      loc
+      (collapsesEffvarsMsg subject mty)
+
+-- ── D-3 (#1095): a result-INDEX occurrence is a PROMISE, not a CHARGE ──────
+-- `checkArgEffVarCoverage` lets a row-kinded occurrence in the method's RESULT
+-- (`f e b`) discharge the argument-only obligation the callback's `<e>` raises.
+-- That is right for the DECLARATION — `f e b` says "performs <e> when forced"
+-- — but it says nothing about the CALL, so an impl that APPLIES its callback
+-- (`gmap g (Done a) = Done (g a)`) performs <e> at call time on an arrow the
+-- signature declares pure, and nothing charges it: `check` is green and a
+-- value typed `Int` prints (both engines).  The declaration cannot see it
+-- (the caller sees only the index) and the #803 per-arrow bound cannot see it
+-- (applying the callback contributes the VARIABLE `e`, never an atom).  The
+-- seam with the information intact is the IMPL BODY: under a signature whose
+-- only non-argument occurrences of `e` are indices, the body must leave `e`
+-- OPEN.  Performing it — or forcing an `e`-indexed argument — meets the
+-- declared-pure arrow and CLOSES `e := <>`, which is exactly the pin
+-- `effVarTailIds` documents as "the safe direction" for a var the method's
+-- own arrow charges, and is a launder for one it does not.  Storing the
+-- callback (`Susp (u => g a)`) unifies `e` with the container's own thunk row
+-- and leaves it open, so the deferred arm the spec requires stays legal.
+--
+-- Scoped to INDEX-ONLY variables on purpose: a var the method's own arrow
+-- charges (`map : (a -> <e> b) -> f a -> <e> f b`) may still close — the
+-- compiler's own `impl Mappable Parser` stores its callback under a pure
+-- arrow and does, which is #825's channel, out of scope here and pinned.
+-- Closed alone is not the signal.  An index-only variable can also close
+-- through an INDEX unification with no effect performed: `deferAp mf ma =
+-- deferThen mf (g => deferMap g ma)` maps a PURE `g` (from `f e (a -> b)`,
+-- whose arrow is `<>`), so `deferMap g ma : f <> b` meets the result `f e b`
+-- and pins `e := <>` — honest, and sound (the value built carries `mf`'s real
+-- row).  What distinguishes the eager arm is that the body PERFORMS `e` on one
+-- of the method's own arrows.  So [eager] is computed at the impl seam from the
+-- body's arrow rows BEFORE they are unified with the declared (pure) arrows —
+-- the same pre-unify snapshot the #803 launder query takes — and only a var in
+-- that set is reported here.  (An interface DEFAULT body has no such snapshot
+-- available at its rigidity read and passes `[]`: a residual, not a rule.)
+checkIndexOnlyEffVarsOpen : ModuleCtx ->
+  String ->
+  List (String, Ref Effvar) ->
+  Option Loc ->
+  List String ->
+  Unit
+checkIndexOnlyEffVarsOpen mctx subject effMap loc eager =
+  checkIndexOnlyGo mctx subject effMap loc eager
+
+-- the index-only vars of [mty] that some body arrow row (pre-unify) carries as
+-- its tail — i.e. the body performs them at call time.
+-- THE BODY'S cells are not the signature'S CELLS.  At the impl seam the
+-- clause parameters are inferred fresh (`g : a -> <ρ> b`), and `ρ` is only
+-- identified with the declared `<e>` by the final `unify expected actual`.
+-- So the pre-unify arrow rows carry `ρ` (or whatever it has been linked to
+-- meanwhile), never `e` itself.  [expected]/[actual] are walked in parallel
+-- to pair each declared row cell with the actual cell at the same position
+-- (`pairRowCells`), and the scan asks whether any of a var's actual
+-- counterparts is a tail of some body arrow row.
+export
+eagerIndexOnlyVars : List String ->
+  List (String, Ref Effvar) ->
+  List EffRow ->
+  Mono ->
+  Mono ->
+  List String
+eagerIndexOnlyVars [] _ _ _ _ = []
+eagerIndexOnlyVars idx effMap actualArrows expected actual =
+  let tails = flatMap rowTailId actualArrows
+  let pairs = pairRowCells expected actual
+  filterList (v => effVarCellPerformed v effMap pairs tails) idx
+
+-- (declared cell id, actual cell id) for every row found at the same
+-- structural position of the two types — arrow latent rows and index rows,
+-- under applications and arrows.  Ids are read AFTER normalization, so a cell
+-- already linked during body inference reports its live representative.
+pairRowCells : Mono -> Mono -> List (Int, Int)
+pairRowCells d a = match peelQual d
+  TFun d1 dr d2 => match peelQual a
+    TFun a1 ar a2 => pairRows dr ar ++ pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TApp d1 d2 => match peelQual a
+    TApp a1 a2 => pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TEff dr => match peelQual a
+    TEff ar => pairRows dr ar
+    _ => []
+  _ => []
+
+pairRows : EffRow -> EffRow -> List (Int, Int)
+pairRows dr ar = match rowTailId dr
+  [did] => map (aid => (did, aid)) (rowTailId ar)
+  _ => []
+
+effVarCellPerformed : String ->
+  List (String, Ref Effvar) ->
+  List (Int, Int) ->
+  List Int ->
+  Bool
+effVarCellPerformed v effMap pairs tails = match lookupAssoc v effMap
+  Some cell =>
+    -- Compare live representatives, not the stable identity of an earlier
+    -- linked cell: pairs/tails were recorded through normalization.
+    let dids = rowTailId (EffRow [] (Some cell))
+    anyList
+      (did =>
+        containsI did tails
+          || anyList (p => fst p == did && containsI (snd p) tails) pairs)
+      dids
+  None => False
+
+checkIndexOnlyGo : ModuleCtx ->
+  String ->
+  List (String, Ref Effvar) ->
+  Option Loc ->
+  List String ->
+  Unit
+checkIndexOnlyGo mctx _ _ _ [] = ()
+checkIndexOnlyGo mctx subject effMap loc (v :: rest) =
+  -- [eager] already holds only the vars the body performed on a method arrow
+  -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
+  -- or the ambient became a join (#821) is not the signal, the performing is.
+  pushTypeErrorOnceAt mctx "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
+  checkIndexOnlyGo mctx subject effMap loc rest
+
+-- The earliest collected call that ran a variable now on one of [actual]'s arrows.
+export
+performSiteIn : Option (Ref (List (Ref Effvar, Option Loc))) ->
+  Mono ->
+  Option Loc
+performSiteIn None _ = None
+performSiteIn (Some sites) actual =
+  let tails = flatMap rowTailId (allArrowEffs actual)
+  findMap
+    (site =>
+      if anyList
+        (id => containsI id tails)
+        (rowTailId (EffRow [] (Some (fst site)))) then
+        snd site
+      else
+        None)
+    (reverseL sites.value)
+
+-- the method effect vars that ride an ARGUMENT (a callback row or a row-kinded
+-- argument) and occur on NO row the method's own type charges — every
+-- non-argument occurrence is a result index.
+export
+indexOnlyEffVars : ModuleCtx -> List (String, List Kind) -> Ty -> List String
+indexOnlyEffVars mctx scope mty =
+  let argNames = dedup (map fst (methodEffArgOccs mctx scope mty))
+  let charged = map fst (methodEffChargedOccs mctx.mcGraph mty)
+  filterList (v => not (contains v charged)) argNames
+
+-- effect-var occurrences on rows the method's type CHARGES: each spine arrow's
+-- own latent row, and every arrow row written inside the final return type.
+-- The `effVarOccAtoms` half of `methodEffRetOccs` minus the two INDEX forms —
+-- the row-kinded-slot padding (`rowArgAtomsIn`) and a bare row written in a
+-- slot (`TyRow`, `Box <Stdout | e> Unit`) — which promise rather than charge.
+methodEffChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
+methodEffChargedOccs gctx (TyConstrained _ t) = methodEffChargedOccs gctx t
+methodEffChargedOccs gctx (TyEffect labels tails t) =
+  occsOfTails gctx tails labels ++ methodEffChargedOccs gctx t
+methodEffChargedOccs gctx (TyFun _ b) = methodEffChargedOccs gctx b
+methodEffChargedOccs gctx t = effVarChargedOccs gctx t
+
+effVarChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
+effVarChargedOccs gctx (TyEffect labels tails t) =
+  occsOfTails gctx tails labels ++ effVarChargedOccs gctx t
+effVarChargedOccs gctx (TyApp a b) =
+  effVarChargedOccs gctx a ++ effVarChargedOccs gctx b
+effVarChargedOccs gctx (TyFun a b) =
+  effVarChargedOccs gctx a ++ effVarChargedOccs gctx b
+effVarChargedOccs gctx (TyTuple ts) = flatMap (effVarChargedOccs gctx) ts
+effVarChargedOccs gctx (TyConstrained _ t) = effVarChargedOccs gctx t
+effVarChargedOccs gctx _ = []
+
+checkEffVarAtoms : ModuleCtx ->
+  String ->
+  List (String, List Atom) ->
+  List (String, Ref Effvar) ->
+  Option Loc ->
+  Unit
+checkEffVarAtoms mctx _ _ [] _ = ()
+checkEffVarAtoms mctx subject occs ((n, cell) :: rest) loc =
+  let esc =
+    effVarOccEscape mctx.mcGraph n (effrowLabels (EffRow [] (Some cell))) occs
+  if isNonEmptyL esc then
+    pushTypeErrorOnceAt
+      mctx
+      "T-EFFECT-LAUNDER"
+      loc
+      (effVarLaunderMsg subject n esc)
+  checkEffVarAtoms mctx subject occs rest loc
+
+-- the first occurrence of var [n] whose declared atoms fail to cover
+-- [instAtoms]: laundering demands EVERY occurrence cover the instantiation,
+-- since the caller reads the var's row at each of them independently.
+effVarOccEscape : GraphCtx ->
+  String ->
+  List Atom ->
+  List (String, List Atom) ->
+  List Atom
+effVarOccEscape gctx _ [] _ = []
+effVarOccEscape gctx _ _ [] = []
+effVarOccEscape gctx n instAtoms ((m, declAtoms) :: rest) =
+  if m == n && isNonEmptyL (atomsEscape gctx instAtoms declAtoms) then
+    atomsEscape gctx instAtoms declAtoms
+  else
+    effVarOccEscape gctx n instAtoms rest
+
+-- (name, written atoms) for each named-tail row occurrence in a method's AST
+-- type — every TyEffect node, on the arrow spine or nested (tuples, callback
+-- rows, data-arg rows).  Bare row-kinded ctor-arg slots (`Async e a`) carry no
+-- written atoms and are contributed by rowArgNames at the call site.
+effVarOccAtoms : GraphCtx -> Ty -> List (String, List Atom)
+effVarOccAtoms gctx (TyEffect labels tails t) =
+  occsOfTails gctx tails labels ++ effVarOccAtoms gctx t
+-- A bare row atom (#997) is a named-tail row occurrence exactly like
+-- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
+-- ctor-arg written as `Box <Stdout | e> Int` was invisible to
+-- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
+-- check over-fired ("not sourced from any argument") on an argument that
+-- demonstrably DOES declare the atom.
+effVarOccAtoms gctx (TyRow labels tails _) = occsOfTails gctx tails labels
+effVarOccAtoms gctx (TyApp a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
+effVarOccAtoms gctx (TyFun a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
+effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
+effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
+effVarOccAtoms gctx _ = []
+
+export
+clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
+clausesAt n m = match omLookup n m
+  Some xs => xs
+  None => []
+
+export
+clausesOf : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
+clausesOf n m = reverse (clausesAt n m)
+
+export
+memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit
+memberEffectRoots member roots =
+  let inputs =
+    if member.smSigned.value then
+      roots
+    else
+      effectRoots member.smOwned.bsValue roots
+  IdMap.foldlWithKey
+    (acc id _ => IdMap.set id () acc)
+    inputs
+    member.smDeclaredRoots.value
+
+-- a signatured binding's body must not perform a concrete effect its signature
+-- doesn't declare; effect *variables* (polymorphic `<e>`) carry no labels and so
+-- never escape (Phase 79e)
+export
+checkEffectEscape : DynCtx -> List (String, Ty) -> String -> List Atom -> Unit
+checkEffectEscape dyn sigs m effs = match dyn.dcGroup
+  None => ()
+  Some group => checkEffectEscapeIn dyn.dcModule group sigs m effs
+
+checkEffectEscapeIn : ModuleCtx ->
+  GroupCtx ->
+  List (String, Ty) ->
+  String ->
+  List Atom ->
+  Unit
+checkEffectEscapeIn mctx group sigs m effs =
+  match omLookup m mctx.mcCells.sigTyMapRef.value
+    None => ()
+    -- #797: a genuinely open declared row (free return-position tail var, no
+    -- argument-side occurrence) has nothing to escape FROM — the row admits
+    -- whatever the body performs, which is what a free tail var MEANS.  Skipping
+    -- here rather than widening `declaredEffects` keeps the CLOSED-row rejection
+    -- (and its wording) byte-identical.
+    Some written =>
+      let ty = expandReturnSpine mctx written
+      if declaredEffectsOpen mctx ty then
+        ()
+      else match (atomsEscape
+        mctx.mcGraph
+        (filterList concreteAtom effs)
+        (declaredEffects mctx.mcGraph ty))
+        -- An atom whose authority is still symbolic is the scoped solver's to
+        -- decide once the binding's arguments have bounded it; comparing it
+        -- here would report a variable a later solution resolves.
+
+        [] => ()
+        extras =>
+          group.gcPendingEscapes :=
+            (
+                m,
+                mctx.mcLoc,
+                effectEscapeMsg
+                  m
+                  (declaredEffects mctx.mcGraph ty)
+                  (declaredEffectTail ty)
+                  extras,
+              )
+              :: group.gcPendingEscapes.value
+
+-- After a group's solver scope has closed: report the walk's finding for a
+-- member the solver said nothing about, and drop it for one it reported.
+export
+flushPendingEscapes : ModuleCtx -> Option GroupCtx -> Unit
+flushPendingEscapes mctx None = ()
+flushPendingEscapes mctx (Some group) =
+  let pending = reverseL group.gcPendingEscapes.value
+  group.gcPendingEscapes := []
+  each
+    (entry =>
+      let (m, loc, msg) = entry
+      if omHasKey m mctx.mcCells.rowFailureReportedRef.value then
+        ()
+      else
+        pushTypeErrorAt mctx "T-EFFECT-LEAK" loc msg)
+    pending
+
+concreteAtom : Atom -> Bool
+concreteAtom a = not (authHasVars (atomAuth a))

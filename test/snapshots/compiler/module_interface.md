@@ -1,5 +1,5 @@
 # META
-source_lines=683
+source_lines=667
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -76,7 +76,8 @@ import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
   ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
   CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView, EvCell(..),
-  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder
+  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder, grantTopKey,
+  methodGrantKey, setGrantIds
 }
 
 -- ── the key ─────────────────────────────────────────────────────────────────
@@ -405,18 +406,6 @@ applyModuleTrees g t =
 zonkLocalAbs : LocalAbs -> LocalAbs
 zonkLocalAbs la = { la | laSlots = map zonkSlot la.laSlots }
 
--- The key a top-level binder's grant ids are recorded under.
-export
-grantTopKey : String -> String -> String
-grantTopKey mid n = "\{mid}|\{n}"
-
--- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
--- no binder that takes no grant has a row.
-export
-setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
-setGrantIds table (key, []) = table := omDelete key table.value
-setGrantIds table (key, ids) = table := omInsert key ids table.value
-
 -- Delete every row recorded under the renamed local binder [name].
 export
 forgetLocalRows : LocalAbsState -> GrantState -> String -> Unit
@@ -424,11 +413,6 @@ forgetLocalRows las gs name =
   las.lasBinders := omDelete name las.lasBinders.value
   las.lasRecOccs := omDelete name las.lasRecOccs.value
   gs.gsLocalIds := omDelete name gs.gsLocalIds.value
-
--- The key an interface method's grants are recorded under.
-export
-methodGrantKey : String -> String -> String
-methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
 
 -- The keys of the methods the interfaces of [prog] declare.
 methodGrantKeys : List Decl -> List String
@@ -700,7 +684,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false) (mem "VecObl" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "ifaceWordOf" false) (mem "replaceEntryIn" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" false) (mem "BinderTypeTable" false) (mem "addBinderRow" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false))))
 (DData Public "ModuleKey" () ((variant "ModuleKey" (ConNamed (field "mkModule" (TyCon "String")) (field "mkSource" (TyCon "String")) (field "mkImports" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "mkGraph" (TyCon "String"))))) ())
 (DTypeSig true "moduleKeyText" (TyFun (TyCon "ModuleKey") (TyCon "String")))
 (DFunDef false "moduleKeyText" ((PVar "k")) (EApp (EVar "joinNl") (EBinOp "++" (EListLit (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkModule")) (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkSource")) (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkGraph"))) (EApp (EApp (EVar "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "imp"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "snd") (EVar "imp"))))) (ELit (LString ""))))) (EFieldAccess (EVar "k") "mkImports")))))
@@ -726,15 +710,8 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "applyModuleTrees" ((PVar "g") (PVar "t")) (EBlock (DoLet false false (PVar "r") (EFieldAccess (EVar "g") "graphRun")) (DoLet false false (PVar "gs") (EFieldAccess (EVar "r") "grants")) (DoLet false false (PVar "las") (EFieldAccess (EVar "r") "localAbs")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "evTable")) (EBinOp "++" (EFieldAccess (EVar "t") "mtEvidence") (EFieldAccess (EFieldAccess (EVar "r") "evTable") "value")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "setGrantIds") (EFieldAccess (EVar "gs") "gsTopIds"))) (EFieldAccess (EVar "t") "mtTopIds"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "forgetLocalRows") (EVar "las")) (EVar "gs")) (EApp (EVar "fst") (EVar "row"))))) (EFieldAccess (EVar "t") "mtLocalIds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasBinders")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "fst") (EVar "row")) (EApp (EApp (EVar "map") (EVar "zonkLocalAbs")) (EApp (EVar "snd") (EVar "row")))))) (EFieldAccess (EVar "t") "mtLocalAbs"))) (EFieldAccess (EFieldAccess (EVar "las") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "setGrantIds") (EFieldAccess (EVar "gs") "gsLocalIds"))) (EFieldAccess (EVar "t") "mtLocalIds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsMethods")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "row")) (EMatch (EApp (EVar "snd") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "fst") (EVar "row"))) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EVar "omDelete") (EApp (EVar "fst") (EVar "row"))) (EVar "acc")))))) (EFieldAccess (EFieldAccess (EVar "gs") "gsMethods") "value")) (EFieldAccess (EVar "t") "mtMethodGrants")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsSourceless")) (EApp (EApp (EVar "insertIds") (EFieldAccess (EVar "t") "mtSourceless")) (EFieldAccess (EFieldAccess (EVar "gs") "gsSourceless") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsBounds")) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "t") "mtBounds")) (EFieldAccess (EFieldAccess (EVar "gs") "gsBounds") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsValueBounds")) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "t") "mtValueBounds")) (EFieldAccess (EFieldAccess (EVar "gs") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EVar "g") "promotionHarvestRef") "value") (EFieldAccess (EVar "t") "mtPromoted"))))) (DoExpr (EMatch (EFieldAccess (EVar "t") "mtMain") (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "mainSchemeRef")) (EApp (EVar "Some") (EApp (EVar "thawScheme") (EVar "p"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EFieldAccess (EVar "t") "mtMarked"))))
 (DTypeSig false "zonkLocalAbs" (TyFun (TyCon "LocalAbs") (TyCon "LocalAbs")))
 (DFunDef false "zonkLocalAbs" ((PVar "la")) (ERecordUpdate (EVar "la") ((fa "laSlots" (EApp (EApp (EVar "map") (EVar "zonkSlot")) (EFieldAccess (EVar "la") "laSlots"))))))
-(DTypeSig true "grantTopKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "grantTopKey" ((PVar "mid") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
-(DTypeSig true "setGrantIds" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Unit"))))
-(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PList))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EVar "omDelete") (EVar "key")) (EFieldAccess (EVar "table") "value"))))
-(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PVar "ids"))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ids")) (EFieldAccess (EVar "table") "value"))))
 (DTypeSig true "forgetLocalRows" (TyFun (TyCon "LocalAbsState") (TyFun (TyCon "GrantState") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "forgetLocalRows" ((PVar "las") (PVar "gs") (PVar "name")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasBinders")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "las") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasRecOccs")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "las") "lasRecOccs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsLocalIds")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "gs") "gsLocalIds") "value"))))))
-(DTypeSig true "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "methodGrantKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "methodGrantKeys" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "declMethodGrantKeys")) (EVar "prog")))
 (DTypeSig false "declMethodGrantKeys" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -803,7 +780,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false) (mem "VecObl" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "ifaceWordOf" false) (mem "replaceEntryIn" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" false) (mem "BinderTypeTable" false) (mem "addBinderRow" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false))))
 (DData Public "ModuleKey" () ((variant "ModuleKey" (ConNamed (field "mkModule" (TyCon "String")) (field "mkSource" (TyCon "String")) (field "mkImports" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "mkGraph" (TyCon "String"))))) ())
 (DTypeSig true "moduleKeyText" (TyFun (TyCon "ModuleKey") (TyCon "String")))
 (DFunDef false "moduleKeyText" ((PVar "k")) (EApp (EVar "joinNl") (EBinOp "++" (EListLit (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkModule")) (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkSource")) (EApp (EVar "lenKey") (EFieldAccess (EVar "k") "mkGraph"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "imp"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "snd") (EVar "imp"))))) (ELit (LString ""))))) (EFieldAccess (EVar "k") "mkImports")))))
@@ -829,15 +806,8 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "applyModuleTrees" ((PVar "g") (PVar "t")) (EBlock (DoLet false false (PVar "r") (EFieldAccess (EVar "g") "graphRun")) (DoLet false false (PVar "gs") (EFieldAccess (EVar "r") "grants")) (DoLet false false (PVar "las") (EFieldAccess (EVar "r") "localAbs")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "evTable")) (EBinOp "++" (EFieldAccess (EVar "t") "mtEvidence") (EFieldAccess (EFieldAccess (EVar "r") "evTable") "value")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "setGrantIds") (EFieldAccess (EVar "gs") "gsTopIds"))) (EFieldAccess (EVar "t") "mtTopIds"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "forgetLocalRows") (EVar "las")) (EVar "gs")) (EApp (EVar "fst") (EVar "row"))))) (EFieldAccess (EVar "t") "mtLocalIds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasBinders")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "fst") (EVar "row")) (EApp (EApp (EMethodRef "map") (EVar "zonkLocalAbs")) (EApp (EVar "snd") (EVar "row")))))) (EFieldAccess (EVar "t") "mtLocalAbs"))) (EFieldAccess (EFieldAccess (EVar "las") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "setGrantIds") (EFieldAccess (EVar "gs") "gsLocalIds"))) (EFieldAccess (EVar "t") "mtLocalIds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsMethods")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "row")) (EMatch (EApp (EVar "snd") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "fst") (EVar "row"))) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EVar "omDelete") (EApp (EVar "fst") (EVar "row"))) (EVar "acc")))))) (EFieldAccess (EFieldAccess (EVar "gs") "gsMethods") "value")) (EFieldAccess (EVar "t") "mtMethodGrants")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsSourceless")) (EApp (EApp (EVar "insertIds") (EFieldAccess (EVar "t") "mtSourceless")) (EFieldAccess (EFieldAccess (EVar "gs") "gsSourceless") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsBounds")) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "t") "mtBounds")) (EFieldAccess (EFieldAccess (EVar "gs") "gsBounds") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsValueBounds")) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "t") "mtValueBounds")) (EFieldAccess (EFieldAccess (EVar "gs") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EVar "g") "promotionHarvestRef") "value") (EFieldAccess (EVar "t") "mtPromoted"))))) (DoExpr (EMatch (EFieldAccess (EVar "t") "mtMain") (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "mainSchemeRef")) (EApp (EVar "Some") (EApp (EVar "thawScheme") (EVar "p"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EFieldAccess (EVar "t") "mtMarked"))))
 (DTypeSig false "zonkLocalAbs" (TyFun (TyCon "LocalAbs") (TyCon "LocalAbs")))
 (DFunDef false "zonkLocalAbs" ((PVar "la")) (ERecordUpdate (EVar "la") ((fa "laSlots" (EApp (EApp (EMethodRef "map") (EVar "zonkSlot")) (EFieldAccess (EVar "la") "laSlots"))))))
-(DTypeSig true "grantTopKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "grantTopKey" ((PVar "mid") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
-(DTypeSig true "setGrantIds" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Unit"))))
-(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PList))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EVar "omDelete") (EVar "key")) (EFieldAccess (EVar "table") "value"))))
-(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PVar "ids"))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ids")) (EFieldAccess (EVar "table") "value"))))
 (DTypeSig true "forgetLocalRows" (TyFun (TyCon "LocalAbsState") (TyFun (TyCon "GrantState") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "forgetLocalRows" ((PVar "las") (PVar "gs") (PVar "name")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasBinders")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "las") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "las") "lasRecOccs")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "las") "lasRecOccs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gs") "gsLocalIds")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "gs") "gsLocalIds") "value"))))))
-(DTypeSig true "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "methodGrantKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "methodGrantKeys" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "declMethodGrantKeys")) (EVar "prog")))
 (DTypeSig false "declMethodGrantKeys" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))

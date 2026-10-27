@@ -110,6 +110,7 @@ import types.typecheck.{
   cellGoalInnerAliasing,
   cellStoreMisses,
   chainArgs,
+  checkModulesChainReportFor,
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
   checkModulesEntryFullReportK,
@@ -125,7 +126,9 @@ import types.typecheck.{
   driveInputsFor,
   elaborateModules,
   elaborateModulesGraph,
+  elaborateOne,
   elaborateOneFacts,
+  isLiveSpan,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnTemplatePresenceProbe,
@@ -133,11 +136,6 @@ import types.typecheck.{
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
-  checkModulesChainReportFor,
-  elaborateOne,
-  isLiveSpan,
-  stampMethodArities,
-  stampRoutes,
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
@@ -6528,22 +6526,6 @@ test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
   let _ = accDrive "acc-inst-other" (accPrefix False) accEntry (accPrefix False)
   let cold = accRender (accDrive "acc-inst-cold" withInst entry withInst)
   expectEqual cold warm
-
-localName : Route -> Option String
-localName (RLocal s []) = Some s
-localName _ = None
-
-test "stampRoutes makes each queued route a local route that keeps its mangled symbol" =
-  let a = Ref (RLocal "f$m" [RDict "d"])
-  let b = Ref RNone
-  stampRoutes [a, b]
-  expectEqual [Some "f$m", Some ""] [localName a.value, localName b.value]
-
-test "stampMethodArities writes the arity into every queued cell" =
-  let a = Ref None
-  let b = Ref (Some 9)
-  stampMethodArities [a, b] 2
-  expectEqual [Some 2, Some 2] [a.value, b.value]
 
 makeable : String
 makeable = joinNl [

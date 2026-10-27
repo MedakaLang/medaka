@@ -1,9 +1,10 @@
 # META
-source_lines=3574
+source_lines=3594
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
--- the checker shares across its stages.  No functions, no cells, no inference.
+-- the checker shares across its stages, with the key format of its grant records.  No
+-- cells, no inference.
 --
 -- Closure rule: this module may not import `types.typecheck`, nor any later
 -- `tc_infer_*`, `tc_solve` or `tc_driver` module.  Everything here sits below them.
@@ -39,7 +40,9 @@ import types.repr.{
 }
 import support.ordmap.{
   OrdMap,
+  omDelete,
   omEmpty,
+  omInsert,
 }
 import map.{
   Map(..),
@@ -2465,6 +2468,23 @@ public export data GrantState = GrantState {
   gsPassingModule : Ref String,
 }
 
+-- The key a top-level binder's grant ids are recorded under.
+export
+grantTopKey : String -> String -> String
+grantTopKey mid n = "\{mid}|\{n}"
+
+-- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
+-- no binder that takes no grant has a row.
+export
+setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
+setGrantIds table (key, []) = table := omDelete key table.value
+setGrantIds table (key, ids) = table := omInsert key ids table.value
+
+-- The key an interface method's grants are recorded under.
+export
+methodGrantKey : String -> String -> String
+methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
+
 -- The binder-name and grant state belong to the lineage (`Lineage`), so a row
 -- outlives the drive that wrote it, and each table is kept by what its key is:
 --   * an evidence ordinal (`gsOccs`, `gsGrantOnly`) never repeats in a lineage, so
@@ -3579,7 +3599,7 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true))))
@@ -3732,6 +3752,13 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "MethodGrant" () ((variant "MethodGrant" (ConNamed (field "mgArity" (TyCon "Int")) (field "mgNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "GrantCallee" () ((variant "SourceCallee" (ConPos)) (variant "FileExternCallee" (ConPos)) (variant "NoGrantCallee" (ConPos))) ())
 (DData Public "GrantState" () ((variant "GrantState" (ConNamed (field "gsOccs" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "GrantOcc")))) (field "gsGrantOnly" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "gsTopIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))))) (field "gsLocalIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))))) (field "gsMethods" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "MethodGrant")))) (field "gsBodies" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "GrantBinder")))) (field "gsLastInst" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsLastMethodInst" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsLastStandalone" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsSourceless" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "gsTakers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "gsFresh" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "gsBounds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EffRow") (TyApp (TyCon "List") (TyCon "GrantBinder"))))))) (field "gsValueBounds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyCon "GrantBinder"))))))) (field "gsPassingModule" (TyApp (TyCon "Ref") (TyCon "String")))))) ())
+(DTypeSig true "grantTopKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "grantTopKey" ((PVar "mid") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig true "setGrantIds" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Unit"))))
+(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PList))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EVar "omDelete") (EVar "key")) (EFieldAccess (EVar "table") "value"))))
+(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PVar "ids"))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ids")) (EFieldAccess (EVar "table") "value"))))
+(DTypeSig true "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
 (DData Public "BuiltinClass" () ((variant "BNum" (ConPos)) (variant "BEq" (ConPos)) (variant "BOrd" (ConPos)) (variant "BSemigroup" (ConPos))) ())
 (DData Public "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool")) (field "bcPreludeSeeded" (TyCon "Bool"))))) ())
@@ -3796,7 +3823,7 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true))))
@@ -3949,6 +3976,13 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "MethodGrant" () ((variant "MethodGrant" (ConNamed (field "mgArity" (TyCon "Int")) (field "mgNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "GrantCallee" () ((variant "SourceCallee" (ConPos)) (variant "FileExternCallee" (ConPos)) (variant "NoGrantCallee" (ConPos))) ())
 (DData Public "GrantState" () ((variant "GrantState" (ConNamed (field "gsOccs" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "GrantOcc")))) (field "gsGrantOnly" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "gsTopIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))))) (field "gsLocalIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))))) (field "gsMethods" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "MethodGrant")))) (field "gsBodies" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "GrantBinder")))) (field "gsLastInst" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsLastMethodInst" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsLastStandalone" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))) (field "gsSourceless" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "gsTakers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "gsFresh" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "gsBounds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EffRow") (TyApp (TyCon "List") (TyCon "GrantBinder"))))))) (field "gsValueBounds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyCon "GrantBinder"))))))) (field "gsPassingModule" (TyApp (TyCon "Ref") (TyCon "String")))))) ())
+(DTypeSig true "grantTopKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "grantTopKey" ((PVar "mid") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig true "setGrantIds" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Unit"))))
+(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PList))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EVar "omDelete") (EVar "key")) (EFieldAccess (EVar "table") "value"))))
+(DFunDef false "setGrantIds" ((PVar "table") (PTuple (PVar "key") (PVar "ids"))) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ids")) (EFieldAccess (EVar "table") "value"))))
+(DTypeSig true "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
 (DData Public "BuiltinClass" () ((variant "BNum" (ConPos)) (variant "BEq" (ConPos)) (variant "BOrd" (ConPos)) (variant "BSemigroup" (ConPos))) ())
 (DData Public "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool")) (field "bcPreludeSeeded" (TyCon "Bool"))))) ())

@@ -6035,7 +6035,7 @@ leadingIndentAt src offset =
 leadingIndentLineStart : Array Char -> Int -> Int
 leadingIndentLineStart chars i
   | i < 0 = 0
-  | arrayGetUnsafe i chars == '\n' = i + 1
+  | arrayGetUnsafe i chars == '\n' || arrayGetUnsafe i chars == '\r' = i + 1
   | otherwise = leadingIndentLineStart chars (i - 1)
 
 leadingIndentAllBlank : Array Char -> Int -> Int -> Bool

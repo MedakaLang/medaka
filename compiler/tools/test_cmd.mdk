@@ -64,7 +64,7 @@ import tools.target_parse.{
 }
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.loader.{
-  loadProgramFilesLocatedE,
+  loadProgramFilesLocatedCachedSourcesE,
   modIdToPath,
   loadErrorMessage,
   LoadError(..),
@@ -235,7 +235,6 @@ import driver.diagnostics.{
   desugaredModPairs,
   mkDiag,
   Severity(..),
-  readDiagSrc,
   ppDiagCliSrc,
   ppDiagCliLines,
   srcLinesArr,
@@ -627,6 +626,17 @@ exemptNotice False _ _ = ()
 exemptNotice True target userDecls =
   ePutStrLn (typecheckSkipNotice target userDecls)
 
+-- Setup failures have no structured location; diagnostic failures retain per-file source.
+-- lint-disable-next-line rule-clone-type
+public export data TestReportError =
+  | TestSetupError String
+  | TestDiagnosticError (List (String, String, List Diag))
+
+renderTestReportError : TestReportError -> String
+renderTestReportError (TestSetupError text) = text
+renderTestReportError (TestDiagnosticError triples) =
+  joinNl (flatMap renderFileErrors triples)
+
 -- Type-check the module the way `medaka check` does.  Prelude-only (no
 -- non-core imports) modules go through `analyzeLocated`, the single-file
 -- analyzer `medaka check` uses: it correctly handles the target==prelude case
@@ -635,13 +645,22 @@ exemptNotice True target userDecls =
 -- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
 -- Import-bearing modules are gated by `gatedDrive` below instead, off the
 -- ONE elaboration the phases already need.
--- Returns Some <located error text> iff the module does NOT typecheck, else None.
+-- Returns structured diagnostics iff the module has an error.
+singleFileTypeErrorsParts : String ->
+  String ->
+  String ->
+  String ->
+  Option TestReportError
+singleFileTypeErrorsParts target tsrc rsrc csrc =
+  let diags = analyzeLocated noStdlibExports rsrc csrc tsrc
+  if isNonEmptyL (filter diagIsError diags) then
+    Some (TestDiagnosticError [(target, tsrc, diags)])
+  else
+    None
+
 singleFileTypeErrors : String -> String -> String -> String -> Option String
 singleFileTypeErrors target tsrc rsrc csrc =
-  let errs = filter diagIsError (analyzeLocated noStdlibExports rsrc csrc tsrc)
-  match errs
-    [] => None
-    _ => Some (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+  map renderTestReportError (singleFileTypeErrorsParts target tsrc rsrc csrc)
 
 -- #1362: `singleFileTypeErrors` above uses the UNGUARDED `analyzeLocated` (no
 -- internal-extern restriction) so a stdlib module under test is never
@@ -661,10 +680,11 @@ singleFileTypeErrors target tsrc rsrc csrc =
 gatedDrive : String ->
   String ->
   String ->
+  OrdMap String ->
   List (String, String, List Decl) ->
   (List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)) ->
-  <IO> (Option String, Option ElabResult)
-gatedDrive rsrc csrc chainKey mods drive =
+  <IO> (Option TestReportError, Option ElabResult)
+gatedDrive rsrc csrc chainKey sources mods drive =
   let front =
     frontEnd
       noStdlibExports
@@ -678,14 +698,19 @@ gatedDrive rsrc csrc chainKey mods drive =
         fiPolicy = DriveUnblocked chainKey NoSteps,
         fiProgram = FrontGraph mods (desugaredModPairs mods),
       }
-  (renderGate front.foDiags, front.foDriven)
+  (diagnosticGate sources front.foDiags, front.foDriven)
 
 -- A load failure reaches the gate as the diagnostic `analyzeProject` attributes
 -- to it: a parse failure to the module that owns it, anything else (unknown
 -- module, cycle, unreadable file) to the entry.
-loadGate : Bool -> String -> LoadError -> <IO> Option String
+loadGate : Bool -> String -> LoadError -> <IO> Option TestReportError
 loadGate True _ _ = None
-loadGate False target le = renderGate (loadErrorDiags target le)
+loadGate False target le =
+  let sources = match le
+    LoadParseFailed path src _ => omInsert path src omEmpty
+    LoadCycle _ path (Some (src, _)) => omInsert path src omEmpty
+    _ => omEmpty
+  diagnosticGate sources (loadErrorDiags target le)
 
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
@@ -696,10 +721,22 @@ loadErrorDiags target (LoadCycle e cpath csite) = match csite
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 
-renderGate : List (String, List Diag) -> <IO> Option String
-renderGate results = match flatMap renderFileErrors (map readDiagSrc results)
-  [] => None
-  rendered => Some (joinNl rendered)
+diagnosticGate : OrdMap String ->
+  List (String, List Diag) ->
+  Option TestReportError
+diagnosticGate sources results =
+  let triples =
+    map
+      ((path, ds) => (
+        path,
+        option "" identity (omLookup path sources),
+        ds,
+      ))
+      results
+  if isNonEmptyL (filter diagIsError (flatMap ((_, _, ds) => ds) triples)) then
+    Some (TestDiagnosticError triples)
+  else
+    None
 
 renderFileErrors : (String, String, List Diag) -> List String
 renderFileErrors (path, src, diags) =
@@ -838,7 +875,7 @@ data Prepared =
 -- `unread` is `treesUnread` for the run.  An exempt, doctest-free target then has
 -- no gate and no tree reader, so the elaboration is skipped; the load and
 -- `modulePathMap` still happen.
-prepareMulti : String ->
+prepareMultiParts : String ->
   String ->
   String ->
   List String ->
@@ -846,10 +883,14 @@ prepareMulti : String ->
   Bool ->
   Bool ->
   List Decl ->
-  <IO> (Option String, Prepared)
-prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
-  let loaded = perfRow "test-load" target (_ =>
-    loadProgramFilesLocatedE (_ => None) target roots)
+  <IO> (Option TestReportError, Prepared)
+prepareMultiParts rsrc csrc target roots exempt unread hasDoctests synthDecls =
+  let (loaded, sources) = perfRow "test-load" target (_ =>
+    loadProgramFilesLocatedCachedSourcesE
+      (Ref omEmpty)
+      (_ => None)
+      target
+      roots)
   match loaded
     Err le => (
       loadGate exempt target le,
@@ -869,35 +910,65 @@ prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
               csrc
               target
               roots
+              sources
               mods
               exempt
               hasDoctests
               synthDecls)
 
-elaborateFor : String ->
+prepareMulti : String ->
   String ->
   String ->
   List String ->
-  List (String, String, List Decl) ->
+  Bool ->
   Bool ->
   Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-elaborateFor rsrc csrc _ _ mods True False _ =
+prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
+  let (gate, prepared) =
+    prepareMultiParts
+      rsrc
+      csrc
+      target
+      roots
+      exempt
+      unread
+      hasDoctests
+      synthDecls
+  (map renderTestReportError gate, prepared)
+
+elaborateFor : String ->
+  String ->
+  String ->
+  List String ->
+  OrdMap String ->
+  List (String, String, List Decl) ->
+  Bool ->
+  Bool ->
+  List Decl ->
+  <IO> (Option TestReportError, Prepared)
+elaborateFor rsrc csrc _ _ _ mods True False _ =
   let rawModules = desugaredModPairs mods
   let (elaborated, _, _) = oneShotElab rsrc csrc rawModules
   (None, PreparedPair (pairOfElab rsrc csrc rawModules elaborated))
-elaborateFor rsrc csrc target roots mods False False _ =
+elaborateFor rsrc csrc target roots sources mods False False _ =
   let rawModules = desugaredModPairs mods
   let (gate, elaborated) =
-    gatedDrive rsrc csrc (chainKeyOf target roots) mods (oneShotElab rsrc csrc)
+    gatedDrive
+      rsrc
+      csrc
+      (chainKeyOf target roots)
+      sources
+      mods
+      (oneShotElab rsrc csrc)
   (
     gate,
     PreparedPair
       (option unelaboratedTrees (pairOfElab rsrc csrc rawModules) elaborated),
   )
-elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
-  gateOfVerbatim exempt rsrc csrc (chainKeyOf target roots) mods,
+elaborateFor rsrc csrc target roots sources mods exempt True synthDecls = (
+  gateOfVerbatim exempt rsrc csrc (chainKeyOf target roots) sources mods,
   PreparedInject (chainKeyOf target roots) mods synthDecls,
 )
 
@@ -1024,10 +1095,11 @@ gateOfVerbatim : Bool ->
   String ->
   String ->
   String ->
+  OrdMap String ->
   List (String, String, List Decl) ->
-  <IO> Option String
-gateOfVerbatim True _ _ _ _ = None
-gateOfVerbatim False rsrc csrc chainKey mods =
+  <IO> Option TestReportError
+gateOfVerbatim True _ _ _ _ _ = None
+gateOfVerbatim False rsrc csrc chainKey sources mods =
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
   let (gate, _) =
@@ -1035,6 +1107,7 @@ gateOfVerbatim False rsrc csrc chainKey mods =
       rsrc
       csrc
       chainKey
+      sources
       mods
       (keyedElab
         rsrc
@@ -2413,19 +2486,21 @@ runTestReport : List Engine ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
-  runTestReportPinned
-    engines
-    runtimeSrc
-    coreSrc
-    target
-    tsrc
-    (targetDesugared tsrc)
-    stdlibDir
-    cases
-    filterOpt
-    includeTestDecls
-    ""
-    omEmpty
+  let (err, runs, props, tests, skipped) =
+    runTestReportPinned
+      engines
+      runtimeSrc
+      coreSrc
+      target
+      tsrc
+      (targetDesugared tsrc)
+      stdlibDir
+      cases
+      filterOpt
+      includeTestDecls
+      ""
+      omEmpty
+  (map renderTestReportError err, runs, props, tests, skipped)
 
 runTestReportPinned : List Engine ->
   String ->
@@ -2439,7 +2514,7 @@ runTestReportPinned : List Engine ->
   Bool ->
   String ->
   PinIndex ->
-  <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
+  <IO> (Option TestReportError, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls file index =
   -- The prelude halves come from the content-keyed `desugaredPrelude` memo.
   let runtimeDecls = desugaredPrelude runtimeSrc
@@ -2466,7 +2541,7 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir c
   else match (if exempt then
     None
   else
-    singleFileTypeErrors target tsrc runtimeSrc coreSrc)
+    singleFileTypeErrorsParts target tsrc runtimeSrc coreSrc)
     Some errText => (Some errText, [], [], [], False)
     None =>
       reportSingle
@@ -2502,8 +2577,35 @@ runTestGradedReport : List Engine ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
 runTestGradedReport engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
+  let (err, runs, props, tests, skipped) =
+    runTestGradedReportParts
+      engines
+      runtimeSrc
+      coreSrc
+      target
+      tsrc
+      userDecls
+      stdlibDir
+      cases
+      filterOpt
+      includeTestDecls
+  (map renderTestReportError err, runs, props, tests, skipped)
+
+export
+runTestGradedReportParts : List Engine ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  String ->
+  Int ->
+  Option String ->
+  Bool ->
+  <IO> (Option TestReportError, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
+runTestGradedReportParts engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
   match carryProjectProfile None target
-    Err m => (Some ("error: " ++ m), [], [], [], False)
+    Err m => (Some (TestSetupError ("error: " ++ m)), [], [], [], False)
     Ok _ =>
       gradedReportUnderProfile
         engines
@@ -2527,20 +2629,20 @@ gradedReportUnderProfile : List Engine ->
   Int ->
   Option String ->
   Bool ->
-  <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
+  <IO> (Option TestReportError, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
 gradedReportUnderProfile engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
   do
     match loadPinContext target
-      Err err => (Some err, [], [], [], False)
+      Err err => (Some (TestSetupError err), [], [], [], False)
       Ok context =>
         match (validatePinNames
           context.contextPins
           context.contextFile
           (propNamesOf userDecls)
           (testNamesOf userDecls))
-          Err err => (Some err, [], [], [], False)
+          Err err => (Some (TestSetupError err), [], [], [], False)
           Ok () => match buildPinIndex context.contextPins
-            Err err => (Some err, [], [], [], False)
+            Err err => (Some (TestSetupError err), [], [], [], False)
             Ok index =>
               let (reportError, runs, props, tests, skipped) =
                 runTestReportPinned
@@ -2592,13 +2694,13 @@ reportMulti : List Engine ->
   Bool ->
   String ->
   PinIndex ->
-  <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
+  <IO> (Option TestReportError, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let allExamples = targetExamples tsrc
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
   let prepared =
-    prepareMulti
+    prepareMultiParts
       rsrc
       csrc
       target
@@ -2680,7 +2782,7 @@ reportSingle : List Engine ->
   Bool ->
   String ->
   PinIndex ->
-  <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
+  <IO> (Option TestReportError, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   let synthResults = buildSynthResults userDecls examples

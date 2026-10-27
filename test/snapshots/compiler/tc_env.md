@@ -1,5 +1,5 @@
 # META
-source_lines=4451
+source_lines=4480
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -1735,6 +1735,25 @@ lookupStandaloneValue env name = match lookupBinding env name
   None => None
 
 export
+lookupImportedStandalone : TcEnv -> String -> Option Scheme
+lookupImportedStandalone env name = match lookupBinding env name
+  Some binding => match binding.ebStandalone
+    Some (ImportedStandalone, value) => Some value.vsScheme
+    _ => None
+  None => None
+
+-- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
+-- the qual constraint table for such a name is authoritative ("unconstrained in its
+-- source"), so `declaredConstraintFor` must NOT fall through to the source-blind bare-name
+-- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
+export
+hasImportDefiner : ModuleCtx -> String -> Bool
+hasImportDefiner mctx name =
+  match omLookup name mctx.mcCells.currentImportDefinersRef.value
+    Some _ => True
+    None => False
+
+export
 bindingWithStandalone : EnvBinding ->
   (StandaloneOrigin, ValueScheme) ->
   EnvBinding
@@ -3350,6 +3369,16 @@ export
 ifaceMethodRows : List Decl -> List (String, List String)
 ifaceMethodRows decls = flatMap ifaceMethodRowOf decls
 
+-- C5: every interface method name declared anywhere in [decls] (unwrapping DAttrib).
+export
+allIfaceMethodNames : List Decl -> List String
+allIfaceMethodNames [] = []
+allIfaceMethodNames ((DAttrib _ d) :: rest) =
+  allIfaceMethodNames [d] ++ allIfaceMethodNames rest
+allIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
+  ifaceMethodNames methods ++ allIfaceMethodNames rest
+allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
+
 ifaceMethodRowOf : Decl -> List (String, List String)
 ifaceMethodRowOf (DAttrib _ d) = ifaceMethodRowOf d
 ifaceMethodRowOf (DInterface { name, methods, ... }) =
@@ -4743,6 +4772,10 @@ methodRowSameNameView rows =
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig true "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
 (DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EVar "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
+(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
 (DFunDef false "bindingWithStandalone" ((PVar "binding") (PVar "source")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EFieldAccess (EVar "binding") "ebValue")) (fa "ebMethodRow" (EFieldAccess (EVar "binding") "ebMethodRow")) (fa "ebStandalone" (EApp (EVar "Some") (EVar "source"))))))
 (DTypeSig true "extendTermBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
@@ -5039,6 +5072,11 @@ methodRowSameNameView rows =
 (DFunDef false "reexportRenamed" ((PTuple (PVar "origin") (PVar "local")) (PVar "src")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "origin")))) (EVar "src"))))
 (DTypeSig true "ifaceMethodRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ifaceMethodRows" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodRowOf")) (EVar "decls")))
+(DTypeSig true "allIfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "allIfaceMethodNames" ((PList)) (EListLit))
+(DFunDef false "allIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "allIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "allIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EVar "ifaceMethodNames") (EVar "methods")) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "allIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest")))
 (DTypeSig false "ifaceMethodRowOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ifaceMethodRowOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodRowOf") (EVar "d")))
 (DFunDef false "ifaceMethodRowOf" ((PRec "DInterface" ((rf "name" None) (rf "methods" None)) true)) (EListLit (ETuple (EVar "name") (EApp (EVar "ifaceMethodNames") (EVar "methods")))))
@@ -5506,6 +5544,10 @@ methodRowSameNameView rows =
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig true "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
 (DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EMethodRef "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
+(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
 (DFunDef false "bindingWithStandalone" ((PVar "binding") (PVar "source")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EFieldAccess (EVar "binding") "ebValue")) (fa "ebMethodRow" (EFieldAccess (EVar "binding") "ebMethodRow")) (fa "ebStandalone" (EApp (EVar "Some") (EVar "source"))))))
 (DTypeSig true "extendTermBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
@@ -5802,6 +5844,11 @@ methodRowSameNameView rows =
 (DFunDef false "reexportRenamed" ((PTuple (PVar "origin") (PVar "local")) (PVar "src")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "origin")))) (EVar "src"))))
 (DTypeSig true "ifaceMethodRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ifaceMethodRows" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodRowOf")) (EVar "decls")))
+(DTypeSig true "allIfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "allIfaceMethodNames" ((PList)) (EListLit))
+(DFunDef false "allIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "allIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "allIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EVar "ifaceMethodNames") (EVar "methods")) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "allIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest")))
 (DTypeSig false "ifaceMethodRowOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ifaceMethodRowOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodRowOf") (EVar "d")))
 (DFunDef false "ifaceMethodRowOf" ((PRec "DInterface" ((rf "name" None) (rf "methods" None)) true)) (EListLit (ETuple (EVar "name") (EApp (EVar "ifaceMethodNames") (EVar "methods")))))

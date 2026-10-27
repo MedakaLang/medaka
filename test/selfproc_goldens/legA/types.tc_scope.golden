@@ -46,6 +46,7 @@ ieImplExistsForHead : ModuleCtx -> ImplEnv -> String -> HeadKey -> Bool
 ifaceSortKey : IfaceRef -> String
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importedCtorEntry : GraphCtx -> List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
+importedIfaceRows : Map String (List (String, List String)) -> List Decl -> List (String, List String)
 importedMemberBindingNames : List Decl -> List String
 importedRecordEntry : GraphCtx -> List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 insertCtorPop : TcEnv -> List Decl -> SpellingPop Scheme -> SpellingPop Scheme
