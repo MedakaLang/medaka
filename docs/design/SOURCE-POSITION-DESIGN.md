@@ -44,6 +44,33 @@ If no source is available, a nonempty diagnostic retains its message and uses
 an explicitly imprecise zero-width range at 0:0. Only an empty diagnostic
 bucket clears a client's prior diagnostics.
 
+## Parser position ownership decision
+
+The parse-ownership sprint moves per-parse state out of module globals. Each
+invocation owns its cursor context, nesting depth, and formatting cue journals.
+A speculative branch restores its cue roots when its result is discarded;
+lookahead restores them even on success. A successful parse publishes
+declarations, positions, and immutable cue lists without exposing the context
+or retaining its source. Syntax-only formatting entry points keep their
+existing acceptance rules; strict entry points continue to run prescans.
+
+The full `SourceIndex` remains the authority for UTF-16 protocol coordinates.
+Parser position projection needs only codepoint line starts, so the existing
+line-start helpers move from the lexer into `support/source_index.mdk` and the
+lexer retains compatibility exports. The parser engine may use the shared
+position module's span query; the published parse result does not depend on the
+engine. This avoids constructing UTF-16 prefix widths for every parse. In the
+design spike, full index construction allocated 335,548,672 bytes for a
+4,194,322-byte comment-heavy source; the existing complete located parser
+allocated 67,146,576 bytes for that input. Those are separate measurements, not
+a claim about the eventual implementation's total cost.
+
+The earlier channel-first decision for declaration positions remains in place;
+this changes the channel's ownership and lifetime, not AST field placement.
+The sprint contract records the exact interfaces, rollback cases, consumer
+migration and full-parser performance and retention checks before the code
+changes land.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;
