@@ -425,7 +425,7 @@ infer env (ENumLit n ev _) = inferNumLit env n ev
 infer env (EWideLit hi lo ev lx) = inferWideLit env hi lo ev lx
 infer env (EVar x) = inferVar env x
 -- #837: EVarId carries the resolve-minted binding id; thread it to
--- instantiateVarTracked so obligation lookup keys by (name, id).
+-- instantiateVarTrackedId so obligation lookup keys by (name, id).
 infer env (EVarId x id) = inferVarId env x id
 infer env (EApp f x) = inferAppExpr env f x
 infer env (ELam pats body) = inferLam env pats body
@@ -460,7 +460,7 @@ infer env (EDictAt name ev) = inferGrantedAt env name ev
 infer env (EArrayLit es) = inferArrayLit env es
 infer env (ERangeList lo hi _) = inferIntRange env lo hi (tconBuiltin "List")
 infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
--- EIndex is desugared to an `index` method call before typecheck (Phase #16b);
+-- EIndex is desugared to an `index` method call before typecheck;
 -- the built-in index-inference path is retired, so no `EIndex` arm here.  ESlice
 -- is likewise desugared to a `slice` method call before typecheck (#670), so
 -- no `ESlice` arm here -- a surviving one is a desugar-ordering bug and hits the
@@ -470,7 +470,7 @@ infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- ELoc is transparent: the wrapped expression and every check inside it are
 -- located at this span, until a nested construct names its own.
 infer env (ELoc l e) = infer (envAt (Some l) env) e
--- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
+-- A do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
 -- error (see typeMismatch).  The chain's walk gets its own context; an inline
 -- nested `do` block (`a <- (do ...)`) mints another, so its first report never
@@ -913,7 +913,7 @@ unifyFieldAssignIdx env rname ri subst fn val =
         (substRecordField env.teDyn.dcModule.mcGraph subst fm)
         vt
 
--- Phase 72 / TYPECHECK-AUDIT C2: receiver-directed field resolution.  Infer the
+-- Receiver-directed field resolution.  Infer the
 -- receiver FIRST, then pick the owning record by its head tycon when known; if
 -- the receiver is still an unbound var and the field is owned by several
 -- records, the access is ambiguous.  `value` keeps the Ref-projection special case (no
@@ -963,7 +963,7 @@ inferVariantUpdate env cname base fields =
     None => unknownRecordFresh env.teDyn.dcModule cname
     Some ri => inferRecordUpdateWith env cname base fields ri
 
--- receiver-directed (Phase 72), like inferFieldAccess: infer base first, then
+-- receiver-directed, like inferFieldAccess: infer base first, then
 -- pick the owning record by the base's head tycon, falling back to the first
 -- update field's owners.
 inferRecordUpdateField : TcEnv ->
@@ -1076,9 +1076,9 @@ inferBinop dyn ">>" lt rt = composeOp dyn lt rt False
 inferBinop dyn "<<" lt rt = composeOp dyn lt rt True
 inferBinop dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
 
--- Roadmap #18a: `++` (append) carries a `Semigroup` obligation on its (unified)
+-- `++` (append) carries a `Semigroup` obligation on its (unified)
 -- operand type — a verbatim mirror of `eqCompareOp`/`recordIfaceObligation` for `==`,
--- and the reason `"x" ++ Box 1` is now a located `No impl of Semigroup for Box`
+-- and the reason `"x" ++ Box 1` is a located `No impl of Semigroup for Box`
 -- reject at CHECK time rather than an eval-time `E-PANIC`.  Reuses the same
 -- pendingImplObligations / checkImplObligations path: a synthetic Semigroup
 -- obligation with a bare iface-param declared type (`TyVar "a"`, typaram ["a"]) so
@@ -1087,10 +1087,10 @@ inferBinop dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
 -- is what keeps core.mdk's `foldMap f = fold (acc x => acc ++ f x) empty` typing).
 -- A still-polymorphic operand defers to the caller, exactly like Num/Eq/Ord.
 --
--- Gated on the PRELUDE's `Semigroup` being present, via `builtinClassPresent` (#1539;
--- it was `ifaceRegistered "Semigroup"` before): the bare-HM no-prelude oracle (tc_probe
--- / typecheck_main.mdk) has no `Semigroup` class, so recording the obligation only when
--- it exists keeps those drivers byte-identical while `medaka check` rejects.
+-- Gated on the PRELUDE's `Semigroup` being present, via `builtinClassPresent`: the
+-- bare-HM no-prelude oracle (tc_probe / typecheck_main.mdk) has no `Semigroup` class, so
+-- recording the obligation only when it exists keeps those drivers byte-identical while
+-- `medaka check` rejects.
 -- The result is a new value of the operands' value type; what it may reach
 -- is the abstraction's business (`alphaOf`), never inherited from an operand.
 appendOp : DynCtx -> Mono -> Mono -> Mono
@@ -1119,7 +1119,7 @@ appendOp dyn lt rt =
 -- check`.
 numArithOp : DynCtx -> Mono -> Mono -> Mono
 numArithOp dyn lt rt =
-  -- Chunk D: taint any literal operand BEFORE the unify grounds it — so a literal
+  -- Taint any literal operand BEFORE the unify grounds it — so a literal
   -- fed to an arithmetic op (`1 + "x"`, `x + 1`, `1 + x`) keeps `No impl of Num for
   -- T` (the `+` is the culprit) rather than being reframed as a bare mismatch.
   markNumlitOpTaint dyn.dcModule lt
@@ -1259,7 +1259,7 @@ boolOp dyn lt rt =
 consOp : DynCtx -> Mono -> Mono -> Mono
 consOp dyn lt rt =
   let tailElem = freshVar dyn.dcModule ()
-  noteNumlitCtx dyn.dcModule lt rt JoinCons  -- Chunk D: tag cons head-vs-list Num mismatch
+  noteNumlitCtx dyn.dcModule lt rt JoinCons  -- tag cons head-vs-list Num mismatch
   unifyIn dyn rt (TApp (tconBuiltin "List") tailElem)
   TApp
     (tconBuiltin "List")
@@ -1319,8 +1319,8 @@ inferUnop dyn op _ = panic ("typecheck: unsupported unary op " ++ op)
 -- It returns `Bool` on that path rather than a fresh var: the operand was a Bool and
 -- the author meant negation, so `Bool` is the type the surrounding expression was
 -- written to expect (`if !flag then …`), and handing it back keeps ONE located error
--- instead of a cascade of downstream mismatches — the Chunk-D recovery shape the
--- literal-provenance arms already use.
+-- instead of a cascade of downstream mismatches — the recovery shape the
+-- literal-provenance arms use.
 derefOp : DynCtx -> Mono -> Mono
 derefOp dyn t =
   if monoIsBool (normalize t) then
@@ -1335,11 +1335,11 @@ derefOp dyn t =
   else
     refStored dyn t
 
--- Roadmap #18c: unary minus `-x` carries a `Num` obligation on its operand type —
+-- Unary minus `-x` carries a `Num` obligation on its operand type —
 -- a verbatim mirror of `numArithOp`/`recordIfaceObligation` for binary `+`/`-`/…,
--- and the reason `-"x"` is now a located `No impl of Num for String` reject at
+-- and the reason `-"x"` is a located `No impl of Num for String` reject at
 -- CHECK time rather than an eval-time `panic "unary minus on non-number"`.
--- markNumlitOpTaint keeps the same Chunk-D literal-provenance error framing as
+-- markNumlitOpTaint keeps the same literal-provenance error framing as
 -- the binary arithmetic operators (`-"x"` blames the operator, not a bare
 -- literal-vs-String mismatch).
 negateOp : ModuleCtx -> Mono -> Mono
@@ -1366,7 +1366,7 @@ inferVar env x = inferVarId env x 0
 -- inferInfix) is the bare-name fallback — byte-identical to the pre-#837 path.
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarId env x id = match maybeStandaloneValueMono env x
-  -- P0-19 d4b (S4): bare value-position definer shadow → the standalone scheme.
+  -- S4: bare value-position definer shadow → the standalone scheme.
   Some m => m
   None => inferVarPlainId env x id
 
@@ -1474,7 +1474,7 @@ unifySpineResult env f ft ((node, at) :: rest) =
 -- of the expectation — `idr : Ref a -> Ref a` applied to an already-typed cell
 -- (`alias = idr box`, the #1098 launder) unifies its result first, which pins
 -- `a := String -> <Stdout> Unit`, and the argument `box : Ref (String -> <>
--- Unit)` then meets that as closed~closed and is rejected as before.  A callee
+-- Unit)` then meets that as closed~closed and is rejected.  A callee
 -- whose result slot is a metavariable cannot have aliased the cell at any
 -- particular row (parametricity), so nothing but a fresh value ever reaches
 -- the accepting order.  The value this admits therefore has no other alias
@@ -1484,7 +1484,7 @@ unifySpineResult env f ft ((node, at) :: rest) =
 -- slot at all (`monoHasNonCovariantSlot`), the expression must be a plain
 -- application spine (no lambda-argument or shadow-head special case, which
 -- keep `inferAppExpr`'s arms), and only then does the order change.  Every
--- other program is inferred exactly as before, so no diagnostic moves.
+-- other program is inferred in the plain order, so no diagnostic moves.
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferExpected env (ELoc l e) expected =
   inferExpected (envAt (Some l) env) e expected
@@ -1546,7 +1546,7 @@ plainAppHead env _ = False
 -- the (now pinned) domain and applied through the ordinary `inferApp`, so the
 -- effect bookkeeping and every diagnostic of the plain path are unchanged.
 -- A callee with fewer than [n] arrows skips the pre-unification (the arity
--- error surfaces from `inferApp` exactly as before).
+-- error surfaces from `inferApp`).
 inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
 inferAppResultFirst env hd args expected =
   let ft = infer env hd
@@ -1630,7 +1630,7 @@ inferAppExpr env f x = match lamUnderLoc x
               None =>
                 let ft = infer env f
                 let xt = infer env x
-                -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
+                -- Detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
                 -- its domain with the tuple), then record the residual result so a
                 -- downstream no-impl / mismatch can surface the tailored hint.
                 let pend = tupleCallShapeHint f x ft
@@ -1711,7 +1711,7 @@ inferShadowApp env mname arityRefs tagRefs f x =
       inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
     AdStandalone => inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
     AdDefer => match headTyconMono tx
-      -- ARCH B-2.1-g: the S2 impl question, off the GRAPH-GLOBAL substrate — see
+      -- The S2 impl question, off the GRAPH-GLOBAL substrate — see
       -- `ieImplExistsForHead`.  The answer must not depend on where in the module order
       -- the receiver's impl sits, so it never reads the cumulative topological prefix
       -- (`shadowKeyTableRef`).
@@ -1778,11 +1778,10 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
     None => inferApp env (EApp f x) (inferShadowAppHead env f) tx
 
 -- #411: infer an IMPORTER-shadow application's head with `dcShadowHeadCtx` set, so
--- maybeStandaloneValueMono's new importer arm does not pin an APPLIED occurrence to the
+-- maybeStandaloneValueMono's importer arm does not pin an APPLIED occurrence to the
 -- standalone scheme (which would kill per-receiver dispatch — Fork 1 / i4).  The definer
--- path has always typed its head this way (inferDefinerShadowApp); this is the peer
--- the importer path was missing, and the reason it could be missing before is that
--- nothing pinned importer value positions at all — which IS the #411 bug.
+-- path types its head this way (inferDefinerShadowApp); this is its peer for the importer
+-- path.
 inferShadowAppHead : TcEnv -> Expr -> Mono
 inferShadowAppHead env f = infer (shadowHeadEnv env) f
 
@@ -1895,7 +1894,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
     None =>
       inferAppNodes env (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
 
--- P0-18: type `size (Box 3)` exactly as the ordinary path (against the standalone
+-- Type `size (Box 3)` exactly as the ordinary path (against the standalone
 -- scheme the env rebound `size` to, preserving program types), but record the
 -- ACTUAL argument mono (`Box`) as this site's receiver so resolveRLocalSite routes
 -- per-receiver: a receiver head WITH an impl of the shadowed interface dispatches to
@@ -1937,13 +1936,13 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- (see `recoveredShadowSym`).  The two `SKRLocal (routeLocalSym !tagRef)` stamps
   -- keep the raw seed: that is the route the emitter follows.
   let sym = recoveredShadowSym name tagRef
-  -- P0-19: the application's location, so a standalone-domain mismatch reports at
+  -- The application's location, so a standalone-domain mismatch reports at
   -- the call site.
   let dloc = appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)
   -- #1815: the arguments the spine already applied, inferred in source order.
   let pre = inferSpineArgs env nodes
   let k = listLen pre
-  -- P0-19 d8 (S2/S6): infer the argument FIRST so the head scheme is chosen PER
+  -- S2/S6: infer the argument FIRST so the head scheme is chosen PER
   -- RECEIVER.  A receiver with a VISIBLE impl of the shadowed interface DISPATCHES: type
   -- the head against the METHOD scheme; else it is the STANDALONE.  The impl universe is
   -- graph-global (`bodyImplEnvRef` via `ieImplExistsForHead`); `SHADOW-SEMANTICS.md`
@@ -1953,12 +1952,12 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- impl is IMPORTED (`size (Box 3)`, d8) has to dispatch to that impl, not reject
   -- `Int vs Box`.
   let xt = infer env x
-  -- P0-19 (constrained-receiver arm): an ungrounded receiver that is a dict-bound
+  -- Constrained-receiver arm: an ungrounded receiver that is a dict-bound
   -- constraint var dispatches through that dict — it must neither be typed against the
   -- standalone scheme nor stamped RLocal (which would send eval/emit to the standalone
   -- and, e.g., apply `sz n = n + 1` to a Bool).
   let isDictVar = definerReceiverIsDictVar env.teDyn name xt
-  -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
+  -- Ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision, so typecheck asks the impl question about the SAME head the
   -- post-inference route resolver will.  See groundShadowReceiver.
   groundShadowReceiver
@@ -1977,7 +1976,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
       cell.ecIface := admittedIfaceWord env.teDyn.dcModule name
     None => ()
   -- The head is typed in `headEnv`: the two default pushes are suppressed, and, as an
-  -- application head (marked EMethodAt on run/build, P0-19 d4b), it keeps the method
+  -- application head (marked EMethodAt on run/build), it keeps the method
   -- scheme for per-receiver dispatch rather than the value-position standalone pin.
   let headEnv = { env |
     teDyn = { env.teDyn |
@@ -1986,7 +1985,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
       dcShadowHeadCtx = True,
     },
   }
-  -- P0-18: for the STANDALONE arm, type the head against the STANDALONE scheme.  On the
+  -- For the STANDALONE arm, type the head against the STANDALONE scheme.  On the
   -- un-mangled run/check path `infer env f` already resolves the bare name to the
   -- standalone (which shadows the method in scope).  On the EMIT path the bare name
   -- resolves to the interface METHOD scheme instead (the standalone was renamed to
@@ -2038,7 +2037,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- arm stamps RLocal unconditionally, which would route a genuine dict dispatch to the
   -- shadowing standalone.  Not recording the site leaves the route for ordinary dispatch
   -- (RNone → eval arg-tag / emit RKey via resolveArgStamps).
-  -- P0-20: the route follows the arm (`not dispatches` ⇒ forceLocal).  `ft` above has
+  -- The route follows the arm (`not dispatches` ⇒ forceLocal).  `ft` above has
   -- already committed this site's TYPE, so re-deriving its route from a receiver mono
   -- that may ground LATER (Num defaulting on an unsignatured standalone) is exactly how
   -- `check` and the binary came to disagree.  A dispatching receiver still re-derives
@@ -2069,7 +2068,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
     -- standalone's own scheme, which is not an interface-method occurrence at all;
     -- pass the receiver mono `xt` so ifaceParamMonos fails its shape match and the
-    -- selector falls back to the singleton goal, exactly as before #609.
+    -- selector falls back to the singleton goal.
     Some _ =>
       pushSiteGoal
         env.teDyn.dcModule.mcGraph
@@ -2085,7 +2084,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
           (captureScope env.teDyn.dcModule ())
           (freshEvId env.teDyn.dcModule ()))
     None => ()
-  -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
+  -- On the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
   -- occurrence resolves to the STANDALONE — a grounded receiver head with no visible
   -- impl of the shadowed interface, or an ungrounded receiver (S5) — impose the
@@ -2116,8 +2115,8 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
 -- run/build path); the two must agree cell-for-cell or `check` and the binary diverge (S7),
 -- which is the bug class this whole arc keeps producing.
 --
--- The receiver's impl universe is no longer consulted (see definerReceiverDispatches).  The
--- sole dispatch arm left is the Fork-2 carve-out: a dict-bound `=>` constraint var, which is
+-- The receiver's impl universe is not consulted (see definerReceiverDispatches).  The
+-- sole dispatch arm is the Fork-2 carve-out: a dict-bound `=>` constraint var, which is
 -- an explicit written request to resolve through the interface.  Everything else — grounded
 -- live-impl head included — types against the LOCAL standalone scheme, so a domain mismatch
 -- (`size (Box 3)` against `size : Int -> Int`) is a located reject at the call, not a silent
@@ -2145,7 +2144,7 @@ inferDefinerShadowVarAppAt env name hd nodes f x =
   let pre = inferSpineArgs env nodes
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar env.teDyn name xt
-  -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
+  -- Ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision (see groundShadowReceiver).  Still load-bearing under the inversion:
   -- it is what gives a bare `Num` literal receiver (`eq 1 2`) the standalone's domain
   -- rather than leaving it open for Num-defaulting to ground LATER, behind typecheck's back.
@@ -2164,7 +2163,7 @@ inferDefinerShadowVarAppAt env name hd nodes f x =
   else
     inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc
 
--- P0-19 (d8 dispatch arm): the interface METHOD scheme for [name], from
+-- Dispatch arm (d8): the interface METHOD scheme for [name], from
 -- methodEntryHere (which spans imported interfaces) so per-receiver dispatch works
 -- even when the multi-module env has rebound the bare name to the local standalone.
 -- Falls back to `infer env f` (flagged as an app head so maybeStandaloneValueMono does
@@ -2187,11 +2186,11 @@ shadowVarHeadMethodScheme env name f =
           (fst (sigToSchemeTvsIn env.teDyn.dcModule scope ty)))
     None => infer (shadowHeadEnv env) f
 
--- P0-19 (standalone arm): type the application against the LOCAL standalone scheme so
+-- Standalone arm: type the application against the LOCAL standalone scheme so
 -- the result is the standalone's (S2/S5); a domain mismatch (`size "hi"`) or a wrapper
 -- generalized over the shadow receiver then called at a foreign type localizes to the
 -- call [dloc].  No declared signature ⇒ fall back to the permissive method-scheme head
--- + enforceStandaloneDomain (the pre-P0-19 permissive behavior, unchanged).
+-- + enforceStandaloneDomain.
 -- #1815: [pre] is the spine's already-applied (node, type) prefix — `[]` at dispatch
 -- index 0, where every line below reduces to the single-argument form it had before.
 inferDefinerStandaloneVarAppAt : TcEnv ->
@@ -2384,12 +2383,12 @@ tupleCallShapeHint f x ft = match tupleArgElems x
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
 inferApp env appExpr ft xt =
   let r = freshVar env.teDyn.dcModule ()
-  -- Chunk C: if the callee normalizes to a concrete NON-arrow head (a known type
+  -- If the callee normalizes to a concrete NON-arrow head (a known type
   -- constructor like `Int`/`List Int`, never a tyvar or an arrow), applying it
   -- is genuinely impossible.  Emit a context-aware `T-NOT-A-FUNCTION` instead of
   -- letting `unify ft (TFun …)` render a leaked `Int vs a -> b` mismatch, and
   -- poison the fresh result var so no secondary obligation cascade fires (reuses
-  -- Chunk A's poisoned-var set).  Fires ONLY on a ground non-arrow head: a real
+  -- the poisoned-var set).  Fires ONLY on a ground non-arrow head: a real
   -- function (`TFun`) or an as-yet-unresolved var (`TVar`) is unaffected.
   match headTyconNameMono ft
     Some _ => inferAppNotFunction env.teDyn.dcModule appExpr ft r
@@ -2507,7 +2506,7 @@ applicationRow env appExpr ft xt result = match normalize ft
     unifyIn env.teDyn ft (TFun xt unknown result)
     unknown
 
--- Chunk C: the applied head is a ground non-function.  If the spine over-applies
+-- The applied head is a ground non-function.  If the spine over-applies
 -- a named function (callee name known AND at least one arg was consumed before
 -- the type went non-arrow) use the arity-aware wording; otherwise fall back to
 -- naming the non-function type.  Poison `r` to suppress downstream cascade.
@@ -2856,19 +2855,19 @@ inferAnnot env e ty =
         ++ callUOblsWindow env.teDyn.dcModule callN0)
   annot
 
--- Phase 108 head-pin (`:~`, EHeadAnnot): like inferAnnot but WITHOUT the
+-- Head-pin (`:~`, EHeadAnnot): like inferAnnot but WITHOUT the
 -- checkAnnotTooGeneral skolemization guard — the pin's type variables are MEANT
 -- to ground (the container literal's element types).  Fixes `e`'s head tycon to
 -- the named container so `fromEntries`'s return-position dispatch resolves to
 -- that container's impl.
 --
--- Phase 114 (was wrongly dropped here): ignore the *arity* the lowering happened
+-- Ignore the *arity* the lowering happened
 -- to supply and apply the head tycon to its *declared* arity of fresh vars.  The
 -- parser can't tell empty `Map { }` from `Set { }` — both have no entries, so
 -- classifyBrace falls through to `ESetLit name []` and the desugar pins a UNARY
 -- `Map _a`, the wrong arity for `Map k v` (→ `Map vs Map …`).  Looking the arity
 -- up by the head tycon makes empty literals work regardless of the lowering's
--- guess; element vars stay free and ground via inference as before.
+-- guess; element vars stay free and ground via inference.
 inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferHeadAnnot env e ty =
   let t = infer env e
@@ -3226,14 +3225,14 @@ processLetGroup env binds =
     nbGuard = localNumGuard env.teDyn.dcModule addedObls callN0,
   }  -- RETPOS soundness
   let genv = generalizeGroup env residuals 0 (zipL binds placeholders)
-  -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
-  -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
-  -- registered NOTHING in schemeObligationsRef — only top-level SCCs did — so a
-  -- later use `f x` instantiated no obligation at all: the one recorded at the
-  -- RHS occurrence stayed on a var the generalization then orphaned, Int
-  -- defaulting quietly satisfied it, and a scheme-var instantiation sailed
-  -- through check into an eval panic / native SEGFAULT.  Register the group
-  -- exactly as processSCC does; instantiateVarTracked's per-use re-recording
+  -- Let-alias evasion (#816): a LOCAL constrained binding (`let f = hh`
+  -- re-generalizing `hh : Num x => x -> x`) that registered NOTHING in
+  -- schemeObligationsRef (only top-level SCCs do) would leave a later use `f x` with
+  -- no obligation at all: the one recorded at the RHS occurrence stays on a var the
+  -- generalization then orphans, Int defaulting quietly satisfies it, and a
+  -- scheme-var instantiation sails through check into an eval panic / native
+  -- SEGFAULT.  Register the group
+  -- exactly as processSCC does; instantiateVarTrackedId's per-use re-recording
   -- then feeds the same call-obligation window every checker reads.  Name
   -- collisions across bodies are safe: the obligation ids are the scheme's own
   -- quantified ids, and substMonos skips entries whose ids a different scheme's
@@ -3299,10 +3298,10 @@ declareRigidVars mctx keys =
 -- the signature-too-general check after body inference).  Returns a pair:
 -- (constraintRegs, sigTvMaps) where sigTvMaps is [(name, sig_ast, tvs)] for
 -- each signed member.
--- #1161 (F-3a-ii): each reg is now a TRIPLE — (name, slot-parallel (iface, mono) pairs,
--- slot-parallel predicate argument VECTORS).  The first two components are unchanged;
--- the third is carried alongside, never instead of, so nothing downstream that sizes or
--- orders dict slots can move.
+-- #1161: each reg is a TRIPLE — (name, slot-parallel (iface, mono) pairs,
+-- slot-parallel predicate argument VECTORS).  The third is carried alongside the first
+-- two, never instead of them, so nothing downstream that sizes or orders dict slots can
+-- move.
 export
 preunifySigsEx : ModuleCtx ->
   List (String, Ty) ->
@@ -3428,7 +3427,7 @@ inferClauseValues env peel owned (cl :: rest) =
 -- infer one clause, returning its arrow type AND the concrete effect labels its
 -- body performs (captured in a fresh collection, then the ambient restored —
 -- building a closure performs nothing).  Mirrors inferLam but exposes the effect.
--- Phase 73: when [peel] is Some(sig source) and the clause has params, peel the
+-- When [peel] is Some(sig source) and the clause has params, peel the
 -- signature's arrow domains and zip-unify them onto the clause param types BEFORE
 -- inferring the body (bidirectional checking mode).
 inferClauseEff : TcEnv -> Option Mono -> (List Pat, Expr) -> (Mono, EffRow)
@@ -3470,7 +3469,7 @@ inferClauseEff outer peel (pats, body) =
   closeExistentialScope env.teDyn.dcModule scope bodyTy (exprLoc body)
   (bodyArrows (fst pr) bodyEff bodyTy, bodyEff)
 
--- Phase 73 peel: for a signed clause with params, zip-unify the peeled sig
+-- For a signed clause with params, zip-unify the peeled sig
 -- domains onto the inferred param types.  No-op for an unsigned member, a value
 -- binding (no params), or a sig with no remaining arrows.
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
@@ -3484,10 +3483,8 @@ localRole : Bool -> BindingRole
 localRole True = RoleQuantifies
 localRole False = RoleMonomorphic
 
--- test-only observation: declarations whose only callers are tests and probes.
-
--- `hadMatchWarnings` of the last module checked: the only read of a drive that returns no
--- outputs (the projections).
+-- test-only observation: `hadMatchWarnings` of the last module checked, the only read of a
+-- drive that returns no outputs (the projections).
 export
 matchWarningsNow : ModuleCtx -> Bool
 matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value

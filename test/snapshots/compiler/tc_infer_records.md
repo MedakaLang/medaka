@@ -1,5 +1,5 @@
 # META
-source_lines=1280
+source_lines=1279
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer_records: the helpers the record arms call: field-owner resolution, field-shape
@@ -446,7 +446,7 @@ recordUpdateWellTyped mctx bt rname ri fn = match headTyconMono bt
             ctors)
       _ => ()
 
--- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
+-- field_owners: every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
 -- named-field variant it's the constructor name, whose
 -- field_owners maps to the record's type name and the variant's con_name.
@@ -1045,8 +1045,7 @@ ctorSiblingWithholdingName mctx (Some hk) fname survivorKey =
 -- unstamped decls mint `TkBare` too, so the wrong mint agrees by accident; the
 -- pin is the cross-module fixture
 -- `test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/main_rejects.mdk`
--- (`T-TYPE-MISMATCH: Type mismatch: T vs U`).  Same writer/reader `TkBare`-vs-`TkIdent`
--- mismatch as `seedAndCheckSplit`, one table over.
+-- (`T-TYPE-MISMATCH: Type mismatch: T vs U`).
 --
 -- The mint below is `matchCol0Type`'s, the other `oGetCtors` reader in this file, minus
 -- the arms it needs only because it starts from a `Mono`: keep `HkDecl`'s own `TabKey`,
@@ -1070,7 +1069,7 @@ firstCtorSiblingWithholding mctx hk fname skey (k :: rest)
   | otherwise = firstCtorSiblingWithholding mctx hk fname skey rest
 
 -- `oGetCtors` already scopes the candidate list to the receiver's own type
--- (via the `TabKey` lookup above), so this no longer needs to re-check the
+-- (via the `TabKey` lookup above), so this does not re-check the
 -- head itself — only whether THIS constructor declares `fname`.  A name with
 -- no `RecordInfo` of this type is a positional or nullary constructor: it
 -- declares no named field, so it unconditionally withholds `fname`.
@@ -1122,7 +1121,7 @@ unknownFieldFresh : ModuleCtx -> String -> String -> List String -> Mono
 unknownFieldFresh mctx fname rname declared =
   pushUnknownFieldMaybeSuggest mctx fname rname declared
   let v = freshVar mctx ()
-  -- Chunk A: the field error already explained this access; poison its result
+  -- The field error already explained this access; poison its result
   -- var so a downstream `debug`/method use doesn't pile on a secondary
   -- `ambiguous instance` cascade (record_wrong_field).
   poisonMismatchVars mctx v v
