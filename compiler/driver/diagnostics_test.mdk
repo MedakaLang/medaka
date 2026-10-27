@@ -907,3 +907,74 @@ test "a refutable let-bound function warns with the lambda code" = expectEach [
     codeCase "W-NONEXHAUSTIVE" "" 0 "  let h (a, b) = a",
   ),
 ]
+
+-- ── do and defer binds ─────────────────────────────────────────────────────
+
+-- The diagnostics of [src] whose text contains [needle].
+bindDiags : String -> String -> <IO> Result String Int
+bindDiags needle src = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    Ok
+      (length
+        (filter
+          (contains needle)
+          (map
+            diagText
+            (analyzeFrom noStdlibExports "main" rsrc csrc (parseLocated src)))))
+  _ => Err "could not read the prelude pair"
+
+-- [want] diagnostics containing [needle] for a `do` block binding [pat] from [rhs].
+doBindCase : String -> Int -> String -> String -> <IO> Expectation
+doBindCase needle want pat rhs = match (bindDiags
+  needle
+  (unlines [
+    "data One = One Int",
+    "r : Option Int",
+    "r = do",
+    "  \{pat} <- \{rhs}",
+    "  Some 1",
+    "main =",
+    "  println (debug r)",
+  ]))
+  Ok n => expectEqual want n
+  Err e => fail e
+
+test "a do bind is judged by the pattern the user wrote" = expectEach [
+  ("unit bind is not unreachable", doBindCase "W-UNREACHABLE" 0 "()" "Some ()"),
+  ("unit bind is exhaustive", doBindCase "W-NONEXHAUSTIVE" 0 "()" "Some ()"),
+  (
+    "single-constructor bind is silent",
+    doBindCase "W-" 0 "One v" "Some (One 1)",
+  ),
+  ("tuple bind is silent", doBindCase "W-" 0 "(a, b)" "Some (1, 2)"),
+  (
+    "refutable bind warns",
+    doBindCase "W-NONEXHAUSTIVE" 1 "Some v" "Some (Some 1)",
+  ),
+  (
+    "refutable bind is not unreachable",
+    doBindCase "W-UNREACHABLE" 0 "Some v" "Some (Some 1)",
+  ),
+]
+
+test "a defer bind is judged by the pattern the user wrote" = expectEach [
+  ("unit bind is silent", deferBindCase 0 "()" "()"),
+  ("refutable bind warns", deferBindCase 1 "Some v" "Some 1"),
+]
+
+deferBindCase : Int -> String -> String -> <IO> Expectation
+deferBindCase want pat rhs = match (bindDiags
+  "W-"
+  (unlines [
+    "import async.{Async, deferPure}",
+    "f : Async <Stdout> Int",
+    "f = defer",
+    "  \{pat} <- deferPure (\{rhs})",
+    "  deferPure 1",
+    "main = println \"x\"",
+  ]))
+  Ok n => expectEqual want n
+  Err e => fail e
