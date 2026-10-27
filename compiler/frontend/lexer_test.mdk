@@ -1,8 +1,12 @@
-import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import test.{expectEqual, expectAll}
+import frontend.lexer.{
+  Token(..), tokenToString, tokenize, tokenizeWithOffsets,
+  tokenizeWithOffsetPairs
+}
+import test.{Expectation, expectEqual, expectAll, expectEach}
 
 literalText : Token -> String
 literalText (TInterpOpen s) = s
+literalText (TInterpMid s) = s
 literalText (TInterpEnd s) = s
 literalText (TString s) = s
 literalText _ = ""
@@ -28,3 +32,143 @@ test "ordinary string and span" =
     expectEqual ["hello", "", ""] (map literalText tokens),
     expectEqual [(0, 7), (0, 0), (0, 0)] spans,
   ]
+
+projectionRow : String -> List String -> List (Int, Int) -> Expectation
+projectionRow src contents spans =
+  let plain = tokenize src
+  let (offsetTokens, offsets) = tokenizeWithOffsets src
+  let (pairTokens, pairs) = tokenizeWithOffsetPairs src
+  expectAll [
+    expectEqual contents (map literalText plain),
+    expectEqual (map tokenToString plain) (map tokenToString offsetTokens),
+    expectEqual (map tokenToString plain) (map tokenToString pairTokens),
+    expectEqual (map fst spans) offsets,
+    expectEqual spans pairs,
+  ]
+
+controlRow : (String, Int) -> (String, Expectation)
+controlRow (hex, n) = (
+  "U+" ++ hex,
+  projectionRow
+    ("\"\\u{" ++ hex ++ "}\"")
+    [charToStr (optionOr ' ' (charFromCode n)), "", ""]
+    [(0, 8), (0, 0), (0, 0)],
+)
+
+test "escaped scalar controls retain content and projections" =
+  expectEach
+    (map controlRow [
+      ("00", 0),
+      ("01", 1),
+      ("02", 2),
+      ("03", 3),
+      ("04", 4),
+      ("05", 5),
+      ("06", 6),
+      ("07", 7),
+      ("08", 8),
+      ("09", 9),
+      ("0A", 10),
+      ("0B", 11),
+      ("0C", 12),
+      ("0D", 13),
+      ("0E", 14),
+      ("0F", 15),
+      ("10", 16),
+      ("11", 17),
+      ("12", 18),
+      ("13", 19),
+      ("14", 20),
+      ("15", 21),
+      ("16", 22),
+      ("17", 23),
+      ("18", 24),
+      ("19", 25),
+      ("1A", 26),
+      ("1B", 27),
+      ("1C", 28),
+      ("1D", 29),
+      ("1E", 30),
+      ("1F", 31),
+      ("7F", 127),
+      ("80", 128),
+      ("81", 129),
+      ("82", 130),
+      ("83", 131),
+      ("84", 132),
+      ("85", 133),
+      ("86", 134),
+      ("87", 135),
+      ("88", 136),
+      ("89", 137),
+      ("8A", 138),
+      ("8B", 139),
+      ("8C", 140),
+      ("8D", 141),
+      ("8E", 142),
+      ("8F", 143),
+      ("90", 144),
+      ("91", 145),
+      ("92", 146),
+      ("93", 147),
+      ("94", 148),
+      ("95", 149),
+      ("96", 150),
+      ("97", 151),
+      ("98", 152),
+      ("99", 153),
+      ("9A", 154),
+      ("9B", 155),
+      ("9C", 156),
+      ("9D", 157),
+      ("9E", 158),
+      ("9F", 159),
+    ])
+
+test "interpolation preserves control positions and projections" = expectEach [
+  (
+    "open",
+    projectionRow
+      "\"\\u{01}x\\{1}y\""
+      ["\u{01}x", "", "y", "", ""]
+      [(8, 10), (10, 11), (13, 14), (0, 0), (0, 0)],
+  ),
+  (
+    "end",
+    projectionRow
+      "\"x\\{1}\\u{01}y\""
+      ["x", "", "\u{01}y", "", ""]
+      [(2, 4), (4, 5), (13, 14), (0, 0), (0, 0)],
+  ),
+]
+
+test "triple and middle segment projection controls" = expectEach [
+  (
+    "middle",
+    projectionRow
+      "\"x\\{1}\\u{01}y\\{2}z\""
+      ["x", "", "\u{01}y", "", "z", "", ""]
+      [(2, 4), (4, 5), (13, 15), (15, 16), (18, 19), (0, 0), (0, 0)],
+  ),
+  (
+    "triple plain",
+    projectionRow
+      "\"\"\"\\u{01}x\"\"\""
+      ["\u{01}x", "", ""]
+      [(0, 13), (0, 0), (0, 0)],
+  ),
+  (
+    "triple open",
+    projectionRow
+      "\"\"\"\\u{01}x\\{1}y\"\"\""
+      ["\u{01}x", "", "y", "", ""]
+      [(10, 12), (12, 13), (15, 18), (0, 0), (0, 0)],
+  ),
+  (
+    "dedent",
+    projectionRow
+      "\"\"\"\n  a \\{1}\n  b\n  \"\"\""
+      ["a ", "", "\nb\n", "", ""]
+      [(8, 10), (10, 11), (19, 22), (0, 0), (0, 0)],
+  ),
+]
