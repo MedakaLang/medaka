@@ -1,0 +1,347 @@
+import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
+import support.util.{u64HalvesHex}
+
+public export data Token =
+  -- TInt carries the parsed value AND the original source lexeme (#458): the raw
+  -- span text ("0xD800", "1_000", "0b1010") so the parser can hand the printer a
+  -- radix-faithful `ENumLit`.  `tokenToString`/token-dump goldens render only the
+  -- value, so the lexer diff goldens are unaffected.
+  | TInt Int String
+  -- An integer literal above 2^62, up to 2^64 - 1: the value's high and low 32-bit
+  -- halves and the source lexeme.  `Int` cannot hold it, so only a `U64` can
+  -- accept it; the parser builds an `EWideLit` and the typechecker decides.
+  | TWideInt Int Int String
+  | TFloat Float
+  | TString String
+  | TChar String
+  | TBool Bool
+  | TInterpOpen String
+  | TInterpMid String
+  | TInterpEnd String
+  | TIdent String
+  | TUpper String
+  | TBacktickIdent String
+  | TLet
+  | TRec
+  | TWith
+  | TMut
+  | TIn
+  | TIf
+  | TThen
+  | TElse
+  | TMatch
+  | TData
+  | TInterface
+  | TDefault
+  | TImpl
+  | TImport
+  | TExport
+  | TPublic
+  | TWhere
+  | TOf
+  | TRequires
+  | TDo
+  | TDefer
+  | TAs
+  | TExtern
+  | TDeriving
+  | TType
+  | TNewtype
+  | TProp
+  | TTest
+  | TBench
+  | TEffect
+  | TFunction
+  | TPlus
+  | TMinus
+  | TMinusTight
+  | TStar
+  | TSlash
+  | TMod
+  | TEqEq
+  | TNeq
+  | TBangEq
+  | TLt
+  | TGt
+  | TLeq
+  | TGeq
+  | TAnd
+  | TOr
+  | TCons
+  | TPlusPlus
+  | TPipeRight
+  | TRCompose
+  | TLCompose
+  | TFatArrow
+  | TArrow
+  | TLArrow
+  | TAt
+  | TBang
+  | TAsAt
+  | TEqual
+  | TColon
+  | TColonEq
+  | TComma
+  | TDot
+  | TPipe
+  | TUnderscore
+  | TLParen
+  | TRParen
+  | TLBracket
+  | TLBracketTight
+  | TRBracket
+  | TLBrace
+  | TRBrace
+  | TLArray
+  | TRArray
+  | TDotLBrace
+  | TDotStar
+  | TEllipsis
+  | TDotDot
+  | TDotDotEq
+  | TNewline
+  | TIndent
+  | TDedent
+  | TEof
+  | TLexError ParseDiagnosticKind
+  deriving (Eq)
+
+-- String-bearing tokens use
+-- `debugStringLit` (the `%S`-style quoted/escaped form); ints use `intToString`.
+export
+tokenToString : Token -> String
+tokenToString (TInt n _) = "INT " ++ intToString n
+tokenToString (TWideInt hi lo _) = "INT 0x" ++ u64HalvesHex hi lo
+tokenToString (TFloat f) = "FLOAT " ++ floatToString f
+tokenToString (TString s) = "STRING " ++ debugStringLit s
+tokenToString (TChar s) = "CHAR " ++ debugStringLit s
+tokenToString (TBool True) = "BOOL true"
+tokenToString (TBool False) = "BOOL false"
+tokenToString (TInterpOpen s) = "INTERP_OPEN " ++ debugStringLit s
+tokenToString (TInterpMid s) = "INTERP_MID " ++ debugStringLit s
+tokenToString (TInterpEnd s) = "INTERP_END " ++ debugStringLit s
+tokenToString (TIdent s) = "IDENT " ++ debugStringLit s
+tokenToString (TUpper s) = "UPPER " ++ debugStringLit s
+tokenToString (TBacktickIdent s) = "BACKTICK_IDENT " ++ debugStringLit s
+tokenToString TLet = "LET"
+tokenToString TRec = "REC"
+tokenToString TWith = "WITH"
+tokenToString TMut = "MUT"
+tokenToString TIn = "IN"
+tokenToString TIf = "IF"
+tokenToString TThen = "THEN"
+tokenToString TElse = "ELSE"
+tokenToString TMatch = "MATCH"
+tokenToString TData = "DATA"
+tokenToString TInterface = "INTERFACE"
+tokenToString TDefault = "DEFAULT"
+tokenToString TImpl = "IMPL"
+tokenToString TImport = "IMPORT"
+tokenToString TExport = "EXPORT"
+tokenToString TPublic = "PUBLIC"
+tokenToString TWhere = "WHERE"
+tokenToString TOf = "OF"
+tokenToString TRequires = "REQUIRES"
+tokenToString TDo = "DO"
+tokenToString TDefer = "DEFER"
+tokenToString TAs = "AS"
+tokenToString TExtern = "EXTERN"
+tokenToString TDeriving = "DERIVING"
+tokenToString TType = "TYPE"
+tokenToString TNewtype = "NEWTYPE"
+tokenToString TProp = "PROP"
+tokenToString TTest = "TEST"
+tokenToString TBench = "BENCH"
+tokenToString TEffect = "EFFECT"
+tokenToString TFunction = "FUNCTION"
+tokenToString TPlus = "PLUS"
+tokenToString TMinus = "MINUS"
+tokenToString TMinusTight = "MINUS_TIGHT"
+tokenToString TStar = "STAR"
+tokenToString TSlash = "SLASH"
+tokenToString TMod = "MOD"
+tokenToString TEqEq = "EQ_EQ"
+tokenToString TNeq = "NEQ"
+tokenToString TBangEq = "BANGEQ"
+tokenToString TLt = "LT"
+tokenToString TGt = "GT"
+tokenToString TLeq = "LEQ"
+tokenToString TGeq = "GEQ"
+tokenToString TAnd = "AND"
+tokenToString TOr = "OR"
+tokenToString TCons = "CONS"
+tokenToString TPlusPlus = "PLUSPLUS"
+tokenToString TPipeRight = "PIPE_RIGHT"
+tokenToString TRCompose = "RCOMPOSE"
+tokenToString TLCompose = "LCOMPOSE"
+tokenToString TFatArrow = "FAT_ARROW"
+tokenToString TArrow = "ARROW"
+tokenToString TLArrow = "LARROW"
+tokenToString TAt = "AT"
+tokenToString TBang = "BANG"
+tokenToString TAsAt = "AS_AT"
+tokenToString TEqual = "EQUAL"
+tokenToString TColon = "COLON"
+tokenToString TColonEq = "COLONEQ"
+tokenToString TComma = "COMMA"
+tokenToString TDot = "DOT"
+tokenToString TPipe = "PIPE"
+tokenToString TUnderscore = "UNDERSCORE"
+tokenToString TLParen = "LPAREN"
+tokenToString TRParen = "RPAREN"
+tokenToString TLBracket = "LBRACKET"
+tokenToString TLBracketTight = "LBRACKET_TIGHT"
+tokenToString TRBracket = "RBRACKET"
+tokenToString TLBrace = "LBRACE"
+tokenToString TRBrace = "RBRACE"
+tokenToString TLArray = "LARRAY"
+tokenToString TRArray = "RARRAY"
+tokenToString TDotLBrace = "DOT_LBRACE"
+tokenToString TDotStar = "DOT_STAR"
+tokenToString TEllipsis = "ELLIPSIS"
+tokenToString TDotDot = "DOTDOT"
+tokenToString TDotDotEq = "DOTDOT_EQ"
+tokenToString TNewline = "NEWLINE"
+tokenToString TIndent = "INDENT"
+tokenToString TDedent = "DEDENT"
+tokenToString TEof = "EOF"
+tokenToString (TLexError s) =
+  "LEX_ERROR " ++ debugStringLit (renderParseProblem s)
+
+-- User-facing rendering of a token for error messages (e.g. "unexpected
+-- `println`"), as opposed to `tokenToString`'s debug format ("IDENT
+-- println"). Identifier-like/punctuation tokens render their surface
+-- spelling in backticks; literal categories render as a phrase (`a number`);
+-- layout/synthetic tokens render as a plain phrase (`end of input`) since
+-- they have no surface spelling a user typed.
+export
+describeToken : Token -> String
+describeToken (TInt _ _) = "a number"
+describeToken (TWideInt _ _ _) = "a number"
+describeToken (TFloat _) = "a number"
+describeToken (TString _) = "a string"
+describeToken (TChar _) = "a character literal"
+describeToken (TBool True) = "`true`"
+describeToken (TBool False) = "`false`"
+describeToken (TInterpOpen _) = "a string"
+describeToken (TInterpMid _) = "a string"
+describeToken (TInterpEnd _) = "a string"
+describeToken (TIdent s) = "`" ++ s ++ "`"
+describeToken (TUpper s) = "`" ++ s ++ "`"
+describeToken (TBacktickIdent s) = "`" ++ s ++ "`"
+describeToken TLet = "`let`"
+describeToken TRec = "`rec`"
+describeToken TWith = "`with`"
+describeToken TMut = "`mut`"
+describeToken TIn = "`in`"
+describeToken TIf = "`if`"
+describeToken TThen = "`then`"
+describeToken TElse = "`else`"
+describeToken TMatch = "`match`"
+describeToken TData = "`data`"
+describeToken TInterface = "`interface`"
+describeToken TDefault = "`default`"
+describeToken TImpl = "`impl`"
+describeToken TImport = "`import`"
+describeToken TExport = "`export`"
+describeToken TPublic = "`public`"
+describeToken TWhere = "`where`"
+describeToken TOf = "`of`"
+describeToken TRequires = "`requires`"
+describeToken TDo = "`do`"
+describeToken TDefer = "`defer`"
+describeToken TAs = "`as`"
+describeToken TExtern = "`extern`"
+describeToken TDeriving = "`deriving`"
+describeToken TType = "`type`"
+describeToken TNewtype = "`newtype`"
+describeToken TProp = "`prop`"
+describeToken TTest = "`test`"
+describeToken TBench = "`bench`"
+describeToken TEffect = "`effect`"
+describeToken TFunction = "`function`"
+describeToken TPlus = "`+`"
+describeToken TMinus = "`-`"
+describeToken TMinusTight = "`-`"
+describeToken TStar = "`*`"
+describeToken TSlash = "`/`"
+describeToken TMod = "`%`"
+describeToken TEqEq = "`==`"
+describeToken TNeq = "`/=`"
+describeToken TBangEq = "`!=`"
+describeToken TLt = "`<`"
+describeToken TGt = "`>`"
+describeToken TLeq = "`<=`"
+describeToken TGeq = "`>=`"
+describeToken TAnd = "`&&`"
+describeToken TOr = "`||`"
+describeToken TCons = "`::`"
+describeToken TPlusPlus = "`++`"
+describeToken TPipeRight = "`|>`"
+describeToken TRCompose = "`>>`"
+describeToken TLCompose = "`<<`"
+describeToken TFatArrow = "`=>`"
+describeToken TArrow = "`->`"
+describeToken TLArrow = "`<-`"
+describeToken TAt = "`@`"
+describeToken TBang = "`!`"
+describeToken TAsAt = "`@`"
+describeToken TEqual = "`=`"
+describeToken TColon = "`:`"
+describeToken TColonEq = "`:=`"
+describeToken TComma = "`,`"
+describeToken TDot = "`.`"
+describeToken TPipe = "`|`"
+describeToken TUnderscore = "`_`"
+describeToken TLParen = "`(`"
+describeToken TRParen = "`)`"
+describeToken TLBracket = "`[`"
+describeToken TLBracketTight = "`[`"
+describeToken TRBracket = "`]`"
+describeToken TLBrace = "`{`"
+describeToken TRBrace = "`}`"
+describeToken TLArray = "`[|`"
+describeToken TRArray = "`|]`"
+describeToken TDotLBrace = "`.{`"
+describeToken TDotStar = "`.*`"
+describeToken TEllipsis = "`...`"
+describeToken TDotDot = "`..`"
+describeToken TDotDotEq = "`..=`"
+describeToken TNewline = "a line break"
+describeToken TIndent = "an indent"
+describeToken TDedent = "a dedent"
+describeToken TEof = "end of input"
+describeToken (TLexError s) = renderParseProblem s
+
+-- ── Raw scanner output ──────────────────────────────────────────────────
+-- The scanner produces real tokens interleaved with `RNewline col` markers
+-- (one per significant source line break, carrying the indentation of the
+-- following line). A second `layout` pass turns those markers into
+-- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
+-- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
+-- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
+-- is materialised only by `rawToComments`; `tokenize` never builds it.  These
+-- markers are produced by the comment arms of `scanAt` and
+-- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
+-- parser consumes is byte-identical to before — comments are purely a side
+-- channel.  `collectComments` re-reads the raw stream to surface them.
+-- `RTok tok startOff endOff` carries the source char offsets of the token's
+-- lexeme: `startOff` is the first char (0-based), `endOff` is one past the last
+-- char (= the next scan position), so `end - start = token length in chars`.
+-- `tokenize` discards both offsets (token stream byte-identical). `tokenizeWithLines`
+-- uses only `startOff` (to derive a 1-based line).
+-- `RNewline col off` carries the offset of the newline char that ended
+-- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
+-- layout pass get a source line too.
+-- `RClauseNl col off` is an `RNewline` that `externClauseBreaks` found before an
+-- extern's second or later `bind` clause line.  `RClauseOpen col off base` is
+-- the one before its first: it also closes every layout context deeper than
+-- `base`, the column of the extern's own line.
+public export data RawTok =
+  | RTok Token Int Int
+  | RTripleInterpOpen String Int Int
+  | RNewline Int Int
+  | RComment Int Int
+  | RClauseNl Int Int
+  | RClauseOpen Int Int Int
