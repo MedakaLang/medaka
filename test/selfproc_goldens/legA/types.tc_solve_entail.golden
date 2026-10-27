@@ -1,0 +1,104 @@
+argImplDictRoutesForEncl : SiteCtx -> String -> ScopeId -> String -> String -> Mono -> List Mono -> List Route
+argImplReqRoutes : SiteCtx -> String -> ScopeId -> List (String, Mono) -> List Require -> ReqWalk -> List Route
+argImplRequiresRoutesForRow : SiteCtx -> String -> ScopeId -> Mono -> List Mono -> ReqWalk -> ImplRow -> List Route
+argReqRoute : SiteCtx -> IfaceRef -> String -> ScopeId -> List (String, Mono) -> List Ty -> ReqWalk -> Route
+augmentWithParams : ModuleCtx -> List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
+binopBuiltinHead : String -> String -> Bool
+binopPrimitiveHead : String -> Bool
+bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
+bucketArgsMatchReqs : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
+candsOneIface : List KeyEntry -> Option String
+committedSuperRoute : SiteCtx -> String -> ScopeId -> IfaceRef -> ReqWalk -> List Mono -> Route
+concreteReqMatchByIface : SiteCtx -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
+determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
+determinedGoalInstance : ModuleCtx -> IfaceRef -> List Mono -> Option ImplRow
+directSuperGoals : GraphCtx -> IfaceRef -> List Mono -> List (IfaceRef, Option (List Mono))
+distinctPrefixes : Int -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
+entail : SiteCtx -> String -> Mono -> String -> ScopeId -> EntailKind -> (Route, List Route)
+entailAssum : ModuleCtx -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
+entailAssumRoute : String -> EntailKind -> Route
+entailAssumVar : ModuleCtx -> Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
+entailDetermined : SiteCtx -> String -> String -> ScopeId -> EntailKind -> Option (Route, List Route)
+entailFallback : SiteCtx -> String -> ScopeId -> Mono -> EntailKind -> Route
+entailInst : SiteCtx -> String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
+entailRigidLead : SiteCtx -> Mono -> String -> ScopeId -> EntailKind -> Option (Route, List Route)
+enteredGoalKey : ReqWalk -> String
+entryCovers : KeyEntry -> KeyEntry -> Bool
+entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
+findMatchingImplReqsU : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
+findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
+firstReqMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
+freshRowHeads : ModuleCtx -> ImplRow -> List Mono
+freshRowHeadsTvs : ModuleCtx -> ImplRow -> (List (String, Mono), List Mono)
+goalCandidates : ModuleCtx -> Map String Unit -> List Mono -> List ImplRow -> List (ImplRow, List (Int, Mono))
+goalFirstIsVariable : List Mono -> Bool
+goalHeadCon : List Mono -> Option HeadKey
+goalIfaceOfKind : ModuleCtx -> String -> EntailKind -> Option IfaceRef
+goalIsProjection : List Mono -> List ImplRow -> Bool
+goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
+goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
+goalReach : ModuleCtx -> List Mono -> List (ImplRow, List (Int, Mono)) -> GoalReach
+goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
+goalRows : ModuleCtx -> IfaceRef -> List Mono -> List ImplRow
+goalsClosed : ModuleCtx -> List Mono -> Bool
+headSubstWithParams : ModuleCtx -> Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
+ieSelectRowByIface : SiteCtx -> ImplEnv -> IfaceRef -> List Mono -> Option ImplRow
+ieSelectRowByMethod : SiteCtx -> ImplEnv -> String -> List Mono -> Option ImplRow
+ifaceParamMonos : ModuleCtx -> String -> Mono -> Option (List Mono)
+implDictRoutesForRow : SiteCtx -> String -> ScopeId -> List Mono -> ImplRow -> List Route
+implHeadMatchesArgs : ModuleCtx -> List Ty -> List Mono -> Bool
+implHeadSubst : ModuleCtx -> List Ty -> List Mono -> Option (List (String, Mono))
+implMatchesU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
+implMatchesWithReqsU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
+innerDefaultMethod : String -> String
+isCompareMethod : String -> Bool
+keyForSite : SiteCtx -> String -> List Mono -> (Option String, Option ImplRow)
+legacyReturnReqRoutesForRow : SiteCtx -> String -> ScopeId -> Mono -> ImplRow -> List Route
+matchEqPairs : ModuleCtx -> List (Mono, Mono) -> Bool
+nestedRowRoute : SiteCtx -> String -> ScopeId -> Mono -> List Mono -> ReqWalk -> ImplRow -> Route
+newWalkMemo : Unit -> WalkMemo
+noteInner : SiteCtx -> Inner -> Unit
+noteInnerRoute : SiteCtx -> Route -> Route
+noteNumericEntailment : SiteCtx -> EntailKind -> ScopeId -> Option IfaceRef -> Route -> List Route -> Unit
+noteNumericPredicateTrace : GraphCtx -> NumericPredicateTraceStage -> ClassPredicate -> ScopeId -> Option Loc -> Option IfaceRef -> Option Route -> List Route -> Unit
+noteRouteWalkCut : ReqWalk -> Unit
+occurrenceParamMonos : ModuleCtx -> String -> Mono -> List (String, Mono) -> Option (List Mono)
+occurrencePredOf : ModuleCtx -> String -> Mono -> List (String, Mono) -> Option PredicateRequest
+opDictVarOf : ModuleCtx -> Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> ScopeId -> Option AssumAnswer
+paramMonoOf : List (String, Mono) -> String -> Mono
+pickMostSpecificEntry : SiteCtx -> List Mono -> List KeyEntry -> Option KeyEntry
+positionBindings : List Ty -> List Mono -> List (String, Mono) -> Option (List (String, Mono))
+predicateScalarRoute : String -> Mono -> Option Route
+repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
+reportAmbiguousOverlap : SiteCtx -> List Mono -> List KeyEntry -> Unit
+reportOverlapForIface : SiteCtx -> String -> List Mono -> List KeyEntry -> Unit
+reqWalkEnter : ReqWalk -> IfaceRef -> List Mono -> ReqStep
+reqWalkMemo : ReqWalk -> WalkMemo
+reqWalkSeed : IfaceRef -> List Mono -> ReqWalk
+reqWalkStart : Unit -> ReqWalk
+requiresNonShrinkingFuel : Int
+requiresRouteWalkCut : GraphCtx -> ReqStep -> List Route
+routeOfD : SiteCtx -> IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> List Mono -> ReqWalk -> Route
+routeUndeterminedTop : SiteCtx -> ScopeId -> IfaceRef -> List Mono -> Route
+routeWalkMemoized : SiteCtx -> String -> ScopeId -> List Mono -> ImplRow -> ReqWalk -> (SiteCtx -> List Route) -> List Route
+routeWalkRecorded : IfaceRef -> List Mono -> ImplRow -> String -> ScopeId -> List RouteWalkEntry -> Option RouteWalkEntry
+rowCountsFor : List Mono -> ImplRow -> Bool
+rowHeadMatches : ModuleCtx -> List Mono -> ImplRow -> Bool
+rowPrefixSubstRigid : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (Int, Mono))
+rowRouteKey : ImplRow -> String
+sameWalkGoal : IfaceRef -> List Mono -> Int -> (IfaceRef, List Mono, Int) -> Bool
+selectReturnRow : SiteCtx -> ImplEnv -> String -> List Mono -> Option ImplRow
+selectedCallSupers : SiteCtx -> String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
+selectedRowReqMatch : ModuleCtx -> List Mono -> ImplRow -> Option (List (String, Mono), List Require)
+stableGoalReach : ModuleCtx -> List Int -> IfaceRef -> List Mono -> GoalReach
+stableMinimum : ModuleCtx -> List Mono -> List ImplRow -> ImplRow -> Bool
+stampOpRouteVal : SiteCtx -> Bool -> String -> ScopeId -> String -> Mono -> String -> Route
+stampPredicateOpRouteVal : SiteCtx -> String -> ScopeId -> String -> Mono -> ClassPredicate -> Route
+superParamsOf : Super -> List String
+superRouteAt : SiteCtx -> String -> ScopeId -> ReqWalk -> (IfaceRef, Option (List Mono)) -> Route
+superRoutesAt : SiteCtx -> IfaceRef -> String -> ScopeId -> List Mono -> ReqWalk -> List Route
+tyIsQualified : Ty -> Bool
+undeterminedRoute : SiteCtx -> String -> ScopeId -> IfaceRef -> Undetermined -> ReqWalk -> List Mono -> Route
+undeterminedRowRoute : SiteCtx -> ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
+univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
+univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)

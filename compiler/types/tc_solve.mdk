@@ -1,0 +1,2883 @@
+-- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
+-- and method-return solver (`solveExactReturn*`, the method-return predicate and its templates);
+-- improvement and determination by the unique instance; instance selection for the judgments above
+-- entailment (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
+-- `residualSelectionStable`); the goal store, its dict-application reads (`dictAppsSince`) and the
+-- solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); the stamp
+-- queue (`enqueueStampCtx`, `stampCtxOf`); and the singular `resolve*Site` computations (one site
+-- each). Entailment and the route walk are `tc_solve_entail`; predicate-slot, dict-arity and
+-- constraint registration and the residual walk at binders are `tc_solve_check`.
+--
+-- Spec: DICT section 3, section 4.2, section 5; TYPECHECK-CONTRACTS section 3.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_solve_check`,
+-- `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`,
+-- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+
+import types.tc_types.{
+  Provenance(..),
+  OblProjection(..),
+  GoalReach(..),
+  GoalPayload(..),
+  GivenScope(..),
+  GivenProvenance(..),
+  GivenMatch(..),
+  EntailKind(..),
+  AdmittedAnswer(..),
+  AssumAnswer(..),
+  BuiltinClass(..),
+  EvDest(..),
+  GoalKind(..),
+  GoalWindow(..),
+  GraphMarks(..),
+  MethodReturnMemoView(..),
+  MethodReturnResolution(..),
+  MethodReturnTraceEntry(..),
+  MethodReturnTraceStage(..),
+  MethodTemplateGivenResult(..),
+  Obligation(..),
+  PendingDictApp(..),
+  PredicateRequest(..),
+  PredicateSlot(..),
+  PredicateSlotArgs(..),
+  SiteCtx(..),
+  SiteKind(..),
+  SolvedGoalEntry(..),
+  StampCtx(..),
+  Undetermined(..),
+  UObligation(..),
+  DynCtx,
+  dynFor,
+  GivenEntry,
+  GraphCtx,
+  ImplEnv,
+  ImplRow,
+  LocalAbs,
+  MethodPredicateSlot,
+  MethodPredicateTemplate,
+  MethodReturnRequest,
+  MethodRow,
+  MethodSchemeRow,
+  MethodTrackedInstantiation,
+  ModuleCtx,
+  NumAnchorTestObservation,
+  PendingEntry,
+  PendingMethodDict,
+  RecDictApp,
+  ReqWalk,
+  siteFor,
+  TraceSink,
+}
+import types.tc_mono.{
+  allConcreteHeads,
+  anyListM,
+  cohApply,
+  cohOverlap,
+  cohOverlapGo,
+  containsI,
+  dedupI,
+  exactReturnRequestOfGoal,
+  findTvarInMono,
+  headTyconMono,
+  matchEqMono,
+  matchOneSided,
+  matchStep,
+  matchTyMono,
+  monoHeadIsDecl,
+  monoMintedBefore,
+  monoSameGiven,
+  monoSizes,
+  monoTyvarIds,
+  monoUnboundIds,
+  monoVarCells,
+  monoVecSameGiven,
+  monoVectorClosed,
+  peelQual,
+  rigidSigPairs,
+  sigCellsOf,
+  sigRigidBindings,
+  stripArrows,
+  stripTyConstraints,
+  substMono,
+  tconBuiltin,
+  tyvarId,
+  tyVarNames,
+  walkMonosSame,
+  unrigidSig,
+}
+import types.tc_diag_text.{locKey}
+import types.tc_state.{
+  blankModuleCtx,
+  callUOblsWindow,
+  currentScopeStore,
+  initialModuleCtx,
+  moduleCtxFrom,
+  moduleWindow,
+  probeGraphCtx,
+}
+import types.tc_env.{
+  anyArgMentions,
+  dispatchTyparams,
+  ieHeadRows,
+  ieRowIfaceMatches,
+  ieRowOfIface,
+  ieRowsAll,
+  ieRowTys,
+  instRefSeq,
+  methodArgs,
+  methodRowIface,
+  methodRowTestIface,
+  methodSlotKey,
+  originMethodName,
+  sameIfaceDecl,
+}
+import types.tc_diag.{erredDuring}
+import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
+import types.tc_unify.{
+  enterLevel,
+  exitLevel,
+  freshEffvar,
+  freshTvMap,
+  freshVar,
+  instantiateMethodTracked,
+  monoUnboundVarLevels,
+  predicateSlotArgs,
+  unify,
+  unifyIn,
+}
+import types.tc_decls_types.{fromAstType, reqTyToMono}
+import types.tc_solve_givens.{
+  activeDictPredOf,
+  activeDictVarOfEncl,
+  anyGivenMatches,
+  assumAnswerEvidence,
+  assumAnswerRoute,
+  enclSlot,
+  firstPredForEncl,
+  firstPredForEnclAt,
+  firstPredForEnclResidual,
+  givenInScope,
+  givenRoute,
+  givensForScope,
+  goalMatchesGiven,
+  lookupPredicateSlots,
+  noteAssumption,
+  predicateRequestMatchesSlot,
+  projectedGivenOf,
+  pushGiven,
+}
+import types.tc_solve_entail.{
+  determinedGoalInstance,
+  directSuperGoals,
+  entail,
+  enteredGoalKey,
+  freshRowHeads,
+  goalCandidates,
+  goalHeadCon,
+  goalIsProjection,
+  goalRows,
+  ieSelectRowByIface,
+  implDictRoutesForRow,
+  paramMonoOf,
+  positionBindings,
+  repeatedBindings,
+  reqWalkMemo,
+  reqWalkStart,
+  routeOfD,
+  rowCountsFor,
+  rowHeadMatches,
+  rowRouteKey,
+  selectedCallSupers,
+  selectedRowReqMatch,
+  stableGoalReach,
+  superRoutesAt,
+  findMatchingImplReqsU,
+}
+import types.solver_contract.{
+  SolverFailure(..),
+  ClassPredicate(..),
+  GoalOrigin(..),
+  Instantiation(..),
+  InstantiationArgument(..),
+  SolverBlocker(..),
+  SolverOutcome(..),
+  Wanted(..),
+}
+import frontend.ast.{
+  TyConOrigin(..),
+  Ns(..),
+  Lit(..),
+  Expr(..),
+  Decl(..),
+  EvEntry(..),
+  EvId(..),
+  EvVal(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  Loc(..),
+  Require(..),
+  Route(..),
+  Ty(..),
+  EvTable,
+  ifaceIdentity,
+  mkIdent,
+  tyConBuiltin,
+}
+import types.effect_rows.{EffRow(..), pureRow}
+import types.evidence.{
+  SolverEvidence(..),
+  PrerequisiteEvidence(..),
+  RequestInstanceId(..),
+  ScopeId(..),
+  SuperEvidence(..),
+  goalIdForDestination,
+}
+import types.registry.{
+  HeadKey(..),
+  headKeyTag,
+}
+import types.repr.{
+  IfaceRef(..), Mono(..), Tyvar(..), lookupAssocI, normalize, ppMono, tupleSpine
+}
+import map.{Map(..)}
+import support.ordmap.{
+  omEmpty, omFromNames, omHasKey, omInsert, omLookup, OrdMap
+}
+import support.util.{
+  allList,
+  anyList,
+  contains,
+  dedup,
+  endsWith,
+  eqStr,
+  filterList,
+  isEmptyL,
+  isNonEmptyL,
+  isSome,
+  listLen,
+  lookupAssoc,
+  orElseOpt,
+  splitOnChar,
+}
+import types.runtime_ops.{arithmeticTag}
+import list.{drop, get, head, indexed, reverse, take, zip}
+import string.{join}
+import types.route_key.{ifaceWordOf}
+import types.evidence_complete.{innerNone, innerOr}
+import types.scopes as Scopes
+import map as IdMap
+import types.scopes.{ScopeOwner(..)}
+
+export
+goalKindTag : GoalKind -> Int
+goalKindTag GKReturnSite = 0
+goalKindTag GKArgStamp = 1
+goalKindTag GKRLocalSite = 2
+goalKindTag GKBinopSite = 3
+goalKindTag GKUnopSite = 4
+goalKindTag GKArithSite = 5
+goalKindTag GKDictApp = 6
+goalKindTag GKMethodDict = 7
+goalKindTag GKRecDictApp = 8
+
+export
+pushGoal : GraphCtx -> Obligation -> Unit
+pushGoal gctx o =
+  let g = gctx.graphRun
+  g.goals := o :: g.goals.value
+  g.goalsN := g.goalsN.value + 1
+
+export
+pushDictApp : GraphCtx -> PendingDictApp -> Unit
+pushDictApp gctx app = pushGoal gctx Obligation {
+  oKind = GKDictApp,
+  oDest = EvRoutes app.pdaRoutesRef,
+  oEv = app.pdaEv,
+  oEncl = app.pdaEncl,
+  oLoc = app.pdaLoc,
+  oScope = app.pdaScope,
+  oPayload = GPDictApp app,
+  oInner = Ref innerNone,
+}
+
+-- the goals recorded since `mark` (a length of the channel: a module's start mark
+-- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
+goalsSince : GraphCtx -> Int -> List Obligation
+goalsSince gctx mark =
+  moduleWindow gctx.graphRun.goalsN.value mark gctx.graphRun.goals.value
+
+export
+goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
+goalsOfKindIn k gs = filterList (o => goalKindTag o.oKind == goalKindTag k) gs
+
+export
+siteEntry : Obligation -> List PendingEntry
+siteEntry o = match o.oPayload
+  GPSite name m site =>
+    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc o.oScope o.oEv]
+  _ => []
+
+evCell : EvDest -> Ref Route
+evCell (EvRoute r) = r
+evCell (EvRoutes _) = Ref RNone
+
+export
+arithEntry : Obligation -> List (Ref Route, Mono)
+arithEntry o = match o.oPayload
+  GPArith m => [(evCell o.oDest, m)]
+  _ => []
+
+export
+dictAppsSince : GraphCtx -> Int -> List PendingDictApp
+dictAppsSince gctx mark = dictAppsIn (goalsSince gctx mark)
+
+dictAppsIn : List Obligation -> List PendingDictApp
+dictAppsIn gs = flatMap dictAppEntry gs
+
+export
+dictAppEntry : Obligation -> List PendingDictApp
+dictAppEntry o = match o.oPayload
+  GPDictApp a => [a]
+  _ => []
+
+export
+methodDictEntry : Obligation -> List PendingMethodDict
+methodDictEntry o = match o.oPayload
+  GPMethodDict d => [d]
+  _ => []
+
+export
+recDictAppEntry : Obligation -> List RecDictApp
+recDictAppEntry o = match o.oPayload
+  GPRecDictApp r => [r]
+  _ => []
+
+-- a bracket's mark: the channel's length now (what `wMark` was for `dictApps`)
+export
+goalsMark : GraphCtx -> Unit -> Int
+goalsMark gctx _ = gctx.graphRun.goalsN.value
+
+-- drop the goals of `kinds` recorded since `mark`, keeping every other goal
+-- (`inferPropBodies`' bracket: a prop body's operator sites must not be stamped)
+export
+dropGoalsSince : GraphCtx -> Int -> List GoalKind -> Unit
+dropGoalsSince gctx mark kinds =
+  let g = gctx.graphRun
+  let now = g.goals.value
+  let n = g.goalsN.value - mark
+  let tags = map goalKindTag kinds
+  let kept =
+    filterList (o => not (containsI (goalKindTag o.oKind) tags)) (take n now)
+  g.goals := kept ++ drop n now
+  g.goalsN := mark + listLen kept
+
+-- the MANGLED standalone symbol a route's RLocal fallback should call, or "" for
+-- the bare-name (un-mangled) case.  Read off the marked EMethodAt route at record
+-- time (before resolveArgStamps may overwrite the ref with an RKey) so the mangled
+-- symbol survives into the pendingRLocalSites entry.
+export
+routeLocalSym : Route -> String
+routeLocalSym (RLocal s _) = s
+routeLocalSym _ = ""
+
+methodReturnOrigin : ModuleCtx -> Option Loc -> GoalOrigin
+methodReturnOrigin mctx loc =
+  let moduleId = mctx.mcCells.currentModuleRef.value
+  let binding =
+    if mctx.mcCells.currentFn.value == "" then
+      None
+    else
+      mkIdent NsValue (OriginModule moduleId) mctx.mcCells.currentFn.value
+  GoalOrigin {
+    location = loc,
+    moduleId = moduleId,
+    binding = binding,
+  }
+
+methodReturnInstantiation : ModuleCtx ->
+  MethodReturnRequest ->
+  Option Instantiation
+methodReturnInstantiation mctx request = match (
+  methodReturnPredicate mctx.mcGraph request,
+  request.mrrGoalEv,
+)
+  (Some predicate, Some destination) => Some Instantiation {
+    body = request.mrrQualifiedBody,
+    force = pureRow,
+    arguments = [
+      InstantiationArgument {
+        formal = Scopes.binderAt request.mrrScope 0,
+        wanted = Wanted {
+          id = goalIdForDestination destination,
+          predicate = predicate,
+          origin = methodReturnOrigin mctx request.mrrLoc,
+          scope = request.mrrScope,
+          destination = destination,
+        },
+      },
+    ],
+  }
+  _ => None
+
+methodReturnPredicate : GraphCtx -> MethodReturnRequest -> Option ClassPredicate
+methodReturnPredicate gctx request =
+  methodReturnPredicateFromTemplate
+    gctx
+    request.mrrPredicateTemplate
+    request.mrrTyparams
+    request.mrrOmitted
+    request.mrrScope
+
+-- A complete template is the goal.  An incomplete one is answered first by the
+-- unique given matching its present positions; failing that, each absent position
+-- is the occurrence's own [omitted] variable (DICT-SEMANTICS §5), for §3 to
+-- determine or the boundary to reject.
+methodReturnPredicateFromTemplate : GraphCtx ->
+  MethodPredicateTemplate ->
+  List String ->
+  List (String, Mono) ->
+  ScopeId ->
+  Option ClassPredicate
+methodReturnPredicateFromTemplate gctx template typarams omitted scope =
+  match methodPredicateTemplateArgs template.mptArguments
+    Some arguments => Some ClassPredicate {
+      predicateInterface = template.mptInterface,
+      predicateArguments = arguments,
+    }
+    None =>
+      match (uniqueMethodTemplateGiven
+        gctx
+        template
+        scope
+        (givensForScope gctx scope))
+        Some given => Some ClassPredicate {
+          predicateInterface = template.mptInterface,
+          predicateArguments = predicateSlotKnownArgs given.geSlot.psArgs,
+        }
+        None =>
+          map
+            (arguments => ClassPredicate {
+              predicateInterface = template.mptInterface,
+              predicateArguments = arguments,
+            })
+            (methodPredicateTemplateArgs
+              (fillOmittedTemplateArgs typarams template.mptArguments omitted))
+
+-- [arguments] with each absent position read from [omitted] by its typaram name.
+fillOmittedTemplateArgs : List String ->
+  List (Option Mono) ->
+  List (String, Mono) ->
+  List (Option Mono)
+fillOmittedTemplateArgs (param :: params) (argument :: arguments) omitted =
+  orElseOpt argument (lookupAssoc param omitted)
+    :: fillOmittedTemplateArgs params arguments omitted
+fillOmittedTemplateArgs _ arguments _ = arguments
+
+export
+methodReturnArgs : GraphCtx -> MethodReturnRequest -> Option (List Mono)
+methodReturnArgs gctx request =
+  map
+    (predicate => predicate.predicateArguments)
+    (methodReturnPredicate gctx request)
+
+export
+methodReturnWanted : ModuleCtx -> MethodReturnRequest -> Option Wanted
+methodReturnWanted mctx request = match methodReturnInstantiation mctx request
+  Some (Instantiation { arguments = [argument], ... }) => Some argument.wanted
+  _ => None
+
+-- an interface occurrence whose identity is not (yet) recoverable at the site.
+--
+-- `recordCallObligations` and `recordSchemeCallObligations` carry an `IfaceRef`
+-- end to end (a `funPredicateSlotsRef` slot names its `IfaceRef`,
+-- `schemeObligationsRef`'s payload is `List VecObl`), so neither mints a bare goal.
+-- What is LEFT — grep this name for the live worklist, do not trust this list:
+--   * `recordImplObligation`'s METHOD-OCCURRENCE goal, which is a decl-layer /
+--     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
+--     it is the LAST condition on deleting the bare compatibility leg;
+--   * `ifaceForInferredId`'s third fallback, which recovers a slot's interface from
+--     `pendingDictApps` — a SPELLING-keyed routing channel (see `resolveDictApps` /
+--     `dispHeadTab`) whose iface component must stay a route word, so the recovery is
+--     bare by construction rather than by omission.
+export
+ifaceRefBare : String -> IfaceRef
+ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
+
+-- The ABSENT-interface sentinel: the empty name means "this slot has no recoverable
+-- interface" (see `ifaceForInferredId`), and every reader tests it and skips.  It is
+-- deliberately NOT spelled `ifaceRefBare ""`: that name is the residual worklist for a
+-- goal whose identity is UNRECOVERABLE, and "no interface at all" is a different fact
+-- that must not pollute the grep.
+export
+ifaceRefNone : IfaceRef
+ifaceRefNone = IfaceRef { irName = "", irOrigin = OriginUnresolved }
+
+-- THE ONLY legal reader of an obligation's dispatch vector — total over both
+-- `OblProjection` arms.  See `OblProjection` for why the impl channel's projection
+-- cannot be hoisted to record time.
+export
+uOblArgs : GraphCtx -> UObligation -> List Mono
+uOblArgs gctx o = match o.oblProj
+  OpProjected => o.pred.args
+  OpMethodOcc typarams mty occ omitted =>
+    occurrenceDispatchMonos typarams mty occ omitted
+  OpExactReturn request => optionOr [] (methodReturnArgs gctx request)
+  OpNumLit _ => o.pred.args
+
+-- cons [x] onto the entry for [fn] (absent ⇒ a fresh single-element entry)
+export
+consSiteFn : String -> a -> OrdMap (List a) -> OrdMap (List a)
+consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
+
+-- the sites recorded for [fn], most-recent-first
+export
+sitesFor : String -> OrdMap (List a) -> List a
+sitesFor fn idx = optionOr [] (omLookup fn idx)
+
+-- D3a/D3b-1: stamp each queued arg-position route from its now-resolved
+-- discriminating arg mono.  D3b-1 first: a mono pinned to an impl's `requires`
+-- element tyvar (registered in activeDictVars by registerImplRequires) → the
+-- element dict param RDict $dict_<method>_<slot> — the ARGUMENT-position analogue
+-- of resolveSite's return-position RDict.  Else (D3a): a concrete head
+-- (Int/String/Float/… or any ADT tycon) → a static `RKey tag …`, and when that
+-- head names a parametric impl WITH a requires, fill the impl-dicts ref so the
+-- call threads the element dict (concrete element → RKey Int; a recursive element
+-- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
+-- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
+export
+resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
+resolveArgStamps sx [] = ()
+resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
+  let _ = match kind
+    SKArg implRef fullMono omitted =>
+      resolveArgStamp sx name tagRef implRef am fullMono omitted encl loc scope
+    _ => ()
+  resolveArgStamps sx rest
+
+-- #156 S3c: a thin adapter over `entail` (EKArg kind).  `entail` returns
+-- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
+-- pre-S3c arm-by-arm body: assum → `(RDict dname, [])`, inst → `(RKey key [],
+-- argImplDictRoutesForEncl …)`, fallback → `(RNone, [])`.
+-- TYPECHECK-AUDIT C7 (arg-position): when ≥2 impls of this method share head tycon [tag]
+-- but differ in type ARGS (e.g. `MyPair Int Bool` vs `MyPair Bool Int`), bare-head `RKey
+-- tag` narrows to the FIRST impl (eval's hasTag matches the head `t`).  `keyForSite`
+-- (inside entailInst) upgrades to the canonical full-type impl key so eval's hasTag
+-- matches the right impl's `k`.  No collision → bare head, unchanged.
+-- tagRef is NOT always RNone-seeded: rewriteArgScoped (~7438) seeds a standalone-shadow
+-- arg site to `RLocal <sym> []`.  At an `EKArg` site, `resolveRLocalSites` leaves that
+-- importer seed untouched only for an ungrounded receiver or a grounded receiver with a
+-- visible impl; a no-impl grounded receiver is restamped `RLocal`.  So the pre-S3c None
+-- arm's `()` was load-bearing: it PRESERVED the seed until that receiver decision.  For
+-- EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
+-- inst→RKey), so guarding the stamp on RNone reproduces that do-nothing None arm exactly
+-- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
+-- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
+-- ever writes an arg-site's implRef), so []-over-[] needs no guard (matches resolveSite).
+resolveArgStamp : SiteCtx ->
+  String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  Mono ->
+  List (String, Mono) ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
+  let (route, routes) = entail sx name am encl scope (EKArg fullMono omitted)
+  let _ = match route
+    RNone => ()
+    _ => tagRef := route
+  implRef := routes
+
+sameTraceEvId : EvId -> EvId -> Bool
+sameTraceEvId (EvId moduleA ordinalA) (EvId moduleB ordinalB) =
+  moduleA == moduleB && ordinalA == ordinalB
+
+export
+noteMethodReturnTrace : ModuleCtx ->
+  MethodReturnTraceStage ->
+  MethodReturnRequest ->
+  Option Route ->
+  List Route ->
+  Unit
+noteMethodReturnTrace mctx stage request route prerequisites =
+  match mctx.mcGraph.trace
+    Some sink =>
+      if sink.tsMethodReturnEnabled then
+        let (qualifiedBody, wanted) =
+          match methodReturnInstantiation mctx request
+            Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
+              (Some body, Some carried)
+            _ => (None, None)
+        sink.tsMethodReturnEntries :=
+          MethodReturnTraceEntry {
+              mrtStage = stage,
+              mrtInterface = request.mrrIface,
+              mrtMethod = request.mrrName,
+              mrtArguments = methodReturnArgs mctx.mcGraph request,
+              mrtScope = request.mrrScope,
+              mrtOrigin = request.mrrLoc,
+              mrtGoal = request.mrrGoalEv,
+              mrtPublished = None,
+              mrtQualifiedBody = qualifiedBody,
+              mrtWanted = wanted,
+              mrtOutcome =
+                map
+                  (resolution => resolution.mrrOutcome)
+                  request.mrrResolution.value,
+              mrtRoute = route,
+              mrtPrerequisites = prerequisites,
+            }
+            :: sink.tsMethodReturnEntries.value
+    None => ()
+
+export
+goalKindName : GoalKind -> String
+goalKindName GKReturnSite = "GKReturnSite"
+goalKindName GKArgStamp = "GKArgStamp"
+goalKindName GKRLocalSite = "GKRLocalSite"
+goalKindName GKBinopSite = "GKBinopSite"
+goalKindName GKUnopSite = "GKUnopSite"
+goalKindName GKArithSite = "GKArithSite"
+goalKindName GKDictApp = "GKDictApp"
+goalKindName GKMethodDict = "GKMethodDict"
+goalKindName GKRecDictApp = "GKRecDictApp"
+
+export
+openScope : ModuleCtx -> ScopeId -> Unit
+openScope mctx sid = mctx.mcCells.currentScope := Scopes.openScopeCursor sid
+
+-- The marks of the module being processed (the head of `moduleRanges`); all zeros
+-- before any module started, which is the whole graph.
+export
+currentModuleMarks : GraphCtx -> Unit -> GraphMarks
+currentModuleMarks gctx _ = match gctx.graphRun.moduleRanges.value
+  (_, m) :: _ => m
+  [] => GraphMarks { mGoals = 0, mNumlit = 0 }
+
+-- the numeric-literal channel's window, the counterpart of `goalsSince`
+numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
+numlitSince gctx mark =
+  moduleWindow gctx.graphRun.numlitN.value mark gctx.graphRun.numlitRefs.value
+
+-- Has the obligation walk [walk] already checked goal [iface] [args], entered with
+-- the fuel [walk] has left, without an error?
+export
+walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  anyListM
+    ((otherIface, otherArgs) =>
+      sameIfaceDecl otherIface iface && monoVecSameGiven otherArgs args)
+    (optionOr [] (omLookup (enteredGoalKey walk) memo.wmDischarged.value))
+
+export
+noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  let key = enteredGoalKey walk
+  memo.wmDischarged :=
+    omInsert
+      key
+      ((iface, args) :: optionOr [] (omLookup key memo.wmDischarged.value))
+      memo.wmDischarged.value
+
+-- The residuals [solve] finds below the goal [iface] [args], which [walk] has just
+-- entered: the recorded ones if this walk already solved that goal, otherwise
+-- [solve]'s, deduplicated and recorded when they came out clean.  Deduplicating
+-- keeps the first occurrence of each goal, so a goal the walk reaches along many
+-- paths is one residual and the result stays as large as the distinct goals.
+export
+solvedOnWalk : ModuleCtx ->
+  ReqWalk ->
+  IfaceRef ->
+  List Mono ->
+  (Unit -> List (IfaceRef, List Mono)) ->
+  List (IfaceRef, List Mono)
+solvedOnWalk mctx walk iface args solve =
+  let memo = reqWalkMemo walk
+  let key = enteredGoalKey walk
+  let entries = optionOr [] (omLookup key memo.wmSolved.value)
+  match filterList (e => walkGoalSame e.sgeIface e.sgeGoals iface args) entries
+    entry :: _ => entry.sgeResiduals
+    [] =>
+      let (clean, found) = solvedCleanly mctx (goals => flatMap snd goals) solve
+      let residuals = dedupWalkGoals found
+      let _ =
+        if clean then
+          let entry = SolvedGoalEntry {
+            sgeIface = iface,
+            sgeGoals = args,
+            sgeResiduals = residuals,
+          }
+          memo.wmSolved :=
+            omInsert
+              key
+              (entry :: optionOr [] (omLookup key memo.wmSolved.value))
+              memo.wmSolved.value
+      residuals
+
+-- Runs [act] and says whether its result can stand for running it again: it
+-- detected no error (`erredDuring`), and no type or effect variable it minted is in
+-- the types [monosOf] reads off the result.  A second run would mint fresh ones in
+-- their place.  Variables minted only to test a unification do not reach the result.
+export
+solvedCleanly : ModuleCtx -> (a -> List Mono) -> (Unit -> a) -> (Bool, a)
+solvedCleanly mctx monosOf act =
+  let tyvars = mctx.mcGraph.graphRun.tyvarCounter.value
+  let effvars = mctx.mcGraph.graphRun.effvarCounter.value
+  let (erred, result) = erredDuring mctx act
+  (
+    not erred && allList (monoMintedBefore tyvars effvars) (monosOf result),
+    result,
+  )
+
+-- [goals] with each goal kept at its first occurrence (`walkGoalSame`).
+dedupWalkGoals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+dedupWalkGoals goals = dedupWalkGoalsGo goals omEmpty []
+
+dedupWalkGoalsGo : List (IfaceRef, List Mono) ->
+  OrdMap (List (IfaceRef, List Mono)) ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+dedupWalkGoalsGo [] _ acc = reverse acc
+dedupWalkGoalsGo ((iface, args) :: rest) seen acc =
+  let key = "\{iface.irName}#\{intToString (monoSizes args)}"
+  let bucket = optionOr [] (omLookup key seen)
+  if anyListM (g => walkGoalSame (fst g) (snd g) iface args) bucket then
+    dedupWalkGoalsGo rest seen acc
+  else
+    dedupWalkGoalsGo
+      rest
+      (omInsert key ((iface, args) :: bucket) seen)
+      ((iface, args) :: acc)
+
+-- Has the prerequisite walk [walk] already followed the goal [iface] [args] it has
+-- just entered?
+export
+walkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalFollowed walk iface args =
+  let memo = reqWalkMemo walk
+  anyListM
+    ((otherIface, otherArgs) => walkGoalSame otherIface otherArgs iface args)
+    (optionOr [] (omLookup (enteredGoalKey walk) memo.wmFollowed.value))
+
+export
+noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalFollowed walk iface args =
+  let memo = reqWalkMemo walk
+  let key = enteredGoalKey walk
+  memo.wmFollowed :=
+    omInsert
+      key
+      ((iface, args) :: optionOr [] (omLookup key memo.wmFollowed.value))
+      memo.wmFollowed.value
+
+-- Two goals are one entry of a solving walk's memo when they are one predicate
+-- (`monoVecSameGiven`) with the same effect rows and authorities as well.  A recorded
+-- residual is built from its goal's own types, and `monoSameGiven` equates every row,
+-- so a goal that differs only in a row must not be answered by another's entry.
+walkGoalSame : IfaceRef -> List Mono -> IfaceRef -> List Mono -> Bool
+walkGoalSame iface args otherIface otherArgs =
+  sameIfaceDecl iface otherIface && walkMonosSame args otherArgs
+
+export
+isLocalAbsName : String -> Bool
+isLocalAbsName n = endsWith "$lb" n
+
+-- The name a candidate local was written with (`f` for `f$m$3$lb`); `$` never occurs in
+-- a source identifier.
+export
+localSourceName : String -> String
+localSourceName name
+  | isLocalAbsName name = match splitOnChar '$' name
+    first :: _ => first
+    [] => name
+  | otherwise = name
+
+-- One dictionary application of a local: each slot's predicate at the occurrence's
+-- instantiation [subst] (empty for a recursive use, whose predicate is the binder's
+-- own), solved in the occurrence's scope.
+export
+pushLocalDictApp : ModuleCtx ->
+  String ->
+  EvId ->
+  LocalAbs ->
+  List (Int, Mono) ->
+  ScopeId ->
+  Unit
+pushLocalDictApp mctx name ev la subst useScope =
+  let monos = map (localSlotLead mctx subst) la.laSlots
+  let _ = pushDictApp mctx.mcGraph PendingDictApp {
+    pdaRoutesRef = Ref [],
+    pdaEv = ev,
+    pdaMonos = monos,
+    pdaIfaces = map (s => s.psIface) la.laSlots,
+    pdaArgVecs = map (localSlotArgs mctx subst) la.laSlots,
+    pdaEncl = mctx.mcCells.currentFn.value,
+    pdaLoc = mctx.mcLoc,
+    pdaScope = useScope,
+    pdaCallee = localSourceName name,
+  }
+  mctx.mcCells.dictAppFns :=
+    consSiteFn mctx.mcCells.currentFn.value monos mctx.mcCells.dictAppFns.value
+
+localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
+localSlotArgs mctx subst slot = match slot.psArgs
+  PSArgsKnown args => map (substMono mctx.mcGraph subst [] []) args
+  PSArgsUnknown => [localSlotLead mctx subst slot]
+
+localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
+localSlotLead mctx subst slot = match slot.psArgs
+  PSArgsKnown (a :: _) => substMono mctx.mcGraph subst [] [] a
+  _ => match slot.psBoundIds
+    id :: _ => optionOr (freshVar mctx ()) (lookupAssocI id subst)
+    [] => freshVar mctx ()
+
+-- #1539 / DICT §8 I7 qualification 4: THE GATE.  True iff the declaration list this
+-- pass treats as the PRELUDE declares this built-in class (with ≥1 method — see
+-- `builtinClassesGo`).  This is the question I7 qualification 4 requires before a
+-- synthetic operator/literal predicate may be synthesized at all; `ifaceRegistered`,
+-- which the three gate sites asked until #1539, answers the *different* question "is
+-- SOME interface spelled `Num` registered anywhere in this program", over a table any
+-- user declaration writes to.
+--
+-- It is a record projection, so it is strictly CHEAPER than the `omHasKey` it
+-- replaces — `ifaceRegistered`'s own doc-comment records that it is on the
+-- per-operator / per-numeric-literal hot path (#147), and this change moves it from
+-- O(log n) to O(1) rather than the other way.
+export
+builtinClassPresent : GraphCtx -> BuiltinClass -> Bool
+builtinClassPresent gctx BNum =
+  gctx.crossRun.builtinClassesRef.value.bcNumPresent
+builtinClassPresent gctx BEq = gctx.crossRun.builtinClassesRef.value.bcEqPresent
+builtinClassPresent gctx BOrd =
+  gctx.crossRun.builtinClassesRef.value.bcOrdPresent
+builtinClassPresent gctx BSemigroup =
+  gctx.crossRun.builtinClassesRef.value.bcSemigroupPresent
+
+-- S2-DECL (d) at the occurrence of [name] whose instantiated method type is [mono]:
+-- each admitted declaration asked through its own parameter vector, read off its own
+-- declared method type, and its own interface's instances (the (b) pairing).
+export
+admittedSelection : SiteCtx -> ImplEnv -> String -> Mono -> AdmittedAnswer
+admittedSelection sx env name mono =
+  let visible = methodVisibleHere sx.sxModule name
+  let answers =
+    map
+      (admittedDeclAnswer sx env visible mono)
+      (methodAdmittedHere sx.sxModule name)
+  if anyList isUndecided answers then
+    Undecided
+  else match filterList isSelection answers
+    [] => SelectsNothing
+    [one] => routableSelection sx.sxModule name one
+    _ => Undecided
+
+-- A selected declaration with its own method-level constraints is unroutable: an
+-- admitted-set occurrence records no method dictionaries (`recordMethodDicts` reads
+-- the one declaration `methodIfaceHere` names, and an admitted spelling names none),
+-- so committing to it would leave those constraints unrouted for every engine.
+routableSelection : ModuleCtx -> String -> AdmittedAnswer -> AdmittedAnswer
+routableSelection mctx name (answer@(Selects iface _ _)) =
+  let key = methodSlotKey iface (originMethodName mctx name)
+  match lookupAssoc key mctx.mcCells.methodPredicateSlotsRef.value
+    Some (_ :: _) => Unroutable iface
+    _ => answer
+routableSelection mctx _ answer = answer
+
+admittedDeclAnswer : SiteCtx ->
+  ImplEnv ->
+  List MethodRow ->
+  Mono ->
+  IfaceRef ->
+  AdmittedAnswer
+admittedDeclAnswer sx env visible mono ir =
+  match filterList (r => ieRowIfaceMatches (methodRowIface r) ir) visible
+    r :: _ => match r.mrEntry
+      (iface, typarams, mty, _) => match matchTyMono mty mono
+        Some subst =>
+          let goals = map (paramMonoOf subst) typarams
+          match goalHeadCon goals
+            None => Undecided
+            Some _ => match ieSelectRowByIface sx env iface goals
+              Some row => Selects iface row goals
+              None => SelectsNothing
+        None => Undecided
+    [] => Undecided
+
+isUndecided : AdmittedAnswer -> Bool
+isUndecided Undecided = True
+isUndecided _ = False
+
+isSelection : AdmittedAnswer -> Bool
+isSelection (Selects _ _ _) = True
+isSelection _ = False
+
+-- [base] plus each variable of [args] whose level is below [level].
+export
+outerRigidIds : Option Int -> List Mono -> OrdMap Unit -> OrdMap Unit
+outerRigidIds outerBelow args base =
+  omFromNames (map intToString (enclosingVarIds outerBelow args)) base
+
+-- The variables of [args] an enclosing binder owns: those below [outerBelow].
+-- A boundary with no enclosing binder (`None`) has none.
+export
+enclosingVarIds : Option Int -> List Mono -> List Int
+enclosingVarIds None _ = []
+enclosingVarIds (Some level) args =
+  map fst (filterList (p => snd p < level) (flatMap monoUnboundVarLevels args))
+
+-- A local boundary's goals are improved before it generalizes, as a top-level
+-- group's are (DICT-SEMANTICS §3 "When"), so its scheme is built from the improved
+-- type.  A variable below the just-exited level is an enclosing binder's to settle,
+-- so it takes part as a constant.
+export
+improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
+improveLocalGoals dyn addedObls callN0 =
+  let goals = addedObls ++ callUOblsWindow dyn.dcModule callN0
+  let outer =
+    outerRigidIds
+      (Some (dyn.dcModule.mcCells.currentLevel.value + 1))
+      (flatMap (uOblArgs dyn.dcModule.mcGraph) goals)
+      omEmpty
+  improveByUniqueImpl dyn outer goals
+
+-- methods whose interface type param appears ONLY in the result (no argument
+-- mentions it) — pure/empty/minBound/maxBound/fromInt/… — are return-position
+export
+returnPosMethodNames : List Decl -> List String
+returnPosMethodNames prog = flatMap returnPosOfDecl prog
+
+returnPosOfDecl : Decl -> List String
+returnPosOfDecl (DInterface { typarams, methods, ... }) =
+  flatMap (returnPosMethod typarams) methods
+returnPosOfDecl _ = []
+
+returnPosMethod : List String -> IfaceMethod -> List String
+returnPosMethod typarams (IfaceMethod mname mty _ _)
+  | not (anyArgMentions (dispatchTyparams typarams) (methodArgs mty)) = [mname]
+  | otherwise = []
+
+-- a method occurrence's route: if its discriminating type is a constrained
+-- function's constraint variable, read that function's dict param (RDict);
+-- otherwise the selected impl's key (RKey); an unresolved polymorphic type
+-- stays RNone.  When the route resolves to a concrete head
+-- that names a parametric impl WITH a `requires`, also fill the impl-dicts ref so
+-- eval threads the element dict(s) into the impl body (Phase 83/84 single-level).
+-- Phase 83/84 #5: stamp the route for one pending method site.  At a concrete
+-- result type (ground RKey case) the element dict routes are computed recursively
+-- by implDictRoutesFor.  At a polymorphic result type (RDict case) the route is
+-- RDictFwd for return-position methods — eval will extract and forward the
+-- enclosing VDict's nested requires at runtime.  Arg-position methods (display/==)
+-- stay RDict; their VMulti dispatch is by arg-tag, not by the forwarded reqs.
+-- TYPECHECK-AUDIT C7: the ground RKey case prefers the canonical impl KEY (via
+-- keyForSite) over the bare head tycon, so two non-overlapping impls sharing a
+-- head tycon (Pair Int Bool vs Pair Bool Int) route to distinct keys; eval's
+-- narrowMethod then matches the right VTypedImpl by its key field.  No selected
+-- row → no route (`RNone`).
+-- C5 NOTE: standalone-shadow RLocal routing is NOT done here — a return-position
+-- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
+-- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
+-- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
+export
+resolveSite : SiteCtx ->
+  OrdMap Unit ->
+  String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  Mono ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+-- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
+-- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
+-- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
+-- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
+-- tagRef is NOT always RNone-seeded: a P0-18 standalone-shadow site seeds it to
+-- `RLocal <sym> []` at rewriteArgScoped (~7438).  A return-position standalone value
+-- shadow is then force-stamped `RLocal` by `resolveRLocalSites`; an argument-position
+-- importer shadow is the separate receiver-sensitive case described at `resolveArgStamp`.
+-- The pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
+-- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
+-- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
+-- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
+resolveSite sx rpNames name tagRef implRef resultMono fullMono encl origin scope =
+  let (route, routes) =
+    entail
+      sx
+      name
+      resultMono
+      encl
+      scope
+      (EKReturn fullMono (omHasKey name rpNames))
+  let _ = match route
+    RNone => ()
+    _ => tagRef := route
+  implRef := routes
+
+-- An admitted-set occurrence's route, committed by `admittedSelection`, the function
+-- that decides its verdict in the same drain (`runStampCtx`): the selected instance's
+-- canonical key and prerequisites, and the selecting declaration's interface word on
+-- the occurrence, which carried none while its spelling named two or more.  Any
+-- other answer is rejected there, and the site keeps no route.
+export
+resolveAdmittedSite : SiteCtx ->
+  String ->
+  Ref String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Unit
+resolveAdmittedSite sx name ifaceRef tagRef implRef fullMono encl scope =
+  match (admittedSelection
+    sx
+    sx.sxModule.mcCells.bodyImplEnvRef.value
+    name
+    fullMono)
+    Selects iface row goals =>
+      ifaceRef := ifaceWordOf iface.irOrigin iface.irName
+      tagRef :=
+        RKey
+          (rowRouteKey row)
+          []
+          (selectedCallSupers sx name (Some row) encl scope goals)
+      implRef := implDictRoutesForRow sx encl scope goals row
+    _ => ()
+
+export
+resolveExactReturnSite : SiteCtx ->
+  OrdMap Unit ->
+  String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  MethodReturnRequest ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+resolveExactReturnSite sx rpNames name tagRef implRef resultMono request encl origin scope =
+  if methodReturnAmbiguousWithoutGiven sx.sxModule request then
+    noteMethodReturnTrace sx.sxModule MRTStamped request None []
+  else match methodReturnArgs sx.sxModule.mcGraph request
+    None =>
+      let _ = noteMethodReturnTrace sx.sxModule MRTStamped request None []
+      resolveSite
+        sx
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        request.mrrOccurrence
+        encl
+        origin
+        scope
+    Some _ =>
+      let resolution = solveExactReturnOnce sx request
+      let _ =
+        if methodReturnResolutionValid sx.sxModule request resolution then
+          ()
+        else
+          panic "ordinary return route received invalid solver evidence"
+      let (route, routes) =
+        exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
+      let _ =
+        noteMethodReturnTrace sx.sxModule MRTStamped request (Some route) routes
+      let _ = match route
+        RNone => ()
+        _ => tagRef := route
+      implRef := routes
+
+exactReturnRoutes : SiteCtx ->
+  String ->
+  String ->
+  ScopeId ->
+  Bool ->
+  MethodReturnResolution ->
+  (Route, List Route)
+exactReturnRoutes sx name encl scope isReturnPosition resolution = match (
+  resolution.mrrOutcome,
+  resolution.mrrSelectedRow,
+)
+  (Solved (GivenEvidence binder), None) => (
+    givenRoute sx.sxModule.mcGraph isReturnPosition binder,
+    [],
+  )
+  (Solved (SuperclassEvidence parent path), None) => (
+    RProj (givenRoute sx.sxModule.mcGraph isReturnPosition parent) path,
+    [],
+  )
+  (Solved (InstanceEvidence _ args prerequisites _), Some row) => (
+    RKey
+      (rowRouteKey row)
+      []
+      (selectedCallSupers sx name (Some row) encl scope args),
+    methodReturnEvidenceRoutes sx encl scope prerequisites,
+  )
+  -- No instance was selected: the site keeps no route, never the occurrence's head
+  -- tag, which names no instance.
+  (Deferred _ _, None) => (RNone, [])
+  (Insoluble _ _, None) => (RNone, [])
+  _ => panic "ordinary return outcome and selected row disagree"
+
+methodReturnEvidenceRoutes : SiteCtx ->
+  String ->
+  ScopeId ->
+  List PrerequisiteEvidence ->
+  List Route
+methodReturnEvidenceRoutes sx encl scope prerequisites =
+  map (methodReturnEvidenceRoute sx encl scope) prerequisites
+
+methodReturnEvidenceRoute : SiteCtx ->
+  String ->
+  ScopeId ->
+  PrerequisiteEvidence ->
+  Route
+methodReturnEvidenceRoute sx encl scope prerequisite =
+  match prerequisite.prerequisiteArguments
+    first :: more =>
+      routeOfD
+        sx
+        prerequisite.prerequisiteInterface
+        encl
+        scope
+        KeepNone
+        first
+        more
+        (reqWalkStart ())
+    [] => RNone
+
+export
+resolveNumLitSite : SiteCtx ->
+  OrdMap Unit ->
+  String ->
+  Ref Route ->
+  Mono ->
+  Mono ->
+  ClassPredicate ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+resolveNumLitSite sx rpNames name tagRef resultMono fullMono predicate encl origin scope =
+  let (route, routes) =
+    entail
+      sx
+      name
+      resultMono
+      encl
+      scope
+      (EKNumReturn predicate fullMono (omHasKey name rpNames) origin)
+  let _ = match route
+    RNone => ()
+    _ => tagRef := numericReturnRoute route routes
+  ()
+
+numericReturnRoute : Route -> List Route -> Route
+numericReturnRoute (RKey key _ sups) routes = RKey key routes sups
+numericReturnRoute route _ = route
+
+export
+predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
+predicateSlotKnownArgs PSArgsUnknown = []
+predicateSlotKnownArgs (PSArgsKnown args) = args
+
+methodPredicateTemplateArgs : List (Option Mono) -> Option (List Mono)
+methodPredicateTemplateArgs [] = Some []
+methodPredicateTemplateArgs ((Some argument) :: rest) =
+  map (argument :: _) (methodPredicateTemplateArgs rest)
+methodPredicateTemplateArgs (None :: _) = None
+
+uniqueMethodTemplateGiven : GraphCtx ->
+  MethodPredicateTemplate ->
+  ScopeId ->
+  List GivenEntry ->
+  Option GivenEntry
+uniqueMethodTemplateGiven gctx template useScope givens =
+  let chain = Scopes.visibleChain (currentScopeStore gctx ()) useScope
+  match methodTemplateGivenScan template chain givens MethodTemplateGivenNone
+    MethodTemplateGivenOne given => Some given
+    _ => None
+
+methodTemplateGivenScan : MethodPredicateTemplate ->
+  List Int ->
+  List GivenEntry ->
+  MethodTemplateGivenResult ->
+  MethodTemplateGivenResult
+methodTemplateGivenScan _ _ [] result = result
+methodTemplateGivenScan template chain (given :: rest) result =
+  let result2 =
+    if givenInScope GSPredicateOnly given
+      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
+      && methodPredicateTemplateMatchesSlot
+        template
+        given.geSlot then match result
+      MethodTemplateGivenNone => MethodTemplateGivenOne given
+      _ => MethodTemplateGivenMany
+    else
+      result
+  match result2
+    MethodTemplateGivenMany => MethodTemplateGivenMany
+    _ => methodTemplateGivenScan template chain rest result2
+
+methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
+  PredicateSlot ->
+  Bool
+methodPredicateTemplateMatchesSlot template slot =
+  sameIfaceDecl template.mptInterface slot.psIface
+    && (match slot.psArgs
+      PSArgsUnknown => False
+      PSArgsKnown arguments =>
+        methodPredicateTemplateArgumentsMatch template.mptArguments arguments)
+
+methodPredicateTemplateArgumentsMatch : List (Option Mono) -> List Mono -> Bool
+methodPredicateTemplateArgumentsMatch [] [] = True
+methodPredicateTemplateArgumentsMatch ((Some expected) :: rest) (actual :: arguments) =
+  monoSameGiven expected actual
+    && methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch (None :: rest) (_ :: arguments) =
+  methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch _ _ = False
+
+export
+resolveArithSite : Ref Route -> Mono -> Unit
+resolveArithSite dref m = match !dref
+  RNone => match arithmeticTag m
+    Some tag => dref := RScalar tag
+    None => ()
+  _ => ()
+
+-- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
+-- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
+-- RNone; else RKey with the element reqs PACKED in, so `snd` is empty and no separate
+-- implRef exists); fallback = RNone.  Op-site route cells are minted `RNone`-seeded
+-- (`mintOpSite`), and the mark pass mints each site once, so the two do-nothing arms
+-- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed.
+export
+resolveOpSite : SiteCtx ->
+  Bool ->
+  String ->
+  Ref Route ->
+  Mono ->
+  Bool ->
+  String ->
+  ScopeId ->
+  Unit
+resolveOpSite sx isBinop method tagRef operandMono inImpl encl scope =
+  match fst (entail sx method operandMono encl scope (EKOp isBinop inImpl))
+    RNone => ()
+    route => tagRef := route
+
+export
+resolvePredicateOpSite : SiteCtx ->
+  Bool ->
+  String ->
+  Ref Route ->
+  Mono ->
+  Bool ->
+  ClassPredicate ->
+  String ->
+  ScopeId ->
+  Unit
+resolvePredicateOpSite sx isBinop method tagRef operandMono inImpl predicate encl scope =
+  match (fst
+    (entail
+      sx
+      method
+      operandMono
+      encl
+      scope
+      (EKPredicateOp isBinop inImpl predicate)))
+    RNone => ()
+    route => tagRef := route
+
+-- The context of the instance [iface] [args] selects with the head variables
+-- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
+export
+rigidHeadInstanceContext : SiteCtx ->
+  OrdMap Unit ->
+  IfaceRef ->
+  List Mono ->
+  Option (List (IfaceRef, List Mono))
+rigidHeadInstanceContext sx headIds iface args =
+  let cells = sigCellsOf headIds (flatMap monoVarCells args)
+  let toRigid = sigRigidBindings headIds cells
+  map
+    (m =>
+      map
+        (r => match reqToObligation sx.sxModule (fst m) r
+          (ri, rargs) => (ri, map (unrigidSig cells) rargs))
+        (snd m))
+    (findMatchingImplReqsU
+      sx
+      sx.sxModule.mcCells.residualUnivRef.value
+      iface
+      (map (substMono sx.sxModule.mcGraph toRigid [] []) args))
+
+-- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
+-- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
+-- Only a non-empty [encl] can supply an active dict, and only from that owner's
+-- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
+routeOf : SiteCtx ->
+  IfaceRef ->
+  String ->
+  ScopeId ->
+  Undetermined ->
+  Mono ->
+  Route
+routeOf sx iface encl useScope policy m =
+  routeOfD sx iface encl useScope policy m [] (reqWalkStart ())
+
+-- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
+-- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
+-- case resolves via routeUndeterminedTop instead of the nested-recursion RNone (which
+-- yields an empty dict → runtime `intToString: not an Int` / a null build dict): the
+-- instances the slot's goal can still reach decide it:
+--   • one, or a stable minimum → stamp that instance's RKey (deterministic
+--                    dispatch on both run and build);
+--   • two or more otherwise → genuinely ambiguous → `T-AMBIGUOUS-INSTANCE`, unless a
+--                    scheme quantifies the goal (no route; the boundary verdict reports it);
+--   • none         → keep RNone (existing no-impl behaviour/error).
+-- #1161 (F-3a-ii): the vector-aware form.  Slot COUNT, slot ORDER and the number of
+-- Routes produced are IDENTICAL to routesOfMonosTop's — the ONLY difference is the
+-- GOAL each slot is selected with.  That is what keeps the change arity-neutral:
+-- dictArityOf, dictPass, scopePredicateSlots, and the cross-module snapshot all read
+-- the same predicate carrier, whose slot count this leaves untouched.
+--
+-- The invariant (#1909).  There is no length gate; `vectorGoal` declines only an EMPTY
+-- vector or an unknown interface.  Byte-identity with routesOfMonosTop is now a property
+-- of the VECTOR'S CONTENT, not of its length:
+--   • vector `[m]` where the recorded argument IS the slot's own mono (every bare-tyvar
+--     `=>` constraint — which is still every `=>` constraint in compiler + stdlib +
+--     sqlite): `routeOfD … g0 [] 0 0` with `g0 == m` is `routeOf … m` term for term, so
+--     those callers are byte-identical BY CONSTRUCTION exactly as before;
+--   • vector `[Wrap a]` against slot mono `a` (a structured single-subject predicate):
+--     routes on `Wrap a`, which is the whole point — see `vectorGoal`;
+--   • no vector at all: the `[]` arm below, still the untouched scalar router.
+-- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
+-- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
+-- absence-of-regression, never correctness of the new path — as before.
+export
+routesOfMonosTopV : SiteCtx ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  List IfaceRef ->
+  List (List Mono) ->
+  List Route
+-- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
+routesOfMonosTopV sx encl useScope monos ifaces [] =
+  routesOfMonosTop sx encl useScope monos ifaces
+routesOfMonosTopV sx _ _ [] _ _ = []
+routesOfMonosTopV sx encl useScope (m :: rest) [] (_ :: vs) =
+  routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTopV sx encl useScope rest [] vs
+routesOfMonosTopV sx encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV sx encl useScope iface m v
+    :: routesOfMonosTopV sx encl useScope rest ifacesRest vs
+
+-- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
+-- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
+-- `Ix Int Char` instead of the shattered `Ix Int _` and `ieEntriesForIface`
+-- returns a singleton.
+-- The vector's arg 0 — NOT this slot's own mono — is the predicate head.  The two
+-- differ whenever a predicate shatters into more than one slot (`Ix a b` gives the `b`
+-- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
+-- for the SAME predicate, so both must select on the same goal.  That is what
+-- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
+topRouteV : SiteCtx ->
+  String ->
+  ScopeId ->
+  IfaceRef ->
+  Mono ->
+  List Mono ->
+  Route
+topRouteV sx encl useScope iface m goals = match vectorGoal iface goals
+  Some (g0, gs) =>
+    routeOfD sx iface encl useScope (CountImpls iface) g0 gs (reqWalkStart ())
+  None => routeOf sx iface encl useScope (CountImpls iface) m
+
+-- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
+-- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
+-- #1909: the length-1 declining clause (`vectorGoal _ [_] = None`) is GONE.  It made a
+-- 1-ary predicate select on the SLOT's mono instead of on the vector's own argument —
+-- byte-identical while the two coincide (`Shw a => …` records `[a]`, so arg 0 IS the
+-- slot mono) and WRONG the moment they do not (`Tag (Wrap a) => …` records `[Wrap a]`
+-- against slot mono `a`, so the call site keyed its dict on `Bool` where the predicate
+-- is `Tag (Wrap Bool)`).  Arity is not what makes a vector meaningful; a recorded
+-- argument that differs from the slot's own mono is.
+-- `iface == ""` is pinned scalar deliberately: with no interface there is no arity
+-- to give a vector meaning (#1168).  Dropping the length-1
+-- clause does not touch that pin: it only widens WHICH non-empty vectors get past it.
+vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
+vectorGoal _ [] = None
+vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
+
+routesOfMonosTop : SiteCtx ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  List IfaceRef ->
+  List Route
+routesOfMonosTop sx _ _ [] _ = []
+routesOfMonosTop sx encl useScope (m :: rest) [] =
+  routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTop sx encl useScope rest []
+routesOfMonosTop sx encl useScope (m :: rest) (iface :: ifacesRest) =
+  routeOf sx iface encl useScope (CountImpls iface) m
+    :: routesOfMonosTop sx encl useScope rest ifacesRest
+
+-- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
+-- method-level constraint, from the instantiated constraint mono.  A concrete head
+-- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
+-- constraint variable still (the caller is itself constrained) → RDict forwarding
+-- the caller's dict.  Mirrors resolveDictApps; runs after inference.
+export
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
+resolveMethodDicts sx [] = ()
+resolveMethodDicts sx (pending :: rest) =
+  pending.pmdRoutesRef :=
+    methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
+  resolveMethodDicts sx rest
+
+methodPredicateRoutes : SiteCtx ->
+  String ->
+  ScopeId ->
+  List PredicateSlot ->
+  List Route
+methodPredicateRoutes sx encl scope slots =
+  map (methodPredicateRoute sx encl scope) slots
+
+methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
+methodPredicateRoute sx encl scope slot = match slot.psArgs
+  PSArgsKnown (g0 :: gs) =>
+    routeOfD sx slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
+  _ => RNone
+
+-- ── recursive dict-app realization (self/mutual recursion) ──────────────────
+-- A deferred recursive call records one route per the CALLEE's constraint slot
+-- (matching the dict params dict_pass prepends to its def), each forwarding the
+-- ENCLOSING fn's own dict param.  Run after inference, when `funPredicateSlotsRef` is
+-- fully populated.
+export
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+realizeRecDictApps sx [] = ()
+realizeRecDictApps sx ((RecDictApp routesRef callee encl mono scope _) :: rest) =
+  let slots =
+    optionOr
+      []
+      (lookupPredicateSlots
+        callee
+        sx.sxModule.mcCells.funPredicateSlotsIdxRef.value)
+  let routes = recRoutes sx encl scope mono slots
+  routesRef := routes
+  realizeRecDictApps sx rest
+
+recRoutes : SiteCtx ->
+  String ->
+  ScopeId ->
+  Mono ->
+  List PredicateSlot ->
+  List Route
+recRoutes sx encl scope mono slots = map (recRoute sx encl scope mono) slots
+
+-- For one of the callee's constraint ids, recover the live occurrence type from
+-- [mono] (the var the body unified it to).  Concrete head → RKey; still a
+-- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
+-- (RDict, the slot it sits at); otherwise leave the route unresolved.
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
+recRoute sx encl scope mono slot =
+  match recPredicateArgs sx.sxModule.mcGraph mono slot
+    Some (g0 :: gs) =>
+      routeOfD sx slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
+    _ => match slot.psBoundIds
+      id :: _ => match findTvarInMono mono id
+        None => RNone
+        Some m => resolveRecMono sx encl scope slot.psIface m
+      [] => RNone
+
+recPredicateArgs : GraphCtx -> Mono -> PredicateSlot -> Option (List Mono)
+recPredicateArgs gctx mono slot = match slot.psArgs
+  PSArgsUnknown => None
+  PSArgsKnown args =>
+    map
+      (subst => map (substMono gctx subst [] []) args)
+      (recSlotSubst mono slot.psBoundIds)
+
+recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
+recSlotSubst _ [] = Some []
+recSlotSubst mono (id :: rest) = match findTvarInMono mono id
+  None => None
+  Some m => map ((id, m) :: _) (recSlotSubst mono rest)
+
+resolveRecMono : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> Route
+resolveRecMono sx encl scope iface m = match headTyconMono m
+  -- a rigid variable names no instance, so its spelled head is left as it was
+  Some (hk@(HkRigid _)) =>
+    RKey
+      (headKeyTag hk)
+      []
+      (superRoutesAt sx iface encl scope [m] (reqWalkStart ()))
+  -- a concrete head names an instance: select it like any other predicate goal, so
+  -- the dictionary carries that instance's word and `requires`
+  Some _ => routeOfD sx iface encl scope KeepNone m [] (reqWalkStart ())
+  -- the enclosing slot is found by tyvar alone, so it may hold a SUB-interface of
+  -- the callee's predicate: read the super out of it
+  None => match enclSlot sx.sxModule encl m
+    Some slot =>
+      let binder =
+        Scopes.binderAt
+          (Scopes.declarationScope
+            (currentScopeStore sx.sxModule.mcGraph ())
+            scope)
+          slot
+      assumAnswerRoute
+        sx.sxModule.mcGraph
+        (LegacyScalar binder)
+        (Some iface)
+        scope
+        RDict
+    None => routeOf sx ifaceRefNone "" scope KeepNone m
+
+-- The sole production decision for a complete ordinary return.  The request keeps
+-- the result so checking and route publication cannot observe different selections.
+export
+solveExactReturnOnce : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solveExactReturnOnce sx request = match request.mrrResolution.value
+  Some resolution => resolution
+  None =>
+    let resolution = solveExactReturn sx request
+    request.mrrResolution := Some resolution
+    resolution
+
+export
+methodReturnAmbiguousWithoutGiven : ModuleCtx -> MethodReturnRequest -> Bool
+methodReturnAmbiguousWithoutGiven mctx request =
+  methodPredicateTemplateHasAbsent request.mrrPredicateTemplate
+    && isNone
+      (uniqueMethodTemplateGiven
+        mctx.mcGraph
+        request.mrrPredicateTemplate
+        request.mrrScope
+        (givensForScope mctx.mcGraph request.mrrScope))
+    && methodPredicateTemplateCandidateCount
+        request.mrrPredicateTemplate
+        (ieRowsAll mctx.mcCells.bodyImplEnvRef.value)
+        0
+      >= 2
+
+export
+methodPredicateTemplateHasAbsent : MethodPredicateTemplate -> Bool
+methodPredicateTemplateHasAbsent template =
+  anyListM isNone template.mptArguments
+
+methodPredicateTemplateCandidateCount : MethodPredicateTemplate ->
+  List ImplRow ->
+  Int ->
+  Int
+methodPredicateTemplateCandidateCount _ _ count
+  | count >= 2 = count
+methodPredicateTemplateCandidateCount _ [] count = count
+methodPredicateTemplateCandidateCount template (row :: rest) count = methodPredicateTemplateCandidateCount
+  template
+  rest
+  (if methodPredicateTemplateMatchesRow template row then count + 1 else count)
+
+methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
+methodPredicateTemplateMatchesRow template (ImplRow _ _ iface tys _ _ _) =
+  sameIfaceDecl template.mptInterface iface
+    && (match methodPredicateTemplateHeadPairs template.mptArguments tys
+      Some pairs =>
+        let subst = Ref []
+        isSome (matchOneSided matchStep eqStr (matchEqMono subst) pairs [])
+      None => False)
+
+methodPredicateTemplateHeadPairs : List (Option Mono) ->
+  List Ty ->
+  Option (List (Ty, Mono))
+methodPredicateTemplateHeadPairs [] [] = Some []
+methodPredicateTemplateHeadPairs ((Some argument) :: rest) (head :: heads) =
+  map ((head, argument) :: _) (methodPredicateTemplateHeadPairs rest heads)
+methodPredicateTemplateHeadPairs (None :: rest) (_ :: heads) =
+  methodPredicateTemplateHeadPairs rest heads
+methodPredicateTemplateHeadPairs _ _ = None
+
+solveExactReturn : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solveExactReturn sx request = match methodReturnWanted sx.sxModule request
+  None => panic "complete return solver received a legacy request"
+  Some wanted =>
+    let predicate = wanted.predicate
+    let args = map normalize predicate.predicateArguments
+    let predRequest = PredicateRequest {
+      prIface = predicate.predicateInterface,
+      prArgs = PSArgsKnown args,
+    }
+    let resultMono = stripArrows request.mrrOccurrence
+    let given =
+      orElseOpt
+        (activeDictVarOfEncl
+          sx.sxModule
+          (Some predRequest)
+          resultMono
+          request.mrrEnclosing
+          wanted.scope)
+        (activeDictPredOf
+          sx.sxModule.mcGraph
+          predRequest
+          resultMono
+          wanted.scope)
+    match given
+      Some answer =>
+        let _ = noteAssumption sx.sxModule.mcGraph wanted.scope answer
+        MethodReturnResolution {
+          mrrWanted = wanted,
+          mrrOutcome = Solved (assumAnswerEvidence answer),
+          mrrSelectedRow = None,
+        }
+      None => solveExactReturnInstance sx request wanted args
+
+solveExactReturnInstance : SiteCtx ->
+  MethodReturnRequest ->
+  Wanted ->
+  List Mono ->
+  MethodReturnResolution
+solveExactReturnInstance sx request wanted [] = MethodReturnResolution {
+  mrrWanted = wanted,
+  mrrOutcome = Deferred wanted [BlockingFinalization],
+  mrrSelectedRow = None,
+}
+solveExactReturnInstance sx request wanted args =
+  let env = sx.sxModule.mcCells.bodyImplEnvRef.value
+  let iface = wanted.predicate.predicateInterface
+  let selected =
+    orElseOpt
+      (ieSelectRowByIface sx env iface args)
+      (determinedGoalInstance sx.sxModule iface args)
+  match selected
+    Some (row@(ImplRow _ inst selectedIface _ _ _ _)) =>
+      let prerequisites = methodReturnPrerequisites sx.sxModule args row
+      MethodReturnResolution {
+        mrrWanted = wanted,
+        mrrOutcome =
+          Solved
+            (InstanceEvidence
+              (RequestInstanceId (instRefSeq inst))
+              args
+              prerequisites
+              (instanceSuperEvidence sx.sxModule.mcGraph selectedIface args)),
+        mrrSelectedRow = Some row,
+      }
+    None =>
+      let outcome =
+        if exactReturnDefers sx.sxModule wanted args then
+          Deferred wanted (exactReturnBlockers args)
+        else
+          Insoluble wanted MissingInstance
+      MethodReturnResolution {
+        mrrWanted = wanted,
+        mrrOutcome = outcome,
+        mrrSelectedRow = None,
+      }
+
+exactReturnDefers : ModuleCtx -> Wanted -> List Mono -> Bool
+exactReturnDefers mctx wanted args =
+  wanted.predicate.predicateInterface.irName == "Num"
+      && not (builtinClassPresent mctx.mcGraph BNum)
+    || not (allConcreteHeads args)
+    || goalDefersOpenWorld
+      mctx
+      wanted.scope
+      wanted.predicate.predicateInterface
+      args
+
+exactReturnBlockers : List Mono -> List SolverBlocker
+exactReturnBlockers args =
+  map BlockingTypeVariable (flatMap monoUnboundIds args)
+
+methodReturnPrerequisites : ModuleCtx ->
+  List Mono ->
+  ImplRow ->
+  List PrerequisiteEvidence
+methodReturnPrerequisites mctx args row =
+  match selectedRowReqMatch mctx args row
+    Some (subst, reqs) =>
+      map prerequisiteEvidence (map (reqToObligation mctx subst) reqs)
+    None => []
+
+-- The direct supers of [iface] at [args], as the predicates a dictionary for that
+-- goal carries in its super segment (declaration order).
+instanceSuperEvidence : GraphCtx -> IfaceRef -> List Mono -> List SuperEvidence
+instanceSuperEvidence gctx iface args =
+  map
+    ((superIface, superArgs) => SuperEvidence {
+      superInterface = superIface,
+      superArguments = optionOr [] superArgs,
+    })
+    (directSuperGoals gctx iface args)
+
+prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
+prerequisiteEvidence (iface, args) = PrerequisiteEvidence {
+  prerequisiteInterface = iface,
+  prerequisiteArguments = args,
+}
+
+export
+methodReturnResolutionValid : ModuleCtx ->
+  MethodReturnRequest ->
+  MethodReturnResolution ->
+  Bool
+methodReturnResolutionValid mctx request resolution =
+  methodReturnWantedMatches mctx request resolution.mrrWanted
+    && (match (resolution.mrrOutcome, resolution.mrrSelectedRow)
+      (Solved (GivenEvidence _), None) => True
+      (Solved (SuperclassEvidence parent path), None) =>
+        match projectedGivenOf mctx.mcGraph parent path
+          Some g =>
+            predicateRequestMatchesSlot
+              PredicateRequest {
+                prIface = resolution.mrrWanted.predicate.predicateInterface,
+                prArgs =
+                  PSArgsKnown resolution.mrrWanted.predicate.predicateArguments,
+              }
+              g.geSlot
+          None => False
+      (Solved (InstanceEvidence identity args prerequisites _), Some row) =>
+        methodReturnInstanceMatches identity row
+          && monoVecSameGiven
+            args
+            resolution.mrrWanted.predicate.predicateArguments
+          && methodReturnPrerequisitesMatch
+            prerequisites
+            (methodReturnPrerequisites mctx args row)
+      (Deferred wanted _, None) => wantedMatches wanted resolution.mrrWanted
+      (Insoluble wanted _, None) => wantedMatches wanted resolution.mrrWanted
+      _ => False)
+
+methodReturnWantedMatches : ModuleCtx -> MethodReturnRequest -> Wanted -> Bool
+methodReturnWantedMatches mctx request wanted =
+  match methodReturnWanted mctx request
+    Some carried => wantedMatches carried wanted
+    None => False
+
+wantedMatches : Wanted -> Wanted -> Bool
+wantedMatches left right =
+  left.id == right.id
+    && sameTraceEvId left.destination right.destination
+    && left.scope == right.scope
+    && sameIfaceDecl
+      left.predicate.predicateInterface
+      right.predicate.predicateInterface
+    && monoVecSameGiven
+      left.predicate.predicateArguments
+      right.predicate.predicateArguments
+
+methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
+methodReturnInstanceMatches (RequestInstanceId identity) (ImplRow _ inst _ _ _ _ _) =
+  identity == instRefSeq inst
+
+methodReturnPrerequisitesMatch : List PrerequisiteEvidence ->
+  List PrerequisiteEvidence ->
+  Bool
+methodReturnPrerequisitesMatch [] [] = True
+methodReturnPrerequisitesMatch (left :: ls) (right :: rs) =
+  sameIfaceDecl left.prerequisiteInterface right.prerequisiteInterface
+    && monoVecSameGiven left.prerequisiteArguments right.prerequisiteArguments
+    && methodReturnPrerequisitesMatch ls rs
+methodReturnPrerequisitesMatch _ _ = False
+
+-- Impl-based improvement (DICT-SEMANTICS §3 "Improvement by the one matching
+-- instance"): when the head matcher (`implHeadSubst`) accepts a goal by binding
+-- the goal's own free variables through a repeated head variable, and that
+-- instance is the only one of the interface whose head unifies with the goal,
+-- the binding is committed, so selection sees the goal the instance determined.
+-- `Pick (List t) (List Int) (List Int)` against the only instance `impl Pick a a a`
+-- fixes `t = Int`.  A second instance that unifies with the goal (an overlap,
+-- including one a later binding of a goal variable would make match) or none
+-- leaves the goal as it is.
+--
+-- It runs at a top-level binding group's close (`processSCC`) and at a method
+-- body's (`inferMethodBody`), before that boundary's Num defaulting and once more
+-- after it, each time ahead of
+-- `determineByUniqueInstance`, which commits a goal to its one unifying instance
+-- even where no repeated head variable ties the goal to itself.  A local boundary
+-- runs it once, before its Num defaulting (`improveLocalGoals`).
+--
+-- [sigIds] are the group's declared-signature variables still free at its close
+-- (at a method body, its instance head's and declared signature's variables).
+-- The commit never binds one: they take part as constants, and a goal that would
+-- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
+export
+improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
+improveByUniqueImpl dyn _ [] = ()
+improveByUniqueImpl dyn sigIds (o :: rest) =
+  let _ =
+    improveGoal
+      dyn
+      sigIds
+      o.pred.iface
+      (map normalize (uOblArgs dyn.dcModule.mcGraph o))
+  improveByUniqueImpl dyn sigIds rest
+
+-- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
+-- sequence's second step).  A goal of any arity that is not closed is unified with
+-- a fresh instance of the one instance head that unifies with it, every variable in
+-- [rigidIds] held rigid.  [rigidIds] are the variables the boundary does not own:
+-- at a group, the declared signatures' variables and the variables in an argument
+-- position of a member's type; at a method body, the instance head's and declared
+-- signature's.  Any other variable of the goal is the boundary's, and the unique
+-- instance is the only type the program can have there.
+--
+-- The candidates are `goalCandidates`', kept only if a commit leaves every sibling
+-- goal on a variable it binds satisfiable: a sibling the commit closes must have an
+-- instance in the table.  A projection of a wider goal is not determined: the
+-- positions it drops can still tell its candidates apart.
+--
+-- Sweeps repeat until one commits nothing, so a goal that another goal's commit
+-- makes unique is determined in the same pass whatever order the window lists
+-- them in.  What stays open gets its verdict from `rejectUndeterminedVectors`.
+export
+determineByUniqueInstance : ModuleCtx -> OrdMap Unit -> List UObligation -> Unit
+determineByUniqueInstance mctx rigidIds obls =
+  if isNonEmptyL obls then
+    determineSweeps
+      mctx
+      rigidIds
+      (goalWindowOf mctx.mcGraph obls)
+      (listLen obls + 1)
+
+-- The fuel only bounds the loop: every sweep but the last changes some goal's
+-- shape.
+determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
+determineSweeps mctx rigidIds window fuel =
+  if fuel > 0
+    && determineByUniqueInstanceGo
+      mctx
+      rigidIds
+      window
+      False
+      window.gwGoals then
+    determineSweeps mctx rigidIds window (fuel - 1)
+
+-- One sweep over the window; True when some goal took its instance's shape.
+determineByUniqueInstanceGo : ModuleCtx ->
+  OrdMap Unit ->
+  GoalWindow ->
+  Bool ->
+  List (Int, UObligation) ->
+  Bool
+determineByUniqueInstanceGo mctx _ _ changed [] = changed
+determineByUniqueInstanceGo mctx rigidIds window changed ((_, o) :: rest) =
+  let args = map normalize (uOblArgs mctx.mcGraph o)
+  let now = determineGoal mctx rigidIds window o args
+  determineByUniqueInstanceGo mctx rigidIds window (now || changed) rest
+
+-- True when the commit changed the goal's shape.  A commit that only renames the
+-- goal's variables to the instance's fresh ones leaves the goal's size and its
+-- count of distinct variables as they were; the window is re-filed either way,
+-- since the goal's variables are no longer the ones it was filed under.
+determineGoal : ModuleCtx ->
+  OrdMap Unit ->
+  GoalWindow ->
+  UObligation ->
+  List Mono ->
+  Bool
+determineGoal mctx rigidIds0 window o args =
+  let rigidIds = withDeclaredVars mctx rigidIds0 args
+  determineHeldGoal mctx rigidIds window o args
+
+-- [rigidIds] plus each variable of [args] a closed binder declared: determination
+-- commits a binding, and a declared variable is rigid in every matcher that does.
+withDeclaredVars : ModuleCtx -> OrdMap Unit -> List Mono -> OrdMap Unit
+withDeclaredVars mctx rigidIds args =
+  let declared = mctx.mcCells.declaredSigVarIds.value
+  omFromNames
+    (filterList
+      (k => omHasKey k declared)
+      (map intToString (flatMap monoUnboundIds args)))
+    rigidIds
+
+determineHeldGoal : ModuleCtx ->
+  OrdMap Unit ->
+  GoalWindow ->
+  UObligation ->
+  List Mono ->
+  Bool
+determineHeldGoal mctx rigidIds window o args
+  | monoVectorClosed args || goalVarsAllHeld rigidIds args = False
+  | otherwise =
+    let rows = goalRows mctx o.pred.iface args
+    let unifying =
+      if goalIsProjection args rows then
+        []
+      else
+        goalCandidates mctx rigidIds args rows
+    match determinationCandidates mctx window args unifying
+      [(row, _)] =>
+        let oldIds = dedupI (flatMap monoUnboundIds args)
+        let sizeBefore = monoSizes args
+        -- Minted inside the boundary's level: a goal variable unified with one
+        -- of these keeps its level and still generalizes.
+        let _ = enterLevel mctx ()
+        let heads = freshRowHeads mctx row
+        let _ = exitLevel mctx ()
+        let _ = commitImprovement (dynFor mctx) rigidIds (zip args heads)
+        let _ = fileDeterminedRow mctx row args
+        let _ = refileGoals mctx.mcGraph window oldIds
+        monoSizes args /= sizeBefore
+          || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
+      _ => False
+
+-- Files a commit's instance under the variable heading the committed goal, the
+-- one `determinedGoalInstance` reads when selection by head finds nothing.
+export
+fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
+fileDeterminedRow mctx _ [] = ()
+fileDeterminedRow mctx row (first :: rest) = match normalize first
+  TVar cell =>
+    let table = mctx.mcCells.determinedRowsRef.value
+    let filed = optionOr [] (IdMap.get (tyvarId cell) table)
+    let entry = (row, map normalize (first :: rest))
+    mctx.mcCells.determinedRowsRef :=
+      IdMap.set (tyvarId cell) (entry :: filed) table
+  _ => ()
+
+-- Every variable of the goal is one the boundary holds rigid, so a commit could
+-- bind none of them.
+export
+goalVarsAllHeld : OrdMap Unit -> List Mono -> Bool
+goalVarsAllHeld rigidIds args =
+  allList
+    (c => omHasKey (intToString (tyvarId c)) rigidIds)
+    (flatMap monoVarCells args)
+
+-- The candidates that count toward a commitment or an ambiguity: `rowCountsFor`'s,
+-- each kept only if its commit leaves every sibling goal on a variable it binds
+-- satisfiable.
+export
+determinationCandidates : ModuleCtx ->
+  GoalWindow ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+determinationCandidates mctx window args unifying =
+  filterList
+    (cand =>
+      rowCountsFor args (fst cand)
+        && siblingsStaySatisfiable mctx window (snd cand))
+    unifying
+
+export
+goalWindowOf : GraphCtx -> List UObligation -> GoalWindow
+goalWindowOf gctx obls =
+  let goals = indexed obls
+  GoalWindow {
+    gwGoals = goals,
+    gwByIndex = fold (m (i, o) => IdMap.set i o m) Tip goals,
+    gwByVar = Ref (fold (m (i, o) => fileGoal gctx i o m) Tip goals),
+  }
+
+fileGoal : GraphCtx ->
+  Int ->
+  UObligation ->
+  Map Int (List Int) ->
+  Map Int (List Int)
+fileGoal gctx i o byVar =
+  fold
+    (m id => IdMap.set id (i :: optionOr [] (IdMap.get id m)) m)
+    byVar
+    (dedupI (flatMap monoUnboundIds (uOblArgs gctx o)))
+
+export
+goalsOnVar : GoalWindow -> Int -> List Int
+goalsOnVar window id = optionOr [] (IdMap.get id window.gwByVar.value)
+
+-- A commit binds only variables of the committed goal and of the instance's fresh
+-- head, so the goals whose variables it can change are the ones filed under the
+-- committed goal's variables.
+refileGoals : GraphCtx -> GoalWindow -> List Int -> Unit
+refileGoals gctx window oldIds =
+  window.gwByVar :=
+    fold
+      (acc i => match IdMap.get i window.gwByIndex
+        Some g => fileGoal gctx i g acc
+        None => acc)
+      window.gwByVar.value
+      (dedupI (flatMap (goalsOnVar window) oldIds))
+
+-- [row]'s head, freshened, unified with [args] in a scratch substitution with
+-- every variable in [rigidIds] held rigid; the substitution, or None.
+rowHeadSubstRigid : ModuleCtx ->
+  OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (Int, Mono))
+rowHeadSubstRigid mctx rigidIds args row =
+  let heads = freshRowHeads mctx row
+  let scratch = Ref []
+  if listLen heads == listLen args
+    && cohOverlapGo
+      scratch
+      (rigidSigPairs mctx.mcGraph rigidIds (zip args heads)) then
+    Some !scratch
+  else
+    None
+
+siblingsStaySatisfiable : ModuleCtx -> GoalWindow -> List (Int, Mono) -> Bool
+siblingsStaySatisfiable mctx window subst =
+  let bound = map fst subst
+  let scratch = Ref subst
+  allList
+    (i => match IdMap.get i window.gwByIndex
+      Some s => siblingStaysSatisfiable mctx scratch bound s
+      None => True)
+    (dedupI (flatMap (goalsOnVar window) bound))
+
+-- A sibling the commit leaves open stays satisfiable, and a closed one needs an
+-- instance whose head matches it.  A sibling with fewer arguments than some
+-- instance of its interface has heads is a truncation, the projection of a wider
+-- goal onto its first positions (a per-slot goal `recordCallObligations` shatters
+-- a predicate into), so matching rows cannot refute it and it stays satisfiable.
+siblingStaysSatisfiable : ModuleCtx ->
+  Ref (List (Int, Mono)) ->
+  List Int ->
+  UObligation ->
+  Bool
+siblingStaysSatisfiable mctx scratch bound s =
+  let args = map normalize (uOblArgs mctx.mcGraph s)
+  if not (any (i => elem i bound) (flatMap monoUnboundIds args)) then
+    True
+  else
+    let after = map (cohApply scratch) args
+    not (monoVectorClosed after)
+      || anyList
+        (row =>
+          listLen (ieRowTys row) > listLen after
+            || rowHeadMatches mctx after row)
+        (filterList (ieRowOfIface s.pred.iface) (improvementPool mctx after))
+
+improveGoal : DynCtx -> OrdMap Unit -> IfaceRef -> List Mono -> Unit
+improveGoal dyn sigIds iface args
+  | isEmptyL args || monoVectorClosed args = ()
+  | otherwise =
+    let rows =
+      filterList (ieRowOfIface iface) (improvementPool dyn.dcModule args)
+    match filterList (rowHeadMatches dyn.dcModule args) rows
+      [row] => match repeatedGoalPairs (ieRowTys row) args
+        [] => ()
+        pairs =>
+          if listLen (filterList (rowHeadUnifies dyn.dcModule args) rows)
+            == 1 then
+            commitImprovement dyn sigIds pairs
+      _ => ()
+
+-- Solve [pairs] in a scratch substitution with every signature variable held
+-- rigid, then bind each variable that substitution solved, in the direction it
+-- solved it: `unify (TVar cell) m` links `cell`, so a fresh variable is linked
+-- to a signature variable and never the other way round.
+commitImprovement : DynCtx -> OrdMap Unit -> List (Mono, Mono) -> Unit
+commitImprovement dyn sigIds pairs =
+  let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
+  let sigCells = sigCellsOf sigIds cells
+  let scratch = Ref []
+  let rigidPairs = rigidSigPairs dyn.dcModule.mcGraph sigIds pairs
+  let cellsById = map (c => (tyvarId c, c)) cells
+  if cohOverlapGo scratch rigidPairs then
+    each
+      (binding => match lookupAssocI (fst binding) cellsById
+        Some cell => unifyIn dyn (TVar cell) (unrigidSig sigCells (snd binding))
+        None => ())
+      (reverse !scratch)
+
+-- Every row that can unify with [args]: the graph-global `IE` rows route selection
+-- reads (`ieSelectRowByIface`).  A goal whose first position has a head constructor
+-- is unified only by rows filed under that head or under none; a multi-position
+-- goal whose first position is a variable, by any row.  A one-position goal that
+-- is a bare variable binds no repeated head variable, so it gets no candidates.
+export
+improvementPool : ModuleCtx -> List Mono -> List ImplRow
+improvementPool mctx args =
+  let env = mctx.mcCells.bodyImplEnvRef.value
+  match goalHeadCon args
+    Some hk => ieHeadRows (Some hk) env ++ ieHeadRows None env
+    None => if listLen args > 1 then ieRowsAll env else []
+
+-- Coherence's overlap question (`cohOverlap`), asked of the row's head, freshened,
+-- and the goal: both sides' variables are wildcards, nothing is committed.
+rowHeadUnifies : ModuleCtx -> List Mono -> ImplRow -> Bool
+rowHeadUnifies mctx args row =
+  let tys = ieRowTys row
+  let tvs = freshTvMap mctx (dedup (flatMap tyVarNames tys))
+  cohOverlap (map (fromAstType mctx tvs) tys) args
+
+-- The pairs a repeated head variable binds, each of which the matcher found
+-- unifiable in its scratch `cohOverlapGo`.
+repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
+repeatedGoalPairs tys args = match positionBindings tys args []
+  Some binds => repeatedBindings binds []
+  None => []
+
+-- Whether one of [answered], or one of its supers at its arguments, is the goal.
+export
+goalAnsweredBy : GraphCtx ->
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  Bool
+goalAnsweredBy gctx answered iface args =
+  anyList
+    (g =>
+      walkGoalSame (fst g) (snd g) iface args
+        || anyList
+          (s => walkGoalSame (fst s) (snd s) iface args)
+          (superGoalClosure gctx (fst g) (snd g)))
+    answered
+
+-- The goals of [iface]'s supers at [args], transitively, each interface once, so a
+-- cyclic super graph (rejected by W1) still ends.
+export
+superGoalClosure : GraphCtx ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+superGoalClosure gctx iface args =
+  superGoalClosureGo gctx [(iface, args)] [iface] []
+
+superGoalClosureGo : GraphCtx ->
+  List (IfaceRef, List Mono) ->
+  List IfaceRef ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+superGoalClosureGo gctx [] _ acc = reverse acc
+superGoalClosureGo gctx ((iface, args) :: rest) seen acc =
+  let step =
+    st sg => match sg
+      (sup, Some supArgs) if not (anyList (sameIfaceDecl sup) (fst st)) =>
+        (sup :: fst st, (sup, supArgs) :: snd st)
+      _ => st
+  let (seen2, found) = fold step (seen, []) (directSuperGoals gctx iface args)
+  let fresh = reverse found
+  superGoalClosureGo gctx (rest ++ fresh) seen2 (found ++ acc)
+
+export
+reqToObligation : ModuleCtx ->
+  List (String, Mono) ->
+  Require ->
+  (IfaceRef, List Mono)
+reqToObligation mctx subst (Require { requireHead = ifaceR, requireArgs = tysR, requireOrigin = o }) = (
+  IfaceRef { irName = ifaceR, irOrigin = o },
+  map (reqTyToMono mctx subst) tysR,
+)
+
+-- `dispatchMonosOf` over a method occurrence's whole interface vector: a typaram
+-- the declared type never mentions reads the occurrence's own variable for it
+-- ([omitted]), so the goal keeps every position (DICT-SEMANTICS §5).
+export
+occurrenceDispatchMonos : List String ->
+  Ty ->
+  Mono ->
+  List (String, Mono) ->
+  List Mono
+occurrenceDispatchMonos typarams mty occ omitted =
+  collectByParam
+    typarams
+    (walkDispatch typarams (stripTyConstraints mty) occ ++ omitted)
+
+-- parallel structural walk collecting (paramName, mono) wherever the declared
+-- type is a bare iface-param tyvar.  Other positions recurse; a shape mismatch
+-- (declared has structure the occurrence lacks) simply stops that branch.
+export
+walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+walkDispatch typarams (TyVar n) m
+  | contains n typarams = [(n, normalize m)]
+  | otherwise = []
+walkDispatch typarams (TyFun a b) m = match peelQual m
+  TFun ma _ mb =>
+    walkDispatch typarams (stripTyConstraints a) ma
+      ++ walkDispatch typarams (stripTyConstraints b) mb
+  _ => []
+walkDispatch typarams (TyApp a b) m = match peelQual m
+  TApp ma mb => walkDispatch typarams a ma ++ walkDispatch typarams b mb
+  _ => []
+walkDispatch typarams (TyTuple ts) m = match tupleSpine m
+  Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
+  _ => []
+walkDispatch _ _ _ = []
+
+-- one mono per interface param, in declaration order; if ANY param has no
+-- recovered binding the whole obligation is abandoned (return [] → caller skips).
+export
+collectByParam : List String -> List (String, Mono) -> List Mono
+collectByParam typarams pairs = match collectByParamGo typarams pairs
+  None => []
+  Some ms => ms
+
+collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
+collectByParamGo [] _ = Some []
+collectByParamGo (p :: rest) pairs = match lookupAssoc p pairs
+  None => None
+  Some m => map (m :: _) (collectByParamGo rest pairs)
+
+-- An instance answers the goal only by fixing a head variable: some instance head
+-- unifies with it while the head variables are free, and none does while they are
+-- held rigid.  Unification rather than matching, because the instance may need the
+-- goal's other variables bound as well (`Conv a String` against
+-- `impl Conv Int String`, `Get (Box (List t)) b` against `impl Get (Box a) a`).
+export
+answeredOnlyByBindingHead : ModuleCtx ->
+  OrdMap Unit ->
+  IfaceRef ->
+  List Mono ->
+  Bool
+answeredOnlyByBindingHead mctx headIds iface args =
+  let rows = filterList (ieRowOfIface iface) (improvementPool mctx args)
+  anyList (rowHeadUnifies mctx args) rows
+    && not
+      (anyList (row => isSome (rowHeadSubstRigid mctx headIds args row)) rows)
+
+-- Whether every use of the binder builds the dictionary the goal's reduction builds
+-- now (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or the
+-- goal is stable (`goalSelectionStable`) and so is each of its super goals
+-- (`superGoalClosure`) that selects.  [context] is the matched instance's context
+-- at the goal; a super goal it answers (`goalAnsweredBy`) is built from that context,
+-- not selected, and the context's goals are reduced under this same test.  Every
+-- other super goal is a selection and is tested, whatever its arguments are
+-- (constructed, arrows or variables alone): a super goal over variables alone that a
+-- blanket instance answers now is unstable when a more specific instance unifies.
+export
+residualSelectionStable : ModuleCtx ->
+  List Int ->
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  Bool
+residualSelectionStable mctx chosen context iface args
+  | not (any (i => elem i chosen) (flatMap monoUnboundIds args)) = True
+  | otherwise =
+    goalSelectionStable mctx chosen iface args
+      && allList
+        (sg =>
+          goalAnsweredBy mctx.mcGraph context (fst sg) (snd sg)
+            || goalSelectionStable mctx chosen (fst sg) (snd sg))
+        (superGoalClosure mctx.mcGraph iface args)
+
+-- Whether every use of the binder selects the instance the goal matches now: the goal
+-- mentions no variable the uses choose, or among the instance heads that unify with
+-- it, one matches it and is ⊑ every other (`goalReach`'s stable minimum).  Only a
+-- variable some binder declared (`declaredSigVarIds`) is held rigid in that
+-- unification: an enclosing binder's variable that is not generalized yet can still
+-- become a type another instance head needs.
+goalSelectionStable : ModuleCtx -> List Int -> IfaceRef -> List Mono -> Bool
+goalSelectionStable mctx chosen iface args =
+  if not (any (i => elem i chosen) (flatMap monoUnboundIds args)) then
+    True
+  else match stableGoalReach mctx chosen iface args
+    ReachMany => False
+    ReachOne _ => True
+    ReachNone => True
+
+-- The OPEN-WORLD defer test for the two OBLIGATION checkers (`checkOneCallObligation`,
+-- `checkReqOne`), as opposed to `residualRefutableNow`'s bare `monoVectorClosed`.  The
+-- residual site sits INSIDE a generalizing binding by construction — producing that
+-- binding's context is its whole job — so an open goal there always has a scheme to
+-- land on, and it never sees a bare-rigid receiver either (`goalHeadCon` is read for
+-- candidacy, not for concreteness).  An obligation checker has neither guarantee, so it
+-- asks all five questions.  Each conjunct's counterexample is on
+-- `checkOneCallObligation`'s arm.
+--
+-- CONJUNCTS 3 AND 5 are the fix-ROUND ADDITIONS (review S0-2 / S0-1 / S2-5), AND
+-- They ask the one question the three-conjunct form never did: *does this goal have a
+-- landing site that will actually be given a dict?*  "Defer" means "forward this
+-- predicate outward to the binder that quantifies its variables, and let each use site
+-- discharge it".  Where no such binder will carry it, "defer" means DROP, and a dropped
+-- goal is a type-confused dict at exit 0 — MEASURED, three ways, all against the sprint
+-- merge-base `0944ca9d` where every one of them was a located reject:
+--   * S0-2 — `g : Tag (Wrap a) => a -> String ; g x = "…\{tagOf (Box x)}"`.  The goal
+--     `Tag (Box a)` is NOT the declared context and a declared context cannot grow, so
+--     it lands nowhere; HEAD printed `wrapChar|boxInt=123`, `Box Int`'s body applied to
+--     a `Char`.  Conjunct 5.
+--   * S0-1 — `f : Conv (Wrap a) Int => a -> String`.  The MULTI-PARAMETER goal has a
+--     landing site (the declared context IS the goal) but no CONSUMPTION-side answer:
+--     `registerPredGiven` matches `[subject]` only and registers nothing for a longer
+--     vector, so `entailAssum` can never see it, `entail` falls to `entailInst`, and the
+--     body is statically committed to whichever impl was most specific at ABSTRACTION
+--     time while the caller's correct dict goes unread.  HEAD printed `T/T` for
+--     `"\{f True}/\{f 41}"` (expected `T/n=42`), and swapping the two `impl` blocks
+--     changed the answer to `intInt/intInt` — selection by declaration order, which
+--     DICT-SEMANTICS §3 forbids outright.  Conjunct 5, via `goalMatchesGiven`, which is
+--     deliberately `registerPredGiven`'s OWN shape: this gate admits exactly what that
+--     registry can answer, so the two cannot drift into another silent accept.
+--     SUPERSEDED AS A reject, not as A RULE (#1956).  `registerPredGiven` is now keyed
+--     on the WHOLE argument vector, so this exact program HAS a consumption-side answer:
+--     `entailAssum` finds the declared context's dict and S0-1 is ACCEPTED, printing
+--     `T/n=42` — the answer DICT-SEMANTICS §3 requires (assum before inst; the caller's
+--     dict is used, not an abstraction-time commitment).  The invariant above is
+--     unchanged and is what made the reject safe to lift: the gate still admits exactly
+--     what the registry answers — the registry simply answers more.
+--   * S2-5 — `data Bad = Bad zzz ; use (Bad v) = qq (Wrap v)`.  `zzz` is a `TRigid` no
+--     scheme quantifies, so `monoUnboundIds` is empty and conjunct 4 passed VACUOUSLY —
+--     the rigid-head forgery `monoHeadIsDecl` catches at the top level, leaking through
+--     as soon as the rigid is NESTED inside a structure.  Conjunct 3 is the groundness
+--     half made non-vacuous: a goal with no unbound variable at all has nothing for any
+--     scheme to generalize, hence nowhere to defer TO.
+--
+-- CONJUNCT 5 fails open on purpose, and that is what keeps #1939 shape (2) accepted.
+-- `not (goalIdsClaimed …)` is the INFERRED-binding arm: `describe x = tag (Wrap x)` in a
+-- library module reaches this gate BEFORE its own generalization has registered anything
+-- (MEASURED on `test/dict_fixtures/s-open-world-library-dependent-impl/lib.mdk`: the
+-- second check pass reaches the goal `Tag (Wrap α)` with an EMPTY given registry and no
+-- `funPredicateSlotsRef` row for `describe`), so its scheme is still open and the goal
+-- is what will populate it.  A binding whose constraint set is already REGISTERED is
+-- fixed — declared or inferred — and a goal claiming its variables must be in it.
+--
+-- Measured correction to the review'S STATED MECHANISM (report S0-2): a declared
+-- context's variables are NOT `TRigid` at this site.  They are ordinary unbound `TVar`s
+-- (`i2_unsound.mdk`'s `g` carries `Tag (Wrap TVar#736)` and its goal is
+-- `Tag (Box TVar#736)` — the SAME cell), so conjunct 4 was never vacuous for S0-2; it
+-- passed because the id genuinely IS deferrable.  The review's conclusion stands, its
+-- mechanism does not, and conjunct 5 is keyed on the fact that was actually there.
+export
+goalDefersOpenWorld : ModuleCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
+goalDefersOpenWorld mctx scope iface args =
+  not (monoVectorClosed args)
+    && allList monoHeadIsDecl args
+    && isNonEmptyL (flatMap monoUnboundIds args)
+    && allList
+      (i => IdMap.has i mctx.mcCells.deferrableVarIds.value)
+      (flatMap monoUnboundIds args)
+    && (goalMatchesGiven mctx.mcGraph scope iface args
+      || goalSlotStillOpen mctx args)
+
+-- COULD a given for this goal still be registered, once the enclosing binding finishes
+-- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
+-- writer that can ever answer a structured goal:
+--   * NON-EMPTY.  It returns `()` for the empty vector and registers nothing, so an
+--     empty goal can never acquire an answer.  (The registry matches the whole argument
+--     vector on all three channels (`requires`, declared, inferred), so a MULTI-PARAMETER
+--     structured goal has a consumption-side answer and this arm withholds none.
+--     `e1_inf_multi.mdk` (`h x = conv (Wrap x) 0`, no signature) and its signatured twin
+--     `a2_twoarg.mdk` pin it.)
+--   * UNCLAIMED.  See below; this is the arm that keeps #1939 shape (2) accepted.
+--     Asked of the vector's WHOLE unbound-id set, for the same reason the match above is
+--     pointwise: a slot is open only if NO binding has already fixed a context claiming
+--     any variable this predicate mentions, at any position.
+goalSlotStillOpen : ModuleCtx -> List Mono -> Bool
+goalSlotStillOpen mctx [] = False
+goalSlotStillOpen mctx args =
+  not (goalIdsClaimed mctx (flatMap monoUnboundIds args))
+
+-- has some binding's constraint set ALREADY been registered against one of [ids]?  If
+-- so that binding's context is fixed and this goal must be part of it; if not, the
+-- binding is still generalizing and this goal is what will open its slot.  Reads
+-- `funPredicateSlotsRef`, which both channels write (`registerMember` for a declared
+-- context, `registerInferredFor` for an inferred one), so the test does not distinguish
+-- them — the fixedness, not the channel, is what decides.
+goalIdsClaimed : ModuleCtx -> List Int -> Bool
+goalIdsClaimed mctx [] = False
+goalIdsClaimed mctx ids =
+  anyClaimRow ids mctx.mcCells.funPredicateSlotsRef.value
+
+anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
+anyClaimRow _ [] = False
+anyClaimRow ids ((_, slots) :: rest) =
+  anyList
+      (v => anyList (m => any (i => elem i ids) (monoTyvarIds m)) v)
+      (predicateSlotArgs slots)
+    || anyClaimRow ids rest
+
+-- The stamp context of the module [mid] whose record is [mctx]: the module's run
+-- fields, and its tables dropped (`moduleCtxFrom`).
+stampCtxOf : ModuleCtx ->
+  String ->
+  List Decl ->
+  List Obligation ->
+  List (Mono, Ref (Option Float), Int, Ref Route) ->
+  StampCtx
+stampCtxOf mctx mid implDecls goals numlits =
+  let dropped = blankModuleCtx mctx.mcGraph mid
+  dropped.mcCells.superDeclsRef := filterList isInterfaceDecl implDecls
+  StampCtx {
+    scModule = mid,
+    scModuleCtx = moduleCtxFrom False mctx dropped dropped dropped,
+    scRpNames = returnPosMethodNames implDecls,
+    scGoals = goals,
+    scNumlits = numlits,
+    scLiveLocs = liveLocsOf mctx goals,
+  }
+
+-- The spans of [goals] and of the module's admitted-set occurrences whose types
+-- mention a variable of a live root (`GraphRun.liveRoots`): their evidence and
+-- verdicts rest on what quiescence leaves that variable.
+liveLocsOf : ModuleCtx -> List Obligation -> List String
+liveLocsOf mctx goals =
+  let ids = flatMap monoUnboundIds mctx.mcGraph.graphRun.liveRoots.value
+  if isEmptyL ids then
+    []
+  else
+    let live = fold (acc i => IdMap.set i () acc) Tip ids
+    let mentions =
+      ms => anyList (m => anyList (i => IdMap.has i live) (monoUnboundIds m)) ms
+    spanKeys
+      (map (o => o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
+        ++ filterMap
+          ((_, m, loc) => if mentions [m] then Some loc else None)
+          mctx.mcCells.admittedOccObls.value)
+
+-- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
+-- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
+export
+spanKeys : List (Option Loc) -> List String
+spanKeys [] = []
+spanKeys (None :: rest) = spanKeys rest
+spanKeys (loc :: rest) = locKey loc :: spanKeys rest
+
+-- The types a goal is posed at.
+goalMonos : Obligation -> List Mono
+goalMonos o = match o.oPayload
+  GPSite _ m site => m :: siteKindMonos site
+  GPArith m => [m]
+  GPDictApp app => app.pdaMonos ++ flatMap identity app.pdaArgVecs
+  GPMethodDict _ => []
+  GPRecDictApp (RecDictApp _ _ _ m _ _) => [m]
+
+siteKindMonos : SiteKind -> List Mono
+siteKindMonos (SKReturn _ m) = [m]
+siteKindMonos (SKAdmittedReturn _ _ m) = [m]
+siteKindMonos (SKExactReturn _ request) = [request.mrrOccurrence]
+siteKindMonos (SKNumReturn _ m) = [m]
+siteKindMonos (SKArg _ m omitted) = m :: map snd omitted
+siteKindMonos (SKOp _) = []
+siteKindMonos (SKPredicateOp _ _) = []
+siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
+
+isInterfaceDecl : Decl -> Bool
+isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
+isInterfaceDecl (DInterface {  }) = True
+isInterfaceDecl _ = False
+
+-- This module's windows, cut now — see `goalsOfKindIn`.  [mctx] is the record the
+-- module was checked in.
+export
+enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
+enqueueStampCtx mctx mid implDecls =
+  let mk = currentModuleMarks mctx.mcGraph ()
+  let ctx =
+    stampCtxOf
+      mctx
+      mid
+      implDecls
+      (goalsSince mctx.mcGraph mk.mGoals)
+      (numlitSince mctx.mcGraph mk.mNumlit)
+  mctx.mcGraph.graphRun.stampCtxs :=
+    ctx :: mctx.mcGraph.graphRun.stampCtxs.value
+
+export
+stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
+stampNoting stamp resolve o =
+  let acc = Ref innerNone
+  let _ = resolve { siteFor stamp | sxInner = Some acc } o
+  o.oInner := innerOr o.oInner.value acc.value
+
+-- test-only observation: declarations whose only callers are tests and probes.
+
+-- Each entry with the evidence its goal published in [evidence], the table of the
+-- drive that recorded it.
+export
+finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
+finishMethodReturnTrace sink evidence =
+  map
+    (publishMethodReturnTrace evidence)
+    (reverse sink.tsMethodReturnEntries.value)
+
+publishMethodReturnTrace : EvTable ->
+  MethodReturnTraceEntry ->
+  MethodReturnTraceEntry
+publishMethodReturnTrace evidence entry =
+  let published = match entry.mrtGoal
+    Some goal => lookupTraceEvidence goal evidence
+    None => None
+  MethodReturnTraceEntry {
+    mrtStage = entry.mrtStage,
+    mrtInterface = entry.mrtInterface,
+    mrtMethod = entry.mrtMethod,
+    mrtArguments = entry.mrtArguments,
+    mrtScope = entry.mrtScope,
+    mrtOrigin = entry.mrtOrigin,
+    mrtGoal = entry.mrtGoal,
+    mrtPublished = published,
+    mrtQualifiedBody = entry.mrtQualifiedBody,
+    mrtWanted = entry.mrtWanted,
+    mrtOutcome = entry.mrtOutcome,
+    mrtRoute = entry.mrtRoute,
+    mrtPrerequisites = entry.mrtPrerequisites,
+  }
+
+lookupTraceEvidence : EvId -> EvTable -> Option EvVal
+lookupTraceEvidence _ [] = None
+lookupTraceEvidence goal ((EvEntry candidate value) :: rest) =
+  if sameTraceEvId goal candidate then
+    Some value
+  else
+    lookupTraceEvidence goal rest
+
+sealMethodReturnGoals : GraphCtx ->
+  EvTable ->
+  List Obligation ->
+  (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoals gctx evidence goals =
+  sealMethodReturnGoalsFrom gctx evidence (reverse goals) ([], [])
+
+-- Walks the goals last to first so each result list is built in input order, with
+-- no recursion before the cons: the goal list of a program that imports `async` is
+-- long enough to overflow the baseline-tier wasm stack in a browser worker.
+sealMethodReturnGoalsFrom : GraphCtx ->
+  EvTable ->
+  List Obligation ->
+  (List Obligation, List MethodReturnMemoView) ->
+  (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoalsFrom gctx _ [] acc = acc
+sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
+  match exactReturnRequestOfGoal goal
+    Some request => sealMethodReturnGoalsFrom gctx evidence rest (
+      goals,
+      methodReturnMemoView gctx evidence goal request :: views,
+    )
+    None => sealMethodReturnGoalsFrom gctx evidence rest (goal :: goals, views)
+
+methodReturnMemoView : GraphCtx ->
+  EvTable ->
+  Obligation ->
+  MethodReturnRequest ->
+  MethodReturnMemoView
+methodReturnMemoView gctx evidence goal request =
+  let (outcome, prerequisites) = match request.mrrResolution.value
+    None => ("legacy", [])
+    Some resolution => (
+      methodReturnMemoOutcome resolution.mrrOutcome,
+      methodReturnMemoPrerequisites resolution.mrrOutcome,
+    )
+  MethodReturnMemoView {
+    mrmvInterface = methodReturnMemoIface request.mrrIface,
+    mrmvMethod = request.mrrName,
+    mrmvArguments =
+      map methodReturnMemoArguments (methodReturnArgs gctx request),
+    mrmvOutcome = outcome,
+    mrmvPrerequisites = prerequisites,
+    mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
+  }
+
+methodReturnMemoArguments : List Mono -> List String
+methodReturnMemoArguments arguments = map ppMono arguments
+
+methodReturnMemoIface : IfaceRef -> String
+methodReturnMemoIface iface =
+  let identity = ifaceIdentity iface.irOrigin iface.irName
+  if identity == "" then iface.irName else identity
+
+methodReturnMemoOutcome : SolverOutcome -> String
+methodReturnMemoOutcome (Solved (GivenEvidence _)) = "given"
+methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _ _)) = "instance"
+methodReturnMemoOutcome (Solved (SuperclassEvidence _ _)) = "superclass"
+methodReturnMemoOutcome (Deferred _ _) = "deferred"
+methodReturnMemoOutcome (Insoluble _ MissingInstance) = "missing"
+methodReturnMemoOutcome (Insoluble _ (AmbiguousInstances _)) = "ambiguous"
+methodReturnMemoOutcome (Insoluble _ (ResolutionCycle _)) = "cycle"
+
+methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
+methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites _)) =
+  map
+    (prerequisite => (
+      methodReturnMemoIface prerequisite.prerequisiteInterface,
+      map ppMono prerequisite.prerequisiteArguments,
+    ))
+    prerequisites
+methodReturnMemoPrerequisites _ = []
+
+methodReturnMemoEvidence : EvId -> EvTable -> String
+methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
+  Some (EvOne route) => methodReturnMemoRoute route
+  Some (EvMany routes) => join "," (map methodReturnMemoRoute routes)
+  Some (EvLit _ route) => methodReturnMemoRoute route
+  Some (EvHead head) => "head:\{head}"
+  None => "unpublished"
+
+methodReturnMemoRoute : Route -> String
+methodReturnMemoRoute RNone = "none"
+methodReturnMemoRoute (RKey key prerequisites supers) =
+  "key:\{key}[\{join "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
+methodReturnMemoRoute (RDict name) = "given:\{name}"
+methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
+methodReturnMemoRoute (RLocal name _) = "local:\{name}"
+methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
+methodReturnMemoRoute (RProj r path) =
+  "projected:\{methodReturnMemoRoute r}.\{join "." (map intToString path)}"
+
+methodReturnMemoSupers : List Route -> String
+methodReturnMemoSupers [] = ""
+methodReturnMemoSupers supers =
+  "{\{join "," (map methodReturnMemoRoute supers)}}"
+
+-- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
+-- carry different effect rows are one predicate to `monoVecSameGiven` and two to
+-- `walkGoalSame`, in either order; the same row is one goal to both.
+export
+walkGoalSameProbe : Unit -> List Bool
+walkGoalSameProbe _ =
+  let iface = ifaceRefBare "C"
+  let int = tconBuiltin "Int"
+  let mctx = initialModuleCtx (probeGraphCtx ())
+  let row1 = EffRow [] (Some (freshEffvar mctx ()))
+  let row2 = EffRow [] (Some (freshEffvar mctx ()))
+  let goal1 = [TFun int row1 int]
+  let goal2 = [TFun int row2 int]
+  [
+    monoVecSameGiven goal1 goal2,
+    monoVecSameGiven goal2 goal1,
+    walkGoalSame iface goal1 iface goal2,
+    walkGoalSame iface goal2 iface goal1,
+    walkGoalSame iface goal1 iface [TFun int row1 int],
+  ]
+
+isSemanticGivenAnswer : Option AssumAnswer -> Bool
+isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
+isSemanticGivenAnswer _ = False
+
+isLegacyPredicateAnswer : Option AssumAnswer -> Bool
+isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
+isLegacyPredicateAnswer _ = False
+
+-- Private service check for the selection half of the scope adapter.  It keeps
+-- the full-vector and id-witness eligibility rules observable independently of
+-- production examples, and its sibling query fails if lexical filtering is
+-- removed from `anyGivenMatches`.
+scopeGivenProbe : Unit -> List Bool
+scopeGivenProbe _ =
+  let gctx = probeGraphCtx ()
+  let store = currentScopeStore gctx ()
+  let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
+  let owner =
+    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
+  let sibling =
+    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "sibling")
+  let iface =
+    IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
+  let args = [tconBuiltin "Int", tconBuiltin "Bool"]
+  let slot = PredicateSlot {
+    psIface = iface,
+    psArgs = PSArgsKnown args,
+    psBoundIds = [41],
+  }
+  let _ = pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
+  let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+  let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
+  let truncated = PredicateRequest {
+    prIface = iface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let witnessIface = IfaceRef {
+    irName = "WitnessGiven",
+    irOrigin = OriginModule "given-probe",
+  }
+  let witnessSlot = PredicateSlot {
+    psIface = witnessIface,
+    psArgs = PSArgsKnown [tconBuiltin "Int"],
+    psBoundIds = [73],
+  }
+  let witnessRequest = PredicateRequest {
+    prIface = witnessIface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let _ =
+    pushGiven
+      gctx
+      GMIdWitnessed
+      DirectGiven
+      witnessSlot
+      (Scopes.binderAt owner 1)
+  let compatibleIface = IfaceRef {
+    irName = "CompatibleGiven",
+    irOrigin = OriginModule "given-probe",
+  }
+  let compatibleSlot = PredicateSlot {
+    psIface = compatibleIface,
+    psArgs = PSArgsUnknown,
+    psBoundIds = [89],
+  }
+  let compatibleRequest = PredicateRequest {
+    prIface = compatibleIface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let _ =
+    pushGiven
+      gctx
+      GMPredicate
+      DirectGiven
+      compatibleSlot
+      (Scopes.binderAt owner 2)
+  let givens = givensForScope gctx owner
+  let result = [
+    anyGivenMatches gctx exact owner givens,
+    not (anyGivenMatches gctx exact sibling givens),
+    not (anyGivenMatches gctx truncated owner givens),
+    not (anyGivenMatches gctx witnessRequest owner givens),
+    isSome
+      (firstPredForEnclAt gctx GSImplRequires 73 witnessRequest owner givens),
+    isNone
+      (firstPredForEnclAt gctx GSImplRequires 74 witnessRequest owner givens),
+    isSemanticGivenAnswer (firstPredForEncl gctx exact owner givens),
+    isLegacyPredicateAnswer
+      (firstPredForEnclAt gctx GSPredicateOnly 41 unknown owner givens),
+    isLegacyPredicateAnswer
+      (firstPredForEnclResidual gctx "PairGiven" args owner givens),
+    isLegacyPredicateAnswer
+      (firstPredForEncl gctx compatibleRequest owner givens),
+  ]
+  result
+
+-- > scopeGivenProbe ()
+-- [True, True, True, True, True, True, True, True, True, True]
+
+export
+methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
+methodSlotBoundIds slots = map (slot => slot.mpsPredicate.psBoundIds) slots
+
+export
+methodSlotPositions : List MethodPredicateSlot -> List (List Int)
+methodSlotPositions slots = map (slot => slot.mpsPositions) slots
+
+export
+methodSlotIdsAtPositions : List Int ->
+  List MethodPredicateSlot ->
+  List (List Int)
+methodSlotIdsAtPositions ids slots =
+  map
+    (slot => map (pos => optionOr (0 - 1) (get pos ids)) slot.mpsPositions)
+    slots
+
+export
+methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)
+methodSlotArgumentIds slots = map methodSlotArgumentIdsOne slots
+
+methodSlotArgumentIdsOne : MethodPredicateSlot -> List Int
+methodSlotArgumentIdsOne slot = match slot.mpsPredicate.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args => flatMap monoTyvarIds args
+
+export
+methodRowRegistrySlotIds : ModuleCtx -> String -> List (List Int)
+methodRowRegistrySlotIds mctx key =
+  match lookupAssoc key mctx.mcCells.methodPredicateSlotsRef.value
+    None => []
+    Some slots => methodSlotBoundIds slots
+
+export
+numAnchorObservationView : NumAnchorTestObservation ->
+  (String, Bool, Bool, String, String)
+numAnchorObservationView observation = (
+  observation.natoCase,
+  observation.natoHasRow,
+  observation.natoIface == "Num",
+  observation.natoSchemeBody,
+  observation.natoDeclaredType,
+)
+
+export
+methodReturnProbeIface : String -> String -> Ty -> Decl
+methodReturnProbeIface moduleId ifaceName methodTy =
+  methodRowTestIface
+    moduleId
+    ifaceName
+    ["a"]
+    [IfaceMethod "make" methodTy None None]
+
+export
+methodReturnProbeImpl : String -> String -> Decl
+methodReturnProbeImpl moduleId ifaceName = DImpl {
+  pub = False,
+  iface = ifaceName,
+  tys = [tyConBuiltin "Int" None],
+  reqs = [],
+  methods = [ImplMethod "make" [] (ELit LUnit)],
+  implOrigin = OriginModule moduleId,
+  implIfaceLoc = None,
+}
+
+export
+methodReturnProbeScope : ModuleCtx -> String -> ScopeId
+methodReturnProbeScope mctx moduleId =
+  let scope =
+    Scopes.freshScope
+      (currentScopeStore mctx.mcGraph ())
+      None
+      0
+      moduleId
+      ModuleOwner
+  let _ = openScope mctx scope
+  scope
+
+export
+methodReturnProbeOccurrence : ModuleCtx ->
+  MethodSchemeRow ->
+  MethodTrackedInstantiation
+methodReturnProbeOccurrence mctx row =
+  let inst = instantiateMethodTracked mctx row.msrScheme
+  let _ = unify mctx (stripArrows inst.mtiBody) (tconBuiltin "Int")
+  inst
+
+export
+methodReturnProbeSpelling : ModuleCtx -> MethodSchemeRow -> Unit
+methodReturnProbeSpelling mctx row =
+  mctx.mcCells.methodAliasEntriesRef :=
+    omInsert "make" (row.msrIface, row.msrTyparams, row.msrType, []) omEmpty
+
+export
+methodReturnProbeRouteKey : Route -> String
+methodReturnProbeRouteKey (RKey key _ _) = key
+methodReturnProbeRouteKey _ = ""
+
+export
+methodReturnSelectedIdentity : MethodReturnResolution -> Int
+methodReturnSelectedIdentity resolution = match resolution.mrrOutcome
+  Solved (InstanceEvidence (RequestInstanceId identity) _ _ _) => identity
+  _ => -1
+
+methodReturnProbeSlotIfaces : List PredicateSlot -> List String
+methodReturnProbeSlotIfaces slots = map (slot => slot.psIface.irName) slots
+
+export
+methodReturnProbeGoalIfaces : List Obligation -> List String
+methodReturnProbeGoalIfaces [] = []
+methodReturnProbeGoalIfaces (goal :: rest) = match goal.oPayload
+  GPMethodDict pending =>
+    methodReturnProbeSlotIfaces pending.pmdSlots
+      ++ methodReturnProbeGoalIfaces rest
+  _ => methodReturnProbeGoalIfaces rest
+
+export
+methodReturnProbeOblIfaces : List UObligation -> List String
+methodReturnProbeOblIfaces [] = []
+methodReturnProbeOblIfaces (obl :: rest) =
+  let here = match obl.prov
+    PMethodLevel => [obl.pred.iface.irName]
+    _ => []
+  here ++ methodReturnProbeOblIfaces rest
+
+-- The method-return views of [gctx]: its live exact-return goals, sealed.
+export
+methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
+methodReturnMemoCurrentViews gctx =
+  snd
+    (sealMethodReturnGoals
+      gctx
+      gctx.graphRun.evTable.value
+      gctx.graphRun.goals.value)

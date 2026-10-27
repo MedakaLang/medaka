@@ -589,6 +589,18 @@ test "arch_boundaries: types.tc_decls closure matches its golden" =
 test "arch_boundaries: types.tc_foreign closure matches its golden" =
   closurePin "types.tc_foreign"
 
+test "arch_boundaries: types.tc_solve_givens closure matches its golden" =
+  closurePin "types.tc_solve_givens"
+
+test "arch_boundaries: types.tc_solve_entail closure matches its golden" =
+  closurePin "types.tc_solve_entail"
+
+test "arch_boundaries: types.tc_solve closure matches its golden" =
+  closurePin "types.tc_solve"
+
+test "arch_boundaries: types.tc_solve_check closure matches its golden" =
+  closurePin "types.tc_solve_check"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 
@@ -1094,6 +1106,10 @@ typecheckFamily = [
   "types.tc_decls_types",
   "types.tc_decls",
   "types.tc_foreign",
+  "types.tc_solve_givens",
+  "types.tc_solve_entail",
+  "types.tc_solve",
+  "types.tc_solve_check",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

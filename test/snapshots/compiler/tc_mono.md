@@ -1,11 +1,12 @@
 # META
-source_lines=2157
+source_lines=2240
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
 -- graph-run counter: head inspection, variable ids, substitution, one-way matching and overlap, the
 -- builtin tycons, the `Scheme` projections (`schemeIds`, `schemeMono`, `schemeBodyOf`,
--- `schemeAuthIds`).
+-- `schemeAuthIds`), and the signature-slot and obligation-argument readings of a `Mono`
+-- (`unrigidSig`, `abstractSlotIds`, `declaredOblArgOk`, `oblArgKey`).
 --
 -- Spec: HM-CORE section 2 (owed, #2555); DICT section 3 (specificity is matching).
 --
@@ -86,6 +87,7 @@ import support.util.{
   filterList,
   isSome,
   joinWith,
+  lenKey,
   listLen,
   minI,
   orElseOpt,
@@ -2128,6 +2130,87 @@ monoSpineHeadIsCon m = match peelQual m
   TRigid _ => True
   _ => False
 
+-- [t] with the rigid stand-in of each of [sigCells] replaced by that variable.
+export
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
+unrigidSig sigCells t = match normalize t
+  TRigid n => match filterList (c => sigStandIn c == n) sigCells
+    c :: _ => TVar c
+    [] => TRigid n
+  TApp a b => TApp (unrigidSig sigCells a) (unrigidSig sigCells b)
+  TFun a eff b => TFun (unrigidSig sigCells a) eff (unrigidSig sigCells b)
+  TQual a q => TQual (unrigidSig sigCells a) q
+  other => other
+
+-- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
+-- `declaredPredicateSlots` keeps a slot by, factored so that the slot's existence and
+-- its argument vector are decided by one test (a disagreement desynchronizes a
+-- slot's `psBoundIds` from its `psArgs` in `funPredicateSlotsRef`).
+export
+abstractSlotIds : List Mono -> List Int
+abstractSlotIds [] = []
+abstractSlotIds (mono :: rest) = match normalize mono
+  TVar cell => tyvarId cell :: abstractSlotIds rest
+  _ => abstractSlotIds rest
+
+-- #1937: a STRUCTURED argument whose free ids are ALL scheme-bound now carries too.
+-- The clause this replaces required a structured argument to be GROUND, because
+-- `substOblArgs` substituted only at a top-level `TVar` and would have carried the
+-- signature's own tyvar cell into the caller's goal.  That walk is now structural, so
+-- the instantiation this admission promises is one the channel can actually perform;
+-- the two halves are a single change (admitting without it substitutes to a
+-- wrong-but-CONCRETE goal, strictly worse than the missing one it replaces).  An
+-- UNBOUND tyvar anywhere in the argument is still refused — it has no id to defer on.
+export
+declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
+declaredOblArgOk isBound m = match normalize m
+  TVar cell => isBound (tyvarId cell)
+  _ => allList isBound (monoTyvarIds m)
+
+-- S-nonlead-arg-identity (#1904): ONE predicate-argument position, rendered as a
+-- PREFIX-FREE PREORDER of the normalized mono, so the key REALISES the sprint's settled
+-- notion of "same predicate" — pointwise `monoSameGiven` over the vector — rather than a
+-- weaker local one.  Every arm below mirrors an arm of `monoSameGiven`:
+--   * `TVar` keys on the tyvar's IDENTITY, not on its mere presence.  This is the whole
+--     fix: the old encoding keyed EVERY tyvar position as the constant "*", so
+--     `(Ix a b c, Ix a c b)` rendered `Ix|*,*,*` twice and `dedupSlotVecs` collapsed two
+--     predicates into ONE dict slot (#1904, S0: `ix n x y + ix n y x` summed 333+333
+--     instead of 333+111).  `vecOblKey` survived that only because `voIds` carries every
+--     position's id in a SECOND component; `cslotVecKey` composes `cslotKey`, which
+--     carries the LEAD id alone (`csId`), so it had no per-position id anywhere.
+--   * `TCon`/`TRigid` fold to the same rendering because `monoSameGiven` equates them by
+--     name across those two constructors.
+--   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
+--     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
+--     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
+--   * `TEff` and `TAuth` (the remaining arms) key as the constant "*", realising
+--     `monoSameGiven`'s erasure: it equates any two effect rows, and any two authorities.
+-- One deliberate residual under-split: TYCON ORIGIN is dropped (name only, as
+-- `headTyconNameMono` always did).  It cannot be folded into a key string at all:
+-- `sameTyConHead`'s absent-origin arm is non-transitive, so no string equivalence can
+-- realise it.
+-- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
+-- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
+-- key is injective over the vector.
+-- Raw tyvar ids in A KEY STRING: safe HERE, and not by an "ids are unique" claim.
+-- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
+-- come from the SAME predicate occurrence in the SAME signature, normalized together.
+-- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
+-- (a call's declared slots, `setFunConstraintEntry`'s declared prefix) and
+-- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
+-- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
+-- no key here consults.
+export
+oblArgKey : Mono -> String
+oblArgKey m = match normalize m
+  TVar cell => "v\{intToString (tyvarId cell)}."
+  TCon name _ => "c\{lenKey name}"
+  TRigid name => "c\{lenKey name}"
+  TApp a b => "a\{oblArgKey a}\{oblArgKey b}"
+  TFun a _ b => "f\{oblArgKey a}\{oblArgKey b}"
+  TQual a _ => oblArgKey a
+  _ => "*"
+
 -- test-only observation: declarations whose only callers are tests and probes.
 
 export
@@ -2168,7 +2251,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))
@@ -2726,6 +2809,15 @@ implDeclWithReqs _ = []
 (DFunDef false "findTvName" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "mono")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))))
 (DTypeSig false "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoSpineHeadIsCon" ((PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TRigid" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "unrigidSig" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))) (TyFun (TyCon "Mono") (TyCon "Mono"))))
+(DFunDef false "unrigidSig" ((PVar "sigCells") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TRigid" (PVar "n")) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "==" (EApp (EVar "sigStandIn") (EVar "c")) (EVar "n")))) (EVar "sigCells")) (arm (PCons (PVar "c") PWild) () (EApp (EVar "TVar") (EVar "c"))) (arm (PList) () (EApp (EVar "TRigid") (EVar "n"))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EVar "eff")) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EVar "q"))) (arm (PVar "other") () (EVar "other"))))
+(DTypeSig true "abstractSlotIds" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "abstractSlotIds" ((PList)) (EListLit))
+(DFunDef false "abstractSlotIds" ((PCons (PVar "mono") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "abstractSlotIds") (EVar "rest")))) (arm PWild () (EApp (EVar "abstractSlotIds") (EVar "rest")))))
+(DTypeSig true "declaredOblArgOk" (TyFun (TyFun (TyCon "Int") (TyCon "Bool")) (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "declaredOblArgOk" ((PVar "isBound") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EVar "isBound") (EApp (EVar "tyvarId") (EVar "cell")))) (arm PWild () (EApp (EApp (EVar "allList") (EVar "isBound")) (EApp (EVar "monoTyvarIds") (EVar "m"))))))
+(DTypeSig true "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
+(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -2749,7 +2841,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))
@@ -3307,6 +3399,15 @@ implDeclWithReqs _ = []
 (DFunDef false "findTvName" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "mono")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))))
 (DTypeSig false "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoSpineHeadIsCon" ((PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TRigid" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "unrigidSig" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))) (TyFun (TyCon "Mono") (TyCon "Mono"))))
+(DFunDef false "unrigidSig" ((PVar "sigCells") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TRigid" (PVar "n")) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "==" (EApp (EVar "sigStandIn") (EVar "c")) (EVar "n")))) (EVar "sigCells")) (arm (PCons (PVar "c") PWild) () (EApp (EVar "TVar") (EVar "c"))) (arm (PList) () (EApp (EVar "TRigid") (EVar "n"))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EVar "eff")) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EVar "a"))) (EVar "q"))) (arm (PVar "other") () (EVar "other"))))
+(DTypeSig true "abstractSlotIds" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "abstractSlotIds" ((PList)) (EListLit))
+(DFunDef false "abstractSlotIds" ((PCons (PVar "mono") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "abstractSlotIds") (EVar "rest")))) (arm PWild () (EApp (EVar "abstractSlotIds") (EVar "rest")))))
+(DTypeSig true "declaredOblArgOk" (TyFun (TyFun (TyCon "Int") (TyCon "Bool")) (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "declaredOblArgOk" ((PVar "isBound") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EVar "isBound") (EApp (EVar "tyvarId") (EVar "cell")))) (arm PWild () (EApp (EApp (EVar "allList") (EVar "isBound")) (EApp (EVar "monoTyvarIds") (EVar "m"))))))
+(DTypeSig true "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
+(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
