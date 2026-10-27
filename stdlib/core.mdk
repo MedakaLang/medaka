@@ -1258,14 +1258,16 @@ runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
-  andThen xs f = splice [] xs
+  andThen xs f = revOnto (collect xs []) []
     where
-      -- One self-recursive function so the `::` arm is tail-modulo-cons (stack
-      -- safe for long inputs and long inner lists); `f` runs once per element,
-      -- left to right, when the previous inner list is exhausted.
-      splice [] [] = []
-      splice [] (x :: rest) = splice (f x) rest
-      splice (y :: ys) rest = y :: splice ys rest
+      -- Every recursive call is a tail call, so no engine grows its stack with
+      -- the input or inner-list length; `f` runs once per element, left to
+      -- right, building the result reversed. (core has no `reverse`; that
+      -- lives in `list.mdk`.)
+      collect [] acc = acc
+      collect (x :: rest) acc = collect rest (revOnto (f x) acc)
+      revOnto [] acc = acc
+      revOnto (y :: ys) acc = revOnto ys (y :: acc)
 
 export impl Thenable Option where
   andThen None _ = None

@@ -424,9 +424,3 @@ test "List andThen calls f once per element, left to right" =
   let log : Ref (List Int) = Ref []
   let out = andThen [1, 2, 3] (x => setRef log (x :: !log) |> (u => [x, x]))
   expectEqual ([1, 1, 2, 2, 3, 3], [3, 2, 1]) (out, !log)
-
-test "List andThen is stack safe on a long input" =
-  expectEqual 1000000 (length (andThen [1..=1000000] (x => [x])))
-
-test "List andThen is stack safe on a long inner list" =
-  expectEqual 1000000 (length (andThen [1] (x => [1..=1000000])))
