@@ -29,6 +29,7 @@ import types.tc_mono.{
   monoClosed,
   monoSameGiven,
   monoUnboundIds,
+  nthFunDomain,
   oblArgKey,
   peelArrows,
   resultAfterArrows,
@@ -38,6 +39,8 @@ import types.tc_mono.{
   tconFrom,
   tconUnresolved,
   tupleMono,
+  hasDupI,
+  anyContainsI,
 }
 import types.tc_state.{probeGraphCtx}
 
@@ -311,6 +314,16 @@ test "resultAfterArrows is None past the arrow spine and the rest within it" =
     expectEqual 2 (arrowArity fn),
   ]
 
+test "nthFunDomain reads the k-th curried domain and is None past the arrow spine" =
+  let int = tconBuiltin "Int"
+  let fn = TFun int pureRow (TFun (tconBuiltin "Bool") pureRow int)
+  expectAll [
+    expectEqual (Some "Int") (map ppMono (nthFunDomain 0 fn)),
+    expectEqual (Some "Bool") (map ppMono (nthFunDomain 1 fn)),
+    expectTrue (isNone (nthFunDomain 2 fn)),
+    expectTrue (isNone (nthFunDomain 0 int)),
+  ]
+
 test "abstractSlotIds lists the variables of a vector in order and skips solved positions" =
   expectEqual
     [3, 9]
@@ -375,3 +388,16 @@ test "oblArgKey keys a variable by its id and reads a rigid like a constructor o
       (oblArgKey (TApp (named "ab") (named "c")))
       (oblArgKey (TApp (named "a") (named "bc"))),
   ]
+
+test "a list has a duplicate exactly when some id repeats" = expectAll [
+  expectTrue (hasDupI [1, 2, 1]),
+  expectFalse (hasDupI [1, 2, 3]),
+  expectFalse (hasDupI []),
+]
+
+test "two id lists meet when they share a member" = expectAll [
+  expectTrue (anyContainsI [1, 2] [2, 9]),
+  expectFalse (anyContainsI [1, 2] [3, 4]),
+  expectFalse (anyContainsI [] [1]),
+  expectFalse (anyContainsI [1] []),
+]

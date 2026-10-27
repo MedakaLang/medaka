@@ -37,6 +37,7 @@ test "runtime ABI keeps written and lowered arities and callback signatures dist
         (s => (s.writtenValueArity, s.loweredCoreArity))
         (runtimeAbi "rename")),
     expectEqual (Some (1, 1)) (omLookup "statFile" fileGrantExterns),
+    expectEqual None (omLookup "println" fileGrantExterns),
     expectEqual
       (Some (["Int", ""], "Array"))
       (map

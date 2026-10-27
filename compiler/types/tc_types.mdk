@@ -1,5 +1,6 @@
 -- Typechecker data declarations and state records: every `data` and `type`
--- the checker shares across its stages.  No functions, no cells, no inference.
+-- the checker shares across its stages, with the key format of its grant records.  No
+-- cells, no inference.
 --
 -- Closure rule: this module may not import `types.typecheck`, nor any later
 -- `tc_infer_*`, `tc_solve` or `tc_driver` module.  Everything here sits below them.
@@ -35,7 +36,9 @@ import types.repr.{
 }
 import support.ordmap.{
   OrdMap,
+  omDelete,
   omEmpty,
+  omInsert,
 }
 import map.{
   Map(..),
@@ -2460,6 +2463,23 @@ public export data GrantState = GrantState {
   gsValueBounds : Ref (OrdMap (List (Mono, List GrantBinder))),
   gsPassingModule : Ref String,
 }
+
+-- The key a top-level binder's grant ids are recorded under.
+export
+grantTopKey : String -> String -> String
+grantTopKey mid n = "\{mid}|\{n}"
+
+-- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
+-- no binder that takes no grant has a row.
+export
+setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
+setGrantIds table (key, []) = table := omDelete key table.value
+setGrantIds table (key, ids) = table := omInsert key ids table.value
+
+-- The key an interface method's grants are recorded under.
+export
+methodGrantKey : String -> String -> String
+methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
 
 -- The binder-name and grant state belong to the lineage (`Lineage`), so a row
 -- outlives the drive that wrote it, and each table is kept by what its key is:
