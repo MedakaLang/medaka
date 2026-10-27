@@ -2815,10 +2815,9 @@ corpus = []
 toolchain = []
 link = "production"
 
-# `shard` is a guess ([W-SHARD-DERIVED]). It sits on a `wasm_arm = true` row
-# because that flag is what installs wasm-tools and Node 24 on a `gates` runner,
-# and the gate's parse, validate and run steps need both. The balancer must keep
-# it on a wasm-arm row.
+# This gate must sit on a `wasm_arm = true` row: that flag is what installs
+# wasm-tools and Node 24 on a `gates` runner, and the gate's parse, validate and
+# run steps need both. The balancer keeps it on a wasm-arm row.
 [[gate]]
 name = "diff_compiler_wasm_single_traversal"
 area = "wasm"
