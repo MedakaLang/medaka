@@ -1,0 +1,371 @@
+-- Sibling test for `compiler/backend/llvm_symbols.mdk` ([P-TEST-SIBLING]).
+--
+-- Each mutation demands its own defect from the registry, beside a control that
+-- uses the same names validly, so the mutation is what the defect answers.  The
+-- last rows drive whole prelude-free programs through `emitProgram` and
+-- `emitProgramRecord`, as `compiler/entries/llvm_emit_main.mdk` does.
+
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{EmitPlan, buildEmitPlan}
+import ir.core_ir.{CProgram}
+import test.{Expectation, expectAll, expectEqual, expectSatisfies, labelFail}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import backend.llvm_emit.{
+  EmitInput, emitProgram, emitProgramRecord, makeEmitInput
+}
+import backend.llvm_symbols.{
+  CallShape(..),
+  LlvmParam(..),
+  LlvmSymbol(..),
+  ModuleScope(..),
+  Prototype(..),
+  SymbolDefect(..),
+  SymbolRegistry,
+  checkCall,
+  declareSymbol,
+  defectCode,
+  defineSymbol,
+  emptyRegistry,
+  excuseSymbol,
+  prototypeText,
+  unresolved,
+}
+import support.symbol_origin.{SymbolOrigin(..)}
+
+at : String -> SymbolOrigin
+at b = SymbolOrigin b "" 0 0
+
+-- `i64 (i64 …)`, one i64 parameter per name in [regs]
+words : List String -> Prototype
+words regs = FuncProto "i64" (map (r => LlvmParam "i64" r) regs) ""
+
+wordCall : Int -> CallShape
+wordCall n = CallShape "i64" (map (_ => "i64") [1..=n])
+
+-- run registry steps in order over [reg], stopping at the first defect
+stepsFrom : SymbolRegistry ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  Result SymbolDefect SymbolRegistry
+stepsFrom reg fs = fold (acc f => andThen acc f) (Ok reg) fs
+
+-- the first defect of [fs] in a module of [scope], or the defects left
+-- unresolved once they all ran
+verdictIn : ModuleScope ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+verdictIn scope fs = match stepsFrom (emptyRegistry scope) fs
+  Err d => [d]
+  Ok reg => unresolved reg
+
+verdict : List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+verdict fs = verdictIn WholeModule fs
+
+test "a symbol defined twice is refused; two names defined once each are not" = expectAll
+  [
+    labelFail
+      "twice"
+      (expectEqual
+        [DuplicateDefinition "mdk_f" (at "second") (at "first")]
+        (verdict [
+          defineSymbol (Generated "mdk_f") (words ["%arg0"]) (at "first"),
+          defineSymbol (Generated "mdk_f") (words ["%arg0"]) (at "second"),
+        ])),
+    labelFail
+      "once each"
+      (expectEqual
+        []
+        (verdict [
+          defineSymbol (Generated "mdk_f") (words ["%arg0"]) (at "first"),
+          defineSymbol (Generated "mdk_g") (words ["%arg0"]) (at "second"),
+        ])),
+    labelFail
+      "a function and a global variable share one namespace"
+      (expectEqual
+        [DuplicateDefinition "mdk_g_x" (at "g_x") (at "x")]
+        (verdict [
+          defineSymbol (Generated "mdk_g_x") (DataProto "i64") (at "x"),
+          defineSymbol (Generated "mdk_g_x") (words ["%arg0"]) (at "g_x"),
+        ])),
+  ]
+
+test "a declaration contradicting an earlier one is refused; a repeated one is not" = expectAll
+  [
+    labelFail
+      "declare, then define with another parameter list"
+      (expectEqual
+        [
+          PrototypeConflict
+            "mdk_f"
+            (words ["%arg0", "%arg1"])
+            (words ["%arg0"])
+            (at "program")
+            (at "prelude"),
+        ]
+        (verdictIn ModuleHalf [
+          declareSymbol (Generated "mdk_f") (words ["%arg0"]) (at "prelude"),
+          defineSymbol
+            (Generated "mdk_f")
+            (words ["%arg0", "%arg1"])
+            (at "program"),
+        ])),
+    labelFail
+      "two declarations with different return types"
+      (expectEqual
+        [
+          PrototypeConflict
+            "mdk_ffi_f"
+            (FuncProto "double" [LlvmParam "i64" ""] "")
+            (FuncProto "i64" [LlvmParam "i64" ""] "")
+            (at "b")
+            (at "a"),
+        ]
+        (verdict [
+          declareSymbol
+            (Foreign "mdk_ffi_f")
+            (FuncProto "i64" [LlvmParam "i64" ""] "")
+            (at "a"),
+          declareSymbol
+            (Foreign "mdk_ffi_f")
+            (FuncProto "double" [LlvmParam "i64" ""] "")
+            (at "b"),
+        ])),
+    labelFail
+      "the same declaration twice, register names and attributes aside"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol
+            (Foreign "mdk_panic_at")
+            (FuncProto
+              "void"
+              [LlvmParam "i64" "", LlvmParam "i64" ""]
+              " noreturn")
+            (at "a"),
+          declareSymbol
+            (Foreign "mdk_panic_at")
+            (FuncProto "void" [LlvmParam "i64" "%x", LlvmParam "i64" "%y"] "")
+            (at "b"),
+        ])),
+    labelFail
+      "declared and defined alike is still written twice"
+      (expectEqual
+        [DuplicateDefinition "mdk_f" (at "program") (at "prelude")]
+        (verdictIn ModuleHalf [
+          declareSymbol (Generated "mdk_f") (words ["%arg0"]) (at "prelude"),
+          defineSymbol (Generated "mdk_f") (words ["%a"]) (at "program"),
+        ])),
+  ]
+
+-- The one defect clang does not refuse: a direct call whose types disagree with
+-- the callee's prototype is valid IR under opaque pointers, and undefined at run
+-- time.
+test "a call whose shape contradicts the prototype is refused, before or after it" = expectAll
+  [
+    labelFail
+      "after: words passed to a double worker"
+      (expectEqual
+        [
+          ShapeMismatch
+            "mdk_f__fw"
+            (wordCall 1)
+            (FuncProto "double" [LlvmParam "double" "%arg0"] "")
+            (at "caller")
+            (at "f"),
+        ]
+        (verdict [
+          defineSymbol
+            (Generated "mdk_f__fw")
+            (FuncProto "double" [LlvmParam "double" "%arg0"] "")
+            (at "f"),
+          checkCall (Generated "mdk_f__fw") (wordCall 1) (at "caller"),
+        ])),
+    labelFail
+      "before: one operand too many"
+      (expectEqual
+        [
+          ShapeMismatch
+            "mdk_f"
+            (wordCall 3)
+            (words ["%arg0", "%arg1"])
+            (at "caller")
+            (at "f"),
+        ]
+        (verdict [
+          checkCall (Generated "mdk_f") (wordCall 3) (at "caller"),
+          defineSymbol (Generated "mdk_f") (words ["%arg0", "%arg1"]) (at "f"),
+        ])),
+    labelFail
+      "a global variable called as a function"
+      (expectEqual
+        [
+          ShapeMismatch
+            "mdk_g_x"
+            (wordCall 0)
+            (DataProto "i64")
+            (at "caller")
+            (at "x"),
+        ]
+        (verdict [
+          defineSymbol (Generated "mdk_g_x") (DataProto "i64") (at "x"),
+          checkCall (Generated "mdk_g_x") (wordCall 0) (at "caller"),
+        ])),
+    labelFail
+      "the matching shape, both orders"
+      (expectEqual
+        []
+        (verdict [
+          checkCall (Generated "mdk_f") (wordCall 2) (at "early"),
+          defineSymbol (Generated "mdk_f") (words ["%arg0", "%arg1"]) (at "f"),
+          checkCall (Generated "mdk_f") (wordCall 2) (at "late"),
+        ])),
+  ]
+
+test "a call nothing defines is unresolved at the end; defined later, it is not" = expectAll
+  [
+    labelFail
+      "never defined"
+      (expectEqual
+        [UndefinedReference "mdk_f" (at "first caller")]
+        (verdict [
+          checkCall (Generated "mdk_f") (wordCall 1) (at "first caller"),
+          checkCall (Generated "mdk_f") (wordCall 1) (at "second caller"),
+        ])),
+    labelFail
+      "defined after the call"
+      (expectEqual
+        []
+        (verdict [
+          checkCall (Generated "mdk_f") (wordCall 1) (at "caller"),
+          defineSymbol (Generated "mdk_f") (words ["%arg0"]) (at "f"),
+        ])),
+    labelFail
+      "declared by the other half"
+      (expectEqual
+        []
+        (verdictIn ModuleHalf [
+          checkCall (Generated "mdk_disp_show_0_1") (wordCall 2) (at "caller"),
+          declareSymbol
+            (Generated "mdk_disp_show_0_1")
+            (words ["%dict", "%arg0"])
+            (at "caller"),
+        ])),
+    labelFail
+      "a call a recorded gap accounts for"
+      (expectEqual [] (match excusedCall
+        Ok reg => unresolved (excuseSymbol (Generated "mdk_f") reg)
+        Err d => [d])),
+  ]
+
+excusedCall : Result SymbolDefect SymbolRegistry
+excusedCall = stepsFrom (emptyRegistry WholeModule) [
+  checkCall (Generated "mdk_f") (wordCall 1) (at "caller"),
+]
+
+test "a whole module may not leave a generated symbol only declared" = expectAll
+  [
+    labelFail
+      "whole: a generated declaration is unresolved"
+      (expectEqual
+        [UndefinedReference "mdk_force_x" (at "x")]
+        (verdictIn WholeModule [
+          declareSymbol (Generated "mdk_force_x") (words []) (at "x"),
+        ])),
+    labelFail
+      "half: the other half defines it"
+      (expectEqual
+        []
+        (verdictIn ModuleHalf [
+          declareSymbol (Generated "mdk_force_x") (words []) (at "x"),
+        ])),
+    labelFail
+      "whole: a foreign declaration is the link's"
+      (expectEqual
+        []
+        (verdictIn WholeModule [
+          declareSymbol
+            (Foreign "mdk_oob_at")
+            (FuncProto "void" [LlvmParam "i64" ""] " noreturn")
+            (at "module"),
+        ])),
+  ]
+
+test "a prototype renders as define and declare write it" = expectAll [
+  expectEqual
+    "i64 @mdk_f(i64 %arg0, i64 %arg1) noinline"
+    (prototypeText
+      "mdk_f"
+      (FuncProto
+        "i64"
+        [LlvmParam "i64" "%arg0", LlvmParam "i64" "%arg1"]
+        " noinline")),
+  expectEqual
+    "void @mdk_panic_at(i64, i64) noreturn"
+    (prototypeText
+      "mdk_panic_at"
+      (FuncProto "void" [LlvmParam "i64" "", LlvmParam "i64" ""] " noreturn")),
+  expectEqual "i64 @mdk_force_x()" (prototypeText "mdk_force_x" (words [])),
+]
+
+-- ── whole programs ──────────────────────────────────────────────────────────
+
+-- [src] lowered as the prelude-free entry lowers it, and handed to [emit]
+withLowered : (EmitInput -> EmitPlan -> CProgram -> r) -> String -> r
+withLowered emit src =
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  emit
+    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
+    cp
+
+-- each defect [src]'s strict emission is refused with: its code and the
+-- bindings it cites; [] when the module is written
+strictDefects : String -> List (List String)
+strictDefects src = refusalFacts (withLowered emitProgram src)
+
+refusalFacts : Result (List SymbolDefect) a -> List (List String)
+refusalFacts (Ok _) = []
+refusalFacts (Err defects) = map defectFacts defects
+
+defectFacts : SymbolDefect -> List String
+defectFacts (d@(DuplicateDefinition name (SymbolOrigin b2 _ _ _) (SymbolOrigin b1 _ _ _))) =
+  [defectCode d, name, b1, b2]
+defectFacts d = [defectCode d]
+
+-- A single-module program mangles nothing, so the value global of `foo` is
+-- `@mdk_g_foo`, the name the function `g_foo` is emitted under.  `main`, emitted
+-- first, calls the global as a function; then the function's define is refused.
+test "a value global and a function the emitter spells alike are refused as one duplicate" = expectAll
+  [
+    labelFail
+      "g_foo and the global of foo"
+      (expectEqual
+        [["E-PHYS-SHAPE"], ["E-PHYS-DUPLICATE", "mdk_g_foo", "foo", "g_foo"]]
+        (strictDefects
+          "g_foo : Int -> Int\ng_foo x = x + 100\nfoo : Int\nfoo = 5\nmain = g_foo foo\n")),
+    labelFail
+      "h_foo and the global of foo"
+      (expectEqual
+        []
+        (strictDefects
+          "h_foo : Int -> Int\nh_foo x = x + 100\nfoo : Int\nfoo = 5\nmain = h_foo foo\n")),
+  ]
+
+test "record mode keeps a gap's census and finds no physical defect" =
+  let src = "f : Int -> Int\nf x = x + 1\nmain = assertSnapshot \"a\" (f 1)\n"
+  let emitted = withLowered emitProgramRecord src
+  match emitted
+    Ok (_, events) =>
+      expectSatisfies
+        "a gap event names the refused extern"
+        (any (e => isSome (stringIndexOf "assertSnapshot" e)))
+        events
+    Err _ => expectEqual [] (refusalFacts emitted)

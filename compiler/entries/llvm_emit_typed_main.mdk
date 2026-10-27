@@ -47,6 +47,8 @@ import ir.core_ir.{
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import backend.llvm_symbols.{SymbolDefect}
+import driver.diagnostics.{refuseLlvmSymbolDefects}
 
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
@@ -118,7 +120,9 @@ emitGapIsolation =
         ],
       }
   let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
-  let (_, gaps) = emitProgramRecord input plan cp
+  let gaps = match emitProgramRecord input plan cp
+    Ok (_, events) => events
+    Err _ => []
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
     let _ =
@@ -130,9 +134,14 @@ emitGapIsolation =
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
-  putStr (runEmit runtimeDecls preludeDecls userDecls)
+  match runEmit runtimeDecls preludeDecls userDecls
+    Ok text => putStr text
+    Err defects => refuseLlvmSymbolDefects "" defects
 
-runEmit : List Decl -> List Decl -> List Decl -> String
+runEmit : List Decl ->
+  List Decl ->
+  List Decl ->
+  Result (List SymbolDefect) String
 runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
   let (elab, _, outputs) = elaborateModulesWithReport

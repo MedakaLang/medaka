@@ -1,0 +1,27 @@
+-- Where an emitter wrote or used a physical symbol, and how a symbol defect
+-- names that place.  Both emitters' symbol registries (backend/wasm_symbols.mdk,
+-- backend/llvm_symbols.mdk) report their defects at a `SymbolOrigin`, and the
+-- emit driver (driver/diagnostics.mdk) locates the diagnostic from it.
+
+-- The source binding whose emission wrote or used the symbol, and that binding's
+-- file, line and column ("" and 0 when it has none).
+public export data SymbolOrigin =
+  SymbolOrigin String String Int Int
+  deriving (Eq, Debug)
+
+-- The file, line and column of [origin] ("" and 0 when it has none).
+export
+originPosition : SymbolOrigin -> (String, Int, Int)
+originPosition (SymbolOrigin _ file line col) = (file, line, col)
+
+-- The binding of [origin], quoted, as a defect message opens with it.
+export
+bindingOf : SymbolOrigin -> String
+bindingOf (SymbolOrigin b _ _ _) = "`\{b}`"
+
+-- The binding of [origin], quoted, with its position when it has one.
+export
+placeOf : SymbolOrigin -> String
+placeOf (SymbolOrigin b "" _ _) = "`\{b}`"
+placeOf (SymbolOrigin b file line col) =
+  "`\{b}` (\{file}:\{intToString line}:\{intToString col})"

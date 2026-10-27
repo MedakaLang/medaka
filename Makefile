@@ -182,6 +182,9 @@ inlang-support-util-test:
 inlang-support-sexp-value-test:
 	./medaka test compiler/support/sexp_value_test.mdk
 
+inlang-support-symbol-origin-test:
+	./medaka test compiler/support/symbol_origin_test.mdk
+
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
@@ -257,6 +260,11 @@ inlang-backend-wasm-emit-paramname-test:
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
 	./medaka test compiler/backend/wasm_symbols_test.mdk
+
+## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
+## beside a valid same-name control, plus whole programs through the emitter.
+inlang-backend-llvm-symbols-test:
+	./medaka test compiler/backend/llvm_symbols_test.mdk
 
 ## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
 ## payload, shared by every site that spells the same bytes.

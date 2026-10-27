@@ -1,0 +1,286 @@
+-- The physical symbols of one LLVM module under emission: each function and
+-- global variable the emitter declares or defines, the prototype it gave, and the
+-- binding whose emission wrote it.  A definition, declaration or direct call
+-- that contradicts the registry is a `SymbolDefect`, which the emitter returns
+-- to its driver instead of a module text.
+--
+-- LLVM has one namespace for functions and global variables, and its text format
+-- refuses a name written twice, even as two identical `declare`s.  So a second
+-- definition of a name, or a declaration of a name already defined, is a defect.
+-- A declaration repeated with the same signature is the one thing the registry
+-- accepts twice; the emitter writes it once.
+--
+-- A function may be called before it is defined (`@mdk_program_main` is emitted
+-- before every function it calls), so a call to a name with no entry yet waits:
+-- it is judged against the prototype when that arrives, and whatever still waits
+-- once the module is complete is `unresolved`.  A whole module (no prelude
+-- object) is the only Medaka code in its link, so there a generated symbol that is
+-- only declared is unresolved too; a module half declares the other half's.
+
+import support.ordmap.{
+  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
+}
+import support.symbol_origin.{SymbolOrigin, bindingOf, placeOf}
+import support.util.{joinWith, reverseL}
+
+-- A global name, without its `@`.  `Generated` is a symbol the emitter writes a
+-- definition for, in this emission or in the other half of a prelude-object
+-- build; `Foreign` is one the link supplies (the runtime, a user FFI symbol, a
+-- site-trap entry, an `llvm.*` intrinsic).  Neither is a failure, so `Result`
+-- would misread it.
+-- lint-disable-next-line rule-clone-type
+public export data LlvmSymbol =
+  | Generated String
+  | Foreign String
+  deriving (Eq, Debug)
+
+-- One parameter: its LLVM type and its register name ("" where a `declare`
+-- names none).
+public export data LlvmParam = LlvmParam String String deriving (Eq, Debug)
+
+-- What a declaration or definition says the symbol is: a function with its
+-- return type, parameters and the attributes written after its parameter list
+-- (` noinline`, ` noreturn`, or ""), or a global variable of a value type.
+public export data Prototype =
+  | FuncProto String (List LlvmParam) String
+  | DataProto String
+  deriving (Eq, Debug)
+
+-- A direct call: the return type it expects and the types of its operands.
+public export data CallShape =
+  CallShape String (List String)
+  deriving (Eq, Debug)
+
+-- Whether the module is the only Medaka code in its link.
+public export data ModuleScope = WholeModule | ModuleHalf deriving (Eq, Debug)
+
+public export data SymbolDefect =
+  | DuplicateDefinition String SymbolOrigin SymbolOrigin  -- the name, where it was written again, where it was first written
+  -- the name, the prototype written again, the one written first, where each was
+  -- written
+  | PrototypeConflict String Prototype Prototype SymbolOrigin SymbolOrigin
+  -- the function, the call's shape, the prototype, the call, the declaration
+  | ShapeMismatch String CallShape Prototype SymbolOrigin SymbolOrigin
+  -- a function some call names, or a generated symbol a whole module only
+  -- declares, that nothing in the module defines
+  | UndefinedReference String SymbolOrigin
+  deriving (Eq, Debug)
+
+data Binding = Declared | Defined deriving (Eq)
+
+data Entry = Entry Binding LlvmSymbol Prototype SymbolOrigin
+
+-- a call still waiting for its symbol
+data Waiting = Waiting CallShape SymbolOrigin
+
+export data SymbolRegistry = SymbolRegistry {
+  scope : ModuleScope,
+  entries : OrdMap Entry,
+  waiting : OrdMap (List Waiting),
+  excused : OrdMap Unit,
+}
+
+export
+emptyRegistry : ModuleScope -> SymbolRegistry
+emptyRegistry scope = SymbolRegistry {
+  scope = scope,
+  entries = omEmpty,
+  waiting = omEmpty,
+  excused = omEmpty,
+}
+
+symbolName : LlvmSymbol -> String
+symbolName (Generated n) = n
+symbolName (Foreign n) = n
+
+-- A symbol the module receives rather than defines: an `external` global, or a
+-- function `declare`.
+export
+declareSymbol : LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+declareSymbol sym proto origin reg =
+  let name = symbolName sym
+  match omLookup name reg.entries
+    None => settle name (Entry Declared sym proto origin) reg
+    Some (Entry Declared _ first at) =>
+      if sameSignature proto first then
+        Ok reg
+      else
+        Err (PrototypeConflict name proto first origin at)
+    Some (Entry Defined _ first at) =>
+      Err (secondWrite name proto origin first at)
+
+-- A function the emitter writes a body for, or a global variable it gives
+-- storage.
+export
+defineSymbol : LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+defineSymbol sym proto origin reg =
+  let name = symbolName sym
+  match omLookup name reg.entries
+    None => settle name (Entry Defined sym proto origin) reg
+    Some (Entry _ _ first at) => Err (secondWrite name proto origin first at)
+
+-- The defect of writing [name] again with [proto] where [first] was written: a
+-- function and a global variable are two things under one name, and so are two
+-- of either alike; two of either that disagree contradict each other.
+secondWrite : String ->
+  Prototype ->
+  SymbolOrigin ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolDefect
+secondWrite name proto origin first at =
+  if sameKind proto first && not (sameSignature proto first) then
+    PrototypeConflict name proto first origin at
+  else
+    DuplicateDefinition name origin at
+
+sameKind : Prototype -> Prototype -> Bool
+sameKind (FuncProto _ _ _) (FuncProto _ _ _) = True
+sameKind (DataProto _) (DataProto _) = True
+sameKind _ _ = False
+
+-- Two prototypes name the same LLVM type: register names and attributes aside.
+sameSignature : Prototype -> Prototype -> Bool
+sameSignature (FuncProto r1 ps1 _) (FuncProto r2 ps2 _) =
+  r1 == r2 && map paramType ps1 == map paramType ps2
+sameSignature (DataProto t1) (DataProto t2) = t1 == t2
+sameSignature _ _ = False
+
+paramType : LlvmParam -> String
+paramType (LlvmParam t _) = t
+
+-- record [entry] for [name], then judge every call that waited for it
+settle : String -> Entry -> SymbolRegistry -> Result SymbolDefect SymbolRegistry
+settle name entry reg =
+  let reg2 = { reg |
+    entries = omInsert name entry reg.entries,
+    waiting = omDelete name reg.waiting,
+  }
+  match omLookup name reg.waiting
+    None => Ok reg2
+    Some calls => judgeWaiting name entry (reverseL calls) reg2
+
+judgeWaiting : String ->
+  Entry ->
+  List Waiting ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+judgeWaiting _ _ [] reg = Ok reg
+judgeWaiting name entry ((Waiting shape at) :: rest) reg =
+  match callDefect name shape at entry
+    Some d => Err d
+    None => judgeWaiting name entry rest reg
+
+callDefect : String -> CallShape -> SymbolOrigin -> Entry -> Option SymbolDefect
+callDefect name (shape@(CallShape ret operands)) at (Entry _ _ proto declared) =
+  match proto
+    FuncProto r ps _ =>
+      if r == ret && map paramType ps == operands then
+        None
+      else
+        Some (ShapeMismatch name shape proto at declared)
+    DataProto _ => Some (ShapeMismatch name shape proto at declared)
+
+-- A direct call of a function with [shape].
+export
+checkCall : LlvmSymbol ->
+  CallShape ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkCall sym shape origin reg =
+  let name = symbolName sym
+  match omLookup name reg.entries
+    Some entry => match callDefect name shape origin entry
+      Some d => Err d
+      None => Ok reg
+    None =>
+      let earlier = match omLookup name reg.waiting
+        Some calls => calls
+        None => []
+      let waits = omInsert name (Waiting shape origin :: earlier) reg.waiting
+      Ok ({ reg | waiting = waits })
+
+-- [sym]'s definer recorded a gap instead of defining it, so a call of it is the
+-- gap's to report, not the registry's.
+export
+excuseSymbol : LlvmSymbol -> SymbolRegistry -> SymbolRegistry
+excuseSymbol sym reg =
+  { reg | excused = omInsert (symbolName sym) () reg.excused }
+
+-- Once the module is complete: one defect for each name some call still waits
+-- for, at its first call, in name order; then, in a whole module, one for each
+-- generated symbol it only declares.
+export
+unresolved : SymbolRegistry -> List SymbolDefect
+unresolved reg =
+  flatMap (unresolvedAt reg) (omKeys reg.waiting)
+    ++ (match reg.scope
+      WholeModule => flatMap (declaredOnly reg) (omKeys reg.entries)
+      ModuleHalf => [])
+
+unresolvedAt : SymbolRegistry -> String -> List SymbolDefect
+unresolvedAt reg name =
+  if omHasKey name reg.excused then
+    []
+  else match omLookup name reg.waiting
+    None => []
+    Some calls => match reverseL calls
+      [] => []
+      (Waiting _ at) :: _ => [UndefinedReference name at]
+
+declaredOnly : SymbolRegistry -> String -> List SymbolDefect
+declaredOnly reg name = match omLookup name reg.entries
+  Some (Entry Declared (Generated _) _ at) => [UndefinedReference name at]
+  _ => []
+
+-- ── rendering ───────────────────────────────────────────────────────────────
+
+-- `<ret> @<name>(<params>)<attrs>`: a function's head as `define` and `declare`
+-- both write it.
+export
+prototypeText : String -> Prototype -> String
+prototypeText name (FuncProto ret ps attrs) =
+  "\{ret} @\{name}(\{joinWith ", " (map paramText ps)})\{attrs}"
+prototypeText name (DataProto t) = "@\{name} : \{t}"
+
+paramText : LlvmParam -> String
+paramText (LlvmParam t "") = t
+paramText (LlvmParam t r) = "\{t} \{r}"
+
+export
+defectCode : SymbolDefect -> String
+defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
+defectCode (PrototypeConflict _ _ _ _ _) = "E-PHYS-SHAPE"
+defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
+defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
+
+-- The binding and position the defect is reported at.
+export
+defectOrigin : SymbolDefect -> SymbolOrigin
+defectOrigin (DuplicateDefinition _ at _) = at
+defectOrigin (PrototypeConflict _ _ _ at _) = at
+defectOrigin (ShapeMismatch _ _ _ at _) = at
+defectOrigin (UndefinedReference _ at) = at
+
+export
+defectMessage : SymbolDefect -> String
+defectMessage (DuplicateDefinition name at first) =
+  "in \{bindingOf at}: the LLVM module would write `@\{name}` twice, here and in \{placeOf first}; a module may declare or define a name once"
+defectMessage (PrototypeConflict name proto first at earlier) =
+  "in \{bindingOf at}: `@\{name}` is written here as `\{prototypeText name proto}`, but \{placeOf earlier} wrote it as `\{prototypeText name first}`"
+defectMessage (ShapeMismatch name shape proto at declared) =
+  "in \{bindingOf at}: a call of `@\{name}` has shape `\{shapeText shape}`, but \{placeOf declared} gives it `\{prototypeText name proto}`"
+defectMessage (UndefinedReference name at) =
+  "in \{bindingOf at}: the LLVM module refers to `@\{name}`, which nothing in it defines"
+
+shapeText : CallShape -> String
+shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"

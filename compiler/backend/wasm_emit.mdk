@@ -338,10 +338,10 @@ import backend.emit_support.{
   isTailCall,
   implEntryDeclaredArity,
   forEachU,
+  bindingOrigin,
 }
 import backend.wasm_symbols.{
   SymbolDefect,
-  SymbolOrigin(..),
   SymbolRegistry,
   WasmShape(..),
   WasmSymbol(..),
@@ -355,6 +355,7 @@ import backend.wasm_symbols.{
   excuseSymbol,
   unresolved,
 }
+import support.symbol_origin.{SymbolOrigin(..)}
 import backend.wasm_preamble.{
   preambleHeadLines,
   plannedImportLines,
@@ -785,12 +786,6 @@ progForBinding name loc site prog = progWithFnCtx prog { freshFnCtx () |
   binding = name,
   origin = bindingOrigin name loc,
 }
-
--- where the binding [name] at [loc] is, as the registry reports it: no position
--- for the placeholder span of a binding without a source location
-bindingOrigin : String -> Loc -> SymbolOrigin
-bindingOrigin name (Loc f 1 0 1 0) = SymbolOrigin name f 0 0
-bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 
 -- [prog] with its physical definitions and uses attributed to [label], for a
 -- body that has no source binding of its own (an impl method, `main`, a value).

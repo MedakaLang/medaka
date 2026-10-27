@@ -57,6 +57,7 @@ import backend.llvm_emit.{
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
+import driver.diagnostics.{refuseLlvmSymbolDefects}
 import entries.entry_support.{
   driveEmitLocated,
   stampSiteFiles,
@@ -170,12 +171,14 @@ emitTail mods requirement outputs facts runtimeDecls coreD modules1 =
   let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls
   let plan =
     buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp
-  if statsOn then
-    let (text, stats) = emitProgramWithStats input plan cp
-    let _ = emitStats statsOn stats
-    putStr text
-  else
-    putStr (emitProgram input plan cp)
+  if statsOn then match emitProgramWithStats input plan cp
+    Ok (text, stats) =>
+      let _ = emitStats statsOn stats
+      putStr text
+    Err defects => refuseLlvmSymbolDefects "" defects
+  else match emitProgram input plan cp
+    Ok text => putStr text
+    Err defects => refuseLlvmSymbolDefects "" defects
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate

@@ -95,10 +95,14 @@ llvmText cp = llvmFor RawUnchecked cp
 
 llvmFor : ManifestRequirement -> CProgram -> String
 llvmFor requirement cp =
-  llvmEmit
-    (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
-    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
-    cp
+  let emitted =
+    llvmEmit
+      (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
+      (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
+      cp
+  match emitted
+    Ok text => text
+    Err _ => ""
 
 wasmText : CProgram -> String
 wasmText cp = wasmFor RawUnchecked cp
