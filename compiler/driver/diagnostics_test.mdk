@@ -848,3 +848,62 @@ test "the clauses of an impl method are not judged one pattern at a time" =
     "data Two = A | B\nimpl Debug Two where\n  debug A = \"A\"\n  debug B = \"B\""
     0
     "  let _ = debug A"
+
+-- The warnings of [binderCase]'s program that contain [needle].
+codeCase : String -> String -> Int -> String -> <IO> Expectation
+codeCase needle top want body = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    expectEqual
+      want
+      (length
+        (filter
+          (contains needle)
+          (binderWarnings
+            rsrc
+            csrc
+            (unlines [
+              "data Pair = Pair Int Int",
+              top,
+              "main =",
+              "  let p = None : Option Int",
+              body,
+              "  println \"done\"",
+            ]))))
+  _ => fail "could not read the prelude pair"
+
+ifaceDefault : String -> String
+ifaceDefault clause =
+  "interface Get a where\n  get : a -> Option Int -> Int\n" ++ clause
+
+test "an interface default clause is judged like an impl clause" = expectEach [
+  (
+    "refutable default",
+    codeCase
+      "W-NONEXHAUSTIVE-CLAUSES"
+      (ifaceDefault "  get _ (Some x) = x")
+      1
+      "  let _ = 0",
+  ),
+  (
+    "exhaustive default",
+    codeCase
+      "W-NONEXHAUSTIVE"
+      (ifaceDefault "  get _ (Some x) = x\n  get _ None = 0")
+      0
+      "  let _ = 0",
+  ),
+]
+
+test "a refutable let-bound function warns with the lambda code" = expectEach [
+  (
+    "refutable let function",
+    codeCase "W-NONEXHAUSTIVE:" "" 1 "  let h (Some x) = x",
+  ),
+  (
+    "irrefutable let function",
+    codeCase "W-NONEXHAUSTIVE" "" 0 "  let h (a, b) = a",
+  ),
+]
