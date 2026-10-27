@@ -103,6 +103,7 @@ import backend.llvm_emit.{
   makeEmitInput,
 }
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import backend.wasm_demand.{WasmDemandPlan, PlannedImport}
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
@@ -1946,8 +1947,11 @@ emissionVictim "not-provided" =
   match omLookup (runtimeExternSymbol "assertSnapshot") facts.factExterns
     Some fact => replaceMain (externVar fact) emissionControl
     None => panic "emission control omitted assertSnapshot extern fact"
+emissionVictim "physical-type" = lowered "main = \"type-neighbor\""
 emissionVictim victim =
-  if contains "extern-" victim then
+  if stringStartsWith "physical-" victim then
+    lowered "main = 12 / 3"
+  else if contains "extern-" victim then
     let cp =
       if victim == "extern-paired" || victim == "extern-import" then
         lowered
@@ -2145,6 +2149,13 @@ manifestVictims = [
 ]
 
 emissionNeedle : String -> String
+emissionNeedle "physical-mode" = "wasm-mode-mismatch"
+emissionNeedle "physical-paired-mode" = "wasm-mode-mismatch"
+emissionNeedle "physical-helper" = "missing-wasm-helper-prerequisite"
+emissionNeedle "physical-int-helper" = "missing-wasm-helper-prerequisite"
+emissionNeedle "physical-type" = "missing-wasm-type-prerequisite"
+emissionNeedle "physical-import" = "missing-wasm-host-key"
+emissionNeedle "physical-signature" = "wasm-import-order"
 emissionNeedle "manifest-core-missing" =
   "manifest: missing checked entry manifest"
 emissionNeedle "manifest-both-missing" =
@@ -2206,6 +2217,67 @@ emissionRoutes = [
   "llvm-stats", "llvm-strict", "llvm-record", "llvm-census", "wasm-strict",
   "wasm-unchecked", "wasm-record", "wasm-census"
 ]
+
+physicalVictims : List String
+physicalVictims = [
+  "physical-mode", "physical-paired-mode", "physical-helper",
+  "physical-int-helper", "physical-type", "physical-import",
+  "physical-signature"
+]
+
+corruptPhysicalPlan : String -> EmitPlan -> EmitPlan
+corruptPhysicalPlan victim plan = match plan.wasmPhysical
+  None => plan
+  Some d =>
+    let changed = match victim
+      "physical-mode" => { d | useRef = not d.useRef }
+      "physical-paired-mode" =>
+        { d | useRef = not d.useRef, helpers = [], representationTypes = [] }
+      "physical-helper" => { d | helpers = [] }
+      "physical-int-helper" => { d | intHelpers = [] }
+      "physical-type" => { d | representationTypes = [] }
+      "physical-import" => { d | imports = [] }
+      "physical-signature" =>
+        { d | imports = map (i => { i | signature = "(param f64)" }) d.imports }
+      _ => d
+    { plan | wasmPhysical = Some changed }
+
+test "physical demand corruptions refuse before text, stats and playground markers" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              physicalVictims)
+          [
+            "wasm-strict", "wasm-unchecked", "wasm-record", "wasm-census",
+            "playground", "playground-analyze"
+          ])
+
+test "physical demand valid neighbors emit nonempty text and an empty census" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (
+            route,
+            if route == "wasm-census" then
+              expectEqual "" (emissionText route "physical-valid")
+            else if route == "playground-analyze" then
+              expectEqual "ANALYZE" (emissionText route "physical-valid")
+            else
+              expectTextContainsAll
+                ["(module", "(export \"mdk_main\""]
+                (emissionText route "physical-valid"),
+          ))
+          [
+            "wasm-strict", "wasm-unchecked", "wasm-record", "wasm-census",
+            "playground", "playground-analyze"
+          ])
 
 publicRendererNames : List Decl -> List String
 publicRendererNames [] = []
@@ -2274,16 +2346,18 @@ emissionText route victim =
     else
       PreludeFreeRuntime
   let plan =
-    corruptManifestPlan
+    corruptPhysicalPlan
       victim
-      (corruptExternPlan
+      (corruptManifestPlan
         victim
-        (corruptGlobalPlan
+        (corruptExternPlan
           victim
-          (buildEmitPlan
-            (if victim == "target" then other else target)
-            domain
-            cp)))
+          (corruptGlobalPlan
+            victim
+            (buildEmitPlan
+              (if victim == "target" then other else target)
+              domain
+              cp))))
   let requirement = manifestRequirement victim
   let li = makeEmitInput requirement domain [] [] 0 [] [] ""
   let wi = makeWasmEmitInput requirement domain []
@@ -2374,6 +2448,7 @@ emissionRefusedAt destination route victim = match boundedVerbSeconds 90 "env" [
         expectFalse (contains "(module" out || contains "define i32" out),
       ),
       ("no marker", expectFalse (contains "__MEDAKA_WAT__" out)),
+      ("no analyze marker", expectFalse (contains "__MEDAKA_ANALYZE__" out)),
       ("no stats", expectFalse (contains "EMISSION_STATS_SENTINEL" out)),
     ]
 
