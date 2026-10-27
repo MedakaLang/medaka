@@ -12,8 +12,9 @@ import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
   chainArgs, checkModulesK, elaborateModulesWithReport, hadTypeErrors,
-  matchWarningsNow, checkModulesPartialLast
+  checkModulesPartialLast
 }
+import types.tc_infer.{matchWarningsNow}
 
 preludeSrc : String
 preludeSrc = joinNl [
