@@ -4,7 +4,7 @@
 -- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
 -- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
 --
--- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (report-ghc.md:71, a leaf that
+-- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (unsourced here: a leaf that
 -- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data
 -- type, so a diagnostic's code is still passed at each emit site.
 --

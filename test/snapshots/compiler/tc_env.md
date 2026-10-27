@@ -1,10 +1,12 @@
 # META
-source_lines=4361
+source_lines=4451
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
--- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index, the export and
--- definer tables; their construction from declarations is `tc_decls`), the identity keys, the
+-- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import
+-- site it finds (`importLocFor`), the export and definer tables; their construction from
+-- declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and
+-- references, `builtinClassName`, `builtinIfaceRef`), the
 -- imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an
 -- import makes visible is `tc_scope`.
 --
@@ -63,6 +65,7 @@ import frontend.ast.{
   identOriginOf,
   ifaceIdentity,
   mkIdent,
+  orElseLoc,
   sameTyConHead,
   tabKeyEq,
   tabKeyOf,
@@ -77,16 +80,43 @@ import types.effect_rows.{EffLabel(..)}
 import types.tc_diag_text.{kindName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
-  CeRow(..), ClassEnv(..), DeclEnvAcc(..), DeclEnvModule(..), DeclEnvs(..),
-  EnvBinding(..), GraphCtx(..), ImplAcc(..), ImplEnv(..), ImplRow(..),
-  ImplUniverse(..), InstRef(..), KeyEntry(..), Kind(..), MethodEnv(..),
-  MethodPredicateSlot(..), MethodRow(..), MethodSchemeRow(..), ModuleCtx(..),
-  RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
-  CDeclared, dynFor, MethodEntry
+  CeRow(..),
+  ClassEnv(..),
+  DeclEnvAcc(..),
+  DeclEnvModule(..),
+  DeclEnvs(..),
+  EnvBinding(..),
+  GraphCtx(..),
+  ImplAcc(..),
+  ImplEnv(..),
+  ImplRow(..),
+  ImplUniverse(..),
+  InstRef(..),
+  KeyEntry(..),
+  Kind(..),
+  MethodEnv(..),
+  MethodPredicateSlot(..),
+  MethodRow(..),
+  MethodSchemeRow(..),
+  ModuleCtx(..),
+  RecordInfo(..),
+  StandaloneOrigin(..),
+  TcEnv(..),
+  ValueScheme(..),
+  AliasDecl,
+  CDeclared,
+  BuiltinClass(..),
+  dynFor,
+  MethodEntry,
 }
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
-import list.{drop, indexed, last}
+import list.{
+  drop,
+  findMap,
+  indexed,
+  last,
+}
 import support.util.{
   anyList,
   contains,
@@ -3531,6 +3561,66 @@ export
 lastComponent : List String -> String
 lastComponent ns = optionOr "" (last ns)
 
+-- The import in [prog] that brings in module [owner]'s declarations: its own
+-- import, or else the first import of a module that reaches it.
+export
+importLocFor : OrdMap (OrdMap Unit) -> List Decl -> String -> Option Loc
+importLocFor reach prog owner =
+  orElseLoc
+    (findMap (importLocOf owner) prog)
+    (findMap (importLocReaching reach owner) prog)
+
+importLocOf : String -> Decl -> Option Loc
+importLocOf owner (DUse _ path loc)
+  | useModId path == owner = Some loc
+importLocOf _ _ = None
+
+importLocReaching : OrdMap (OrdMap Unit) -> String -> Decl -> Option Loc
+importLocReaching reach owner (DUse _ path loc)
+  | omHasKey owner (optionOr omEmpty (omLookup (useModId path) reach)) =
+    Some loc
+importLocReaching _ _ _ = None
+
+-- the spelling each built-in class has in the prelude.  It is a CONSTANT of the
+-- language, not a lookup key: nothing resolves this string against a scope.
+export
+builtinClassName : BuiltinClass -> String
+builtinClassName BNum = "Num"
+builtinClassName BEq = "Eq"
+builtinClassName BOrd = "Ord"
+builtinClassName BSemigroup = "Semigroup"
+
+export
+builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
+builtinClassOrigin gctx BNum = gctx.crossRun.builtinClassesRef.value.bcNum
+builtinClassOrigin gctx BEq = gctx.crossRun.builtinClassesRef.value.bcEq
+builtinClassOrigin gctx BOrd = gctx.crossRun.builtinClassesRef.value.bcOrd
+builtinClassOrigin gctx BSemigroup =
+  gctx.crossRun.builtinClassesRef.value.bcSemigroup
+
+-- the identity-carrying interface reference a synthetic occurrence records.
+--
+-- Standing condition, for the four call sites this function feeds
+-- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`).  Each of
+-- them builds a DECL-LAYER obligation goal out of this ref, via `builtinClassOrigin` ->
+-- `builtinClassesRef`, a table `builtinClassesGo` populates by reading
+-- `DInterface { ifaceOrigin }`.  That is sound TODAY only because no user declaration can
+-- reach that table's population — MEASURED on both arms: a module IN the import graph
+-- redeclaring one of the four spellings is rejected `Duplicate interface: Semigroup`
+-- (exit 1); a module NOT in the graph is never loaded at all, so it contributes no
+-- `DInterface` to the walk; and a user `core.mdk` cannot shadow the prelude.  The
+-- cross-layer defect U1c (#1507) cured at `recordImplObligation` RETURNS at all four
+-- sites if ANY of these changes: the duplicate-interface guard is relaxed; DICT §7.1 U1
+-- makes the prelude a graph node (at which point §8 I4 makes two same-spelled
+-- declarations legal, which is precisely what removes the guard); or a fifth
+-- `BuiltinClass` is added whose spelling the guard does not cover.  The safety here is a
+-- property of the LANGUAGE's current namespace rules, not of this channel.  Background:
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.
+export
+builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
+builtinIfaceRef gctx c =
+  IfaceRef { irName = builtinClassName c, irOrigin = builtinClassOrigin gctx c }
+
 -- test-only observation: declarations whose only callers are tests and probes.
 
 -- ── ARCH B-2.1-a2 history: standalone-decl-list `ImplEnv` ────────────────────
@@ -4366,17 +4456,17 @@ methodRowSameNameView rows =
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "dynFor" false) (mem "MethodEntry" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
@@ -4987,6 +5077,26 @@ methodRowSameNameView rows =
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
+(DTypeSig true "importLocFor" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "importLocFor" ((PVar "reach") (PVar "prog") (PVar "owner")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EVar "findMap") (EApp (EVar "importLocOf") (EVar "owner"))) (EVar "prog"))) (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "importLocReaching") (EVar "reach")) (EVar "owner"))) (EVar "prog"))))
+(DTypeSig false "importLocOf" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "importLocOf" ((PVar "owner") (PCon "DUse" PWild (PVar "path") (PVar "loc"))) (EIf (EBinOp "==" (EApp (EVar "useModId") (EVar "path")) (EVar "owner")) (EApp (EVar "Some") (EVar "loc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "importLocOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "importLocReaching" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "importLocReaching" ((PVar "reach") (PVar "owner") (PCon "DUse" PWild (PVar "path") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "owner")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "reach")))) (EApp (EVar "Some") (EVar "loc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "importLocReaching" (PWild PWild PWild) (EVar "None"))
+(DTypeSig true "builtinClassName" (TyFun (TyCon "BuiltinClass") (TyCon "String")))
+(DFunDef false "builtinClassName" ((PCon "BNum")) (ELit (LString "Num")))
+(DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
+(DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
+(DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
+(DTypeSig true "builtinClassOrigin" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcNum"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcEq"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcOrd"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcSemigroup"))
+(DTypeSig true "builtinIfaceRef" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "BuiltinClass") (TyCon "IfaceRef"))))
+(DFunDef false "builtinIfaceRef" ((PVar "gctx") (PVar "c")) (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "builtinClassName") (EVar "c"))) (fa "irOrigin" (EApp (EApp (EVar "builtinClassOrigin") (EVar "gctx")) (EVar "c"))))))
 (DTypeSig true "buildFlatImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
 (DFunDef false "buildFlatImplEnv" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "implDeclFacts") (EVar "prog")))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "ieIndexRows") (EVar "rows")) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "indexed") ((fa "ieRows" (EVar "rows")) (fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EVar "rows"))))))))
 (DTypeSig false "ieIndexRows" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
@@ -5109,17 +5219,17 @@ methodRowSameNameView rows =
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "dynFor" false) (mem "MethodEntry" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
@@ -5730,6 +5840,26 @@ methodRowSameNameView rows =
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
+(DTypeSig true "importLocFor" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "importLocFor" ((PVar "reach") (PVar "prog") (PVar "owner")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EVar "findMap") (EApp (EVar "importLocOf") (EVar "owner"))) (EVar "prog"))) (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "importLocReaching") (EVar "reach")) (EVar "owner"))) (EVar "prog"))))
+(DTypeSig false "importLocOf" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "importLocOf" ((PVar "owner") (PCon "DUse" PWild (PVar "path") (PVar "loc"))) (EIf (EBinOp "==" (EApp (EVar "useModId") (EVar "path")) (EVar "owner")) (EApp (EVar "Some") (EVar "loc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "importLocOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "importLocReaching" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "importLocReaching" ((PVar "reach") (PVar "owner") (PCon "DUse" PWild (PVar "path") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "owner")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "reach")))) (EApp (EVar "Some") (EVar "loc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "importLocReaching" (PWild PWild PWild) (EVar "None"))
+(DTypeSig true "builtinClassName" (TyFun (TyCon "BuiltinClass") (TyCon "String")))
+(DFunDef false "builtinClassName" ((PCon "BNum")) (ELit (LString "Num")))
+(DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
+(DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
+(DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
+(DTypeSig true "builtinClassOrigin" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcNum"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcEq"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcOrd"))
+(DFunDef false "builtinClassOrigin" ((PVar "gctx") (PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef") "value") "bcSemigroup"))
+(DTypeSig true "builtinIfaceRef" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "BuiltinClass") (TyCon "IfaceRef"))))
+(DFunDef false "builtinIfaceRef" ((PVar "gctx") (PVar "c")) (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "builtinClassName") (EVar "c"))) (fa "irOrigin" (EApp (EApp (EVar "builtinClassOrigin") (EVar "gctx")) (EVar "c"))))))
 (DTypeSig true "buildFlatImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
 (DFunDef false "buildFlatImplEnv" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "implDeclFacts") (EVar "prog")))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "ieIndexRows") (EVar "rows")) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "indexed") ((fa "ieRows" (EVar "rows")) (fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EVar "rows"))))))))
 (DTypeSig false "ieIndexRows" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))

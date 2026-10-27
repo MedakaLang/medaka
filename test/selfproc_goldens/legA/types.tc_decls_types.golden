@@ -1,0 +1,131 @@
+aliasArgBindings : ModuleCtx -> SigVars -> List (String, Mono) -> List String -> List Kind -> List Ty -> (SigVars, List (String, Mono))
+aliasArgScope : ModuleCtx -> SigVars -> List (String, Mono) -> TabKey -> List String -> List Ty -> (SigVars, List (String, Mono))
+aliasRowParamCell : GraphCtx -> EffRow -> Ref Effvar
+aliasScopeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Option (SigVars, List (String, Mono), Ty)
+anyRowDeclaredType : List Kind -> List Kind -> Bool
+anyRowSlotArg : SigVars -> List (String, Mono) -> List Ty -> Bool
+appFallback : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
+argsCarry : GraphCtx -> List TabKey -> String -> TabKey -> Int -> List Ty -> Bool
+astEffrowE : GraphCtx -> SigVars -> Ty -> EffRow
+atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
+atomOfWrittenIn : GraphCtx -> SigVars -> EffAtomTy -> Atom
+atomsOfWritten : GraphCtx -> List EffAtomTy -> List Atom
+atomsOfWrittenIn : GraphCtx -> SigVars -> List EffAtomTy -> List Atom
+authArgBindersIn : ModuleCtx -> Ty -> List (String, Param)
+authArgOf : ModuleCtx -> SigVars -> List (String, Mono) -> EffLabel -> Bool -> Ty -> Authority
+authTermOf : ModuleCtx -> SigVars -> List (String, Mono) -> EffLabel -> Bool -> EffParamTy -> Authority
+authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
+authorityNamesWritten : GraphCtx -> Ty -> List (String, Option Loc)
+authorityParamNames : List String -> List (Option KindAnn) -> List String
+authorityUsesOf : ModuleCtx -> Ty -> List (String, Param)
+axisAtomBinders : GraphCtx -> EffAtomTy -> List (String, Param)
+axisNamesArgument : List (String, EffParamTy) -> Bool
+binderDomainsIn : GraphCtx -> Ty -> List (String, Param)
+bindingForceFromAst : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> EffRow
+checkAliasPatternSlots : ModuleCtx -> List (String, Option KindAnn) -> Ty -> Unit
+checkAuthorityBinder : ModuleCtx -> String -> Ty -> Ty -> Unit
+checkAuthorityKindLabel : ModuleCtx -> KindAnn -> Unit
+checkAuthorityKindLabels : ModuleCtx -> List (Option KindAnn) -> Unit
+checkBinderDomain : ModuleCtx -> String -> Ty -> Option EffAtomTy -> Unit
+checkDeclAuthorityDomains : ModuleCtx -> List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
+checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
+checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit
+checkDeclaredKinds : ModuleCtx -> List Decl -> Unit
+checkDeclaredKindsDecl : ModuleCtx -> List Decl -> Decl -> Unit
+checkDeclaredKindsGo : ModuleCtx -> List Decl -> List Decl -> Unit
+checkDomainAxes : ModuleCtx -> Option Loc -> String -> Option String -> List (String, String) -> Unit
+checkEachEffectAtom : ModuleCtx -> List EffAtomTy -> Unit
+checkEffectAtoms : ModuleCtx -> List EffAtomTy -> Unit
+checkEffectParams : ModuleCtx -> List Decl -> Unit
+checkEffectParamsDecl : ModuleCtx -> Decl -> Unit
+checkEffectParamsTy : ModuleCtx -> Ty -> Unit
+checkEffectParamsTys : ModuleCtx -> List Ty -> Unit
+checkHeadKinds : ModuleCtx -> String -> List String -> List (Option KindAnn) -> List Ty -> Unit
+checkHeadKindsGo : ModuleCtx -> String -> List String -> List Ty -> List String -> List (Option KindAnn) -> Unit
+checkIfaceHeadKinds : ModuleCtx -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> Unit
+checkOneEffectParam : ModuleCtx -> String -> Param -> EffParamTy -> Unit
+checkPhantomAuthorityExport : ModuleCtx -> DataVis -> String -> List String -> List Variant -> Unit
+checkSuperKinds : ModuleCtx -> List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
+checkWrittenElementCap : ModuleCtx -> List EffAtomTy -> Unit
+declaredAuthority : GraphCtx -> (String, Option KindAnn) -> List (String, Param)
+dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
+domainParam : Option String -> Param
+domainParamWith : Option String -> List (String, String) -> Param
+expandAliasHeadTy : ModuleCtx -> Ty -> Ty
+expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
+fieldTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Field -> Mono
+findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
+firstIfaceMethodLoc : List IfaceMethod -> Option Loc
+foldAppFallback : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
+foldAppKinds : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
+foldRowSlotArgs : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
+fromAstDomainE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
+fromAstType : ModuleCtx -> List (String, Mono) -> Ty -> Mono
+fromAstTypeApp : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
+fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
+fromAstTypeVarApp : ModuleCtx -> SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
+isEPName : EffParamTy -> Bool
+isEPProduct : EffParamTy -> Bool
+isEPSet : EffParamTy -> Bool
+isOrdinaryBinder : SigVars -> String -> Bool
+isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
+isStringTy : Ty -> Bool
+kauthArgVarNames : GraphCtx -> List Kind -> List Ty -> List (String, Param)
+kindAnnHasEffect : KindAnn -> Bool
+kindArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
+kindsEq : List Kind -> List Kind -> Bool
+krowArgVarNames : List Kind -> List Ty -> List String
+literalDomainTop : List EffParamTy -> Param
+namedArgTypes : Ty -> List (String, Ty)
+namedAtomBinder : GraphCtx -> EffAtomTy -> List (String, Param)
+namedAtomBinders : GraphCtx -> Ty -> List (String, Param)
+ordinaryBinderIn : SigVars -> Bool -> Ty -> Option String
+paramCarries : GraphCtx -> List TabKey -> TabKey -> Int -> Bool
+patternArgVarNames : List Kind -> List Ty -> List String
+patternSlotNamesIn : ModuleCtx -> Ty -> List String
+payloadTypesE : ModuleCtx -> SigVars -> List (String, Mono) -> ConPayload -> List Mono
+populateEffectDomainsGraph : GraphCtx -> List Decl -> List (String, List Decl) -> Unit
+populateGo : GraphCtx -> List Decl -> Unit
+populateUnitsGo : GraphCtx -> List (String, List Decl) -> Unit
+qualifiedArgumentKinds : ModuleCtx -> Option Loc -> List (String, List Kind) -> List (List Kind) -> List Ty -> List (String, List Kind)
+qualifiedConstraintKinds : ModuleCtx -> Option Loc -> List (String, List Kind) -> List Constraint -> List (String, List Kind)
+qualifiedKindScope : ModuleCtx -> List (String, List Kind) -> Ty -> List (String, List Kind)
+qualifyBy : SigVars -> String -> Mono -> Mono
+qualifyByAll : SigVars -> List String -> Mono -> Mono
+qualifyByTerms : ModuleCtx -> SigVars -> List EffParamTy -> Option Loc -> Mono -> Mono
+recFieldMono : ModuleCtx -> SigVars -> List (String, Mono) -> Field -> (String, Mono)
+registerEffectDomain : GraphCtx -> EffLabel -> Option String -> List (String, String) -> Unit
+reportBinderDomains : ModuleCtx -> Ty -> List (String, Param) -> Unit
+reportUnboundAuthorityNames : ModuleCtx -> Ty -> SigVars -> Unit
+reportUnboundAuthorityNamesIn : ModuleCtx -> List Ty -> SigVars -> Unit
+reqTyToMono : ModuleCtx -> List (String, Mono) -> Ty -> Mono
+returnRowE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> EffRow
+rowArgNames : ModuleCtx -> Ty -> List String
+rowArgNamesApp : ModuleCtx -> List (String, List Kind) -> TyConOrigin -> String -> List Ty -> Option (List String)
+rowArgNamesIn : ModuleCtx -> List (String, List Kind) -> Ty -> List String
+rowArgNamesVarApp : ModuleCtx -> List (String, List Kind) -> String -> List Ty -> Option (List String)
+rowArgOf : ModuleCtx -> SigVars -> Ty -> EffRow
+rowSlotArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
+sameDomainTop : Param -> Param -> Bool
+seedEffectDomains : GraphCtx -> Unit -> Unit
+sigConstraintsOf : Ty -> List Constraint
+sigVarsUnion : SigVars -> SigVars -> SigVars
+sigVarsWithAuths : List (String, Ref Authvar) -> SigVars -> SigVars
+sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
+spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
+substAliasArgs : List (String, Ty) -> Ty -> Ty
+substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
+substTyVars : List (String, Ty) -> Ty -> Ty
+tailCell : GraphCtx -> SigVars -> List String -> Option (Ref Effvar)
+tailCellsOf : SigVars -> List String -> List (Ref Effvar)
+tyCarries : GraphCtx -> List TabKey -> String -> Ty -> Bool
+tyVarTypeOcc : ModuleCtx -> String -> Ty -> Bool
+tyVarTypeOccSlots : ModuleCtx -> String -> List Kind -> List Ty -> Bool
+writtenAxisTerm : SigVars -> List (String, EffParamTy) -> (String, Param) -> (String, Authority)
+writtenBindingForce : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Option EffRow
+writtenElement : Param -> EffAtomTy -> List Param
+writtenQualifiers : Ty -> List (List String, Option Loc)
+writtenTermProblems : String -> Param -> List EffParamTy -> List String
+zipCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (Variant, List (String, KindAnn))
+zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
+zipParamKinds : List String -> List (Option KindAnn) -> List (String, Option KindAnn)

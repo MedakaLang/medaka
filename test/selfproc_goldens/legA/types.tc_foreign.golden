@@ -1,0 +1,56 @@
+externDecls : List Decl -> List Decl
+externSigsToMap : List Decl -> Map String (Ty, List (String, Int)) -> Map String (Ty, List (String, Int))
+ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
+ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
+ffiCheckCatalogRowGo : ModuleCtx -> List Decl -> Unit
+ffiCheckCatalogRowOne : ModuleCtx -> String -> Ty -> String -> List EffAtomTy -> List (String, Int) -> List EffAtomTy -> Unit
+ffiCheckExternPos : ModuleCtx -> String -> Option Loc -> Ty -> Unit
+ffiCheckExternSig : ModuleCtx -> String -> Option Loc -> Ty -> Unit
+ffiCheckExternsCatalogRow : ModuleCtx -> Bool -> List Decl -> Unit
+ffiCheckExternsCrossable : ModuleCtx -> Bool -> List Decl -> Unit
+ffiCheckExternsGo : ModuleCtx -> List Decl -> Unit
+ffiCheckExternsLabelled : ModuleCtx -> Bool -> List Decl -> Unit
+ffiCheckExternsShadow : ModuleCtx -> Bool -> List Decl -> Unit
+ffiCheckLabelsGo : ModuleCtx -> List Decl -> Unit
+ffiCheckShadowGo : ModuleCtx -> List Decl -> Unit
+ffiCheckSpineRow : ModuleCtx -> String -> Ty -> List (String, Int) -> List (String, Ty) -> String -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
+ffiCrossableConName : String -> Bool
+ffiCrossableTy : ModuleCtx -> Ty -> Bool
+ffiDeclaredRow : ModuleCtx -> Ty -> Option (List EffAtomTy)
+ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
+ffiExternTypeRowsWith : Map String (Ty, List (String, Int)) -> List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List (String, String), (List String, String)))
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> List EffAtomTy
+ffiInstRow : List (String, Int) -> List (String, Ty) -> List EffAtomTy -> List EffAtomTy
+ffiIsBuiltinExternName : GraphCtx -> String -> Bool
+ffiMatchAtom : EffAtomTy -> EffAtomTy -> List (String, Ty) -> Option (List (String, Ty))
+ffiMatchAtoms : List EffAtomTy -> List EffAtomTy -> List (String, Ty) -> Option (List (String, Ty), List EffAtomTy)
+ffiMatchRow : List EffAtomTy -> List String -> List EffAtomTy -> List String -> Option (List (String, Ty)) -> Option (List (String, Ty))
+ffiMatchSpine : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+ffiMatchTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+ffiMatchTys : List (TabKey, (List String, Ty)) -> List Ty -> List Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+ffiParamOf : Ty -> Option EffParamTy
+ffiParamTy : EffParamTy -> Ty
+ffiResultRow : ModuleCtx -> Ty -> List EffAtomTy
+ffiRowBody : Ty -> Ty
+ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
+ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
+ffiSameNames : List String -> List String -> Bool
+ffiSameParam : EffParamTy -> EffParamTy -> Bool
+ffiSameRow : List EffAtomTy -> List String -> List EffAtomTy -> List String -> Bool
+ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
+ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
+ffiSigInstance : ModuleCtx -> Ty -> Ty -> Option (List (String, Ty))
+ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
+ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
+ffiSpineRows : List (TabKey, (List String, Ty)) -> Ty -> List (List EffAtomTy, List String)
+ffiStampMode : GraphCtx -> String -> Bool
+ffiStampModeOwned : GraphCtx -> String -> Bool
+ffiTakeAtom : EffAtomTy -> List EffAtomTy -> List EffAtomTy -> List (String, Ty) -> Option (List (String, Ty), List EffAtomTy)
+ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
+freeAuthorityNames : List String -> List EffAtomTy -> List String
+namedArgOrder : Ty -> List (String, Int)
+namedArgPositions : Ty -> Int -> List (String, Int)
+positionCells : ModuleCtx -> List (String, Int) -> List (Int, Ref Authvar)
+positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
+pushFfiDiag : ModuleCtx -> FfiDiag -> Unit
+withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars

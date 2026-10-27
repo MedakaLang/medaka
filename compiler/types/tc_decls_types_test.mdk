@@ -1,0 +1,344 @@
+-- Tests of `types.tc_decls_types`'s own API: the conversion of a written type to a `Mono`
+-- (`fromAstType`) with its alias, row-slot, tuple, variable and authority qualifier cases,
+-- the declaration checks over declared parameter kinds (`checkDeclaredKinds`), written effect
+-- parameters (`checkEffectParams`) and named authority binders (`checkDeclAuthorityUses`),
+-- and the signature binder sets the conversion reads.  Each test parses its own declarations
+-- and mints its own module record in a fresh graph record.  An unknown type name is a
+-- resolver diagnostic, not this layer's: the conversion keeps it as an opaque constructor
+-- and pushes nothing.  The closed model types of `tc_mono_test` give the property its inputs.
+
+import test.{
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectTrue,
+}
+import frontend.parser.{parse}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
+import types.repr.{Mono(..), ppMono, ppTy}
+import types.effect_rows.{pureRow}
+import types.tc_mono.{monoUnboundIds, tconBuiltin, tconFrom}
+import types.tc_mono_test.{MTy(..), Closed(..), closedTy}
+import types.tc_state.{blankModuleCtx, probeGraphCtx}
+import types.tc_test_support.{
+  aliasTableOf,
+  codesOf,
+  intTy,
+  recordKindsOf,
+  sigsOf,
+  withFirstSig,
+}
+import types.tc_types.{Kind(..), ModuleCtx(..)}
+import types.tc_decls_types.{
+  expandAliasHeadTy,
+  authorityBinderBound,
+  binderDomainsIn,
+  checkDeclAuthorityUses,
+  checkDeclaredKinds,
+  checkEffectParams,
+  fromAstType,
+  kindsEq,
+  namedArgTypes,
+  patternSlotNamesIn,
+  populateEffectDomainsGraph,
+  rowArgNames,
+  sigConstraintsOf,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- A module record whose alias table and effect domains are those of [ds].
+ctxFor : List Decl -> ModuleCtx
+ctxFor ds =
+  let m = blankModuleCtx (probeGraphCtx ()) "probe"
+  m.mcCells.aliasTableRef := aliasTableOf ds
+  populateEffectDomainsGraph m.mcGraph [] [("probe", ds)]
+  m
+
+-- Run the three declaration checks and convert every signature of [src]; answer the
+-- conversions rendered, then the codes of the diagnostics pushed, oldest first.
+analyse : String -> (List String, List String)
+analyse src =
+  let ds = parse src
+  let m = ctxFor ds
+  recordKindsOf m ds
+  checkDeclaredKinds m ds
+  checkEffectParams m ds
+  checkDeclAuthorityUses m ds
+  let monos = map (t => ppMono (fromAstType m [] t)) (sigsOf ds)
+  (monos, codesOf m)
+
+rendered : String -> List String
+rendered src = fst (analyse src)
+
+srcCodes : String -> List String
+srcCodes src = snd (analyse src)
+
+rigidName : Mono -> Option String
+rigidName (TRigid n) = Some n
+rigidName _ = None
+
+stringTy : Ty
+stringTy =
+  TyCon { tyConName = "String", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- ── declared parameter kinds ──────────────────────────────────────────────
+
+test "a parameter declared Effect may stand in an arrow's effect tail" =
+  expectEqual [] (srcCodes "data Box (e : Effect) a = Mk (Unit -> <e> a)\n")
+
+test "an unannotated parameter used as an effect tail is T-EFFECT-KIND-MISMATCH" =
+  expectEqual
+    ["T-EFFECT-KIND-MISMATCH"]
+    (srcCodes "data Box e a = Mk (Unit -> <e> a)\n")
+
+test "an ordinary type at a row-kinded argument position is T-EFFECT-KIND-MISMATCH" =
+  expectEqual
+    ["T-EFFECT-KIND-MISMATCH"]
+    (srcCodes
+      """
+        data Box (e : Effect) a = Mk (Unit -> <e> a)
+        x : Box String Unit
+        """)
+
+test "a row at an ordinary argument position is T-EFFECT-KIND-MISMATCH and reads as Unit" =
+  let src = """
+    data Box a = Mk a
+    x : Box <Stdout>
+    """
+  expectAll [
+    expectEqual ["T-EFFECT-KIND-MISMATCH"] (srcCodes src),
+    expectEqual ["Box Unit"] (rendered src),
+  ]
+
+test "a row at a row-kinded argument position is kept" =
+  let src =
+    """
+      data Box (e : Effect) a = Mk (Unit -> <e> a)
+      x : Box <Stdout> Int
+      """
+  expectAll [
+    expectEqual [] (srcCodes src),
+    expectEqual ["Box <Stdout> Int"] (rendered src),
+  ]
+
+-- ── aliases and their arguments ───────────────────────────────────────────
+
+test "a nullary alias expands to its right-hand side, through alias chains" = expectEach
+  [
+    ("one step", expectEqual ["Int"] (rendered """
+      type A = Int
+      x : A
+      """)),
+    (
+      "chain",
+      expectEqual ["Int"] (rendered """
+        type A = Int
+        type B = A
+        x : B
+        """),
+    ),
+  ]
+
+test "an applied alias substitutes its arguments" = expectEach [
+  (
+    "pair",
+    expectEqual
+      ["(Int, Bool)"]
+      (rendered """
+        type Pair a b = (a, b)
+        x : Pair Int Bool
+        """),
+  ),
+  ("nested", expectEqual ["Int"] (rendered """
+    type Id a = a
+    x : Id (Id Int)
+    """)),
+]
+
+test "an alias applied to too few or too many arguments is T-ALIAS-ARITY" = expectEach
+  [
+    (
+      "too few",
+      expectEqual
+        ["T-ALIAS-ARITY"]
+        (srcCodes """
+          type Pair a b = (a, b)
+          x : Pair Int
+          """),
+    ),
+    (
+      "none",
+      expectEqual
+        ["T-ALIAS-ARITY"]
+        (srcCodes """
+          type Pair a b = (a, b)
+          x : Pair
+          """),
+    ),
+    (
+      "too many",
+      expectEqual
+        ["T-ALIAS-ARITY"]
+        (srcCodes """
+          type Pair a b = (a, b)
+          x : Pair Int Bool Char
+          """),
+    ),
+  ]
+
+test "an alias applied to exactly its arity pushes no diagnostic" =
+  expectEqual [] (srcCodes """
+    type Pair a b = (a, b)
+    x : Pair Int Bool
+    """)
+
+test "an unknown type name is the resolver's R-UNKNOWN-TYPE; this layer keeps an opaque constructor and pushes none" =
+  expectEqual (["Foo"], []) (analyse "x : Foo\n")
+
+-- ── the alias at a written head ───────────────────────────────────────────
+
+test "expandAliasHeadTy follows aliases at the head, nullary or applied to arguments" =
+  let m = ctxFor (parse """
+    type A = Int
+    type B = A
+    type P a = List a
+    """)
+  expectAll [
+    withFirstSig "x : B\n" (t =>
+      expectEqual "Int" (ppTy (expandAliasHeadTy m t))),
+    withFirstSig "x : A\n" (t =>
+      expectEqual "Int" (ppTy (expandAliasHeadTy m t))),
+    withFirstSig "x : P Int\n" (t =>
+      expectEqual "List Int" (ppTy (expandAliasHeadTy m t))),
+  ]
+
+-- ── arrows, tuples and variables ──────────────────────────────────────────
+
+test "an arrow keeps the written effect row of its result" = expectAll [
+  expectEqual ["Int -> <Stdout> Unit"] (rendered "f : Int -> <Stdout> Unit\n"),
+  expectEqual ["Int -> Int"] (rendered "f : Int -> Int\n"),
+]
+
+test "a tuple type reads as the tuple of its components" =
+  expectEqual ["(Int, Bool, String)"] (rendered "x : (Int, Bool, String)\n")
+
+test "a variable bound by the caller reads as its mono, an unbound one as a rigid" =
+  let m = ctxFor []
+  expectAll [
+    expectEqual
+      "Int"
+      (ppMono (fromAstType m [("a", tconBuiltin "Int")] (TyVar "a"))),
+    expectEqual
+      (Some "b")
+      (rigidName (fromAstType m [("a", tconBuiltin "Int")] (TyVar "b"))),
+    expectEqual
+      None
+      (rigidName (fromAstType m [("a", tconBuiltin "Int")] (TyVar "a"))),
+  ]
+
+test "a constrained type converts as its body" =
+  expectEqual
+    (rendered "f : Int -> Int\n")
+    (rendered "f : Eq a => Int -> Int\n")
+
+-- ── effect parameters and authority qualifiers ────────────────────────────
+
+test "a parameter on an atomic label is T-EFFECT-PARAM" =
+  expectEqual ["T-EFFECT-PARAM"] (srcCodes "h : Int -> <Stdout \"x\"> Unit\n")
+
+test "a String authority binder at a parameterised label is accepted" =
+  expectEqual
+    []
+    (srcCodes """
+      effect Net Prefix
+      f : (p : String) -> <Net p> Unit
+      """)
+
+test "a binder an atom names as an authority must be a String: T-AUTHORITY-BINDER" =
+  expectEqual
+    ["T-AUTHORITY-BINDER"]
+    (srcCodes """
+      effect Net Prefix
+      g : (p : Int) -> <Net p> Unit
+      """)
+
+test "a written String qualifier keeps its literal on the converted type" =
+  expectEqual ["String @\"a.com/*\""] (rendered "g : String @(\"a.com/*\")\n")
+
+-- ── signature binder sets ─────────────────────────────────────────────────
+
+test "namedArgTypes lists the named arguments of the arrow spine in order" = withFirstSig
+  "f : (p : String) -> Bool -> (n : Int) -> Unit\n"
+  (t => expectEqual ["p", "n"] (map fst (namedArgTypes t)))
+
+test "namedArgTypes sees through a constraint and stops at a non-arrow" = expectAll
+  [
+    withFirstSig "f : Eq a => (p : a) -> Unit\n" (t =>
+      expectEqual ["p"] (map fst (namedArgTypes t))),
+    withFirstSig "f : Int\n" (t => expectEqual [] (map fst (namedArgTypes t))),
+  ]
+
+test "binderDomainsIn names the binders an effect atom draws from a domain" =
+  let m = ctxFor (parse "effect Net Prefix\n")
+  expectAll [
+    withFirstSig "f : (p : String @Net) -> Unit\n" (t =>
+      expectEqual ["p"] (map fst (binderDomainsIn m.mcGraph t))),
+    withFirstSig "f : String -> Unit\n" (t =>
+      expectEqual [] (map fst (binderDomainsIn m.mcGraph t))),
+  ]
+
+test "a name is a bound authority only as a String named argument or an index slot" = expectAll
+  [
+    expectTrue (authorityBinderBound [("p", stringTy)] [] "p"),
+    expectFalse (authorityBinderBound [("p", intTy)] [] "p"),
+    expectTrue (authorityBinderBound [] ["q"] "q"),
+    expectFalse (authorityBinderBound [] ["q"] "r"),
+  ]
+
+test "sigConstraintsOf collects the constraints of the whole spine" = withFirstSig
+  "f : (Eq a, Ord a) => a -> Bool\n"
+  (t => expectEqual 2 (length (sigConstraintsOf t)))
+
+test "patternSlotNamesIn and rowArgNames find nothing in a signature without such slots" =
+  let m = ctxFor []
+  withFirstSig "f : Int -> Int\n" (t => expectAll [
+    expectEqual [] (patternSlotNamesIn m t),
+    expectEqual [] (rowArgNames m t),
+  ])
+
+test "kindsEq compares kind lists position by position" = expectAll [
+  expectTrue (kindsEq [KType, KRow] [KType, KRow]),
+  expectFalse (kindsEq [KType, KRow] [KRow, KType]),
+  expectFalse (kindsEq [KType] [KType, KType]),
+  expectTrue (kindsEq [] []),
+]
+
+-- ── the conversion of a closed written type ───────────────────────────────
+
+-- The written form of a model type, constructors stamped with one module's identity.
+written : MTy -> Ty
+written (MCon n) =
+  TyCon { tyConName = n, tyConLoc = None, tyConOrigin = OriginModule "gen" }
+written (MVar k) = TyVar "v\{intToString k}"
+written (MApp a b) = TyApp (written a) (written b)
+written (MFun a b) = TyFun (written a) (written b)
+
+-- The `Mono` the conversion must produce, computed on the model.
+expected : MTy -> Mono
+expected (MCon n) = tconFrom (OriginModule "gen") n
+expected (MVar k) = TRigid "v\{intToString k}"
+expected (MApp a b) = TApp (expected a) (expected b)
+expected (MFun a b) = TFun (expected a) pureRow (expected b)
+
+-- A closed written type converts to a closed `Mono` that is exactly the model's: no
+-- variable is minted, no diagnostic is pushed, and application and arrow structure survive.
+-- The generator draws constructor leaves only, with depth-2 applications and arrows.
+prop "a closed written type converts to the closed Mono of its model, with no diagnostic" (c : Closed) =
+  let t = closedTy c
+  let m = ctxFor []
+  let mono = fromAstType m [] (written t)
+  ppMono mono == ppMono (expected t)
+    && monoUnboundIds mono == []
+    && codesOf m == []
