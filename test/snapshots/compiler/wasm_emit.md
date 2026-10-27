@@ -1,5 +1,5 @@
 # META
-source_lines=11397
+source_lines=11387
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_repr.{
@@ -298,6 +298,7 @@ import ir.core_ir_lower.{
   callModeFor,
   isPartialMode,
   definedArityOf,
+  leadingDictParams,
   programArities,
 }
 import backend.trmc_analysis.{
@@ -333,7 +334,6 @@ import backend.emit_plan.{
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
-  isDictParamName,
   ftPrefix,
   labelFallthrough,
   rngBound,
@@ -4092,7 +4092,7 @@ dispatchCallSeqW prog arm name nArgs end =
 armIsExactW : ImplArmW -> Int -> Bool
 armIsExactW arm nArgs =
   let pats = implEntryPatsW (armEntryW arm)
-  listLen pats - wLeadingDictPats pats == nArgs
+  listLen pats - leadingDictParams pats == nArgs
 
 -- The define of [arm]'s entry as a closure value: a lifted `$codety` wrapper that
 -- unpacks its argument array into the define's parameters, at the define's arity.
@@ -4233,7 +4233,7 @@ projPathWord : List Int -> String
 projPathWord path = joinWith "_" (map intToString path)
 
 implLeadingDictCountOfEntryW : CImplEntry -> Int
-implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
+implLeadingDictCountOfEntryW ent = leadingDictParams (implEntryPatsW ent)
 
 -- `take n` for a route list (no stdlib `take` in scope here).
 takeRoutesW : Int -> List Route -> List Route
@@ -4592,13 +4592,6 @@ gatherImplGroup prog entries (m, key) =
     Some ent => implEntrySymW m ent
     None => panic "wasm: impl group without an entry (internal error)"
   ImplG m headTag key (implGroupArity clauses) clauses fnName
-
--- count of leading `$dict_…` param patterns the dict-pass prepends ahead of the
--- source value params (mirror of llvm_emit's leadingDictPats; uses wIsDictParamName).
-wLeadingDictPats : List Pat -> Int
-wLeadingDictPats ((PVar x _ _) :: rest) =
-  if wIsDictParamName x then 1 + wLeadingDictPats rest else 0
-wLeadingDictPats _ = 0
 
 -- the clauses of (method, key): the def-side grouping passes a canonical key, which
 -- selects exactly one impl's clauses even when it shares a head with an overlapping
@@ -7925,9 +7918,6 @@ wTrmcImplTry prog method key fnName arity clauses =
         (wTrmcCtorSet prog self arity pairs))
   else
     None
-
-wIsDictParamName : String -> Bool
-wIsDictParamName x = startsWith "$dict" x
 
 -- the fn's distinct (ctorName, selfFieldIdx) leaf-ctor pairs, in first-seen
 -- clause/leaf order (deterministic).  Cons-tail leaves report ("Cons", 1).
@@ -11420,11 +11410,11 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "leadingDictParams" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
@@ -12096,7 +12086,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "dispatchCallSeqW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispatchCallSeqW" ((PVar "prog") (PVar "arm") (PVar "name") (PVar "nArgs") (PVar "end")) (EBlock (DoLet false false (PVar "memoName") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EApp (EVar "armSymTagW") (EVar "arm")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "memoName"))) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EBinOp "++" (ELit (LString "force_")) (EApp (EVar "gname") (EVar "memoName")))) (ELit (LInt 0)))) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EApp (EVar "armFnSymW") (EVar "arm"))) (EBinOp "+" (EApp (EApp (EVar "armDictCountW") (EApp (EVar "armEntryW") (EVar "arm"))) (ELit (LInt 0))) (EVar "nArgs"))))))))
 (DTypeSig false "armIsExactW" (TyFun (TyCon "ImplArmW") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "armIsExactW" ((PVar "arm") (PVar "nArgs")) (EBlock (DoLet false false (PVar "pats") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm")))) (DoExpr (EBinOp "==" (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "wLeadingDictPats") (EVar "pats"))) (EVar "nArgs")))))
+(DFunDef false "armIsExactW" ((PVar "arm") (PVar "nArgs")) (EBlock (DoLet false false (PVar "pats") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm")))) (DoExpr (EBinOp "==" (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))) (EVar "nArgs")))))
 (DTypeSig false "armClosureW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "armClosureW" ((PVar "prog") (PVar "arm")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm"))))) (DoLet false false (PVar "wrapper") (EBinOp "++" (ELit (LString "$mdk_lam")) (EApp (EVar "intToString") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EVar "prog")) (EVar "wrapper"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "addLifted") (EVar "prog")) (EVar "wrapper")) (EVar "codeShapeW")) (EApp (EApp (EApp (EVar "closWrapperLines") (EVar "wrapper")) (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "CallTailW")) (EApp (EVar "armFnSymW") (EVar "arm"))) (EVar "arity"))) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EVar "prog")) (EVar "wrapper")) (EVar "arity")))))
 (DTypeSig false "emitDispatchChain" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplArmW")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "MethodDictsW") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CallEndW") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
@@ -12116,7 +12106,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "projPathWord" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "projPathWord" ((PVar "path")) (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "path"))))
 (DTypeSig false "implLeadingDictCountOfEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
-(DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "wLeadingDictPats") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
+(DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "leadingDictParams") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
 (DTypeSig false "takeRoutesW" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "takeRoutesW" ((PVar "n") PWild) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "takeRoutesW" (PWild (PList)) (EListLit))
@@ -12186,9 +12176,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupPairsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "pairKey") (EVar "p"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "p") (EVar "acc")))))))
 (DTypeSig false "gatherImplGroup" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "ImplG")))))
 (DFunDef false "gatherImplGroup" ((PVar "prog") (PVar "entries") (PTuple (PVar "m") (PVar "key"))) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "m"))) (DoLet false false (PVar "headTag") (EApp (EApp (EApp (EVar "headTagForKeyW") (EVar "m")) (EVar "key")) (EVar "mEntries"))) (DoLet false false (PVar "clauses") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implClauseFor") (EVar "m")) (EVar "key"))) (EVar "mEntries"))) (DoLet false false (PVar "fnName") (EMatch (EApp (EApp (EApp (EVar "firstEntryForKeyW") (EVar "m")) (EVar "key")) (EVar "mEntries")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EVar "implEntrySymW") (EVar "m")) (EVar "ent"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "wasm: impl group without an entry (internal error)")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplG") (EVar "m")) (EVar "headTag")) (EVar "key")) (EApp (EVar "implGroupArity") (EVar "clauses"))) (EVar "clauses")) (EVar "fnName")))))
-(DTypeSig false "wLeadingDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "wLeadingDictPats" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "wIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "wLeadingDictPats") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "wLeadingDictPats" (PWild) (ELit (LInt 0)))
 (DTypeSig false "implClauseFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "CClause"))))))
 (DFunDef false "implClauseFor" ((PVar "m") (PVar "tag") (PVar "ent")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "implEntryMethodW") (EVar "ent")) (EVar "m")) (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "ent"))) (EListLit (EApp (EApp (EVar "CClause") (EApp (EVar "implEntryPatsW") (EVar "ent"))) (EApp (EVar "implBodyExprW") (EApp (EVar "implEntryBodyW") (EVar "ent"))))) (EListLit)))
 (DTypeSig false "implBodyExprW" (TyFun (TyCon "CImplBody") (TyCon "CExpr")))
@@ -12841,8 +12828,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "clauseToPair" ((PCon "CClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
 (DTypeSig false "wTrmcImplTry" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "wTrmcImplTry" ((PVar "prog") (PVar "method") (PVar "key") (PVar "fnName") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (EVar "clauseToPair")) (EVar "clauses"))) (DoLet false false (PVar "self") (EApp (EApp (EApp (EVar "methodSelf") (EVar "method")) (EVar "key")) (EMatch (EVar "pairs") (arm (PCons (PTuple (PVar "ps") PWild) PWild) () (EVar "ps")) (arm (PList) () (EListLit))))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTrmcImpl") (EApp (EVar "progTrmcW") (EVar "prog"))) (EVar "method")) (EVar "key")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWasmTrmcCore") (EVar "prog")) (EVar "fnName")) (EVar "self")) (EVar "fnName")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorSet") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "pairs")))) (EVar "None")))))
-(DTypeSig false "wIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
 (DTypeSig false "wTrmcCtorSet" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "wTrmcCtorSet" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "pairs")) (EApp (EApp (EVar "wTrmcDedupCtors") (EApp (EApp (EVar "flatMap") (ELam ((PVar "pr")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "snd") (EVar "pr"))))) (EVar "pairs"))) (EListLit)))
 (DTypeSig false "wTrmcDedupCtors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -13515,11 +13500,11 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "leadingDictParams" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
@@ -14191,7 +14176,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "dispatchCallSeqW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispatchCallSeqW" ((PVar "prog") (PVar "arm") (PVar "name") (PVar "nArgs") (PVar "end")) (EBlock (DoLet false false (PVar "memoName") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EApp (EVar "armSymTagW") (EVar "arm")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "memoName"))) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EBinOp "++" (ELit (LString "force_")) (EApp (EVar "gname") (EVar "memoName")))) (ELit (LInt 0)))) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EApp (EVar "armFnSymW") (EVar "arm"))) (EBinOp "+" (EApp (EApp (EVar "armDictCountW") (EApp (EVar "armEntryW") (EVar "arm"))) (ELit (LInt 0))) (EVar "nArgs"))))))))
 (DTypeSig false "armIsExactW" (TyFun (TyCon "ImplArmW") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "armIsExactW" ((PVar "arm") (PVar "nArgs")) (EBlock (DoLet false false (PVar "pats") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm")))) (DoExpr (EBinOp "==" (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "wLeadingDictPats") (EVar "pats"))) (EVar "nArgs")))))
+(DFunDef false "armIsExactW" ((PVar "arm") (PVar "nArgs")) (EBlock (DoLet false false (PVar "pats") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm")))) (DoExpr (EBinOp "==" (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))) (EVar "nArgs")))))
 (DTypeSig false "armClosureW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "armClosureW" ((PVar "prog") (PVar "arm")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EApp (EVar "implEntryPatsW") (EApp (EVar "armEntryW") (EVar "arm"))))) (DoLet false false (PVar "wrapper") (EBinOp "++" (ELit (LString "$mdk_lam")) (EApp (EVar "intToString") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EVar "prog")) (EVar "wrapper"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "addLifted") (EVar "prog")) (EVar "wrapper")) (EVar "codeShapeW")) (EApp (EApp (EApp (EVar "closWrapperLines") (EVar "wrapper")) (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "CallTailW")) (EApp (EVar "armFnSymW") (EVar "arm"))) (EVar "arity"))) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EVar "prog")) (EVar "wrapper")) (EVar "arity")))))
 (DTypeSig false "emitDispatchChain" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplArmW")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "MethodDictsW") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CallEndW") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
@@ -14211,7 +14196,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "projPathWord" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "projPathWord" ((PVar "path")) (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "path"))))
 (DTypeSig false "implLeadingDictCountOfEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
-(DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "wLeadingDictPats") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
+(DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "leadingDictParams") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
 (DTypeSig false "takeRoutesW" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "takeRoutesW" ((PVar "n") PWild) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "takeRoutesW" (PWild (PList)) (EListLit))
@@ -14281,9 +14266,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupPairsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "pairKey") (EVar "p"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "p") (EVar "acc")))))))
 (DTypeSig false "gatherImplGroup" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "ImplG")))))
 (DFunDef false "gatherImplGroup" ((PVar "prog") (PVar "entries") (PTuple (PVar "m") (PVar "key"))) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "m"))) (DoLet false false (PVar "headTag") (EApp (EApp (EApp (EVar "headTagForKeyW") (EVar "m")) (EVar "key")) (EVar "mEntries"))) (DoLet false false (PVar "clauses") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implClauseFor") (EVar "m")) (EVar "key"))) (EVar "mEntries"))) (DoLet false false (PVar "fnName") (EMatch (EApp (EApp (EApp (EVar "firstEntryForKeyW") (EVar "m")) (EVar "key")) (EVar "mEntries")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EVar "implEntrySymW") (EVar "m")) (EVar "ent"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "wasm: impl group without an entry (internal error)")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplG") (EVar "m")) (EVar "headTag")) (EVar "key")) (EApp (EVar "implGroupArity") (EVar "clauses"))) (EVar "clauses")) (EVar "fnName")))))
-(DTypeSig false "wLeadingDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "wLeadingDictPats" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "wIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "wLeadingDictPats") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "wLeadingDictPats" (PWild) (ELit (LInt 0)))
 (DTypeSig false "implClauseFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "CClause"))))))
 (DFunDef false "implClauseFor" ((PVar "m") (PVar "tag") (PVar "ent")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "implEntryMethodW") (EVar "ent")) (EVar "m")) (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "ent"))) (EListLit (EApp (EApp (EVar "CClause") (EApp (EVar "implEntryPatsW") (EVar "ent"))) (EApp (EVar "implBodyExprW") (EApp (EVar "implEntryBodyW") (EVar "ent"))))) (EListLit)))
 (DTypeSig false "implBodyExprW" (TyFun (TyCon "CImplBody") (TyCon "CExpr")))
@@ -14936,8 +14918,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "clauseToPair" ((PCon "CClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
 (DTypeSig false "wTrmcImplTry" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "wTrmcImplTry" ((PVar "prog") (PVar "method") (PVar "key") (PVar "fnName") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (EVar "clauseToPair")) (EVar "clauses"))) (DoLet false false (PVar "self") (EApp (EApp (EApp (EVar "methodSelf") (EVar "method")) (EVar "key")) (EMatch (EVar "pairs") (arm (PCons (PTuple (PVar "ps") PWild) PWild) () (EVar "ps")) (arm (PList) () (EListLit))))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTrmcImpl") (EApp (EVar "progTrmcW") (EVar "prog"))) (EVar "method")) (EVar "key")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWasmTrmcCore") (EVar "prog")) (EVar "fnName")) (EVar "self")) (EVar "fnName")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorSet") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "pairs")))) (EVar "None")))))
-(DTypeSig false "wIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
 (DTypeSig false "wTrmcCtorSet" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "wTrmcCtorSet" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "pairs")) (EApp (EApp (EVar "wTrmcDedupCtors") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "pr")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "snd") (EVar "pr"))))) (EVar "pairs"))) (EListLit)))
 (DTypeSig false "wTrmcDedupCtors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))

@@ -231,6 +231,7 @@ import ir.core_ir_lower.{
   compileTree,
   canonPat,
   definedArityOf,
+  leadingDictParams,
   ifaceWordOfKey,
   programArities,
 }
@@ -338,7 +339,6 @@ import backend.emit_plan.{
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
-  isDictParamName,
   ftPrefix,
   ftLabelOf,
   labelFallthrough,
@@ -492,30 +492,22 @@ data GDispCtx =
   | GDispOff
   | GDispOn String (List String) (List String) String String
 
--- the plan's (b′) groups (`EmitPlan.dispGroups`), the fn binds they were detected
--- over, and the fn-arity table with wasm's `fnParamCountW` contract (clause arity;
--- -1 when not a top-level fn — an 0-when-unknown lookup would let a 0-arg call
--- "saturate").  Installed once per emitProgram; left empty by emitProgramGaps so a
--- prior program's groups can never leak into the gap-census path.
+-- the plan's (b′) groups (`EmitPlan.dispGroups`) and the fn binds they were detected
+-- over.  Installed once per emitProgram; left empty by emitProgramGaps so a prior
+-- program's groups can never leak into the gap-census path.
 
--- #990: the (fn-name -> arity) table above indexed into an OrdMap, built once beside
--- `e.gDispArs` in emitProgram.  The group emit calls `gDispFnArity` per member and
--- per tail call; the map answers in O(log fns) with the SAME first-match value
--- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name).
--- RUN-EMIT-003: the second `lookupAssoc n !e.gDispArs` path is RETIRED.
--- `installDispatchState` installs this map on BOTH arms, so `None` is now a
--- broken-invariant panic, not a silent slow path that has to agree with the index.
 gDispIsFn : Emit -> String -> Bool
-gDispIsFn e n = match !e.gDispArMap
-  Some m => omHasKey n m
-  None => panic "llvm: gDispArMap read before install (internal error)"
+gDispIsFn e n = isKnownFn e n
 
+-- a top-level function's parameter count, or -1 when [n] names no function: the
+-- contract of wasm's `fnParamCountW` for the shared dispatch-group detection.  A
+-- 0-when-unknown lookup would let a 0-arg call "saturate".
 gDispFnArity : Emit -> String -> Int
-gDispFnArity e n = match !e.gDispArMap
-  Some m => match omLookup n m
-    Some a => a
-    None => 0 - 1
-  None => panic "llvm: gDispArMap read before install (internal error)"
+gDispFnArity e n =
+  if isKnownFn e n then
+    optionOr (0 - 1) (definedArity e (CVar n AGlobal))
+  else
+    0 - 1
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : Emit -> String -> Bool
@@ -576,7 +568,7 @@ implEntryIfaceWord (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _ _)) =
 implSrcValueArity : CImplEntry -> Int
 implSrcValueArity ent =
   let pats = implPats ent
-  listLen pats - leadingDictPats pats
+  listLen pats - leadingDictParams pats
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- The ctor → declared-field-type-head-name table from core_ir_lower's
@@ -912,8 +904,6 @@ data Emit = Emit {
   gDispGroups : Ref (List DispGroup),
   gDispBinds : Ref (List CBind),
   gDispBindMap : Ref (OrdMap CBind),
-  gDispArs : Ref (List (String, Int)),
-  gDispArMap : Ref (Option (OrdMap Int)),
   curImplTag : Ref String,
   curSelfFnParams : Ref (List String),
   knownFnMap : Ref (Option (OrdMap Unit)),
@@ -4084,7 +4074,7 @@ u32Inline e env f args =
           && lengthS pats == lengthS args
           && hasArgs args
           && allPVar pats
-          && leadingDictPats pats == 0
+          && leadingDictParams pats == 0
           && not (contains name (freeVars [] body))
           && coreSize body <= inlineBudget then
           Some (rk, pats, body)
@@ -4408,7 +4398,7 @@ tupleInline e f args n =
         if lengthS pats == lengthS args
           && hasArgs args
           && allPVar pats
-          && leadingDictPats pats == 0
+          && leadingDictParams pats == 0
           && not (contains name (freeVars [] body))
           && coreSize body <= inlineBudget then
           map ((lead, comps) => (pats, lead, comps)) (tupleBody body n)
@@ -8405,7 +8395,7 @@ emitDispatchBody e name iface dictPtr methWords argOps siteArity =
   (r, LTInt)
 
 -- the count of leading element-dict params a matched impl's lifted fn expects:
--- `leadingDictPats` applied to THIS entry's own clause — a DIRECT count of the
+-- `leadingDictParams` applied to THIS entry's own clause — a DIRECT count of the
 -- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  Those
 -- patterns are the define's own leading parameters, so caller and callee agree by
 -- construction rather than by coincidence.  Exact peer of wasm_emit's
@@ -8415,7 +8405,7 @@ emitDispatchBody e name iface dictPtr methWords argOps siteArity =
 -- dict cell (fields 1..count), so the runtime chain loads exactly that many and
 -- prepends them.  Never negative.
 implReqCount : Emit -> String -> CImplEntry -> Int
-implReqCount _e _name ent = leadingDictPats (implPats ent)
+implReqCount _e _name ent = leadingDictParams (implPats ent)
 
 -- #1648: the impl-`requires` dict words a DIRECT (RKey) call to [ent]'s lifted fn is
 -- allowed to push — never more than that define actually BINDS.  dict_pass prepends an
@@ -8433,7 +8423,7 @@ implReqCount _e _name ent = leadingDictPats (implPats ent)
 -- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
 -- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
 -- the three now agree by construction: `implReqCount` counts the entry's own leading
--- `$dict_*` patterns DIRECTLY (`leadingDictPats (implPats ent)`) — the define's own
+-- `$dict_*` patterns DIRECTLY (`leadingDictParams (implPats ent)`) — the define's own
 -- leading parameters — of which the first `lengthS methRoutes` are the METHOD-level dicts,
 -- leaving this impl's own share.  (It was briefly a SUBTRACTION — clause pattern count
 -- less value arity — which is a DIFFERENT quantity for a POINT-FREE clause and reopened
@@ -8554,7 +8544,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
-    -- #1816: `implReqCount` is a direct `leadingDictPats` count and never negative;
+    -- #1816: `implReqCount` is a direct `leadingDictParams` count and never negative;
     -- the clamp guards the `- lengthS methWords` subtraction.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let superCount = entrySuperCount e ent
@@ -11766,16 +11756,6 @@ allClausesPVar : List (List Pat, CExpr) -> Bool
 allClausesPVar [] = True
 allClausesPVar ((pats, _) :: rest) = allPVar pats && allClausesPVar rest
 
--- count of leading `$dict_…` parameter patterns (the dict witnesses dict_pass
--- prepends ahead of the source value params).
-leadingDictPats : List Pat -> Int
-leadingDictPats ((PVar x _ _) :: rest) =
-  if isDictParamName x then 1 + leadingDictPats rest else 0
-leadingDictPats _ = 0
-
--- (`isDictParamName` — a dict-witness parameter name, `$dict_<method>_<slot>` — now
--- lives in backend/emit_support.mdk: BOTH backends need it, for the same reason.)
-
 -- E1a — multi-clause / patterned top-level fns.  Route ordinary fn-binds whose
 -- clauses don't all reduce to plain-variable params through the SAME
 -- clause-coalescing + decision-tree lowering the impl methods use
@@ -12502,12 +12482,6 @@ emitGDispEdge e env f args uslots =
   let _ = trmcStoreParamSlots e uslots argOps
   emit e ("  br label %" ++ gDispLabel f)
 
--- the clause-derived fn-arity table (name → first clause's param count)
-gDispFnArsOf : List CBind -> List (String, Int)
-gDispFnArsOf [] = []
-gDispFnArsOf ((CBind n cs _ _) :: rest) =
-  (n, clauseArityOf cs) :: gDispFnArsOf rest
-
 -- drop group members from the float worker-wrapper advertisement set.
 gDispDropMembers : Emit ->
   List (String, (Int, List Int)) ->
@@ -12614,7 +12588,7 @@ floatWorkerEligible e name pats ptys body =
     LTFloat => True
     _ => False
   allPVar pats
-    && leadingDictPats pats == 0
+    && leadingDictParams pats == 0
     && hasFloatPty ptys
     && isFloatRet
     && contains name (freeVars [] body)
@@ -12632,7 +12606,7 @@ floatFwEligible e name pats ptys body =
     LTFloat => True
     _ => False
   allPVar pats
-    && leadingDictPats pats == 0
+    && leadingDictParams pats == 0
     && isFloatRet
     && floatWorkerOk name (lengthS pats) body
 
@@ -12885,7 +12859,7 @@ rawWorkerOf e refine (CBind name [CClause pats body] _ bid) =
     if arity > 0
       && (any (k => not (isRawWord k)) ks || not (isRawWord rk))
       && allPVar pats
-      && leadingDictPats pats == 0
+      && leadingDictParams pats == 0
       && not (any (== RTFloat) paramStamps)
       && ret /= RTFloat
       && isNone (dispGroupOf !e.gDispGroups name)
@@ -14768,13 +14742,6 @@ data EmitStateConfig = EmitStateConfig {
 -- for the whole disposition.
 installDispatchState : Emit -> Option (List DispGroup) -> List CBind -> Unit
 installDispatchState e dispGroups fnBindsList =
-  -- RUN-EMIT-003: `gDispArMap` is installed on BOTH arms, so no reader can ever
-  -- observe it uninstalled.  The census arm leaves `gDispArs` empty and never
-  -- reaches gDispIsFn/gDispFnArity (they run only under GDispOn, which needs the
-  -- groups this arm does not install) — an EMPTY map answers exactly what the
-  -- retired `lookupAssoc n ![]` scan answered (False / -1), so this is inert.
-  -- `installDispatchGroups` overwrites it with the real table on the other arm.
-  e.gDispArMap := Some omEmpty
   let _ = match dispGroups
     Some groups => installDispatchGroups e groups fnBindsList
     None => e.gDispGroups := []
@@ -14785,11 +14752,6 @@ installDispatchState e dispGroups fnBindsList =
 -- members/roots, beside the tables the group emit reads.
 installDispatchGroups : Emit -> List DispGroup -> List CBind -> Unit
 installDispatchGroups e groups fnBindsList =
-  let gDispArs = gDispFnArsOf fnBindsList
-  e.gDispArs := gDispArs
-  -- #990: index the fn-arity table so the group emit's gDispIsFn/gDispFnArity is
-  -- O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
-  e.gDispArMap := Some (omFromPairs (reverseL gDispArs) omEmpty)
   e.gDispBinds := fnBindsList
   -- #1061: O(log P) member lookup for emitGDispMembers/gDispMembersEtaStable,
   -- replacing dispFindBind's per-member O(P) linear scan over the whole
@@ -14845,8 +14807,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     gDispGroups = Ref [],
     gDispBinds = Ref [],
     gDispBindMap = Ref omEmpty,
-    gDispArs = Ref [],
-    gDispArMap = Ref None,
     curImplTag = Ref "",
     curSelfFnParams = Ref [],
     knownFnMap = Ref None,
