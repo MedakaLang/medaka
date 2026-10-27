@@ -959,10 +959,11 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk"
+predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk"
 cat $predicate_slot_row_files > "$predicate_slot_rows_src"
 tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
 tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"
+tc_occurrence_src="$ROOT/compiler/types/tc_occurrence.mdk"
 # slice_rows START END: the rows from `START :` to `END :` in the module that holds START. When END is
 # in another module (the rows between them were split across the layer), the slice ends at the next
 # top-level signature after START, so the pin reads START's own row.
@@ -1240,7 +1241,7 @@ done || exit 1
 # The literal's anchor records its method-level dictionaries from the anchor row's
 # slots under the instantiation's substitution; arguments between the slots and the
 # substitution (the destination refs) are not part of the contract.
-numlit_method_flat="$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src" | tr '\n' ' ' | tr -s ' ')"
+numlit_method_flat="$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$tc_occurrence_src" | tr '\n' ' ' | tr -s ' ')"
 if ! printf '%s\n' "$numlit_method_flat" | grep -Eq 'recordMethodDictsFromSlots mctx anchor\.msrMethodSlots( \([^()]*\))* \(snd inst\)'; then
   echo "FAIL: inferNumLitMethod no longer records the anchor's method dictionaries: recordMethodDictsFromSlots mctx anchor.msrMethodSlots ... (snd inst)"
   exit 1
@@ -1590,7 +1591,7 @@ printf '%s\n' "$eval_req_count_retired" | while IFS= read -r retired; do
   fi
 done || exit 1
 
-numeric_infer_block=$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src")
+numeric_infer_block=$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$tc_occurrence_src")
 if printf '%s\n' "$numeric_infer_block" | grep -Fq 'recordMethodDicts "fromInt"'; then
   echo "FAIL: numeric literal method slots still use the spelling-keyed registry"
   exit 1

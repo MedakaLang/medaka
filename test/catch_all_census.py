@@ -52,6 +52,7 @@ SRCS = [
     f"{ROOT}/compiler/types/tc_solve_check.mdk",
     f"{ROOT}/compiler/types/tc_shadow.mdk",
     f"{ROOT}/compiler/types/tc_effects.mdk",
+    f"{ROOT}/compiler/types/tc_occurrence.mdk",
     f"{ROOT}/compiler/types/repr.mdk",
     f"{ROOT}/compiler/types/chain_key.mdk",
     f"{ROOT}/compiler/types/evidence_coverage.mdk",

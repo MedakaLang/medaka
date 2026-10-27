@@ -107,8 +107,6 @@ import types.tc_solve_test_support.{
 }
 import types.typecheck.{
   TcDiag(..),
-  cellGoalInnerAliasing,
-  cellStoreMisses,
   chainArgs,
   checkModulesChainReportFor,
   checkModulesChainReportForGraph,
@@ -120,7 +118,6 @@ import types.typecheck.{
   checkOneDiagsGraph,
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
-  constrainedSigNames,
   defaultDriveInputs,
   driveArgs,
   driveInputsFor,
@@ -130,8 +127,6 @@ import types.typecheck.{
   elaborateOneFacts,
   isLiveSpan,
   matchWarningsNow,
-  methodReturnResolutionMutationProbe,
-  methodReturnTemplatePresenceProbe,
   ModDiags,
   stickyTypeErrorDiags,
   tcCode,
@@ -152,6 +147,13 @@ import types.tc_solve.{
   finishMethodReturnTrace,
   methodReturnMemoCurrentViews,
   spanKeys,
+}
+import types.tc_occurrence.{
+  cellGoalInnerAliasing,
+  cellStoreMisses,
+  constrainedSigNames,
+  methodReturnResolutionMutationProbe,
+  methodReturnTemplatePresenceProbe,
 }
 
 data NumericTraceView = NumericTraceView {
