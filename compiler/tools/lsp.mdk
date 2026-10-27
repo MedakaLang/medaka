@@ -1,5 +1,5 @@
 -- lint-disable-file rule-duplicate-body
--- (A handful of small pure cursor/env helpers here — identifierAt/offsetOfLineCol/
+-- (A handful of small pure cursor/env helpers here — identifierAt/
 --  prefixBefore/lookupSchemeL/jHover/… — are intentionally mirrored in
 --  compiler/entries/playground_main.mdk, which cannot import this module: doing so
 --  drags tools.fmt + io into that entry's graph and trips a pre-existing
@@ -49,6 +49,11 @@ import driver.diagnostics.{
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
 import support.ordmap.{OrdMap, omEmpty}
+import support.source_index.{
+  SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
+  offsetToUtf16Position
+}
+import tools.lsp_positions.{locToLspRange, lspPositionToOffset}
 import driver.profile_select.{carryProjectProfile, manifestPathOf}
 import frontend.parser.{
   ParseError,
@@ -184,46 +189,45 @@ severityCode SevWarning = 2
 -- B.10.2b: type-error Diags now carry the ELoc span captured at the push site
 -- (`Some Loc`), so they map to an expr-level LSP range:
 -- a 1-based `Loc` line maps to a
--- 0-based LSP line (line-1), the col is already 0-based.  Resolve / guard /
+-- 0-based LSP line and UTF-16 column.  Resolve / guard /
 -- match diagnostics carry `None` (the compiler pipeline doesn't locate them) and
 -- fall back to the whole-document range.  Parse errors keep using parseResult's
 -- located line/col (below).
 
--- Count the lines in a source string (number of '\n' separators).  Used to
--- build the whole-document range end position.
-countLines : String -> Int
-countLines src = countLinesGo (stringToChars src) 0 0
-
-countLinesGo : Array Char -> Int -> Int -> Int
-countLinesGo arr i acc
-  | i >= arrayLength arr = acc
-  | arrayGetUnsafe i arr == '\n' = countLinesGo arr (i + 1) (acc + 1)
-  | otherwise = countLinesGo arr (i + 1) acc
-
--- The range covering the whole document: (0,0) .. (lineCount, 0).
+-- Loc-less diagnostics retain their whole-line range.
 wholeDocRange : String -> Json
-wholeDocRange src = jRange 0 0 (countLines src) 0
+wholeDocRange src =
+  match offsetToUtf16Position (indexSource src) (stringLength src)
+    Some (line, _) => jRange 0 0 line 0
+    None => JNull
 
--- Map an `Option Loc` to an LSP range.  `Some` → the expr-level span (mirror of
--- OCaml `range_of_loc`: line-1 for both start/end line, cols verbatim); `None` →
--- the whole-document fallback.
-rangeOfLoc : String -> Option Loc -> Json
-rangeOfLoc src (Some (Loc _ sl sc el ec)) = jRange (sl - 1) sc (el - 1) ec
-rangeOfLoc src None = wholeDocRange src
+-- Map an optional Loc to its indexed protocol range, or the whole document.
+rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
+rangeOfLoc index _ (Some loc) = match locToLspRange index loc
+  Some range => range
+  None => JNull
+rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
 -- `rangeOfLoc`'s `Some` arm, factored out for the #331 decl-NAME-span callers
 -- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
 -- `wholeDocRange`) when there is no name `Loc`.
-jRangeOfLoc : Loc -> Json
-jRangeOfLoc (Loc _ sl sc el ec) = jRange (sl - 1) sc (el - 1) ec
+jRangeOfLoc : SourceIndex -> Loc -> Json
+jRangeOfLoc index loc = match locToLspRange index loc
+  Some range => range
+  None => JNull
 
 -- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
 -- (B.10.2b) for an expr-level range, falling back to whole-document for
 -- loc-less diagnostics.
-diagToJson : String -> Diag -> Json
-diagToJson src (Diag sev _ msg loc _ _) =
-  jDiagnostic (severityCode sev) (rangeOfLoc src loc) msg
+diagToJson : SourceIndex -> Json -> Diag -> Json
+diagToJson index fallback (Diag sev _ msg loc _ _) =
+  jDiagnostic (severityCode sev) (rangeOfLoc index fallback loc) msg
+
+diagsToJson : String -> List Diag -> List Json
+diagsToJson src diags =
+  let index = indexSource src
+  map (diagToJson index (wholeDocRange src)) diags
 
 -- ── document store accessor (request handlers) ──────────────────────────────
 -- Look up an open document's source by uri.  Request handlers (formatting/
@@ -240,14 +244,14 @@ docsLookup uri ((k, v) :: rest)
 -- ── textDocument/formatting ─────────────────────────────────────────────────
 -- Run the formatter; if the text is
 -- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
--- whole document with the formatted source.  The replaced range is
--- (0,0)..(lineCount+1, 0), using
--- `nl = newline_count + 1` for the end line so every line (incl. the last) is
--- covered without knowing its width.  A parse failure yields [] here: the source
+-- whole document through EOF. A parse failure yields [] here: the source
 -- is lexed once and `formatSourceChecked` returns the parse error instead of
 -- panicking.
 fullDocRangeFmt : String -> Json
-fullDocRangeFmt src = jRange 0 0 (countLines src + 1) 0
+fullDocRangeFmt src =
+  match offsetToUtf16Position (indexSource src) (stringLength src)
+    Some (line, col) => jRange 0 0 line col
+    None => JNull
 
 formattingEdits : String -> List Json
 formattingEdits src = match tokenizeWithOffsetPairs src
@@ -267,34 +271,6 @@ formattingEdits src = match tokenizeWithOffsetPairs src
 
 -- ── identifier-at-cursor + occurrence scan (pure string ops) ────────────────
 
--- Byte offset of 0-based (line, col): walk to the line start, add col.  Returns
--- None if the line doesn't exist or the offset is past EOF.
-offsetOfLineCol : Array Char -> Int -> Int -> Option Int
-offsetOfLineCol arr line col = offsetGo arr (arrayLength arr) 0 0 0 line col
-
-offsetGo : Array Char -> Int -> Int -> Int -> Int -> Int -> Int -> Option Int
-offsetGo arr len i curLine lineStart line col
-  | curLine == line =
-    let pos = lineStart + col
-    let lineEnd = lineEndFrom arr len lineStart
-    if pos >= 0 && pos < len && pos < lineEnd then Some pos else None
-  | i >= len = None
-  | arrayGetUnsafe i arr == '\n' =
-    offsetGo arr len (i + 1) (curLine + 1) (i + 1) line col
-  | otherwise = offsetGo arr len (i + 1) curLine lineStart line col
--- ran out before reaching `line`
-
--- The exclusive end offset of the line starting at `i`: the index of its
--- terminating '\n', or `len` if it is the file's last (unterminated) line.
--- Used to clamp `col` to THIS line's own length rather than the whole file's
--- (#286 — an out-of-range col was walking arithmetic-coincidentally into a
--- later line and returning a confident wrong symbol instead of no-symbol).
-lineEndFrom : Array Char -> Int -> Int -> Int
-lineEndFrom arr len i
-  | i >= len = len
-  | arrayGetUnsafe i arr == '\n' = i
-  | otherwise = lineEndFrom arr len (i + 1)
-
 -- Expand left/right from `pos` over identifier chars; returns (start, stopExcl).
 identStart : Array Char -> Int -> Int
 identStart arr i
@@ -313,26 +289,15 @@ identifierAt : String -> Int -> Int -> Option String
 identifierAt src line col =
   let arr = stringToChars src
   let len = arrayLength arr
-  match offsetOfLineCol arr line col
+  match sourcePositionToOffset (indexSource src) (line + 1) col
     None => None
     Some pos =>
-      if not (isIdentChar (arrayGetUnsafe pos arr)) then
+      if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
         None
       else
         let s = identStart arr pos
         let e = identStop arr len pos
         Some (stringSlice s e src)
-
--- 0-based (line, character) of a byte offset.  Used to turn occurrence offsets
--- back into LSP Positions (mirror offset_to_position).
-posOfOffset : Array Char -> Int -> (Int, Int)
-posOfOffset arr off = posOffGo arr off 0 0 0
-
-posOffGo : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
-posOffGo arr off i line lineStart
-  | i >= off = (line, off - lineStart)
-  | arrayGetUnsafe i arr == '\n' = posOffGo arr off (i + 1) (line + 1) (i + 1)
-  | otherwise = posOffGo arr off (i + 1) line lineStart
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
@@ -363,14 +328,18 @@ occStart arr len m =
 -- documentHighlight ranges (one per occurrence) of `name` in `src`.
 highlightRanges : String -> String -> List Json
 highlightRanges src name =
-  let arr = stringToChars src
+  let index = indexSource src
   let nlen = stringLength name
-  map (occToHighlight arr nlen) (occurrences src name)
+  filterMap (occToHighlight index nlen) (occurrences src name)
 
-occToHighlight : Array Char -> Int -> Int -> Json
-occToHighlight arr nlen off = match posOfOffset arr off
-  (sl, sc) => match posOfOffset arr (off + nlen)
-    (el, ec) => jObject [("range", jRange sl sc el ec)]
+occToHighlight : SourceIndex -> Int -> Int -> Option Json
+occToHighlight index nlen off = match (
+  offsetToUtf16Position index off,
+  offsetToUtf16Position index (off + nlen),
+)
+  (Some (sl, sc), Some (el, ec)) =>
+    Some (jObject [("range", jRange sl sc el ec)])
+  _ => None
 
 -- ── textDocument/documentSymbol ─────────────────────────────────────────────
 -- parseWithPositions → zip decls with their DeclPos (1-based line..end_line) →
@@ -412,10 +381,10 @@ jSymbol name kind range selRange children = jObject [
 -- else fall back to the parent decl `range` (`fallback`).  Both `range` and
 -- `selectionRange` are the name span (a leaf symbol has no distinct enclosing
 -- range).
-jChildLoc : String -> Int -> Json -> Option Loc -> Json
-jChildLoc name kind fallback loc =
+jChildLoc : SourceIndex -> String -> Int -> Json -> Option Loc -> Json
+jChildLoc index name kind fallback loc =
   let r = match loc
-    Some l => jRangeOfLoc l
+    Some l => jRangeOfLoc index l
     None => fallback
   jSymbol name kind r r []
 
@@ -425,38 +394,48 @@ jChildLoc name kind fallback loc =
 -- exposes one Field symbol (kind 8) per field; any other variant shows its
 -- single constructor name (kind 22).  ⚠️ The parser's `declChildSpansOf`
 -- produces `locs` in exactly this order — keep the two in lockstep.
-variantKids : Json -> List (Option Loc) -> List Variant -> List Json
-variantKids _ _ [] = []
-variantKids fb locs ((Variant _ (ConNamed fs True)) :: vs) =
-  let step = fieldKidsStep fb locs (map fieldName fs)
-  fst step ++ variantKids fb (snd step) vs
-variantKids fb [] ((Variant vn _) :: vs) =
-  jChildLoc vn 22 fb None :: variantKids fb [] vs
-variantKids fb (l :: ls) ((Variant vn _) :: vs) =
-  jChildLoc vn 22 fb l :: variantKids fb ls vs
+variantKids : SourceIndex ->
+  Json ->
+  List (Option Loc) ->
+  List Variant ->
+  List Json
+variantKids _ _ _ [] = []
+variantKids index fb locs ((Variant _ (ConNamed fs True)) :: vs) =
+  let step = fieldKidsStep index fb locs (map fieldName fs)
+  fst step ++ variantKids index fb (snd step) vs
+variantKids index fb [] ((Variant vn _) :: vs) =
+  jChildLoc index vn 22 fb None :: variantKids index fb [] vs
+variantKids index fb (l :: ls) ((Variant vn _) :: vs) =
+  jChildLoc index vn 22 fb l :: variantKids index fb ls vs
 
 -- One Field child (kind 8) per field name, consuming a `Loc` each; returns the
 -- kids plus the leftover `Loc`s for the next variant.
-fieldKidsStep : Json ->
+fieldKidsStep : SourceIndex ->
+  Json ->
   List (Option Loc) ->
   List String ->
   (List Json, List (Option Loc))
-fieldKidsStep _ locs [] = ([], locs)
-fieldKidsStep fb [] (fn :: fns) =
-  let rest = fieldKidsStep fb [] fns
-  (jChildLoc fn 8 fb None :: fst rest, snd rest)
-fieldKidsStep fb (l :: ls) (fn :: fns) =
-  let rest = fieldKidsStep fb ls fns
-  (jChildLoc fn 8 fb l :: fst rest, snd rest)
+fieldKidsStep _ _ locs [] = ([], locs)
+fieldKidsStep index fb [] (fn :: fns) =
+  let rest = fieldKidsStep index fb [] fns
+  (jChildLoc index fn 8 fb None :: fst rest, snd rest)
+fieldKidsStep index fb (l :: ls) (fn :: fns) =
+  let rest = fieldKidsStep index fb ls fns
+  (jChildLoc index fn 8 fb l :: fst rest, snd rest)
 
 -- 1:1 child symbols for a fixed-shape child list (methods, let-binds),
 -- consuming a `Loc` each in order.
-zipKids : Json -> Int -> List (Option Loc) -> List String -> List Json
-zipKids _ _ _ [] = []
-zipKids fb kind [] (nm :: nms) =
-  jChildLoc nm kind fb None :: zipKids fb kind [] nms
-zipKids fb kind (l :: ls) (nm :: nms) =
-  jChildLoc nm kind fb l :: zipKids fb kind ls nms
+zipKids : SourceIndex ->
+  Json ->
+  Int ->
+  List (Option Loc) ->
+  List String ->
+  List Json
+zipKids _ _ _ _ [] = []
+zipKids index fb kind [] (nm :: nms) =
+  jChildLoc index nm kind fb None :: zipKids index fb kind [] nms
+zipKids index fb kind (l :: ls) (nm :: nms) =
+  jChildLoc index nm kind fb l :: zipKids index fb kind ls nms
 
 -- The outline (name, kind, clauseLike, children) for a decl, given its
 -- precomputed decl-level `range` (used for the child symbols' spans), or None for
@@ -472,30 +451,31 @@ zipKids fb kind (l :: ls) (nm :: nms) =
 -- child name-token `Loc`s (`declPosChildLocs`), consumed in the SAME order the
 -- children are emitted below.  ⚠️ The order here IS the invariant the parser's
 -- `declChildSpansOf` mirrors — change one, change both.
-symbolPartsOfDecl : Decl ->
+symbolPartsOfDecl : SourceIndex ->
+  Decl ->
   Json ->
   List (Option Loc) ->
   Option (String, Int, Bool, List Json)
-symbolPartsOfDecl d range childLocs = match innerDecl d
+symbolPartsOfDecl index d range childLocs = match innerDecl d
   DTypeSig _ name _ _ => Some (name, 13, True, [])
   DExtern (ExternDecl { edName = name, ... }) => Some (name, 12, False, [])
   DFunDef _ name _ _ _ _ => Some (name, 12, True, [])
   DLetGroup _ binds => match binds
     [] => None
     (LetBind n0 _ _ _) :: _ =>
-      let kids = zipKids range 12 childLocs (map letBindName binds)
+      let kids = zipKids index range 12 childLocs (map letBindName binds)
       Some (n0, 12, True, kids)
   DData { dataName = name, dataCtors = variants } =>
     -- records (the `data X = { … }` short form, nameOmitted) expose their
     -- fields as child symbols (kind 8); ordinary variants show their ctor name.
-    let kids = variantKids range childLocs variants
+    let kids = variantKids index range childLocs variants
     Some (name, 10, False, kids)
   DInterface { name = n, methods = ms, ... } =>
-    let kids = zipKids range 6 childLocs (map ifaceMethodName ms)
+    let kids = zipKids index range 6 childLocs (map ifaceMethodName ms)
     Some (n, 11, False, kids)
   DImpl { iface = ifc, methods = ms, ... } =>
     let label = implLabel ifc
-    let kids = zipKids range 6 childLocs (map implMethodName ms)
+    let kids = zipKids index range 6 childLocs (map implMethodName ms)
     Some (label, 5, False, kids)
   DTypeAlias { tyAliasName = name } => Some (name, 26, False, [])
   DNewtype { newtypeName = name } => Some (name, 23, False, [])
@@ -535,9 +515,18 @@ documentSymbols : String -> List Json
 documentSymbols src = match parseWithPositionsOpt src
   None => []
   Some (decls, positions) =>
+    let index = indexSource src
+    let len = stringLength src
     map
-      renderSymbol
-      (collapseSymbols (symbolParts decls (positionsDecls positions)))
+      (renderSymbol index len)
+      (collapseSymbols (symbolParts index len decls (positionsDecls positions)))
+
+wholeLineRange : SourceIndex -> Int -> Int -> Int -> Json
+wholeLineRange index len sl el = match sourcePositionToOffset index (el + 1) 0
+  Some _ => jRange sl 0 el 0
+  None => match offsetToUtf16Position index len
+    Some (line, col) => jRange sl 0 line col
+    None => JNull
 
 -- One outline row before collapse: name, LSP SymbolKind, 0-based start/end line,
 -- whether it's a signature/clause row (only those coalesce — see
@@ -549,16 +538,20 @@ data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) into
 -- SymRow rows, dropping non-outline decls.
-symbolParts : List Decl -> List DeclPos -> List SymRow
-symbolParts (d :: ds) (p :: ps) =
+symbolParts : SourceIndex -> Int -> List Decl -> List DeclPos -> List SymRow
+symbolParts index len (d :: ds) (p :: ps) =
   let sl = declPosLine p - 1
   let el = declPosEndLine p
-  match symbolPartsOfDecl d (jRange sl 0 el 0) (declPosChildLocs p)
-    None => symbolParts ds ps
+  match (symbolPartsOfDecl
+    index
+    d
+    (wholeLineRange index len sl el)
+    (declPosChildLocs p))
+    None => symbolParts index len ds ps
     Some (name, kind, clauseLike, kids) =>
       SymRow name kind sl el clauseLike kids (declPosNameLoc p)
-        :: symbolParts ds ps
-symbolParts _ _ = []
+        :: symbolParts index len ds ps
+symbolParts _ _ _ _ = []
 
 -- Collapse a signature+clauses run — consecutive rows that share the EXACT same
 -- name AND are BOTH clause-like — into ONE outline symbol (#300 part 3): the
@@ -583,11 +576,11 @@ collapseGo (SymRow n0 k0 s0 e0 cl0 c0 nl0) ((SymRow n1 k1 s1 e1 cl1 c1 nl1) :: r
     SymRow n0 k0 s0 e0 cl0 c0 nl0
       :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1 nl1) rest
 
-renderSymbol : SymRow -> Json
-renderSymbol (SymRow name kind sl el _ kids nameLoc) =
-  let range = jRange sl 0 el 0
+renderSymbol : SourceIndex -> Int -> SymRow -> Json
+renderSymbol index len (SymRow name kind sl el _ kids nameLoc) =
+  let range = wholeLineRange index len sl el
   let selRange = match nameLoc
-    Some l => jRangeOfLoc l
+    Some l => jRangeOfLoc index l
     None => range
   jSymbol name kind range selRange kids
 
@@ -668,30 +661,44 @@ locAtIndex i (_ :: ls) = locAtIndex (i - 1) ls
 definitionRange : String -> String -> Option Json
 definitionRange src name = match parseWithPositionsOpt src
   None => None
-  Some (decls, positions) => defZip decls (positionsDecls positions) name
+  Some (decls, positions) =>
+    defZip
+      (indexSource src)
+      (stringLength src)
+      decls
+      (positionsDecls positions)
+      name
 
 -- #331: the go-to-definition RANGE for `name` in the decl (`d`, `p`) that
 -- defines it — own-name span first, else the matching child's span
 -- (increment 5, Part B) — falling back to the old (line, 0)..(end_line, 0)
 -- whole-decl range only when the parser's name-finder didn't resolve a span
 -- for that particular name.
-defZip : List Decl -> List DeclPos -> String -> Option Json
-defZip (d :: ds) (p :: ps) name = match defZipDeclMatch d p name
-  Some j => Some j
-  None => defZip ds ps name
-defZip _ _ _ = None
+defZip : SourceIndex ->
+  Int ->
+  List Decl ->
+  List DeclPos ->
+  String ->
+  Option Json
+defZip index len (d :: ds) (p :: ps) name =
+  match defZipDeclMatch index len d p name
+    Some j => Some j
+    None => defZip index len ds ps name
+defZip _ _ _ _ _ = None
 
-defZipDeclMatch : Decl -> DeclPos -> String -> Option Json
-defZipDeclMatch d p name
-  | declOwnNameMatches d name = Some (defZipLocOr (declPosNameLoc p) p)
+defZipDeclMatch : SourceIndex -> Int -> Decl -> DeclPos -> String -> Option Json
+defZipDeclMatch index len d p name
+  | declOwnNameMatches d name =
+    Some (defZipLocOr index len (declPosNameLoc p) p)
   | otherwise =
     map
-      (k => defZipLocOr (locAtIndex k (declPosChildLocs p)) p)
+      (k => defZipLocOr index len (locAtIndex k (declPosChildLocs p)) p)
       (indexOfName name (declChildNames d))
 
-defZipLocOr : Option Loc -> DeclPos -> Json
-defZipLocOr (Some l) _ = jRangeOfLoc l
-defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p) 0
+defZipLocOr : SourceIndex -> Int -> Option Loc -> DeclPos -> Json
+defZipLocOr index _ (Some l) _ = jRangeOfLoc index l
+defZipLocOr index len None p =
+  wholeLineRange index len (declPosLine p - 1) (declPosEndLine p)
 
 -- ── typecheck-env build (hover / completion / inlayHint) ────────────────────
 -- The handlers run `checkProgram prog`
@@ -791,11 +798,8 @@ lookupSchemeL name ((n, s) :: rest)
 -- (cheap), then build the env (potentially loading the project graph), so an
 -- off-identifier hover never pays for a typecheck/load.
 hoverFor : String -> String -> String -> String -> Json -> Docs -> <IO> Json
-hoverFor runtimeSrc coreSrc uri src params docs = match (
-  positionLine params,
-  positionChar params,
-)
-  (Some line, Some col) => match identifierAt src line col
+hoverFor runtimeSrc coreSrc uri src params docs = match sourceCursor src params
+  Some (line, col) => match identifierAt src line col
     None => JNull
     Some name => match hoverEnvFor runtimeSrc coreSrc uri src docs
       None => JNull
@@ -841,7 +845,16 @@ typeAtPoints : String ->
   List Int ->
   <IO> List (Option String)
 typeAtPoints runtimeSrc coreSrc filePath src line cols =
-  let names = map (col => identifierAt src line col) cols
+  let positions =
+    map
+      (col => sourceCursor src (jObject [("position", jPosition line col)]))
+      cols
+  let names =
+    map
+      (pos => match pos
+        Some (ln, col) => identifierAt src ln col
+        None => None)
+      positions
   if allList isNone names then
     map (_ => None) cols
   else
@@ -849,7 +862,17 @@ typeAtPoints runtimeSrc coreSrc filePath src line cols =
     let docs = docsPut uri src emptyDocs
     match hoverEnvFor runtimeSrc coreSrc uri src docs
       None => map (_ => None) cols
-      Some env => zipWith (typeAtIn src line env) names cols
+      Some env => zipWith (typeAtPosition src line env) names positions
+
+typeAtPosition : String ->
+  Int ->
+  HoverEnv ->
+  Option String ->
+  Option (Int, Int) ->
+  Option String
+typeAtPosition _ _ _ _ None = None
+typeAtPosition src _ env name (Some (line, col)) =
+  typeAtIn src line env name col
 
 typeAtIn : String -> Int -> HoverEnv -> Option String -> Int -> Option String
 typeAtIn _ _ _ None _ = None
@@ -1068,7 +1091,7 @@ prefixBefore : String -> Int -> Int -> String
 prefixBefore src line col =
   let arr = stringToChars src
   let len = arrayLength arr
-  match offsetOfLineStart arr len line
+  match sourcePositionToOffset (indexSource src) (line + 1) 0
     None => ""
     Some lineStart =>
       let stop = lineStart + col - 1
@@ -1081,18 +1104,6 @@ prefixBefore src line col =
       else
         let start = prefixStart arr lineStart stop
         stringSlice start (stop + 1) src
-
--- Byte offset of the start of 0-based `line`, or None if it doesn't exist.
-offsetOfLineStart : Array Char -> Int -> Int -> Option Int
-offsetOfLineStart arr len line = lineStartGo arr len 0 0 0 line
-
-lineStartGo : Array Char -> Int -> Int -> Int -> Int -> Int -> Option Int
-lineStartGo arr len i curLine lineStart line
-  | curLine == line = Some lineStart
-  | i >= len = None
-  | arrayGetUnsafe i arr == '\n' =
-    lineStartGo arr len (i + 1) (curLine + 1) (i + 1) line
-  | otherwise = lineStartGo arr len (i + 1) curLine lineStart line
 
 -- Walk left from `stop` over identifier chars, not past the line start.
 prefixStart : Array Char -> Int -> Int -> Int
@@ -1134,17 +1145,14 @@ completionFor : String ->
   Json ->
   Docs ->
   <IO> Json
-completionFor runtimeSrc coreSrc uri src params docs = match (
-  positionLine params,
-  positionChar params,
-)
-  (Some line, Some col) =>
-    match completionEnvFor runtimeSrc coreSrc uri src docs
+completionFor runtimeSrc coreSrc uri src params docs =
+  match sourceCursor src params
+    Some (line, col) => match completionEnvFor runtimeSrc coreSrc uri src docs
       None => JNull
       Some env =>
         let prefix = prefixBefore src line col
         jArray (filterCompletions prefix [] env)
-  _ => JNull
+    _ => JNull
 
 -- Completion suggests names from the env directly, so for a project buffer the
 -- env must be the FULL visible set: the entry's own schemes + its locals + its
@@ -1219,7 +1227,7 @@ columnAfterName : String -> Int -> Option Int
 columnAfterName src line =
   let arr = stringToChars src
   let len = arrayLength arr
-  match offsetOfLineStart arr len line
+  match sourcePositionToOffset (indexSource src) (line + 1) 0
     None => None
     Some lineStart =>
       let endCol = identRunLen arr len lineStart 0
@@ -1251,7 +1259,9 @@ inlayHints runtimeSrc coreSrc uri src docs =
 -- over the decl's start line.
 inlayNamePos : String -> DeclPos -> Option (Int, Int)
 inlayNamePos src p = match declPosNameLoc p
-  Some (Loc _ sl _ _ ec) => Some (sl - 1, ec)
+  Some (Loc _ _ _ el ec) => match sourcePositionToOffset (indexSource src) el ec
+    Some off => offsetToUtf16Position (indexSource src) off
+    None => None
   None =>
     map
       (col => (declPosLine p - 1, col))
@@ -1299,20 +1309,12 @@ handleInlayHint runtimeSrc coreSrc idJson params docs =
   writeMessage (responseMsg idJson result)
 
 -- ── request-position helpers ────────────────────────────────────────────────
--- Pull params.position.{line,character} (0-based) from a request message.
-positionLine : Json -> Option Int
-positionLine params = match get "position" params
-  Some pos => match get "line" pos
-    Some v => asInt v
-    None => None
-  None => None
-
-positionChar : Json -> Option Int
-positionChar params = match get "position" params
-  Some pos => match get "character" pos
-    Some v => asInt v
-    None => None
-  None => None
+sourceCursor : String -> Json -> Option (Int, Int)
+sourceCursor src params = do
+  let index = indexSource src
+  pos <- get "position" params
+  off <- lspPositionToOffset index pos
+  map ((line, col) => (line - 1, col)) (offsetToSourcePosition index off)
 
 -- params.textDocument.uri for a request.
 requestUri : Json -> Option String
@@ -1609,7 +1611,11 @@ classify tok (SemCtx depth ls mode) =
    role, empty/synthetic spans (start == end), and any token straddling a line
    boundary (LSP forbids multi-line tokens; only a triple-quoted string could, and
    those stay with TextMate). -}
-semToksOf : Array Char -> List Token -> List (Int, Int) -> SemCtx -> List SemTok
+semToksOf : SourceIndex ->
+  List Token ->
+  List (Int, Int) ->
+  SemCtx ->
+  List SemTok
 semToksOf _ [] _ _ = []
 semToksOf _ _ [] _ = []
 semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
@@ -1618,12 +1624,13 @@ semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
     Some ty =>
       if s >= e then
         semToksOf arr ts ps ctx2
-      else match (posOfOffset arr s, posOfOffset arr e)
-        ((sl, sc), (el, ec)) =>
+      else match (offsetToUtf16Position arr s, offsetToUtf16Position arr e)
+        (Some (sl, sc), Some (el, ec)) =>
           if sl == el then
             SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
           else
             semToksOf arr ts ps ctx2
+        _ => semToksOf arr ts ps ctx2
 
 {- Delta-encode the (start-ordered) SemTok list into the flat 5-int LSP array.
    prevLine/prevChar start at 0, so the first token's deltaLine is its absolute
@@ -1638,7 +1645,7 @@ encodeSemToks prevLine prevChar ((SemTok line ch len ty) :: rest) =
 -- The full semantic-tokens `data` array (flat ints) for a source string.
 semanticTokensData : String -> List Int
 semanticTokensData src =
-  let arr = stringToChars src
+  let arr = indexSource src
   match tokenizeWithOffsetPairs src
     (toks, pairs) =>
       encodeSemToks 0 0 (semToksOf arr toks pairs (SemCtx 0 True MExpr))
@@ -1682,11 +1689,15 @@ initializeResultFor serverVersion = jObject [
 
 -- The single located diagnostic for an unparseable buffer.  The parser's line
 -- is 1-based and col 0-based; LSP wants 0-based lines.
-parseErrorDiags : ParseError -> List Json
-parseErrorDiags e =
-  let ln = maxI 0 (parseErrorLine e - 1)
-  let col = maxI 0 (parseErrorCol e)
-  let r = jRange ln col ln (col + 1)
+parseErrorDiags : String -> ParseError -> List Json
+parseErrorDiags src e =
+  let index = indexSource src
+  let ln = parseErrorLine e
+  let col = parseErrorCol e
+  let end = match sourcePositionToOffset index ln (col + 1)
+    Some _ => col + 1
+    None => col
+  let r = jRangeOfLoc index (Loc "" ln col ln end)
   [jDiagnostic 1 r (parseErrorMessage e)]
 
 publishDiagnosticsList : String -> List Json -> <IO> Unit
@@ -1713,7 +1724,7 @@ publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
       coreSrc
       decls
   let diags = flatMap snd front.foDiags
-  let _ = publishDiagnosticsList uri (map (diagToJson src) diags)
+  let _ = publishDiagnosticsList uri (diagsToJson src diags)
   map (_ => front.foReport) front.foDriven
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
@@ -1840,7 +1851,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc
-  let _ = publishEach results
+  let _ = publishEach docs results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
@@ -1863,17 +1874,23 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
-publishEach : List (String, List Diag) -> <IO> Unit
-publishEach [] = ()
-publishEach ((file, ds) :: rest) =
+publishEach : Docs -> List (String, List Diag) -> <IO> Unit
+publishEach _ [] = ()
+publishEach docs ((file, ds) :: rest) =
   let uri = uriOfPath file
+  let src = sourceForPath docs file
   let params = jObject [
     ("uri", JString uri),
-    ("diagnostics", jArray (map (diagToJson "") ds)),
+    (
+      "diagnostics",
+      jArray (match src
+        Some text => diagsToJson text ds
+        None => []),
+    ),
   ]
   let _ =
     writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
-  publishEach rest
+  publishEach docs rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
@@ -1892,7 +1909,7 @@ selectProjectProfileFor file docs = match carryProjectProfile None file
   Err msg => match manifestPathOf file
     None => docs
     Some path =>
-      let _ = publishEach [
+      let _ = publishEach docs [
         (
           path,
           [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))],
@@ -1905,7 +1922,7 @@ clearFlaggedManifest file docs = match manifestPathOf file
   None => docs
   Some path =>
     if docsFlagged path docs then
-      let _ = publishEach [(path, [])]
+      let _ = publishEach docs [(path, [])]
       docsUnflag path docs
     else
       docs
@@ -1932,7 +1949,7 @@ publishForSelected : String ->
 publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
     Err e =>
-      let _ = publishDiagnosticsList uri (parseErrorDiags e)
+      let _ = publishDiagnosticsList uri (parseErrorDiags text e)
       None
     Ok decls =>
       if anyImport decls then
@@ -1998,14 +2015,36 @@ handleDocumentSymbol idJson params docs =
   writeMessage (responseMsg idJson result)
 
 -- textDocument/definition → Location[] (singleton) or null.
-handleDefinition : Json -> Json -> Docs -> <IO> Unit
-handleDefinition idJson params docs =
+handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleDefinition runtimeSrc coreSrc idJson params docs =
   let result = match requestUri params
     None => JNull
     Some uri => match docsGet uri docs
       None => JNull
-      Some src => definitionResult uri src params
+      Some src => projectDefinition runtimeSrc coreSrc uri src params docs
   writeMessage (responseMsg idJson result)
+
+projectDefinition : String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Docs ->
+  <IO> Json
+projectDefinition runtimeSrc coreSrc uri src params docs =
+  match sourceCursor src params
+    None => JNull
+    Some (line, col) => match identifierAt src line col
+      None => JNull
+      Some _ =>
+        let rootFile = pathOfUri uri
+        let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+        let read = path => docsGet (uriOfPath path) docs
+        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
+        match binderAt idx rootFile (line + 1) col
+          None => definitionResult uri src params
+          Some key =>
+            jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
 
 -- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
@@ -2016,11 +2055,8 @@ handleDefinition idJson params docs =
 -- relative in the result (path-stable for a golden).
 export
 definitionResult : String -> String -> Json -> Json
-definitionResult uri src params = match (
-  positionLine params,
-  positionChar params,
-)
-  (Some line, Some col) => match identifierAt src line col
+definitionResult uri src params = match sourceCursor src params
+  Some (line, col) => match identifierAt src line col
     None => JNull
     Some name => match definitionRange src name
       None => JNull
@@ -2077,24 +2113,23 @@ referencesResult : String ->
   Json ->
   Docs ->
   <IO> Json
-referencesResult runtimeSrc coreSrc uri src params docs = match (
-  positionLine params,
-  positionChar params,
-)
-  (Some line, Some col) => match identifierAt src line col
-    None => jArray []
-    Some _ =>
-      let rootFile = pathOfUri uri
-      let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
-      let read = path => docsGet (uriOfPath path) docs
-      let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
-      -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
-      -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
-      match binderAt idx rootFile (line + 1) col
-        None => jArray []
-        Some key =>
-          jArray (referenceLocations idx key (includeDeclarationOf params))
-  _ => jArray []
+referencesResult runtimeSrc coreSrc uri src params docs =
+  match sourceCursor src params
+    Some (line, col) => match identifierAt src line col
+      None => jArray []
+      Some _ =>
+        let rootFile = pathOfUri uri
+        let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+        let read = path => docsGet (uriOfPath path) docs
+        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
+        -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
+        -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
+        match binderAt idx rootFile (line + 1) col
+          None => jArray []
+          Some key =>
+            jArray
+              (referenceLocations docs idx key (includeDeclarationOf params))
+    _ => jArray []
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
 -- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
@@ -2126,11 +2161,11 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (
 -- index was built). #912 bounced the merge queue on exactly this — one
 -- runner's golden didn't match another's. The def site is sorted IN with the
 -- uses, not pinned to the front — nothing in the spec/F6 requires it first.
-referenceLocations : RefIndex -> String -> Bool -> List Json
-referenceLocations idx key includeDecl =
+referenceLocations : Docs -> RefIndex -> String -> Bool -> <IO> List Json
+referenceLocations docs idx key includeDecl =
   let uses = usesOf idx key
   let all = if includeDecl then defsOf idx key ++ uses else uses
-  map locationJson (sortBy compareUseLoc all)
+  locationsJson docs (sortBy compareUseLoc all)
 
 -- (path, then start line, then start char) — see `referenceLocations`.
 compareUseLoc : (String, Loc) -> (String, Loc) -> Ordering
@@ -2143,9 +2178,36 @@ compareUseLoc (p1, Loc _ sl1 sc1 _ _) (p2, Loc _ sl2 sc2 _ _) =
       Gt => Gt
       Eq => compare sc1 sc2
 
-locationJson : (String, Loc) -> Json
-locationJson (path, loc) =
-  jObject [("uri", JString (uriOfPath path)), ("range", jRangeOfLoc loc)]
+sourceForPath : Docs -> String -> <IO> Option String
+sourceForPath docs path = match docsGet (uriOfPath path) docs
+  Some src => Some src
+  None => match readFile path
+    Ok src => Some src
+    Err _ => None
+
+locationsJson : Docs -> List (String, Loc) -> <IO> List Json
+locationsJson _ [] = []
+locationsJson docs ((path, loc) :: rest) =
+  let index = map indexSource (sourceForPath docs path)
+  locationsForPath docs path index ((path, loc) :: rest)
+
+locationsForPath : Docs ->
+  String ->
+  Option SourceIndex ->
+  List (String, Loc) ->
+  <IO> List Json
+locationsForPath _ _ _ [] = []
+locationsForPath docs path index ((next, loc) :: rest) =
+  if next /= path then
+    locationsJson docs ((next, loc) :: rest)
+  else
+    let tail = locationsForPath docs path index rest
+    match index
+      None => tail
+      Some idx => match locToLspRange idx loc
+        None => tail
+        Some range =>
+          jObject [("uri", JString (uriOfPath path)), ("range", range)] :: tail
 
 -- `params.context.includeDeclaration` (LSP `ReferenceContext`). Missing
 -- `context`/field, or a non-bool value, defaults to `True` (F6, locked).
@@ -2167,8 +2229,8 @@ handleHighlight idJson params docs =
   writeMessage (responseMsg idJson result)
 
 highlightResult : String -> Json -> Json
-highlightResult src params = match (positionLine params, positionChar params)
-  (Some line, Some col) => match identifierAt src line col
+highlightResult src params = match sourceCursor src params
+  Some (line, col) => match identifierAt src line col
     None => JNull
     Some name => jArray (highlightRanges src name)
   _ => JNull
@@ -2240,7 +2302,13 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
       let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/definition" then
-      let _ = handleDefinition (requestId msg) (fieldOr "params" msg) docs
+      let _ =
+        handleDefinition
+          runtimeSrc
+          coreSrc
+          (requestId msg)
+          (fieldOr "params" msg)
+          docs
       Step docs True
     else if meth == "textDocument/documentHighlight" then
       let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
