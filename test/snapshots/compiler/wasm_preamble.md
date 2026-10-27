@@ -1,12 +1,18 @@
 # META
-source_lines=3537
+source_lines=3564
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{
-  WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
-  jsWireResult, unaryF64Sig, binaryF64Sig
+  WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
+  helperOrder, hasWasmHelper, jsWireParam, jsWireResult, unaryF64Sig,
+  binaryF64Sig
 }
 import backend.wasm_demand.{JsImport(..)}
+import backend.wasm_symbols.{
+  SymbolDefect, SymbolRegistry, WasmShape(..), WasmSymbol(..), checkRef,
+  defineSymbol
+}
+import support.symbol_origin.{SymbolOrigin(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
 -- (WASMGC-DESIGN.md §3 type-section + §6 host-import seam).  Peer of
 -- `backend.llvm_preamble` (the `declare @mdk_…` block): PURE DATA, identical for
@@ -46,7 +52,7 @@ import backend.wasm_demand.{JsImport(..)}
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
-import support.util.{anyList, contains, joinWith}
+import support.util.{anyList, contains, filterList, joinWith}
 import types.private_mangle.{injectiveIdent}
 
 export
@@ -3428,14 +3434,35 @@ plannedImportLines = map (imp =>
 export
 plannedHelperLines : WasmDemandPlan -> List (List Int) -> List String
 plannedHelperLines plan files =
-  flatMap
-    (name =>
-      if hasWasmHelper plan name then
-        plannedHelperBlock plan files name
-      else
-        [])
-    helperOrder
+  flatMap (plannedHelperBlock plan files) (plannedHelpers plan)
 
+-- the helper blocks [plan] selects, in module order
+plannedHelpers : WasmDemandPlan -> List String
+plannedHelpers plan = filterList (hasWasmHelper plan) helperOrder
+
+-- The registry steps that declare the planned helper blocks' identities: each
+-- function a selected block defines, then a reference to each function it
+-- calls outside itself, from its manifest row.
+export
+declarePlannedHelpers : WasmDemandPlan ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+declarePlannedHelpers plan =
+  flatMap (helperSymbolSteps plan) (plannedHelpers plan)
+
+helperSymbolSteps : WasmDemandPlan ->
+  String ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+helperSymbolSteps plan name =
+  let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
+  let (HelperManifest defines calls) = helperManifest plan name
+  map
+      ((f, params) => defineSymbol (WasmFunc f) (FuncParams params) origin)
+      defines
+    ++ map (f => checkRef (WasmFunc f) origin) calls
+
+-- The text of helper block [name] as [plan] selects it.  `helperManifest`
+-- (wasm_demand.mdk) states what this text defines and calls.
+export
 plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
 plannedHelperBlock plan files "closApplyLines" = closApplyLines
 plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
@@ -3540,9 +3567,11 @@ plannedHelperBlock plan files "siteRuntimeLines" =
 plannedHelperBlock _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
@@ -3907,8 +3936,14 @@ plannedHelperBlock _ _ name =
 (DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "plannedImportLines" () (EApp (EVar "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
 (DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
-(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
+(DTypeSig false "plannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedHelpers" ((PVar "plan")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasWasmHelper") (EVar "plan"))) (EVar "helperOrder")))
+(DTypeSig true "declarePlannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "declarePlannedHelpers" ((PVar "plan")) (EApp (EApp (EVar "flatMap") (EApp (EVar "helperSymbolSteps") (EVar "plan"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
+(DTypeSig false "helperSymbolSteps" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
+(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DTypeSig true "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))
@@ -3979,9 +4014,11 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
 (DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
@@ -4346,8 +4383,14 @@ plannedHelperBlock _ _ name =
 (DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "plannedImportLines" () (EApp (EMethodRef "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
 (DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
-(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
+(DTypeSig false "plannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedHelpers" ((PVar "plan")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasWasmHelper") (EVar "plan"))) (EVar "helperOrder")))
+(DTypeSig true "declarePlannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "declarePlannedHelpers" ((PVar "plan")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "helperSymbolSteps") (EVar "plan"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
+(DTypeSig false "helperSymbolSteps" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
+(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DTypeSig true "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))

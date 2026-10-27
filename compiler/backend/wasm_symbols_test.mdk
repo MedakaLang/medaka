@@ -170,6 +170,19 @@ test "a reference nothing defines is unresolved at the end; defined later, it is
           checkRef (WasmGlobal "g") (at "reader"),
         ])),
     labelFail
+      "a string segment read before its literal is interned"
+      (expectEqual
+        [UndefinedReference (WasmData "strseg_0") (at "main")]
+        (verdict [checkRef (WasmData "strseg_0") (at "main")])),
+    labelFail
+      "an interned string segment"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (WasmData "strseg_0") DataDecl (at "main"),
+          checkRef (WasmData "strseg_0") (at "main"),
+        ])),
+    labelFail
       "a use a recorded gap accounts for"
       (expectEqual
         []
@@ -219,7 +232,41 @@ test "a ref.func no element declaration lists is refused; a listed one is not" =
           checkRef (WasmFunc "mdk_lam0") (at "outer"),
           checkRef (WasmElem "mdk_lam0") (at "outer"),
         ])),
+    labelFail
+      "listed, but no function of that name is defined"
+      (expectEqual
+        [UndefinedReference (WasmFunc "mdk_lam0") (at "outer")]
+        (verdict [
+          declareSymbol (WasmElem "mdk_lam0") ElemDecl (at "outer"),
+          checkRef (WasmFunc "mdk_lam0") (at "outer"),
+          checkRef (WasmElem "mdk_lam0") (at "outer"),
+        ])),
   ]
+
+-- With closures off the emitter writes no element declaration, so it declares
+-- no element entry, `$mdk_pap`'s included; with them on it declares `$mdk_pap`'s
+-- and the closure helpers define it.
+test "a ref.func while closures are off is refused" = expectAll [
+  labelFail
+    "closures off"
+    (expectEqual
+      [UndeclaredFuncRef "mdk_pap" (at "outer")]
+      (verdict [
+        defineSymbol (WasmFunc "mdk_pap") (FuncOfType "codety" 2) (at "module"),
+        checkRef (WasmFunc "mdk_pap") (at "outer"),
+        checkRef (WasmElem "mdk_pap") (at "outer"),
+      ])),
+  labelFail
+    "closures on"
+    (expectEqual
+      []
+      (verdict [
+        declareSymbol (WasmElem "mdk_pap") ElemDecl (at "module"),
+        defineSymbol (WasmFunc "mdk_pap") (FuncOfType "codety" 2) (at "module"),
+        checkRef (WasmFunc "mdk_pap") (at "outer"),
+        checkRef (WasmElem "mdk_pap") (at "outer"),
+      ])),
+]
 
 test "element entries are a set kept in first-declared order" =
   expectEqual

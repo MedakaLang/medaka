@@ -1,25 +1,28 @@
 # META
-source_lines=296
+source_lines=314
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical identities of one WasmGC module under emission: each function,
--- type, global and element-declared function reference the emitter writes, the
--- shape it was given, and the binding whose emission wrote it.  A definition,
--- call or reference that contradicts the registry is a `SymbolDefect`, which the
--- emitter returns to its driver instead of a module text.
+-- type, global, data segment and element-declared function reference the
+-- emitter writes, the shape it was given, and the binding whose emission wrote
+-- it.  A definition, call or reference that contradicts the registry is a
+-- `SymbolDefect`, which the emitter returns to its driver instead of a module
+-- text.
 --
 -- When an identity is judged depends on when its set is closed, not on its name.
--- Types and globals are declared before any body is emitted, so a use of an
--- undeclared one is a defect at the use.  A function may be called before it is
--- defined (force functions and coded-trap helpers follow every body), so a call
--- to a function not yet defined waits: it is judged against the definition when
--- that arrives, and whatever still waits once the module is complete is
--- `unresolved`.  An element reference (`ref.func`) waits the same way for the
--- `(elem declare func …)` entry that makes it valid.
+-- Types, globals and the planned runtime helpers are declared before any body is
+-- emitted, and a data segment when its literal is interned, so a use of an
+-- undeclared global, type or segment is a defect at the use.  A function may be
+-- called before it is defined (force functions and coded-trap helpers follow
+-- every body), so a call to a function not yet defined waits: it is judged
+-- against the definition when that arrives, and whatever still waits once the
+-- module is complete is `unresolved`.  An element reference (`ref.func`) waits
+-- the same way for the `(elem declare func …)` entry that makes it valid.
 --
--- A WebAssembly module may not name one function, type or global twice, so a
--- second declaration or definition of an identity is a defect whichever of the
--- two declared it.  Only an element entry may repeat: the element list is a set.
+-- A WebAssembly module may not name one function, type, global or data segment
+-- twice, so a second declaration or definition of an identity is a defect
+-- whichever of the two declared it.  Only an element entry may repeat: the
+-- element list is a set.
 
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
@@ -32,6 +35,7 @@ public export data WasmSymbol =
   | WasmFunc String
   | WasmType String
   | WasmGlobal String
+  | WasmData String
   | WasmElem String
   deriving (Eq, Debug)
 
@@ -45,6 +49,7 @@ public export data WasmShape =
   | FuncImported
   | TypeDecl
   | GlobalDecl
+  | DataDecl
   | ElemDecl
   deriving (Eq, Debug)
 
@@ -89,12 +94,14 @@ symbolKey : WasmSymbol -> String
 symbolKey (WasmFunc n) = "f:" ++ n
 symbolKey (WasmType n) = "t:" ++ n
 symbolKey (WasmGlobal n) = "g:" ++ n
+symbolKey (WasmData n) = "d:" ++ n
 symbolKey (WasmElem n) = "e:" ++ n
 
 symbolName : WasmSymbol -> String
 symbolName (WasmFunc n) = n
 symbolName (WasmType n) = n
 symbolName (WasmGlobal n) = n
+symbolName (WasmData n) = n
 symbolName (WasmElem n) = n
 
 paramCount : WasmShape -> Option Int
@@ -189,24 +196,34 @@ checkCall sym operands origin reg = match omLookup (symbolKey sym) reg.entries
     None => Ok reg
   None => Ok (wait (Waiting sym (Some operands) origin) reg)
 
--- A use of an identity by name alone: a type use, a global access, or a
--- `ref.func` (whose function and element entry both have to exist).
+-- A use of an identity by name alone: a type use, a global access, a data
+-- segment read, or a `ref.func` (whose function and element entry both have to
+-- exist).
 export
 checkRef : WasmSymbol ->
   SymbolOrigin ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
 checkRef (WasmType t) origin reg = checkTypeUse t t origin reg
-checkRef (WasmGlobal g) origin reg =
-  if omHasKey (symbolKey (WasmGlobal g)) reg.entries then
-    Ok reg
-  else
-    Err (UndefinedReference (WasmGlobal g) origin)
+checkRef (WasmGlobal g) origin reg = checkDeclared (WasmGlobal g) origin reg
+checkRef (WasmData d) origin reg = checkDeclared (WasmData d) origin reg
 checkRef sym origin reg =
   if omHasKey (symbolKey sym) reg.entries then
     Ok reg
   else
     Ok (wait (Waiting sym None origin) reg)
+
+-- a use of an identity whose set closed before the use: it is there, or never
+-- will be
+checkDeclared : WasmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkDeclared sym origin reg =
+  if omHasKey (symbolKey sym) reg.entries then
+    Ok reg
+  else
+    Err (UndefinedReference sym origin)
 
 -- [user]'s declaration says `(type $<t>)`; the type section must declare it.
 export
@@ -297,17 +314,18 @@ describe : WasmSymbol -> String
 describe (WasmFunc n) = "function `$\{n}`"
 describe (WasmType n) = "type `$\{n}`"
 describe (WasmGlobal n) = "global `$\{n}`"
+describe (WasmData n) = "data segment `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"
 # DESUGAR
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
-(DImpl true "Eq" ((TyCon "WasmSymbol")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "WasmFunc" (PVar "__a0")) (PCon "WasmFunc" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmType" (PVar "__a0")) (PCon "WasmType" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmGlobal" (PVar "__a0")) (PCon "WasmGlobal" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmElem" (PVar "__a0")) (PCon "WasmElem" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "WasmSymbol")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "WasmFunc" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmFunc ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmType" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmType ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmGlobal" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmGlobal ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmElem" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmElem ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
-(DData Public "WasmShape" () ((variant "FuncParams" (ConPos (TyCon "Int"))) (variant "FuncOfType" (ConPos (TyCon "String") (TyCon "Int"))) (variant "FuncImported" (ConPos)) (variant "TypeDecl" (ConPos)) (variant "GlobalDecl" (ConPos)) (variant "ElemDecl" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "WasmShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "FuncParams" (PVar "__a0")) (PCon "FuncParams" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) (PCon "FuncOfType" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FuncImported") (PCon "FuncImported")) () (EVar "True")) (arm (PTuple (PCon "TypeDecl") (PCon "TypeDecl")) () (EVar "True")) (arm (PTuple (PCon "GlobalDecl") (PCon "GlobalDecl")) () (EVar "True")) (arm (PTuple (PCon "ElemDecl") (PCon "ElemDecl")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "WasmShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "FuncParams" (PVar "__a0")) () (EBinOp "++" (ELit (LString "FuncParams ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FuncOfType ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "FuncImported") () (ELit (LString "FuncImported"))) (arm (PCon "TypeDecl") () (ELit (LString "TypeDecl"))) (arm (PCon "GlobalDecl") () (ELit (LString "GlobalDecl"))) (arm (PCon "ElemDecl") () (ELit (LString "ElemDecl")))))))
+(DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmData" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "WasmSymbol")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "WasmFunc" (PVar "__a0")) (PCon "WasmFunc" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmType" (PVar "__a0")) (PCon "WasmType" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmGlobal" (PVar "__a0")) (PCon "WasmGlobal" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmData" (PVar "__a0")) (PCon "WasmData" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmElem" (PVar "__a0")) (PCon "WasmElem" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmSymbol")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "WasmFunc" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmFunc ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmType" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmType ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmGlobal" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmGlobal ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmData" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmData ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "WasmElem" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmElem ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DData Public "WasmShape" () ((variant "FuncParams" (ConPos (TyCon "Int"))) (variant "FuncOfType" (ConPos (TyCon "String") (TyCon "Int"))) (variant "FuncImported" (ConPos)) (variant "TypeDecl" (ConPos)) (variant "GlobalDecl" (ConPos)) (variant "DataDecl" (ConPos)) (variant "ElemDecl" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "WasmShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "FuncParams" (PVar "__a0")) (PCon "FuncParams" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) (PCon "FuncOfType" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FuncImported") (PCon "FuncImported")) () (EVar "True")) (arm (PTuple (PCon "TypeDecl") (PCon "TypeDecl")) () (EVar "True")) (arm (PTuple (PCon "GlobalDecl") (PCon "GlobalDecl")) () (EVar "True")) (arm (PTuple (PCon "DataDecl") (PCon "DataDecl")) () (EVar "True")) (arm (PTuple (PCon "ElemDecl") (PCon "ElemDecl")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "FuncParams" (PVar "__a0")) () (EBinOp "++" (ELit (LString "FuncParams ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FuncOfType ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "FuncImported") () (ELit (LString "FuncImported"))) (arm (PCon "TypeDecl") () (ELit (LString "TypeDecl"))) (arm (PCon "GlobalDecl") () (ELit (LString "GlobalDecl"))) (arm (PCon "DataDecl") () (ELit (LString "DataDecl"))) (arm (PCon "ElemDecl") () (ELit (LString "ElemDecl")))))))
 (DData Public "SymbolDefect" () ((variant "DuplicateDefinition" (ConPos (TyCon "WasmSymbol") (TyCon "SymbolOrigin") (TyCon "SymbolOrigin"))) (variant "ShapeMismatch" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "SymbolOrigin") (TyCon "SymbolOrigin"))) (variant "UndefinedReference" (ConPos (TyCon "WasmSymbol") (TyCon "SymbolOrigin"))) (variant "UndeclaredType" (ConPos (TyCon "String") (TyCon "String") (TyCon "SymbolOrigin"))) (variant "UndeclaredFuncRef" (ConPos (TyCon "String") (TyCon "SymbolOrigin")))) ())
 (DImpl true "Eq" ((TyCon "SymbolDefect")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DuplicateDefinition" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "DuplicateDefinition" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "ShapeMismatch" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "ShapeMismatch" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4")))) (arm (PTuple (PCon "UndefinedReference" (PVar "__a0") (PVar "__a1")) (PCon "UndefinedReference" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "UndeclaredType" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "UndeclaredType" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "UndeclaredFuncRef" (PVar "__a0") (PVar "__a1")) (PCon "UndeclaredFuncRef" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "SymbolDefect")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DuplicateDefinition" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "DuplicateDefinition ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2"))))) (arm (PCon "ShapeMismatch" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ShapeMismatch ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a4"))))) (arm (PCon "UndefinedReference" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndefinedReference ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "UndeclaredType" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndeclaredType ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2"))))) (arm (PCon "UndeclaredFuncRef" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndeclaredFuncRef ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
@@ -320,11 +338,13 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "symbolKey" ((PCon "WasmFunc" (PVar "n"))) (EBinOp "++" (ELit (LString "f:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmType" (PVar "n"))) (EBinOp "++" (ELit (LString "t:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmGlobal" (PVar "n"))) (EBinOp "++" (ELit (LString "g:")) (EVar "n")))
+(DFunDef false "symbolKey" ((PCon "WasmData" (PVar "n"))) (EBinOp "++" (ELit (LString "d:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (ELit (LString "e:")) (EVar "n")))
 (DTypeSig false "symbolName" (TyFun (TyCon "WasmSymbol") (TyCon "String")))
 (DFunDef false "symbolName" ((PCon "WasmFunc" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmType" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmGlobal" (PVar "n"))) (EVar "n"))
+(DFunDef false "symbolName" ((PCon "WasmData" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmElem" (PVar "n"))) (EVar "n"))
 (DTypeSig false "paramCount" (TyFun (TyCon "WasmShape") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "paramCount" ((PCon "FuncParams" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
@@ -348,8 +368,11 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "checkCall" ((PVar "sym") (PVar "operands") (PVar "origin") (PVar "reg")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "sym")) (EApp (EVar "Some") (EVar "operands"))) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EApp (EVar "wait") (EApp (EApp (EApp (EVar "Waiting") (EVar "sym")) (EApp (EVar "Some") (EVar "operands"))) (EVar "origin"))) (EVar "reg"))))))
 (DTypeSig true "checkRef" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "checkRef" ((PCon "WasmType" (PVar "t")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "checkTypeUse") (EVar "t")) (EVar "t")) (EVar "origin")) (EVar "reg")))
-(DFunDef false "checkRef" ((PCon "WasmGlobal" (PVar "g")) (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmGlobal") (EVar "g")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "WasmGlobal") (EVar "g"))) (EVar "origin")))))
+(DFunDef false "checkRef" ((PCon "WasmGlobal" (PVar "g")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EVar "checkDeclared") (EApp (EVar "WasmGlobal") (EVar "g"))) (EVar "origin")) (EVar "reg")))
+(DFunDef false "checkRef" ((PCon "WasmData" (PVar "d")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EVar "checkDeclared") (EApp (EVar "WasmData") (EVar "d"))) (EVar "origin")) (EVar "reg")))
 (DFunDef false "checkRef" ((PVar "sym") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Ok") (EApp (EApp (EVar "wait") (EApp (EApp (EApp (EVar "Waiting") (EVar "sym")) (EVar "None")) (EVar "origin"))) (EVar "reg")))))
+(DTypeSig false "checkDeclared" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkDeclared" ((PVar "sym") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "origin")))))
 (DTypeSig true "checkTypeUse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "checkTypeUse" ((PVar "t") (PVar "user") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmType") (EVar "t")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "UndeclaredType") (EVar "t")) (EVar "user")) (EVar "origin")))))
 (DTypeSig false "wait" (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
@@ -387,17 +410,18 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "describe" ((PCon "WasmFunc" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "function `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmType" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "type `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmGlobal" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "global `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
+(DFunDef false "describe" ((PCon "WasmData" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "data segment `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "element entry `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 # MARK
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
-(DImpl true "Eq" ((TyCon "WasmSymbol")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "WasmFunc" (PVar "__a0")) (PCon "WasmFunc" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmType" (PVar "__a0")) (PCon "WasmType" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmGlobal" (PVar "__a0")) (PCon "WasmGlobal" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmElem" (PVar "__a0")) (PCon "WasmElem" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "WasmSymbol")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "WasmFunc" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmFunc ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmType" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmType ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmGlobal" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmGlobal ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmElem" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmElem ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
-(DData Public "WasmShape" () ((variant "FuncParams" (ConPos (TyCon "Int"))) (variant "FuncOfType" (ConPos (TyCon "String") (TyCon "Int"))) (variant "FuncImported" (ConPos)) (variant "TypeDecl" (ConPos)) (variant "GlobalDecl" (ConPos)) (variant "ElemDecl" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "WasmShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "FuncParams" (PVar "__a0")) (PCon "FuncParams" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) (PCon "FuncOfType" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FuncImported") (PCon "FuncImported")) () (EVar "True")) (arm (PTuple (PCon "TypeDecl") (PCon "TypeDecl")) () (EVar "True")) (arm (PTuple (PCon "GlobalDecl") (PCon "GlobalDecl")) () (EVar "True")) (arm (PTuple (PCon "ElemDecl") (PCon "ElemDecl")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "WasmShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "FuncParams" (PVar "__a0")) () (EBinOp "++" (ELit (LString "FuncParams ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FuncOfType ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "FuncImported") () (ELit (LString "FuncImported"))) (arm (PCon "TypeDecl") () (ELit (LString "TypeDecl"))) (arm (PCon "GlobalDecl") () (ELit (LString "GlobalDecl"))) (arm (PCon "ElemDecl") () (ELit (LString "ElemDecl")))))))
+(DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmData" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "WasmSymbol")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "WasmFunc" (PVar "__a0")) (PCon "WasmFunc" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmType" (PVar "__a0")) (PCon "WasmType" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmGlobal" (PVar "__a0")) (PCon "WasmGlobal" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmData" (PVar "__a0")) (PCon "WasmData" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WasmElem" (PVar "__a0")) (PCon "WasmElem" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmSymbol")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "WasmFunc" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmFunc ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmType" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmType ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmGlobal" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmGlobal ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmData" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmData ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "WasmElem" (PVar "__a0")) () (EBinOp "++" (ELit (LString "WasmElem ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
+(DData Public "WasmShape" () ((variant "FuncParams" (ConPos (TyCon "Int"))) (variant "FuncOfType" (ConPos (TyCon "String") (TyCon "Int"))) (variant "FuncImported" (ConPos)) (variant "TypeDecl" (ConPos)) (variant "GlobalDecl" (ConPos)) (variant "DataDecl" (ConPos)) (variant "ElemDecl" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "WasmShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "FuncParams" (PVar "__a0")) (PCon "FuncParams" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) (PCon "FuncOfType" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FuncImported") (PCon "FuncImported")) () (EVar "True")) (arm (PTuple (PCon "TypeDecl") (PCon "TypeDecl")) () (EVar "True")) (arm (PTuple (PCon "GlobalDecl") (PCon "GlobalDecl")) () (EVar "True")) (arm (PTuple (PCon "DataDecl") (PCon "DataDecl")) () (EVar "True")) (arm (PTuple (PCon "ElemDecl") (PCon "ElemDecl")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "FuncParams" (PVar "__a0")) () (EBinOp "++" (ELit (LString "FuncParams ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "FuncOfType" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FuncOfType ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "FuncImported") () (ELit (LString "FuncImported"))) (arm (PCon "TypeDecl") () (ELit (LString "TypeDecl"))) (arm (PCon "GlobalDecl") () (ELit (LString "GlobalDecl"))) (arm (PCon "DataDecl") () (ELit (LString "DataDecl"))) (arm (PCon "ElemDecl") () (ELit (LString "ElemDecl")))))))
 (DData Public "SymbolDefect" () ((variant "DuplicateDefinition" (ConPos (TyCon "WasmSymbol") (TyCon "SymbolOrigin") (TyCon "SymbolOrigin"))) (variant "ShapeMismatch" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "SymbolOrigin") (TyCon "SymbolOrigin"))) (variant "UndefinedReference" (ConPos (TyCon "WasmSymbol") (TyCon "SymbolOrigin"))) (variant "UndeclaredType" (ConPos (TyCon "String") (TyCon "String") (TyCon "SymbolOrigin"))) (variant "UndeclaredFuncRef" (ConPos (TyCon "String") (TyCon "SymbolOrigin")))) ())
 (DImpl true "Eq" ((TyCon "SymbolDefect")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DuplicateDefinition" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "DuplicateDefinition" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "ShapeMismatch" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "ShapeMismatch" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4")))) (arm (PTuple (PCon "UndefinedReference" (PVar "__a0") (PVar "__a1")) (PCon "UndefinedReference" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "UndeclaredType" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "UndeclaredType" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "UndeclaredFuncRef" (PVar "__a0") (PVar "__a1")) (PCon "UndeclaredFuncRef" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "SymbolDefect")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DuplicateDefinition" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "DuplicateDefinition ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2"))))) (arm (PCon "ShapeMismatch" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ShapeMismatch ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a4"))))) (arm (PCon "UndefinedReference" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndefinedReference ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "UndeclaredType" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndeclaredType ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2"))))) (arm (PCon "UndeclaredFuncRef" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "UndeclaredFuncRef ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
@@ -410,11 +434,13 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "symbolKey" ((PCon "WasmFunc" (PVar "n"))) (EBinOp "++" (ELit (LString "f:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmType" (PVar "n"))) (EBinOp "++" (ELit (LString "t:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmGlobal" (PVar "n"))) (EBinOp "++" (ELit (LString "g:")) (EVar "n")))
+(DFunDef false "symbolKey" ((PCon "WasmData" (PVar "n"))) (EBinOp "++" (ELit (LString "d:")) (EVar "n")))
 (DFunDef false "symbolKey" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (ELit (LString "e:")) (EVar "n")))
 (DTypeSig false "symbolName" (TyFun (TyCon "WasmSymbol") (TyCon "String")))
 (DFunDef false "symbolName" ((PCon "WasmFunc" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmType" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmGlobal" (PVar "n"))) (EVar "n"))
+(DFunDef false "symbolName" ((PCon "WasmData" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "WasmElem" (PVar "n"))) (EVar "n"))
 (DTypeSig false "paramCount" (TyFun (TyCon "WasmShape") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "paramCount" ((PCon "FuncParams" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
@@ -438,8 +464,11 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "checkCall" ((PVar "sym") (PVar "operands") (PVar "origin") (PVar "reg")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "sym")) (EApp (EVar "Some") (EVar "operands"))) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EApp (EVar "wait") (EApp (EApp (EApp (EVar "Waiting") (EVar "sym")) (EApp (EVar "Some") (EVar "operands"))) (EVar "origin"))) (EVar "reg"))))))
 (DTypeSig true "checkRef" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "checkRef" ((PCon "WasmType" (PVar "t")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "checkTypeUse") (EVar "t")) (EVar "t")) (EVar "origin")) (EVar "reg")))
-(DFunDef false "checkRef" ((PCon "WasmGlobal" (PVar "g")) (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmGlobal") (EVar "g")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "WasmGlobal") (EVar "g"))) (EVar "origin")))))
+(DFunDef false "checkRef" ((PCon "WasmGlobal" (PVar "g")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EVar "checkDeclared") (EApp (EVar "WasmGlobal") (EVar "g"))) (EVar "origin")) (EVar "reg")))
+(DFunDef false "checkRef" ((PCon "WasmData" (PVar "d")) (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EVar "checkDeclared") (EApp (EVar "WasmData") (EVar "d"))) (EVar "origin")) (EVar "reg")))
 (DFunDef false "checkRef" ((PVar "sym") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Ok") (EApp (EApp (EVar "wait") (EApp (EApp (EApp (EVar "Waiting") (EVar "sym")) (EVar "None")) (EVar "origin"))) (EVar "reg")))))
+(DTypeSig false "checkDeclared" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkDeclared" ((PVar "sym") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EVar "sym"))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "origin")))))
 (DTypeSig true "checkTypeUse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "checkTypeUse" ((PVar "t") (PVar "user") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmType") (EVar "t")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "UndeclaredType") (EVar "t")) (EVar "user")) (EVar "origin")))))
 (DTypeSig false "wait" (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
@@ -477,4 +506,5 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "describe" ((PCon "WasmFunc" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "function `$")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmType" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "type `$")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmGlobal" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "global `$")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
+(DFunDef false "describe" ((PCon "WasmData" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "data segment `$")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "element entry `$")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))

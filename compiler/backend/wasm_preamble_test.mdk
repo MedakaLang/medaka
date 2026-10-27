@@ -1,0 +1,386 @@
+-- Sibling test for `compiler/backend/wasm_preamble.mdk` ([P-TEST-SIBLING]).
+--
+-- The registry declares each planned helper block from its manifest row
+-- (`helperManifest`, wasm_demand.mdk), never from the block's text.  This file
+-- is where the two meet: for every block, under every plan input that changes
+-- its text, the functions the text defines (with the parameters each declares)
+-- and the functions it calls must be the ones its row states.  The mutation
+-- rows below then give each defect a seeded registry raises beside a valid
+-- control that uses the same names.
+
+import backend.wasm_demand.{
+  HelperManifest(..),
+  WasmDemand(..),
+  WasmDemandPlan(..),
+  helperManifest,
+  helperOrder,
+}
+import backend.wasm_preamble.{declarePlannedHelpers, plannedHelperBlock}
+import backend.wasm_symbols.{
+  SymbolDefect(..),
+  SymbolRegistry,
+  WasmShape(..),
+  WasmSymbol(..),
+  checkCall,
+  declareSymbol,
+  defineSymbol,
+  emptyRegistry,
+  unresolved,
+}
+import support.ordmap.{omEmpty, omFromNames, omHasKey, omKeys}
+import support.symbol_origin.{SymbolOrigin(..)}
+import support.util.{contains, joinWith, stringTrimLeft}
+import test.{Expectation, expectAll, expectEqual, labelFail}
+
+-- ── reading a block's text ──────────────────────────────────────────────────
+
+-- the offsets just past each occurrence of [needle] in [line]
+hitsAfter : String -> String -> List Int
+hitsAfter needle line = hitsFrom needle line 0
+
+hitsFrom : String -> String -> Int -> List Int
+hitsFrom needle line from =
+  let rest = stringSlice from (stringLength line) line
+  match stringIndexOf needle rest
+    None => []
+    Some rel =>
+      let after = from + rel + stringLength needle
+      after :: hitsFrom needle line after
+
+countIn : String -> String -> Int
+countIn needle line = length (hitsAfter needle line)
+
+-- the identifier that starts at [i]
+identAt : String -> Int -> String
+identAt line i = stringSlice i (identEnd line i) line
+
+identEnd : String -> Int -> Int
+identEnd line j =
+  if j >= stringLength line then
+    j
+  else if contains (stringSlice j (j + 1) line) [" ", "(", ")", "\""] then
+    j
+  else
+    identEnd line (j + 1)
+
+codeLines : List String -> List String
+codeLines = filter (l => not (stringStartsWith ";;" (stringTrimLeft l)))
+
+-- each `(func $f` the text writes, with the `(param $…)` count of its line; a
+-- parameter written without a name is counted as -1, so it cannot match a row
+textDefines : List String -> List (String, Int)
+textDefines lines =
+  flatMap
+    (l =>
+      map
+        (i => (
+          identAt l i,
+          if countIn "(param " l == countIn "(param $" l then
+            countIn "(param $" l
+          else
+            -1,
+        ))
+        (hitsAfter "(func $" l))
+    (codeLines lines)
+
+-- each function a `call $f` or `return_call $f` names, once each, in name order
+textCalls : List String -> List String
+textCalls lines =
+  setOf
+    (flatMap (l => map (identAt l) (hitsAfter "call $" l)) (codeLines lines))
+
+setOf : List String -> List String
+setOf names = omKeys (omFromNames names omEmpty)
+
+showDefines : List (String, Int) -> String
+showDefines ds = joinWith " " (map ((n, k) => "\{n}/\{intToString k}") ds)
+
+-- Where [text] and its manifest row disagree, one line for each half.
+blockDrift : HelperManifest -> List String -> List String
+blockDrift (HelperManifest defines calls) text =
+  let found = textDefines text
+  let own = omFromNames (map fst found) omEmpty
+  let outside = filter (n => not (omHasKey n own)) (textCalls text)
+  (if found == defines then
+      []
+    else
+      ["defines \{showDefines found}; the row says \{showDefines defines}"])
+    ++ (if outside == setOf calls then
+      []
+    else
+      [
+        "calls \{joinWith " " outside}; the row says \{joinWith " " (setOf calls)}",
+      ])
+
+-- ── the plans a block's text depends on ─────────────────────────────────────
+
+noDemand : WasmDemand
+noDemand = WasmDemand {
+  uses = [],
+  refBox = False,
+  divGuard = False,
+  tupleArities = [],
+}
+
+planOf : List String -> List String -> Bool -> WasmDemandPlan
+planOf helpers ints nonexh = WasmDemandPlan {
+  sourceDemand = noDemand,
+  sourceHostKeys = [],
+  jsImports = [],
+  useRef = True,
+  useClos = True,
+  stringOps = True,
+  representation = noDemand,
+  representationTypes = [],
+  helpers = helpers,
+  intHelpers = ints,
+  censusHelpers = [],
+  censusIntHelpers = [],
+  siteRuntime = True,
+  nonexhaustiveRuntime = nonexh,
+  imports = [],
+  catalogFamilies = [],
+}
+
+intNames : List String
+intNames = ["add", "sub", "mul", "div", "neg", "left", "right"]
+
+subsets : List String -> List (List String)
+subsets [] = [[]]
+subsets (x :: xs) =
+  let rest = subsets xs
+  map (x :: _) rest ++ rest
+
+-- every helper, without each combination of the two wide-integer blocks the
+-- `$mdk_value_*` blocks splice arms for
+wideVariants : List (List String)
+wideVariants =
+  map
+    (dropped => filter (n => not (contains n dropped)) helperOrder)
+    (subsets ["u64RuntimeLines", "i64RuntimeLines"])
+
+driftUnder : WasmDemandPlan -> String -> List String
+driftUnder plan name =
+  map
+    (line => "\{name}: \{line}")
+    (blockDrift
+      (helperManifest plan name)
+      (plannedHelperBlock plan [[97, 46, 109]] name))
+
+test "each helper block's text defines and calls what its manifest row states" = expectAll
+  [
+    labelFail
+      "every block, with and without the wide-integer arms"
+      (expectEqual
+        []
+        (flatMap
+          (helpers =>
+            flatMap (driftUnder (planOf helpers intNames True)) helperOrder)
+          wideVariants)),
+    labelFail
+      "the checked Int block, for every set of operators"
+      (expectEqual
+        []
+        (flatMap
+          (ints => driftUnder (planOf helperOrder ints True) "intRuntimeLines")
+          (subsets intNames))),
+    labelFail
+      "the located-trap block without the non-exhaustive trap"
+      (expectEqual
+        []
+        (driftUnder (planOf helperOrder intNames False) "siteRuntimeLines")),
+  ]
+
+test "a block whose text and row disagree is reported" = expectAll [
+  labelFail
+    "agreeing"
+    (expectEqual
+      []
+      (blockDrift (HelperManifest [("f", 1)] ["g"]) [
+        "  (func $f (param $a i32)", "    (call $g (local.get $a))",
+        "    (call $f (local.get $a)))"
+      ])),
+  labelFail
+    "a parameter the row does not count, and a call it does not list"
+    (expectEqual
+      [
+        "defines f/1; the row says f/2",
+        "calls g h; the row says g",
+      ]
+      (blockDrift (HelperManifest [("f", 2)] ["g"]) [
+        "  (func $f (param $a i32)", "    (call $g (call $h (local.get $a))))"
+      ])),
+  labelFail
+    "a parameter written without a name"
+    (expectEqual
+      ["defines f/-1; the row says f/1"]
+      (blockDrift (HelperManifest [("f", 1)] []) ["  (func $f (param i32))"])),
+]
+
+-- ── the seeded registry ──────────────────────────────────────────────────────
+
+at : String -> SymbolOrigin
+at b = SymbolOrigin b "" 0 0
+
+helperAt : String -> SymbolOrigin
+helperAt block = at ("runtime helper " ++ block)
+
+-- the host import every block [ioRuntimeLines] needs, then the helpers [helpers]
+-- select, then [more]: the first defect, or what is left unresolved
+seeded : List String ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+seeded helpers more =
+  verdict
+    ([declareSymbol (WasmFunc "mdk_write_byte") FuncImported (at "module")]
+      ++ declarePlannedHelpers (planOf helpers intNames True)
+      ++ more)
+
+verdict : List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+verdict fs = match runSteps emptyRegistry fs
+  Err d => [d]
+  Ok reg => unresolved reg
+
+runSteps : SymbolRegistry ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  Result SymbolDefect SymbolRegistry
+runSteps reg [] = Ok reg
+runSteps reg (f :: rest) = match f reg
+  Ok next => runSteps next rest
+  Err d => Err d
+
+strBlocks : List String
+strBlocks = ["ioRuntimeLines", "strLeafRuntimeLines", "strSearchRuntimeLines"]
+
+test "a call of a helper no manifest row defines is unresolved" = expectAll [
+  labelFail
+    "misspelled"
+    (expectEqual
+      [UndefinedReference (WasmFunc "mdk_box_ints") (at "main")]
+      (seeded
+        ["ioRuntimeLines"]
+        [checkCall (WasmFunc "mdk_box_ints") 1 (at "main")])),
+  labelFail
+    "a row's function"
+    (expectEqual
+      []
+      (seeded
+        ["ioRuntimeLines"]
+        [checkCall (WasmFunc "mdk_box_int") 1 (at "main")])),
+]
+
+test "a call supplying operands the manifest row does not declare is refused" = expectAll
+  [
+    labelFail
+      "two operands to a one-parameter helper"
+      (expectEqual
+        [
+          ShapeMismatch
+            "mdk_box_int"
+            1
+            2
+            (at "main")
+            (helperAt "ioRuntimeLines"),
+        ]
+        (seeded
+          ["ioRuntimeLines"]
+          [checkCall (WasmFunc "mdk_box_int") 2 (at "main")])),
+    labelFail
+      "one operand"
+      (expectEqual
+        []
+        (seeded
+          ["ioRuntimeLines"]
+          [checkCall (WasmFunc "mdk_box_int") 1 (at "main")])),
+  ]
+
+test "a helper the plan does not select is undefined where it is called" = expectAll
+  [
+    labelFail
+      "called by a selected block"
+      (expectEqual
+        [
+          UndefinedReference
+            (WasmFunc "mdk_str_compare")
+            (helperAt "valueEqRuntimeLines"),
+        ]
+        (seeded ["ioRuntimeLines", "valueEqRuntimeLines"] [])),
+    labelFail
+      "called by a body"
+      (expectEqual
+        [UndefinedReference (WasmFunc "mdk_str_compare") (at "f")]
+        (seeded
+          ["ioRuntimeLines"]
+          [checkCall (WasmFunc "mdk_str_compare") 2 (at "f")])),
+    labelFail
+      "selected, with the blocks it calls"
+      (expectEqual
+        []
+        (seeded (strBlocks ++ ["valueEqRuntimeLines"]) [
+          checkCall (WasmFunc "mdk_str_compare") 2 (at "f"),
+        ])),
+  ]
+
+-- every function some row calls that no row defines: the host imports
+importSteps : WasmDemandPlan ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+importSteps plan =
+  let rows = map (helperManifest plan) helperOrder
+  let defined =
+    omFromNames (flatMap ((HelperManifest ds _) => map fst ds) rows) omEmpty
+  map
+    (f => declareSymbol (WasmFunc f) FuncImported (at "module"))
+    (filter
+      (f => not (omHasKey f defined))
+      (setOf (flatMap ((HelperManifest _ cs) => cs) rows)))
+
+test "a helper defined twice is refused" = expectAll [
+  labelFail
+    "a body defining a helper's name"
+    (expectEqual
+      [
+        DuplicateDefinition
+          (WasmFunc "mdk_box_int")
+          (at "mdk_box_int")
+          (helperAt "ioRuntimeLines"),
+      ]
+      (seeded
+        ["ioRuntimeLines"]
+        [
+          defineSymbol
+            (WasmFunc "mdk_box_int")
+            (FuncParams 1)
+            (at "mdk_box_int"),
+        ])),
+  labelFail
+    "a body defining another name"
+    (expectEqual
+      []
+      (seeded
+        ["ioRuntimeLines"]
+        [
+          defineSymbol
+            (WasmFunc "mdk_box_int2")
+            (FuncParams 1)
+            (at "mdk_box_int2"),
+        ])),
+  labelFail
+    "a block declared twice"
+    (expectEqual
+      [
+        DuplicateDefinition
+          (WasmFunc "mdk_unbox_int")
+          (helperAt "ioRuntimeLines")
+          (helperAt "ioRuntimeLines"),
+      ]
+      (seeded
+        ["ioRuntimeLines"]
+        (declarePlannedHelpers (planOf ["ioRuntimeLines"] [] True)))),
+  labelFail
+    "every block at once: no function is defined by two"
+    (expectEqual [] (allBlocks (planOf helperOrder intNames True))),
+]
+
+allBlocks : WasmDemandPlan -> List SymbolDefect
+allBlocks plan = verdict (importSteps plan ++ declarePlannedHelpers plan)
