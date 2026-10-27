@@ -1,21 +1,24 @@
 -- The physical identities of one WasmGC module under emission: each function,
--- type, global and element-declared function reference the emitter writes, the
--- shape it was given, and the binding whose emission wrote it.  A definition,
--- call or reference that contradicts the registry is a `SymbolDefect`, which the
--- emitter returns to its driver instead of a module text.
+-- type, global, data segment and element-declared function reference the
+-- emitter writes, the shape it was given, and the binding whose emission wrote
+-- it.  A definition, call or reference that contradicts the registry is a
+-- `SymbolDefect`, which the emitter returns to its driver instead of a module
+-- text.
 --
 -- When an identity is judged depends on when its set is closed, not on its name.
--- Types and globals are declared before any body is emitted, so a use of an
--- undeclared one is a defect at the use.  A function may be called before it is
--- defined (force functions and coded-trap helpers follow every body), so a call
--- to a function not yet defined waits: it is judged against the definition when
--- that arrives, and whatever still waits once the module is complete is
--- `unresolved`.  An element reference (`ref.func`) waits the same way for the
--- `(elem declare func …)` entry that makes it valid.
+-- Types, globals and the planned runtime helpers are declared before any body is
+-- emitted, and a data segment when its literal is interned, so a use of an
+-- undeclared global, type or segment is a defect at the use.  A function may be
+-- called before it is defined (force functions and coded-trap helpers follow
+-- every body), so a call to a function not yet defined waits: it is judged
+-- against the definition when that arrives, and whatever still waits once the
+-- module is complete is `unresolved`.  An element reference (`ref.func`) waits
+-- the same way for the `(elem declare func …)` entry that makes it valid.
 --
--- A WebAssembly module may not name one function, type or global twice, so a
--- second declaration or definition of an identity is a defect whichever of the
--- two declared it.  Only an element entry may repeat: the element list is a set.
+-- A WebAssembly module may not name one function, type, global or data segment
+-- twice, so a second declaration or definition of an identity is a defect
+-- whichever of the two declared it.  Only an element entry may repeat: the
+-- element list is a set.
 
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
@@ -28,6 +31,7 @@ public export data WasmSymbol =
   | WasmFunc String
   | WasmType String
   | WasmGlobal String
+  | WasmData String
   | WasmElem String
   deriving (Eq, Debug)
 
@@ -41,6 +45,7 @@ public export data WasmShape =
   | FuncImported
   | TypeDecl
   | GlobalDecl
+  | DataDecl
   | ElemDecl
   deriving (Eq, Debug)
 
@@ -85,12 +90,14 @@ symbolKey : WasmSymbol -> String
 symbolKey (WasmFunc n) = "f:" ++ n
 symbolKey (WasmType n) = "t:" ++ n
 symbolKey (WasmGlobal n) = "g:" ++ n
+symbolKey (WasmData n) = "d:" ++ n
 symbolKey (WasmElem n) = "e:" ++ n
 
 symbolName : WasmSymbol -> String
 symbolName (WasmFunc n) = n
 symbolName (WasmType n) = n
 symbolName (WasmGlobal n) = n
+symbolName (WasmData n) = n
 symbolName (WasmElem n) = n
 
 paramCount : WasmShape -> Option Int
@@ -185,24 +192,34 @@ checkCall sym operands origin reg = match omLookup (symbolKey sym) reg.entries
     None => Ok reg
   None => Ok (wait (Waiting sym (Some operands) origin) reg)
 
--- A use of an identity by name alone: a type use, a global access, or a
--- `ref.func` (whose function and element entry both have to exist).
+-- A use of an identity by name alone: a type use, a global access, a data
+-- segment read, or a `ref.func` (whose function and element entry both have to
+-- exist).
 export
 checkRef : WasmSymbol ->
   SymbolOrigin ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
 checkRef (WasmType t) origin reg = checkTypeUse t t origin reg
-checkRef (WasmGlobal g) origin reg =
-  if omHasKey (symbolKey (WasmGlobal g)) reg.entries then
-    Ok reg
-  else
-    Err (UndefinedReference (WasmGlobal g) origin)
+checkRef (WasmGlobal g) origin reg = checkDeclared (WasmGlobal g) origin reg
+checkRef (WasmData d) origin reg = checkDeclared (WasmData d) origin reg
 checkRef sym origin reg =
   if omHasKey (symbolKey sym) reg.entries then
     Ok reg
   else
     Ok (wait (Waiting sym None origin) reg)
+
+-- a use of an identity whose set closed before the use: it is there, or never
+-- will be
+checkDeclared : WasmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkDeclared sym origin reg =
+  if omHasKey (symbolKey sym) reg.entries then
+    Ok reg
+  else
+    Err (UndefinedReference sym origin)
 
 -- [user]'s declaration says `(type $<t>)`; the type section must declare it.
 export
@@ -293,4 +310,5 @@ describe : WasmSymbol -> String
 describe (WasmFunc n) = "function `$\{n}`"
 describe (WasmType n) = "type `$\{n}`"
 describe (WasmGlobal n) = "global `$\{n}`"
+describe (WasmData n) = "data segment `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"

@@ -250,7 +250,7 @@ for required in \
   'let useRef = physical.useRef' \
   'let useClos = physical.useClos' \
   'let imports = plannedImportLines physical.imports' \
-  'requireHelperW : WasmEmit -> String -> Unit' \
+  'let _ = forEachU (registerW emit) (declarePlannedHelpers physical)' \
   'let _ = seedDemandW emit physical.representation' \
   'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "$__sdivr" else divrLocal prog d) site' \
   'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
@@ -375,9 +375,9 @@ fi
 for required in \
   'stringSegments : Ref (List (Int, List Int))' \
   'nextStringSegmentId : Ref Int' \
-  'freshStrSeg : WasmEmit -> List Int -> Int' \
+  'freshStrSeg : Prog -> List Int -> Int' \
   'emitDataSegs : WasmEmit -> List String' \
-  'emitLitRef : WasmEmit -> Lit -> List String' \
+  'emitLitRef : Prog -> Lit -> List String' \
   'let i = !emit.nextStringSegmentId' \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
@@ -387,7 +387,7 @@ for required in \
   'emitProgramGaps input plan cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
-  'WasmValue WBoxEq (emitLitRef (progEmit prog) l)'; do
+  'WasmValue WBoxEq (emitLitRef prog l)'; do
   has_wasm_pin "$required" || {
     echo "FAIL wasm typed string-state ratchet: missing $required"
     exit 1
@@ -666,14 +666,14 @@ done
   exit 1
 }
 for required_call in \
-  'emitLitRef (progEmit prog) (LString s)' \
-  'emitLitRef (progEmit prog) l'; do
+  'emitLitRef prog (LString s)' \
+  'emitLitRef prog l'; do
   [ "$(grep -F -- "$required_call" "$WASM_SRC" | wc -l | tr -d ' ')" -ge 1 ] || {
     echo "FAIL wasm typed string-state ratchet: missing routed call $required_call"
     exit 1
   }
 done
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'emitLitRef (progEmit prog) (LString s)' | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F '++ emitLitRef prog (LString s)' | wc -l | tr -d '[:space:]')" -eq 3 ] || {
   echo "FAIL wasm typed string-state ratchet: incomplete string-literal routing"
   exit 1
 }

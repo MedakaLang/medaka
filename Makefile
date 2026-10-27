@@ -261,6 +261,12 @@ inlang-backend-wasm-emit-paramname-test:
 inlang-backend-wasm-symbols-test:
 	./medaka test compiler/backend/wasm_symbols_test.mdk
 
+## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
+## defines and calls what its manifest row states, and the registry seeded from
+## the rows refuses each defect beside a valid control.
+inlang-backend-wasm-preamble-test:
+	./medaka test compiler/backend/wasm_preamble_test.mdk
+
 ## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-llvm-symbols-test:
