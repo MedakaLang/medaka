@@ -1,21 +1,25 @@
 -- Tests of `types.tc_infer`'s own API: the type and the diagnostics `infer` gives each arm of
 -- the recursion (variable, lambda, application, let and let-group, if, match with its guards,
--- tuple, list, array, range, annotation, block statement, operator), the exhaustiveness and
--- redundancy checks a match schedules (`checkMatchChecks`, and the check deferred while the
--- scrutinee type is unknown), the wide-literal check (`checkWideLiterals`), the clause inference
--- of a binding group (`inferMemberClauses`, `inferBindingChecked`), the signature
--- pre-unification (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the span readers
--- (`appArgLoc`, `valueSpanLoc`), the applications of an importer shadow (a bare head, a marked
--- head, and a spine whose receiver is not its first argument) and of a definer shadow with a
--- marked head. Each test builds the module record and the environment it reads and drives the
--- recursion below the entry module. Two properties run over generated programs: a name in a
--- chain of lambdas means its innermost binder, and an argument flows into the parameter at its
--- position. Not driven here: the occurrences of an ordinary method or dictionary (`EMethodAt`,
--- `EDictAt`), which read method scheme rows only a drive builds; the definer shadow spine and
--- variable-head arms; the shadow verdicts that reject or defer to the standalone when two
--- interfaces declare one method name (`AdReject`, `AdStandalone`); and the effect a standalone's
--- arrow performs at its call. `typecheck_test` drives whole checks and `drive_independence_test`
--- the match-warning flag.
+-- tuple, list, array, range, annotation, block statement, operator, and the record arms:
+-- construction, field access, value field, update), the exhaustiveness and redundancy checks a
+-- match schedules (`checkMatchChecks`, and the check deferred while the scrutinee type is
+-- unknown), the wide-literal check (`checkWideLiterals`), the clause inference of a binding
+-- group (`inferMemberClauses`, `inferBindingChecked`), the signature pre-unification
+-- (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the span readers (`appArgLoc`,
+-- `valueSpanLoc`), the applications of an importer shadow (a bare head, a marked head, and a
+-- spine whose receiver is not its first argument) and of a definer shadow with a marked head.
+-- The operator rows pair operands of different types, so an operator that stops unifying them
+-- reports no mismatch, and read the obligations the operators record where the prelude's
+-- classes are present (`withObligations`). Each test builds the module record and the
+-- environment it reads and drives the recursion below the entry module. Three properties run
+-- over generated programs: a name in a chain of lambdas means its innermost binder, an argument
+-- flows into the parameter at its position, and a field read after an update has the type its
+-- record was built at. Not driven here: the occurrences of an ordinary method or dictionary
+-- (`EMethodAt`, `EDictAt`), which read method scheme rows only a drive builds; the definer
+-- shadow spine and variable-head arms; the shadow verdicts that reject or defer to the
+-- standalone when two interfaces declare one method name (`AdReject`, `AdStandalone`); and the
+-- effect a standalone's arrow performs at its call. `typecheck_test` drives whole checks and
+-- `drive_independence_test` the match-warning flag.
 
 import test.{Expectation, expectAll, expectEqual, expectTrue}
 import frontend.ast.{
@@ -684,6 +688,83 @@ test "equality compares two operands of one type" =
 
 test "an append of two strings is a string" =
   checks "main = \"a\" ++ \"b\"" "String" []
+
+-- Operands of different types make a missing unification visible: the result keeps the type of
+-- the operator's own operand, and the disagreement is the mismatch the operator reports.
+
+test "arithmetic unifies its operands and gives their type" = expectAll [
+  checks "main = x => x + x" "a -> a" [],
+  says "main = 'a' + True" "Char" ["type mismatch: Char vs Bool"],
+  says "main = 'a' % True" "Char" ["type mismatch: Char vs Bool"],
+]
+
+test "an ordering comparison unifies its operands and gives Bool" = expectAll [
+  checks "main = x => x < x" "a -> Bool" [],
+  says "main = 'a' <= True" "Bool" ["type mismatch: Char vs Bool"],
+  says "main = 'a' > True" "Bool" ["type mismatch: Char vs Bool"],
+]
+
+test "an equality comparison unifies its operands and gives Bool" = expectAll [
+  checks "main = x => x == x" "a -> Bool" [],
+  says "main = 'a' == True" "Bool" ["type mismatch: Char vs Bool"],
+  says "main = 'a' /= True" "Bool" ["type mismatch: Char vs Bool"],
+]
+
+test "a cons unifies its tail with a list and joins the head with the tail's elements" = expectAll
+  [
+    says "main = 'a' :: True" "List Char" ["type mismatch: Bool vs List a"],
+    says "main = 'a' :: [True]" "List Char" ["type mismatch: Char vs Bool"],
+  ]
+
+test "the left of >> runs first and the left of << runs last" = expectAll [
+  checks "main = (x => True) >> (c => if c then 'a' else 'b')" "a -> Char" [],
+  checks "main = (c => if c then 'a' else 'b') << (x => True)" "a -> Char" [],
+  says "main = (x => 'c') >> (c => if c then 'a' else 'b')" "a -> Char" [
+    "type mismatch: Bool vs Char",
+  ],
+  says "main = (c => if c then 'a' else 'b') << (x => 'c')" "a -> Char" [
+    "type mismatch: Bool vs Char",
+  ],
+]
+
+test "unary minus keeps its operand's type and a bang reads a reference" = expectAll
+  [
+    checks "main = x => -x" "a -> a" [],
+    checks "main = r => !r" "Ref a -> a" [],
+  ]
+
+test "a bang on a Bool is rejected by code, naming `not`" = expectAll [
+  checks "main = !True" "Bool" ["T-BANG-ON-BOOL"],
+  says "main = !True" "Bool" [
+    "`!` dereferences a `Ref` and does not negate a `Bool`; use `not x`",
+  ],
+]
+
+-- The operator obligations [src] records, as a count, in a module where the prelude's
+-- `Num`, `Eq`, `Ord` and `Semigroup` are present; without them an operator records none.
+withObligations : String -> (Int -> Expectation) -> Expectation
+withObligations src k =
+  let m = scopedWith shapes
+  let seeded = m.mcGraph.crossRun.builtinClassesRef.value
+  m.mcGraph.crossRun.builtinClassesRef := { seeded |
+    bcNumPresent = True,
+    bcEqPresent = True,
+    bcOrdPresent = True,
+    bcSemigroupPresent = True,
+  }
+  let env = envWithData m shapes
+  withMain m src (e =>
+    let _ = infer env e
+    k (listLen (wAll m.mcCells.implObls)))
+
+test "each arithmetic, comparison and unary operator records one obligation on its operand" = expectAll
+  [
+    withObligations "main = x => -x" (n => expectEqual 1 n),
+    withObligations "main = x => x + x" (n => expectEqual 1 n),
+    withObligations "main = x => x == x" (n => expectEqual 1 n),
+    withObligations "main = x => x < x" (n => expectEqual 1 n),
+    withObligations "main = x => x ++ x" (n => expectEqual 1 n),
+  ]
 
 -- ── wide literals ─────────────────────────────────────────────────────────
 
