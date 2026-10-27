@@ -6,7 +6,7 @@
 Stage five of the pipeline (`ARCHITECTURE.md` section 1), layer `types` in A1: above `frontend/`,
 below `ir/`. It consumes the resolved AST and produces the dict-passing-elaborated program plus
 the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types, route words).
-One module, `typecheck.mdk`, still holds the inference core; the rest are the modules extracted from it.
+`typecheck.mdk` is the graph driver and elaboration entry; the inference core lives in `tc_infer` and `tc_infer_records`, with the rest extracted from it into the other `tc_*` modules.
 
 ## Parts
 | Module | Owns | Entry points |
@@ -34,7 +34,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `tc_pat.mdk` | Pattern inference: literal, constructor, tuple, list, record and existential-opening patterns, binder types. Spec: HM-CORE has no section on pattern typing yet (owed, #2555); language-design Data Types; EFFECTS section 4.1 | `inferPat`, `inferPats` |
 | `tc_infer_records.mdk` | The helpers the record arms call: field-owner resolution, field-shape conflicts, record instantiation, the record error emitters and the field-name suggestion, and the stamped record head; the record arms themselves are members of the `tc_infer` recursion. Spec: language-design Data Types, Product Types (record construction, access, update) | `stampedRecordHead`, `resolveFieldRecord`, `instantiateRecordUpdate` |
 | `tc_infer.mdk` | The expression inference recursion (variables, application, lambda, let and rec-let, match and arms, blocks, the shadow-application arms and the record arms), signature pre-unification, exhaustiveness and wide-literal checks at their sites. Spec: DICT section 4 (the elaboration judgment); HM-CORE section 3-section 5 (owed, #2555); SHADOW section 1.1; EFFECTS section 3 | `infer`, `preunifySigsEx`, `checkWideLiterals` |
-| `typecheck.mdk` | Hindley-Milner inference, dict-passing elaboration, coherence, the effect-row checker's wiring; the solver itself lives in the `tc_solve*` modules; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
+| `typecheck.mdk` | The graph drivers, interfaces, impls and coherence, dict-passing elaboration, the effect-row checker's wiring; the solver itself lives in the `tc_solve*` modules; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
 | `entry_outcome.mdk` | The checked `main` shape facts and `EntryOutcome` construction published at graph-drive completion | `entryOutcomeNow`, `mainIsUnitNow` |
 | `prelude_interface.mdk` | The prelude interface value (`PreludeInterface`: what a drive needs from the prelude's core pass), its process cache (`preludeCacheRef`, one entry per compiler generation), freeze and thaw, and the on-disk key (`InterfaceKey`) | `seedPreludeInterface`, `currentPreludeInterface`, `preludeCacheHit`, `freezeInterface`, `thawInterface`, `interfaceKeyOf` |
@@ -103,7 +103,7 @@ The tree arm (`GOutTrees`; `run`, the emitter child, `medaka test`'s eval drives
 - `ARCHITECTURE-PLAYBOOK.md` §6 for the split: the twenty-seven-row layer table (twenty-six `tc_*` modules and `typecheck.mdk`) ruled 2026-10-25/26 (P4-D1 to D12 on #4206), executed by milestone 42; issue #2586 sequences it.
 
 ## Traps
-- `[P-EXHAUST-IN-TYPECHECK]` — `checkMatchExhaustive` is defined and called in `typecheck.mdk`, once per `EMatch`; it sees only core patterns.
+- `[P-EXHAUST-IN-TYPECHECK]` — `checkMatchExhaustive` is defined and called in `tc_infer.mdk`, once per `EMatch`; it sees only core patterns.
 - `[T-TUPLES]` — tuples are `__tupleN__`-headed `TApp` spines.
 - `[T-ERRORS-ACCUM]` — no early exits.
 - `[T-GLOBAL-TABLE]` — key new tables by scope.

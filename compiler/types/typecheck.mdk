@@ -14,13 +14,13 @@ import types.invocation_basis.{
 -- file is being decomposed towards: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
 --
 -- The HM core is monotypes over Ref-based union-find tyvars, level-based
--- generalization, unification (occurs-check + level adjust), and instantiation.  On
--- top of it, and NOT deferred elsewhere, this file also carries: interfaces, impls,
--- superclasses and coherence; constraint solving and the dict-passing elaboration the
--- backends consume; effect rows; records; explicit signatures; and operator inference.
--- Exhaustiveness is the one part that lives elsewhere and is still called from here --
--- `checkMatchExhaustive` (`compiler/frontend/exhaust.mdk`), once per `EMatch`
--- ([P-EXHAUST-IN-TYPECHECK]).
+-- generalization, unification (occurs-check + level adjust), and instantiation.  This
+-- file is the driver over the `tc_*` modules: it carries interfaces, impls,
+-- superclasses and coherence; the dict-passing elaboration the backends consume; and
+-- the graph drivers below.  The expression recursion, records, operator inference and
+-- exhaustiveness live in `types/tc_infer.mdk` and `types/tc_infer_records.mdk`;
+-- `checkMatchExhaustive` (`compiler/frontend/exhaust.mdk`) is called once per
+-- `EMatch` from `tc_infer` ([P-EXHAUST-IN-TYPECHECK]).
 --
 -- ONE GRAPH DRIVER, TWO OUTPUT SELECTIONS.  `driveGraphK` is the single whole-graph
 -- driver: `GOutDiags` (per-module diagnostics and schemes) is what `medaka check`,

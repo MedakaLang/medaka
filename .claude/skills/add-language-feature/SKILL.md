@@ -53,7 +53,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    because a fix routed here (cross-cutting) would otherwise miss a skill-scoped gate. Infer/check
    types (HM + interfaces + effects). If the construct introduces match arms, update
    exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`, whose call sites
-   (`grep -n 'checkMatchExhaustive\|checkMatchRedundant' compiler/types/typecheck.mdk`
+   (`grep -n 'checkMatchExhaustive\|checkMatchRedundant' compiler/types/tc_infer.mdk`
    — derive them, line numbers here rot) call *into*
    `compiler/frontend/exhaust.mdk` (`buildOracle` / `useful` / `usefulWitness`);
    exhaust is not a standalone stage. Per-node `infer`/`check` arms are shared, but
