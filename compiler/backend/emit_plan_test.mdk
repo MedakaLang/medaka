@@ -323,7 +323,8 @@ llvmCheckedCallLine =
   "\"call \\{ret} @\\{symbolName sym}(\\{rawArgDecls ops})\""
 
 -- Lines writing a named call that neither are the checked renderer nor sit
--- within three lines after a `checkWordCall` of the same call.
+-- within three lines after any `checkWordCall`. A spelling check: a call
+-- assembled by concatenation is not seen.
 uncheckedLlvmCalls : List String -> List String -> List String
 uncheckedLlvmCalls _ [] = []
 uncheckedLlvmCalls recent (l :: rest) =

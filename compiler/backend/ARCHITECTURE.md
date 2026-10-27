@@ -24,7 +24,7 @@ Core IR and the Plan rather than reaching for a mangling module of its own.
 | `../support/symbol_origin.mdk` | Where a symbol was written or used (`SymbolOrigin`), shared by both registries and the driver's diagnostic | `SymbolOrigin`, `bindingOf`, `placeOf` |
 | `wasm_emit.mdk` | WasmGC emitter, peer of `llvm_emit.mdk` over the same Core IR; one recursive value/control traversal selects raw or boxed physical instructions | `emitProgram` |
 | `wasm_repr.mdk` | WasmGC physical value representations and typed local-slot accessors; no traversal or explicit imports | `WasmRepr`, `WasmValue`, `LocalSlot` |
-| `wasm_preamble.mdk` | The fixed lines heading every WAT module, as helper blocks; `helperManifest` states per block the functions it defines and the calls it makes (with operand counts), so the registry judges a helper call without reading helper text | `helperManifest`, `HelperManifest(..)`, `plannedHelperBlock` |
+| `wasm_preamble.mdk` | The fixed lines heading every WAT module, as helper blocks; the registry is seeded from the `HelperManifest` rows in `wasm_demand.mdk` (`helperManifest`), which state per block the functions it defines and the calls it makes (with operand counts), so a helper call is judged without reading helper text | `declarePlannedHelpers`, `plannedHelperBlock` |
 | `wasm_reach.mdk` | Dispatch-rooted reachability filter for the WasmGC modules path, after `dce` | reachability filter |
 | `wasm_file_grants.mdk` | Wasm file-capability prerequisites on the elaborated AST, shared with the in-browser compiler | `moduleGrantDiags` |
 
@@ -46,7 +46,7 @@ The Core gateway (`core_validate.mdk`) judges names that exist before lowering. 
 
 ## Ratchets
 
-`compiler/backend/emit_plan_test.mdk` (native, `inlang-backend-emit-plan-test`) reads emitter and entry source and fails when a retired mechanism returns:
+`compiler/backend/emit_plan_test.mdk` (native, `inlang-backend-emit-plan-test`) reads emitter and entry source and fails when a retired mechanism returns in its known spelling. These are spelling checks, not a structural guarantee: a call assembled by concatenation (for example `"call " ++ ty ++ " @" ++ f`, or `"return_call " ++ "$" ++ f`) is not seen, and the LLVM check accepts any `checkWordCall` in the three preceding lines, not only one for the same call.
 - an LLVM `call <ty> @name` written outside `directCall` and not preceded by `checkWordCall`;
 - a `call $` in `wasm_emit.mdk` outside `callInstrW`;
 - `declareOfDefine` or `emitDeclaresFor` in either emitter or `llvm_preamble.mdk`;
@@ -65,7 +65,7 @@ Each fact has one producer; a carrier moves it; a validator or fixture fails whe
 | Leading dictionary count | `leadingDictParams` in `compiler/ir/core_ir_lower.mdk` | clause patterns | every consumer reads the one function | `compiler/ir/core_ir_lower_test.mdk` ("leadingDictParams counts only the leading dict witnesses") | `leadingDictPats`, `wLeadingDictPats`, `isDictParamName`; ratchet "no emitter counts leading dictionary parameters from their spelling" |
 | Dispatch and definition arities | `definedArityOf` in `compiler/ir/core_ir_lower.mdk` | `e.arities` of the LLVM emission state | `checkCall` shape check | `compiler/backend/llvm_symbols_test.mdk`, `test/diff_compiler_call_arity_test.mdk` | the LLVM dispatch-graph arity table |
 | Int-helper membership | `plan.censusIntHelpers` / `intHelpers` in `compiler/backend/wasm_demand.mdk` | the Wasm demand plan | `UndefinedReference` from the helper rows of `compiler/backend/wasm_preamble.mdk` | `compiler/backend/wasm_demand_test.mdk` | `noteIntRt` and its `unplanned-wasm-helper: Int` panic |
-| Wasm helper manifest | `helperManifest` in `compiler/backend/wasm_preamble.mdk` | `HelperManifest` rows | block text agrees with its row | `compiler/backend/wasm_preamble_test.mdk` ("each helper block's text defines and calls what its manifest row states") | none |
+| Wasm helper manifest | `helperManifest` in `compiler/backend/wasm_demand.mdk` | `HelperManifest` rows | block text agrees with its row | `compiler/backend/wasm_preamble_test.mdk` ("each helper block's text defines and calls what its manifest row states") | none |
 | LLVM preamble table | `compiler/backend/llvm_preamble.mdk` | `RuntimeDecl` rows | `declareRuntime` registers each row | `compiler/backend/llvm_preamble_test.mdk` | the fixed preamble text lines |
 | Emit routes | the roster in `compiler/backend/emit_plan_test.mdk` | `compiler/entries/*.mdk` | "the emit-route entries are exactly the pinned roster and each builds its plan" | same test | none |
 
