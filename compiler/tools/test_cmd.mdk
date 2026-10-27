@@ -626,15 +626,7 @@ exemptNotice False _ _ = ()
 exemptNotice True target userDecls =
   ePutStrLn (typecheckSkipNotice target userDecls)
 
--- Type-check the module the way `medaka check` does.  Prelude-only (no
--- non-core imports) modules go through `analyzeLocated`, the single-file
--- analyzer `medaka check` uses: it correctly handles the target==prelude case
--- (`medaka test stdlib/core.mdk`, the neq-hang canary) via the shared
--- shadow-scoping, and is UNGUARDED for internal-only externs so a stdlib
--- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
--- Import-bearing modules are gated by `gatedDrive` below instead, off the
--- ONE elaboration the phases already need.
--- Returns Some <located error text> iff the module does NOT typecheck, else None.
+-- Setup failures have no location; diagnostic failures retain per-file source.
 -- lint-disable-next-line rule-clone-type
 public export data TestReportError =
   | TestSetupError String
@@ -645,16 +637,26 @@ renderTestReportError (TestSetupError text) = text
 renderTestReportError (TestDiagnosticError triples) =
   joinNl (flatMap renderFileErrors triples)
 
+-- Type-check the module the way `medaka check` does.  Prelude-only (no
+-- non-core imports) modules go through `analyzeLocated`, the single-file
+-- analyzer `medaka check` uses: it correctly handles the target==prelude case
+-- (`medaka test stdlib/core.mdk`, the neq-hang canary) via the shared
+-- shadow-scoping, and is UNGUARDED for internal-only externs so a stdlib
+-- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
+-- Import-bearing modules are gated by `gatedDrive` below instead, off the
+-- ONE elaboration the phases already need.
+-- Returns structured diagnostics iff the module has an error.
 singleFileTypeErrorsParts : String ->
   String ->
   String ->
   String ->
   Option TestReportError
 singleFileTypeErrorsParts target tsrc rsrc csrc =
-  let errs = filter diagIsError (analyzeLocated noStdlibExports rsrc csrc tsrc)
-  match errs
-    [] => None
-    _ => Some (TestDiagnosticError [(target, tsrc, errs)])
+  let diags = analyzeLocated noStdlibExports rsrc csrc tsrc
+  if isNonEmptyL (filter diagIsError diags) then
+    Some (TestDiagnosticError [(target, tsrc, diags)])
+  else
+    None
 
 singleFileTypeErrors : String -> String -> String -> String -> Option String
 singleFileTypeErrors target tsrc rsrc csrc =
@@ -728,10 +730,10 @@ diagnosticGate sources results =
       ((path, ds) => (
         path,
         option "" identity (omLookup path sources),
-        filter diagIsError ds,
+        ds,
       ))
       results
-  if isNonEmptyL (flatMap ((_, _, ds) => ds) triples) then
+  if isNonEmptyL (filter diagIsError (flatMap ((_, _, ds) => ds) triples)) then
     Some (TestDiagnosticError triples)
   else
     None

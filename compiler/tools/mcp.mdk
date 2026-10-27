@@ -1694,7 +1694,7 @@ primaryEngineName : List Engine -> String
 primaryEngineName [] = "unknown"
 primaryEngineName (e :: _) = engineName e
 
--- #1443: present iff `runTestReport`'s typecheck gate rejected the module —
+-- Setup, parse, and typecheck failures expose `typeError`; on rejection,
 -- `doctests`/`properties`/`summary` are then the untouched empty defaults
 -- (mirrors the CLI's `runTest`, which never reaches `driveAll` on a gate
 -- failure either). Diagnostic messages and structured ranges are separate;
@@ -1713,7 +1713,7 @@ typeErrorField (Some (TestDiagnosticError triples)) = [
 
 testDiagnosticMessages : (String, String, List Diag) -> List String
 testDiagnosticMessages (_, _, diags) =
-  map ((Diag _ _ message _ _ _) => message) diags
+  map ((Diag _ _ message _ _ _) => message) (filter diagIsError diags)
 
 testDiagnosticFile : (String, String, List Diag) -> Json
 testDiagnosticFile (path, src, diags) = match cjFileEntry path src diags
