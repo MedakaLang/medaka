@@ -1,0 +1,327 @@
+-- Tests of `types.tc_pat`'s own API: the type and bindings `inferPat` and `inferPats` give a
+-- variable, wildcard, tuple, cons, list, as, range and constructor pattern, the rejections of
+-- a pattern by code (an unknown constructor or record, a literal pattern that cannot match, a
+-- range of two kinds), the integer literals parked at a pattern site and settled against the
+-- scrutinee (`takePatLits`, `settlePatLits`), the existential binders a constructor pattern
+-- opens (`patOpensExistentials`, `takeOpenedExistentials`, `openExistentialScope`) and the
+-- binder records a pattern leaves (`recordLocalBind`, `recordBinderType`).  Each test builds
+-- the module record and constructor table it reads; none reaches the inference recursion.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{
+  BinderId(..),
+  Lit(..),
+  Pat(..),
+  TyConOrigin(..),
+  noBinderId,
+}
+import types.effect_rows.{pureRow}
+import types.repr.{Mono(..), Scheme(..), ppMono}
+import types.effect_authority.{authvarId}
+import types.tc_env.{envFor}
+import types.tc_mono.{schemeMono, tconBuiltin, tconFrom, tupleMono}
+import types.tc_pat.{
+  closeExistentialScope,
+  inferPat,
+  inferPats,
+  openExistentialScope,
+  patOpensExistentials,
+  recordBinderType,
+  recordLocalBind,
+  settlePatLits,
+  takeOpenedExistentials,
+  takePatLits,
+}
+import types.tc_test_support.{
+  at, boolM, codesOf, fresh, fst3, intM, pvar, snd3, varM
+}
+import types.tc_types.{
+  ModuleCtx(..),
+  PendingBinder(..),
+  RecordInfo(..),
+  TcEnv(..),
+}
+import types.tc_unify.{unifyIn}
+import support.ordmap.{omEmpty, omInsert}
+import support.util.{joinWith, listLen}
+import list.{drop, take}
+import map as IdMap
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- `Wrap : a -> Wrap a` and `Pair : Int -> Bool -> Pair`, and `Packed`, a constructor with
+-- one existential authority binder (id 5) recorded as the graph's existentials.
+wrapScheme : Scheme
+wrapScheme =
+  Forall
+    [1]
+    []
+    []
+    []
+    pureRow
+    (TFun (varM 1) pureRow (TApp (tconFrom (OriginModule "m") "Wrap") (varM 1)))
+
+pairScheme : Scheme
+pairScheme =
+  Forall
+    []
+    []
+    []
+    []
+    pureRow
+    (TFun
+      intM
+      pureRow
+      (TFun boolM pureRow (tconFrom (OriginModule "m") "Pair")))
+
+packedScheme : Scheme
+packedScheme =
+  Forall [] [] [5] [] pureRow (tconFrom (OriginModule "m") "Packed")
+
+-- A module record and an environment over it knowing the three constructors above.
+setup : Unit -> (ModuleCtx, TcEnv)
+setup _ =
+  let m = fresh ()
+  m.mcGraph.graphRun.ctorExistentialsRef := IdMap.set 5 () IdMap.Tip
+  let base = envFor m
+  (
+    m,
+    { base |
+      teCtors =
+        omInsert
+          "Wrap"
+          wrapScheme
+          (omInsert
+            "Pair"
+            pairScheme
+            (omInsert "Packed" packedScheme base.teCtors)),
+    },
+  )
+
+-- The pattern's type, rendered, and the names and types it binds, rendered.
+boundMonos : List (String, Scheme) -> List Mono
+boundMonos binds = map (b => schemeMono (snd b)) binds
+
+boundTypes : List (String, Scheme) -> List String
+boundTypes binds = map ppMono (boundMonos binds)
+
+shown : (Mono, List (String, Scheme)) -> (String, List (String, String))
+shown (t, binds) =
+  (ppMono t, map (b => (fst b, ppMono (schemeMono (snd b)))) binds)
+
+-- ── what a pattern binds and has the type of ──────────────────────────────
+
+test "a variable pattern binds its name at the pattern's own fresh type" =
+  let (_, env) = setup ()
+  let (t, binds) = inferPat env (pvar "x")
+  expectEqual [ppMono t] (boundTypes binds)
+
+test "a wildcard binds nothing" =
+  let (_, env) = setup ()
+  expectEqual [] (map fst (snd (inferPat env PWild)))
+
+test "a tuple pattern is a tuple of its components' types and binds each in order" =
+  let (_, env) = setup ()
+  let (t, binds) = inferPat env (PTuple [pvar "a", PLit (LChar "c"), pvar "b"])
+  match boundMonos binds
+    [a, b] => expectAll [
+      expectEqual ["a", "b"] (map fst binds),
+      expectEqual (ppMono (tupleMono [a, tconBuiltin "Char", b])) (ppMono t),
+    ]
+    _ => expectEqual 2 (listLen binds)
+
+test "a cons pattern is a list of the head's type, and its tail is a list of that type" =
+  let (_, env) = setup ()
+  let (t, binds) = inferPat env (PCons (pvar "h") (pvar "rest"))
+  match boundMonos binds
+    [h, rest] =>
+      let listOfHead = ppMono (TApp (tconBuiltin "List") h)
+      expectAll [
+        expectEqual ["h", "rest"] (map fst binds),
+        expectEqual listOfHead (ppMono t),
+        expectEqual listOfHead (ppMono rest),
+      ]
+    _ => expectEqual 2 (listLen binds)
+
+test "a list pattern unifies its elements, so two literals of one type agree and bind nothing" =
+  let (m, env) = setup ()
+  let (t, binds) = inferPat env (PList [PLit (LChar "a"), PLit (LChar "b")])
+  expectEqual ("List Char", [], []) (ppMono t, map fst binds, codesOf m)
+
+test "a list pattern of two literal kinds is a type mismatch" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PList [PLit (LChar "a"), PLit (LBool True)])
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "an as-pattern binds its name at the type of the pattern it names, beside that pattern's bindings" =
+  let (_, env) = setup ()
+  let (t, binds) = inferPat env (PAs "whole" at noBinderId (PTuple [pvar "p"]))
+  expectAll [
+    expectEqual ["whole", "p"] (map fst binds),
+    expectEqual [ppMono t] (map ppMono (take 1 (boundMonos binds))),
+  ]
+
+test "inferPats gives one type per pattern, in order, and all their bindings" =
+  let (_, env) = setup ()
+  let (ts, binds) =
+    inferPats env [PLit (LBool True), pvar "u", PLit (LChar "x")]
+  expectEqual
+    (["Bool", "Char"], ["u"], map ppMono (take 1 (drop 1 ts)))
+    (map ppMono (take 1 ts ++ drop 2 ts), map fst binds, boundTypes binds)
+
+-- ── constructor patterns ──────────────────────────────────────────────────
+
+test "a constructor pattern gives the constructor's result type at its arguments' types" =
+  let (m, env) = setup ()
+  let (t, binds) = inferPat env (PCon "Wrap" [pvar "inner"])
+  expectEqual
+    (["Wrap " ++ joinWith "" (boundTypes binds)], ["inner"], [])
+    ([ppMono t], map fst binds, codesOf m)
+
+test "a constructor pattern whose argument has the wrong type is a type mismatch" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PCon "Pair" [PLit (LBool True), pvar "b"])
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "a constructor pattern at the declared argument types is accepted and binds the variables" =
+  let (m, env) = setup ()
+  let (t, binds) = inferPat env (PCon "Pair" [pvar "n", PLit (LBool False)])
+  expectEqual (("Pair", [("n", "Int")]), []) (shown (t, binds), codesOf m)
+
+test "an unknown constructor is rejected with T-UNKNOWN-CTOR and its sub-patterns still bind" =
+  let (m, env) = setup ()
+  let (_, binds) = inferPat env (PCon "Nowhere" [pvar "kept"])
+  expectEqual (["T-UNKNOWN-CTOR"], ["kept"]) (codesOf m, map fst binds)
+
+test "a record pattern naming no record is rejected with T-UNKNOWN-RECORD" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PRec "Nowhere" [] False)
+  expectEqual ["T-UNKNOWN-RECORD"] (codesOf m)
+
+-- ── literal and range patterns ────────────────────────────────────────────
+
+test "a 64-bit wide literal pattern is rejected with T-TYPE-MISMATCH" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PLit (LU64 1 2))
+  let _ = inferPat env (PLit (LI64 1 2))
+  expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m)
+
+test "a range pattern of two Int bounds or two Char bounds binds nothing and has that type" =
+  let (m, env) = setup ()
+  let ints = shown (inferPat env (PRng (LInt 1) (LInt 9) True))
+  let chars = shown (inferPat env (PRng (LChar "a") (LChar "z") False))
+  expectEqual (("Int", []), ("Char", []), []) (ints, chars, codesOf m)
+
+test "a range pattern whose bounds differ in kind is rejected with T-TYPE-MISMATCH" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PRng (LInt 1) (LChar "z") True)
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+-- ── literals settled against the scrutinee ────────────────────────────────
+
+-- Infers an integer literal pattern at a site, unifies its type with [scrutinee], and
+-- settles the site; returns the diagnostics.
+settledAgainst : Mono -> List String
+settledAgainst scrutinee =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let (t, _) = inferPat env (PLit (LInt 3))
+  unifyIn env.teDyn scrutinee t
+  settlePatLits env.teDyn saved
+  codesOf m
+
+test "an integer literal pattern against an Int or an unknown scrutinee is accepted" = expectAll
+  [
+    expectEqual [] (settledAgainst intM),
+    expectEqual [] (settledAgainst (varM 40)),
+  ]
+
+test "an integer literal pattern against a String scrutinee is a type mismatch" =
+  expectEqual ["T-TYPE-MISMATCH"] (settledAgainst (tconBuiltin "String"))
+
+test "an integer literal pattern against a U64 scrutinee is refused, not compiled to an arm that never matches" =
+  expectEqual ["T-TYPE-MISMATCH"] (settledAgainst (tconBuiltin "U64"))
+
+test "a site restores the literals of the site enclosing it" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PLit (LInt 1))
+  let outer = takePatLits m ()
+  let _ = inferPat env (PLit (LInt 2))
+  settlePatLits env.teDyn outer
+  expectEqual [1] (map snd3 m.mcCells.patLitPending.value)
+
+-- ── existential binders ───────────────────────────────────────────────────
+
+test "a pattern opens existentials exactly when a constructor in it has an existential binder" =
+  let (_, env) = setup ()
+  expectAll [
+    expectTrue (patOpensExistentials env (PCon "Packed" [])),
+    expectTrue (patOpensExistentials env (PTuple [pvar "a", PCon "Packed" []])),
+    expectTrue
+      (patOpensExistentials
+        env
+        (PAs "p" at noBinderId (PCons (PCon "Packed" []) PWild))),
+    expectFalse (patOpensExistentials env (PCon "Wrap" [pvar "a"])),
+    expectFalse (patOpensExistentials env (pvar "a")),
+    expectFalse (patOpensExistentials env (PCon "Nowhere" [])),
+  ]
+
+test "a record pattern opens existentials exactly when its record has an existential authority" =
+  let (m, env) = setup ()
+  m.mcCells.recordByNameRef :=
+    omInsert
+      "Sealed"
+      (RecordInfo [] [5] intM [] omEmpty)
+      (omInsert "Plain" (RecordInfo [] [6] intM [] omEmpty) omEmpty)
+  expectAll [
+    expectTrue (patOpensExistentials env (PRec "Sealed" [] False)),
+    expectFalse (patOpensExistentials env (PRec "Plain" [] False)),
+    expectFalse (patOpensExistentials env (PRec "Nowhere" [] False)),
+  ]
+
+test "a constructor pattern with an existential binder parks one opened authority for its site" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PCon "Packed" [])
+  -- the authority variable it opens is the first the fresh graph mints
+  expectEqual [0] (map authvarId (takeOpenedExistentials m ()))
+
+test "an existential left open when its site settles is refused with T-AUTHORITY-EXISTENTIAL-SCOPE" =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let _ = inferPat env (PCon "Packed" [])
+  settlePatLits env.teDyn saved
+  expectEqual ["T-AUTHORITY-EXISTENTIAL-SCOPE"] (codesOf m)
+
+test "an arm that takes the opened existentials before settling is not refused, and closing its scope reports nothing for a value that holds none" =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let _ = inferPat env (PCon "Packed" [])
+  let opened = takeOpenedExistentials m ()
+  let scope = openExistentialScope m opened
+  closeExistentialScope m scope (tconBuiltin "Int") None
+  settlePatLits env.teDyn saved
+  expectEqual [] (codesOf m)
+
+test "a scope over no existentials opens no level" =
+  let m = fresh ()
+  let before = m.mcCells.currentLevel.value
+  let _ = openExistentialScope m []
+  expectEqual before m.mcCells.currentLevel.value
+
+-- ── the binder records ───────────────────────────
+
+test "a local binder is recorded under its source name, not its mangled local name" =
+  let m = fresh ()
+  recordLocalBind m "go$m$3$lb" (Some at) noBinderId intM
+  expectEqual ["go"] (map fst3 m.mcCells.localBindRefs.value)
+
+test "a binder with a minted id is queued for the runtime-type table and one without is skipped" =
+  let m = fresh ()
+  recordBinderType m.mcGraph noBinderId "unminted" intM None False
+  recordBinderType m.mcGraph (BinderId "m" 4) "named$m$1$lb" boolM (Some 2) True
+  expectEqual
+    [("named", Some 2, True)]
+    (map
+      (p => match p
+        PendingBinder _ name _ arity signed => (name, arity, signed))
+      m.mcGraph.graphRun.binderPending.value)

@@ -36,10 +36,9 @@ import frontend.ast.{externDecls}
 import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
   checkedFfiExternTypeNamesModules,
+  preludeArgPosDictNames,
+  preludeReturnPosDictNames,
 }
 import types.tc_types.{DriveOutputs}
 import ir.core_ir_lower.{
@@ -61,6 +60,7 @@ import entries.entry_support.{
 }
 import support.timer.{statsEnabled, emitStats}
 import types.program_facts.{ProgramFacts}
+import types.tc_occurrence.{constrainedSigNames}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP

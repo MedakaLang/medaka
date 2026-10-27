@@ -39,9 +39,8 @@ import backend.emit_target.{Backend(..)}
 import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
   elaborateModulesWithReport,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
   preludeArgPosDictNames,
+  preludeReturnPosDictNames,
 }
 import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
@@ -56,6 +55,7 @@ import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import entries.entry_support.{driveModules}
+import types.tc_occurrence.{constrainedSigNames}
 
 main : <IO> Unit
 main = driveModules runEmit
