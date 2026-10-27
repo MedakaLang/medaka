@@ -17,4 +17,5 @@ visibility.types.tc_decls	28
 visibility.types.tc_decls_types	4
 visibility.types.tc_decls_variance	3
 visibility.types.tc_env	7
-visibility.types.typecheck	8
+visibility.types.tc_shadow	1
+visibility.types.typecheck	7

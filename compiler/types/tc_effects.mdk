@@ -1,5 +1,5 @@
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
--- summary failures, rigidity, index-only variables) grant and authority recording, and file-bound
+-- summary failures, rigidity, index-only variables), grant and authority recording, and file-bound
 -- values (authority bounds at binding boundaries: recording, flow and settle checks); wires the
 -- `effect_*` leaves into inference.
 --

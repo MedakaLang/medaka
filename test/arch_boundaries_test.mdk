@@ -601,6 +601,12 @@ test "arch_boundaries: types.tc_solve closure matches its golden" =
 test "arch_boundaries: types.tc_solve_check closure matches its golden" =
   closurePin "types.tc_solve_check"
 
+test "arch_boundaries: types.tc_shadow closure matches its golden" =
+  closurePin "types.tc_shadow"
+
+test "arch_boundaries: types.tc_effects closure matches its golden" =
+  closurePin "types.tc_effects"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 

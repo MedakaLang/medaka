@@ -1,0 +1,115 @@
+anyContainsI : List Int -> List Int -> Bool
+appSpineArgCount : Expr -> Int
+argPerformableOccs : ModuleCtx -> List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
+atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
+beginEffectContract : ModuleCtx -> EffRow -> Mono -> (Map Int Unit, Map Int Unit)
+beginEffectSummaryScope : ModuleCtx -> Unit -> Unit
+borrowedEffectCells : ModuleCtx -> Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
+calleeTakesGrants : GrantCallee -> Bool
+catalogCallee : GraphCtx -> String -> GrantCallee
+changesFileRow : EffRow -> EffRow -> Bool
+changesPackedFileBound : Bool -> Mono -> Mono -> Bool
+checkArgEffVarCoverage : ModuleCtx -> Option String -> List (String, List Kind) -> String -> Ty -> Unit
+checkArgEffVars : ModuleCtx -> Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+checkEffVarAtoms : ModuleCtx -> String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
+checkEffectEscape : DynCtx -> List (String, Ty) -> String -> List Atom -> Unit
+checkEffectEscapeIn : ModuleCtx -> GroupCtx -> List (String, Ty) -> String -> List Atom -> Unit
+checkFileValueFlow : ModuleCtx -> (Option Loc, Mono, Mono) -> Unit
+checkIfaceMethodEffs : ModuleCtx -> String -> List (String, List Kind) -> List IfaceMethod -> Unit
+checkImplEffVarRigidity : ModuleCtx -> String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
+checkIndexOnlyEffVarsOpen : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyGo : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkMethodEffVarRigidity : ModuleCtx -> String -> List Mono -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
+checkUndeterminedRetEffVars : ModuleCtx -> List Decl -> Unit
+checkUndeterminedRetEffVarsDecl : ModuleCtx -> Decl -> Unit
+clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+collectProducedSummary : ModuleCtx -> List EffRow -> EffRow
+concreteAtom : Atom -> Bool
+declaredArgEffNames : ModuleCtx -> Ty -> List String
+declaredEffectTail : Ty -> List String
+declaredEffects : GraphCtx -> Ty -> List Atom
+declaredEffectsOpen : ModuleCtx -> Ty -> Bool
+eagerIndexOnlyVars : List String -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
+effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> List Int -> Bool
+effVarChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
+effVarOccAtoms : GraphCtx -> Ty -> List (String, List Atom)
+effVarOccEscape : GraphCtx -> String -> List Atom -> List (String, List Atom) -> List Atom
+effVarTailIds : List (String, Ref Effvar) -> List Int
+effectSiteOf : ModuleCtx -> String -> Option String -> Option Authority -> Option Loc
+evOrdinal : EvId -> Int
+expandReturnSpine : ModuleCtx -> Ty -> Ty
+externCallee : String -> GrantCallee
+failureBound : SummaryFailure ObligationSite -> Option Authority
+fileBodyLoc : Expr -> Option Loc
+fileBoundKey : Loc -> String
+fileBoundSite : String -> Loc -> String
+fileGrantExterns : Map String (Int, Int)
+fileValueKey : String -> Expr -> Option String
+fileValueShape : Expr -> String
+finishEffectContract : DynCtx -> (Map Int Unit, Map Int Unit) -> Unit
+finishEffectSummaryScope : ModuleCtx -> Map Int Unit -> Map Int (Ref Effvar) -> Unit
+finishEffectSummaryScopeKeeping : ModuleCtx -> ScopeRoles -> Map Int Unit -> Map Int (Ref Effvar) -> List (Int, AuthResidual)
+finishFileValueScope : ModuleCtx -> Unit -> Unit
+flushPendingEscapes : ModuleCtx -> Option GroupCtx -> Unit
+freshEffectSummary : ModuleCtx -> Unit -> EffRow
+grantCalleeOf : ModuleCtx -> String -> GrantCallee
+grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
+grantNameIn : TcEnv -> String -> Bool
+grantOccOf : GraphCtx -> EvId -> Option GrantOcc
+grantOnlyBindingId : ModuleCtx -> String -> Int
+grantOrder : Scheme -> List Int
+grantsEnabled : GraphCtx -> Unit -> Bool
+hasDupI : List Int -> Bool
+hasFileBoundValue : Mono -> Bool
+indexOnlyEffVars : ModuleCtx -> List (String, List Kind) -> Ty -> List String
+krowSlotOccs : ModuleCtx -> List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
+krowSlotVarOccs : ModuleCtx -> List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
+launderEscapeFromLog : GraphCtx -> List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
+launderOpenActualArrow : GraphCtx -> EffRow -> List AbsorptionEvent -> List Atom
+liveTailId : Ref Effvar -> Int
+localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
+markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
+markSourceless : GraphCtx -> List Int -> Unit
+memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit
+mentionsEscaped : ModuleCtx -> Authority -> Bool
+methodEffArgOccs : ModuleCtx -> List (String, List Kind) -> Ty -> List (String, List Atom)
+methodEffChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
+methodEffRetOccs : ModuleCtx -> List (String, List Kind) -> Ty -> List (String, List Atom)
+methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
+methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
+methodRet : Ty -> Ty
+narrowFileAtom : Atom -> Bool
+notePerformSite : TcEnv -> EffRow -> Unit
+occsOfTails : GraphCtx -> List String -> List EffAtomTy -> List (String, List Atom)
+pairRowCells : Mono -> Mono -> List (Int, Int)
+pairRows : EffRow -> EffRow -> List (Int, Int)
+performSiteIn : Option (Ref (List (Ref Effvar, Option Loc))) -> Mono -> Option Loc
+recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
+recordEffectBody : ModuleCtx -> EffRow -> EffRow -> Unit
+recordFileBound : ModuleCtx -> Expr -> EffRow -> Unit
+recordGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordLocalQuantified : GraphCtx -> Scheme -> Unit
+recordMethodGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
+recordOccWith : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Option Int -> Bool -> Unit
+recordRecursiveGrants : GraphCtx -> String -> String -> List (String, List Int) -> Expr -> Unit
+recordStandaloneAt : ModuleCtx -> String -> Expr -> SelectedValueOccurrence -> Unit
+recordStandaloneGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
+recordTopGrants : GraphCtx -> String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
+recordValueFileBound : ModuleCtx -> Expr -> Mono -> Unit
+registerLocalAbsIf : ModuleCtx -> String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
+registerLocalGrants : GraphCtx -> String -> Scheme -> Unit
+registerLocalGroupAbs : TcEnv -> Int -> Int -> List (LetBind, Option ScopeId) -> Unit
+reportEffectSummaryFailures : ModuleCtx -> List (SummaryFailure ObligationSite) -> Unit
+reportRowFailure : ModuleCtx -> SummaryFailure ObligationSite -> Unit
+retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
+revClauses : List (List Pat, Expr) -> List (List Pat, Expr) -> List (List Pat, Expr)
+scopeFileBoundModule : ModuleCtx -> Unit -> String
+setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
+spineHeadEv : Expr -> Option EvId
+summaryEscape : GraphCtx -> Bool -> List Atom -> List Atom -> List Atom
+undeterminedRetEffVars : ModuleCtx -> List (String, List Kind) -> Ty -> List String
+unsettledFileRow : EffRow -> EffRow -> Bool
+unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
+unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
