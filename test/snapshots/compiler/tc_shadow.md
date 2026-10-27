@@ -1,5 +1,5 @@
 # META
-source_lines=2232
+source_lines=2192
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
@@ -40,7 +40,6 @@ import types.tc_mono.{
   headMonoNode,
   headTyconMono,
   monoIsTyvarId,
-  nthArgMono,
   nthFunDomain,
   nthMono,
   substMono,
@@ -238,12 +237,11 @@ declaredEffectsAt gctx inst declared =
 -- (instrumented over a full compiler build and a two-module probe; it never fired), so
 -- the clamp is defensive, not measured — it is one token and it fails closed.
 --
--- S-xmod-vector-supply (#1868/#1867): the qual arm is now `qualConstraintDecl`, shared
--- with `qualConstraintFor` and `declaredCrossModuleObls`.  The two arms that used to be
--- spelled out here — a qual KEY hit whose ids payload MISSES, and no qual key at all with
--- the name still an import — collapse into the one `hasImportDefiner` test below: a
--- `qualConstraintKey` hit IS a `currentImportDefinersRef` hit (same ref, same lookup), so
--- the empty `CDeclared` both arms produced is unchanged.
+-- The qual arm is `qualConstraintDecl`, shared with `qualConstraintFor` and
+-- `declaredCrossModuleObls`.  A qual KEY hit whose ids payload MISSES, and no qual key at
+-- all with the name still an import, are one case, the `hasImportDefiner` test below: a
+-- `qualConstraintKey` hit IS a `currentImportDefinersRef` hit (same ref, same lookup), and
+-- both yield the empty `CDeclared`.
 export
 declaredConstraintFor : ModuleCtx -> String -> CDeclared
 declaredConstraintFor mctx name = match qualConstraintDecl mctx name
@@ -352,11 +350,9 @@ export
 checkAdmittedOccObls : ModuleCtx -> Unit -> Unit
 checkAdmittedOccObls mctx _ =
   let env = mctx.mcCells.bodyImplEnvRef.value
-  let _ =
-    map
-      (o => checkAdmittedOccObl mctx env o)
-      (reverseL mctx.mcCells.admittedOccObls.value)
-  ()
+  each
+    (o => checkAdmittedOccObl mctx env o)
+    (reverseL mctx.mcCells.admittedOccObls.value)
 
 checkAdmittedOccObl : ModuleCtx -> ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObl mctx env (name, mono, loc) =
@@ -385,7 +381,7 @@ admittedReceiverMono : ModuleCtx ->
 admittedReceiverMono mctx _ [] _ = None
 admittedReceiverMono mctx name (ir :: _) mono = do
   k <- lookupIdxById ir name mctx.mcCells.methodDispatchIdxByIdRef.value
-  nthArgMono k mono
+  nthFunDomain k mono
 
 -- ── #1815: application spines ───────────────────────────────────────────────
 -- The ultimate head of an application spine, ELoc wrappers peeled.  A non-application
@@ -491,11 +487,8 @@ isShadowStandalone env name =
 -- `False` would skip the importer route and with it S2-DECL (d)'s cardinality
 -- decision (`importerAdmittedVerdict`).
 --
--- RENAMED from `singleParamIfaceMethod` (#54).  The old name said "single-PARAM
--- method" while the body counts interface TYPE PARAMS; it stated the opposite of what it
--- does and sent one agent down a wrong hypothesis (issue #54; SHADOW-SEMANTICS.md S8).
--- A two-PARAM method of a one-typaram interface (`comb : a -> a -> Int`, cell d7) passes
--- this predicate, and always did.
+-- It counts interface TYPE PARAMS, not method params (SHADOW-SEMANTICS.md S8, #54): a
+-- two-PARAM method of a one-typaram interface (`comb : a -> a -> Int`, cell d7) passes.
 singleTyparamIfaceMethod : ModuleCtx -> String -> Bool
 singleTyparamIfaceMethod mctx name = match methodEntryHere mctx name
   Some (_, typarams, _, _) => listLen typarams == 1
@@ -704,12 +697,10 @@ importerShadowOnEmitPath mctx name tagRef =
 --
 -- The ifaceMethodName conjunct mirrors definerShadowVarHead / definerShadowArgHead's
 -- definer disjunct verbatim, so every entry point agrees on which occurrences the
--- machinery owns.  ✅ S-3 / row 26 CLOSED (#54): a multi-TYPARAM interface
--- (`interface Ix a i`) is now IN scope.  The gate used to be singleParamIfaceMethod (a
--- typaram COUNT test), which excused `Ix a i` from every typing entry point and left its
--- occurrences to ordinary dispatch — check/build kept the pre-inversion per-receiver
--- answer while eval resolved the bare name lexically and E-PANICked (SHADOW-SEMANTICS.md
--- S8; the S7 violation d11 pinned).
+-- machinery owns.  A multi-TYPARAM interface (`interface Ix a i`) is IN scope: gating on
+-- the typaram count would leave its occurrences to ordinary dispatch, where check/build
+-- keep the per-receiver answer while eval resolves the bare name lexically and E-PANICs
+-- (SHADOW-SEMANTICS.md S8; the S7 violation d11 pins; row 26, #54).
 export
 isDefinerShadow : ModuleCtx -> String -> Bool
 isDefinerShadow mctx name =
@@ -720,10 +711,9 @@ isDefinerShadow mctx name =
 -- applied to a receiver of type [xt] should DISPATCH to the interface method rather than
 -- call the standalone.
 --
--- FOR A definer shadow the impl universe is no longer consulted.  It used to be: a
--- receiver whose head tycon had a visible impl of the shadowed interface dispatched, and the
--- standalone was only a FALLBACK for a no-impl head.  That rule silently ERASED the user's
--- function —
+-- For a definer shadow the impl universe is NOT consulted.  Dispatching whenever the
+-- receiver's head tycon has a visible impl of the shadowed interface, with the standalone
+-- only a fallback for a no-impl head, would silently ERASE the user's function —
 --
 --   eq : List Int -> List Int -> Bool
 --   eq a b = True
@@ -1020,10 +1010,10 @@ emitValueShadowGate mctx name
 -- For a DEFINER shadow this is behavior-preserving both ways: resolveRLocalSite's grounded
 -- arm already forced RLocal, and its ungrounded arm already stamped RLocal for
 -- definerShadowNamesRef members.
--- For an IMPORTER shadow it is the #411 fix: the grounded arm used to let a live impl steal
--- the value (row 21b), and the ungrounded arm left the route UNSTAMPED (row 21a) — which is
--- why eval arg-tag-dispatched into the Box impl and the emitter, having no standalone
--- fallback, panicked `no impl of method 'size' for type 'Int'`.
+-- For an IMPORTER shadow it is the #411 fix: a grounded arm that let a live impl steal
+-- the value (row 21b), or an ungrounded arm that left the route UNSTAMPED (row 21a), makes
+-- eval arg-tag-dispatch into the Box impl and the emitter, having no standalone
+-- fallback, panic `no impl of method 'size' for type 'Int'`.
 --
 -- Mirrors maybeStandaloneValueMono's guards exactly; keep the two in lockstep.
 export
@@ -1456,47 +1446,18 @@ allIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
   ifaceMethodNames methods ++ allIfaceMethodNames rest
 allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
 
--- C5 (DEFINER shadow): the names THIS module declares as a top-level funDef that
--- ALSO name an interface method visible in [implDecls] (the imported prelude/core).
--- E.g. map-as-root defines `isEmpty`, which shadows Foldable's method of that name.
--- The
--- MARK pass (`buildStandaloneShadowsGraph`) rewrites occurrences of these to
--- `EMethodAt`, so they MUST be in `standaloneValuesRef` for `recordRLocalSite` to
--- record an RLocal candidate — otherwise the route falls back to the method's
--- RESULT-type RKey and the method dispatches on the WRONG impl.
--- Unlike importer shadows these keep their LOCAL standalone scheme (NOT rebound to the
--- method scheme), since the impl bodies apply them to the concrete receiver.
--- #154 PR1: fold THIS module's decls into the persistent universe accumulators
--- (declared in `CrossRun`).  Called from checkBodyImpl's Module arm BEFORE the shadow
--- reads, so this module's own decls are visible there — exactly as `fullUniverse` (which
--- appended prog0) was.
--- ARCH B-2.1-d removed the key-BUCKET LINE from this fold, with the
--- `universeKeyBucketsRef` cell it grew.  That line re-entered `bucketKeyEntries` once per
--- module with a NON-EMPTY accumulator, which is what duplicated declaration indices across
--- modules and left each module's slice descending; at the time, `buildKeyTable` was
--- `bucketKeyEntries`' sole caller and passed `omEmpty` (see `mergeByDeclIdx`).  Both
--- `buildKeyTable` and `bucketKeyEntries` (and the whole key-bucket table, `KeyBuckets`) were
--- deleted by `S-keytable-payoff`.  Do not re-add a cumulative key-bucket accumulator here:
--- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
--- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
--- BOTH SPELLINGS of the prelude's module id under `Module` mode, in one place.  The
--- export indexes (`meExports`, `deCtorExports`) key the prelude under `"core"`, but
--- the `mid` `graphPreamble` actually PASSES for the core pass is `""` on both output
--- selections (`GOutDiags`:
--- `checkCoreMemoized` → `checkModuleFull` → `checkModuleFullImpl ""`; `GOutTrees`:
--- `elabModuleStamp ""`).  A test of one spelling alone silently never fires on either
--- selection.  Two callers — `seedBuiltinClasses` and
--- `appendUniverseAccums` (below) — and they must not drift apart, since both ask the
--- same question: "is the unit being folded the implicit prelude?"
+-- True for either spelling of the prelude's module id.  The export indexes
+-- (`meExports`, `deCtorExports`) key the prelude under "core", but the `mid` the core
+-- pass receives is "" on both output selections, so a test of one spelling alone never
+-- fires on either.
 export
 isPreludeMid : String -> Bool
 isPreludeMid mid = mid == "core" || mid == ""
 
--- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
--- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
--- ordinal).  `direct` still filters THIS module's localNames in declaration order, so
--- `isMethod n` is a point-for-point substitute for `contains n methodNames` — same
--- set, same order, byte-identical output.
+-- The names THIS module declares as a top-level funDef that also name an interface method
+-- (`isMethod`).  Unlike importer shadows these keep their LOCAL standalone scheme, since
+-- the impl bodies apply them to the concrete receiver.  `bares` recovers
+-- the bare name of a mangled definer through `mangledShadowMapRef`.
 export
 definerShadowsFromSet : GraphCtx -> (String -> Bool) -> List Decl -> List String
 definerShadowsFromSet gctx isMethod prog =
@@ -1627,8 +1588,8 @@ nameableIfaceShadows gctx prog names
 -- shadow-hood to be a superset of dispatch
 -- eligibility and rules two different predicates at the two sites non-conformant; one set
 -- makes them equal, so the invariant holds by construction rather than by test.  Do not
--- introduce a second, wider set for marking: two earlier cuts of this unit did exactly that
--- and each shipped an S0 (a `run`-vs-built-binary split, and a `build`-only E-PANIC).
+-- introduce a second, wider set for marking: that splits `run` from the built binary or
+-- yields a `build`-only E-PANIC (each an S0).
 --
 -- The per-METHOD union of the two namespaces lives in `selectIfaceRows`, applied on the
 -- import arm here and on the re-export arm in `meIfaceExports`.
@@ -2082,10 +2043,9 @@ buildStandaloneShadowsGraph sm allDecls userDecls =
   -- #2809: no path reaches this with mangled funDefs any more, and the map is non-empty
   -- on ALL of them — the rows are `(name ↦ name)`, so this filter selects the funDef
   -- names `direct` already selected and the union is unchanged.  The header 25 lines up
-  -- states that retirement; this line used to contradict it by claiming the map is empty
-  -- off the emit path.  Kept rather than deleted because it is what would recover a
-  -- genuinely mangled row if one appeared (a hand-written `<mid>__toList` mints one), and
-  -- because `dedup` makes the redundancy free.
+  -- states that retirement.  The filter stays because it recovers a genuinely mangled row
+  -- if one appears (a hand-written `<mid>__toList` mints one), and `dedup` makes the
+  -- redundancy free.
   let mangled = filter (n => isSome (lookupAssoc n sm)) fns
   dedup (direct ++ mangled)
 
@@ -2236,7 +2196,7 @@ shadowBareName sm n = match lookupAssoc n sm
   None => n
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthArgMono" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambiguousShadowHelp" false) (mem "shadowIfaceLabel" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAt" false) (mem "emptyShadowDicts" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "depExportsStandalone" false) (mem "depExportsUnknown" false) (mem "funDefs" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceExportsIndex" false) (mem "ifaceMethodNames" false) (mem "ifaceMethodRows" false) (mem "importedBindings" false) (mem "lookupBinding" false) (mem "lookupIdxById" false) (mem "lookupStandaloneValue" false) (mem "lookupStandaloneVar" false) (mem "lookupVar" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "removeAllS" false) (mem "selectIfaceRows" false) (mem "standaloneValueFor" false))))
@@ -2283,12 +2243,12 @@ shadowBareName sm n = match lookupAssoc n sm
 (DFunDef false "constraintMonosOf" ((PList) PWild) (EListLit))
 (DFunDef false "constraintMonosOf" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" (PVar "m")) () (EBinOp "::" (EVar "m") (EApp (EApp (EVar "constraintMonosOf") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EApp (EApp (EVar "constraintMonosOf") (EVar "rest")) (EVar "subst")))))
 (DTypeSig true "checkAdmittedOccObls" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
-(DFunDef false "checkAdmittedOccObls" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "o")) (EApp (EApp (EApp (EVar "checkAdmittedOccObl") (EVar "mctx")) (EVar "env")) (EVar "o")))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value")))) (DoExpr (ELit LUnit))))
+(DFunDef false "checkAdmittedOccObls" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "o")) (EApp (EApp (EApp (EVar "checkAdmittedOccObl") (EVar "mctx")) (EVar "env")) (EVar "o")))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value"))))))
 (DTypeSig false "checkAdmittedOccObl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyTuple (TyCon "String") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))))
 (DFunDef false "checkAdmittedOccObl" ((PVar "mctx") (PVar "env") (PTuple (PVar "name") (PVar "mono") (PVar "loc"))) (EBlock (DoLet false false (PVar "ifs") (EApp (EApp (EVar "methodAdmittedHere") (EVar "mctx")) (EVar "name"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "admittedSelection") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EVar "name")) (EVar "mono")) (arm (PCon "Selects" PWild PWild PWild) () (ELit LUnit)) (arm (PCon "Undecided") () (EApp (EApp (EApp (EApp (EVar "pushAmbiguousMethod") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "loc"))) (arm (PCon "Unroutable" (PVar "sel")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushUnroutableAdmitted") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "sel")) (EVar "loc"))) (arm (PCon "SelectsNothing") () (EBlock (DoLet false false (PVar "recv") (EMatch (EApp (EApp (EApp (EApp (EVar "admittedReceiverMono") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "mono")) (arm (PCon "Some" (PVar "at")) () (EApp (EVar "ppMono") (EVar "at"))) (arm (PCon "None") () (ELit (LString "this receiver"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no impl of ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " or "))) (EApp (EApp (EVar "map") (ELam ((PVar "ir")) (EFieldAccess (EVar "ir") "irName"))) (EVar "ifs"))))) (ELit (LString " for "))) (EApp (EVar "display") (EVar "recv"))) (ELit (LString "; write an impl of one of them for it")))))))))))
 (DTypeSig false "admittedReceiverMono" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))))
 (DFunDef false "admittedReceiverMono" ((PVar "mctx") PWild (PList) PWild) (EVar "None"))
-(DFunDef false "admittedReceiverMono" ((PVar "mctx") (PVar "name") (PCons (PVar "ir") PWild) (PVar "mono")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "ir")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodDispatchIdxByIdRef") "value"))) (ELam ((PVar "k")) (EApp (EApp (EVar "nthArgMono") (EVar "k")) (EVar "mono")))))
+(DFunDef false "admittedReceiverMono" ((PVar "mctx") (PVar "name") (PCons (PVar "ir") PWild) (PVar "mono")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "ir")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodDispatchIdxByIdRef") "value"))) (ELam ((PVar "k")) (EApp (EApp (EVar "nthFunDomain") (EVar "k")) (EVar "mono")))))
 (DTypeSig false "appSpineHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appSpineHead" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appSpineHead") (EVar "e")))
 (DFunDef false "appSpineHead" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "appSpineHead") (EVar "f")))
@@ -2542,7 +2502,7 @@ shadowBareName sm n = match lookupAssoc n sm
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 # MARK
 (DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthArgMono" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambiguousShadowHelp" false) (mem "shadowIfaceLabel" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAt" false) (mem "emptyShadowDicts" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "depExportsStandalone" false) (mem "depExportsUnknown" false) (mem "funDefs" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceExportsIndex" false) (mem "ifaceMethodNames" false) (mem "ifaceMethodRows" false) (mem "importedBindings" false) (mem "lookupBinding" false) (mem "lookupIdxById" false) (mem "lookupStandaloneValue" false) (mem "lookupStandaloneVar" false) (mem "lookupVar" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "removeAllS" false) (mem "selectIfaceRows" false) (mem "standaloneValueFor" false))))
@@ -2589,12 +2549,12 @@ shadowBareName sm n = match lookupAssoc n sm
 (DFunDef false "constraintMonosOf" ((PList) PWild) (EListLit))
 (DFunDef false "constraintMonosOf" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" (PVar "m")) () (EBinOp "::" (EVar "m") (EApp (EApp (EVar "constraintMonosOf") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EApp (EApp (EVar "constraintMonosOf") (EVar "rest")) (EVar "subst")))))
 (DTypeSig true "checkAdmittedOccObls" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
-(DFunDef false "checkAdmittedOccObls" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (EApp (EApp (EApp (EVar "checkAdmittedOccObl") (EVar "mctx")) (EVar "env")) (EVar "o")))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value")))) (DoExpr (ELit LUnit))))
+(DFunDef false "checkAdmittedOccObls" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "o")) (EApp (EApp (EApp (EVar "checkAdmittedOccObl") (EVar "mctx")) (EVar "env")) (EVar "o")))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value"))))))
 (DTypeSig false "checkAdmittedOccObl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyTuple (TyCon "String") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))))
 (DFunDef false "checkAdmittedOccObl" ((PVar "mctx") (PVar "env") (PTuple (PVar "name") (PVar "mono") (PVar "loc"))) (EBlock (DoLet false false (PVar "ifs") (EApp (EApp (EVar "methodAdmittedHere") (EVar "mctx")) (EVar "name"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "admittedSelection") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EVar "name")) (EVar "mono")) (arm (PCon "Selects" PWild PWild PWild) () (ELit LUnit)) (arm (PCon "Undecided") () (EApp (EApp (EApp (EApp (EVar "pushAmbiguousMethod") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "loc"))) (arm (PCon "Unroutable" (PVar "sel")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushUnroutableAdmitted") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "sel")) (EVar "loc"))) (arm (PCon "SelectsNothing") () (EBlock (DoLet false false (PVar "recv") (EMatch (EApp (EApp (EApp (EApp (EVar "admittedReceiverMono") (EVar "mctx")) (EVar "name")) (EVar "ifs")) (EVar "mono")) (arm (PCon "Some" (PVar "at")) () (EApp (EVar "ppMono") (EVar "at"))) (arm (PCon "None") () (ELit (LString "this receiver"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no impl of ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " or "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ir")) (EFieldAccess (EVar "ir") "irName"))) (EVar "ifs"))))) (ELit (LString " for "))) (EApp (EMethodRef "display") (EVar "recv"))) (ELit (LString "; write an impl of one of them for it")))))))))))
 (DTypeSig false "admittedReceiverMono" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))))
 (DFunDef false "admittedReceiverMono" ((PVar "mctx") PWild (PList) PWild) (EVar "None"))
-(DFunDef false "admittedReceiverMono" ((PVar "mctx") (PVar "name") (PCons (PVar "ir") PWild) (PVar "mono")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "ir")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodDispatchIdxByIdRef") "value"))) (ELam ((PVar "k")) (EApp (EApp (EVar "nthArgMono") (EVar "k")) (EVar "mono")))))
+(DFunDef false "admittedReceiverMono" ((PVar "mctx") (PVar "name") (PCons (PVar "ir") PWild) (PVar "mono")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "ir")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodDispatchIdxByIdRef") "value"))) (ELam ((PVar "k")) (EApp (EApp (EVar "nthFunDomain") (EVar "k")) (EVar "mono")))))
 (DTypeSig false "appSpineHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appSpineHead" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appSpineHead") (EVar "e")))
 (DFunDef false "appSpineHead" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "appSpineHead") (EVar "f")))

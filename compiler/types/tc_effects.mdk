@@ -388,7 +388,7 @@ finishEffectContract dyn (saved, savedAuths) =
 -- tail var in RETURN position but in NO ROW-KINDED argument position — it is
 -- under-determined, so a caller can instantiate it to `<>` and LAUNDER the
 -- dispatched impl's real effect (a pure-typed wrapper silently performs it).
--- SCOPED to interface methods (the ratified scope); a top-level return-only
+-- SCOPED to interface methods (the scope of this check); a top-level return-only
 -- effect var is #797's separate territory.
 --
 -- This runs as a SEPARATE pass from checkEffectParams, deliberately AFTER
@@ -1239,7 +1239,7 @@ export
 collectProducedSummary : ModuleCtx -> List EffRow -> EffRow
 collectProducedSummary mctx rows =
   let summary = freshEffectSummary mctx ()
-  fold (_ row => recordEffectBody mctx summary row) () rows
+  each (row => recordEffectBody mctx summary row) rows
   summary
 
 export
@@ -1319,13 +1319,12 @@ finishFileValueScope mctx _ = match mctx.mcCells.fileValueScopes.value
   saved :: rest =>
     mctx.mcCells.fileValueScopes := rest
     let flows = wWindow mctx.mcCells.fileValueFlows (snd saved)
-    let _ = wRestore mctx.mcCells.fileValueFlows saved
-    let _ =
-      map
-        (flow =>
-          if isEmptyL rest || not (unsettledFileValueFlow flow) then
-            checkFileValueFlow mctx flow)
-        flows
+    wRestore mctx.mcCells.fileValueFlows saved
+    each
+      (flow =>
+        if isEmptyL rest || not (unsettledFileValueFlow flow) then
+          checkFileValueFlow mctx flow)
+      flows
     -- A local result can be shaped by a later use in its enclosing scope.
     -- Keep its producer evidence until that receiving type is determined.
     match rest
@@ -1622,11 +1621,9 @@ anyContainsI (x :: xs) ys = containsI x ys || anyContainsI xs ys
 -- A method effect var aliasing an INSTANCE-HEAD row parameter is REJECTED, not
 -- admitted: `checkMethodRigidityCore` pushes `T-IMPL-TOO-SPECIFIC` when a
 -- method effect var's tail is among `monoIndexEffvarIds` of the head monos,
--- before it calls this function.  What used to need the exception was Async
--- v1's `impl Mappable (Async e)`, whose `Suspend` arm stored the callback and
--- so forced method `e'` ~ head `e`; with the `Deferred*` family the head is the
--- bare constructor and the callback row rides the index, so no legal impl needs
--- that identification.  This function's own dup set is therefore the METHOD's
+-- before it calls this function.  No legal impl needs that identification: with
+-- the `Deferred*` family the head is the bare constructor and the callback row
+-- rides the index.  This function's own dup set is therefore the METHOD's
 -- own effect vars only — impl-head row tails never enter it.  (The TYPE-var
 -- half never had an exception either: a method type var may never alias an
 -- impl-head type var.)

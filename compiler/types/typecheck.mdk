@@ -629,7 +629,7 @@ import types.tc_mono.{
   monoUnboundIds,
   monoVarCells,
   monoVectorClosed,
-  nthArgMono,
+  nthFunDomain,
   patVarsListTc,
   patVarsTc,
   peelArrows,
@@ -2233,7 +2233,7 @@ recordArgStamp : ModuleCtx ->
   Unit
 recordArgStamp mctx suppressed name tagRef implRef innerRef idx mono omitted
   | suppressed = ()
-  | otherwise = match nthArgMono idx mono
+  | otherwise = match nthFunDomain idx mono
     Some am =>
       pushSiteGoal
         mctx.mcGraph
@@ -2258,7 +2258,7 @@ recordArgStamp mctx suppressed name tagRef implRef innerRef idx mono omitted
 -- the constraint is inferred, not declared).  Idx-th arg mono = the receiver whose
 -- (constraint) tyvar must be discovered.
 recordArgSiteFn : ModuleCtx -> String -> Int -> Mono -> Unit
-recordArgSiteFn mctx _ idx mono = match nthArgMono idx mono
+recordArgSiteFn mctx _ idx mono = match nthFunDomain idx mono
   Some am =>
     mctx.mcCells.methodSiteFns :=
       consSiteFn
@@ -3658,7 +3658,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
         Some (occurrence.svoScheme, inst.mtiSubstitution.misAuthSubst)
       arityRef := Some (funArity inst.mtiBody)
       let receiver = match methodDispatchIdx env.teDyn.dcModule name
-        Some idx => optionOr inst.mtiBody (nthArgMono idx inst.mtiBody)
+        Some idx => optionOr inst.mtiBody (nthFunDomain idx inst.mtiBody)
         None => inst.mtiBody
       pushSiteGoal
         env.teDyn.dcModule.mcGraph
@@ -3811,7 +3811,7 @@ recordRLocalSite env name tagRef innerRef inst
     ()
   | otherwise = match methodDispatchIdx env.teDyn.dcModule name
     None => ()
-    Some idx => match nthArgMono idx inst
+    Some idx => match nthFunDomain idx inst
       Some am =>
         let sym = routeLocalSym !tagRef
         let dicts =

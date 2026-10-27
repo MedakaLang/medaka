@@ -1,5 +1,5 @@
 # META
-source_lines=2240
+source_lines=2229
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -127,15 +127,6 @@ cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
 cellIdSetGo [] ids = ids
 cellIdSetGo (cell :: cells) ids =
   cellIdSetGo cells (IdMap.set (effvarId cell) () ids)
-
-export
-nthArgMono : Int -> Mono -> Option Mono
-nthArgMono 0 m = match normalize m
-  TFun a _ _ => Some a
-  _ => None
-nthArgMono n m = match normalize m
-  TFun _ _ b => nthArgMono (n - 1) b
-  _ => None
 
 export
 containsI : Int -> List Int -> Bool
@@ -292,12 +283,12 @@ xmodOblArgId m = match normalize m
   TVar cell => [tyvarId cell]
   _ => monoTyvarIds m
 
--- #1937 (structured predicate carry): this walk used to substitute ONLY at a TOP-LEVEL
--- `TVar` and pass anything else through untouched, which is why the admission pair
--- (`declaredOblArgOk`) could not admit a structured argument: `Conv (Wrap a) b` would
--- have carried the DEFINING signature's `a` cell into the caller's goal unsubstituted,
--- the wrong-but-concrete goal its header calls strictly worse than a missing one.  It
--- now recurses through `TApp`/`TFun` and substitutes at every `TVar` LEAF, so
+-- #1937 (structured predicate carry): this walk recurses through `TApp`/`TFun` and
+-- substitutes at every `TVar` LEAF.  Substituting only at a TOP-LEVEL `TVar` would carry
+-- the DEFINING signature's `a` cell of `Conv (Wrap a) b` into the caller's goal
+-- unsubstituted, the wrong-but-concrete goal its header calls strictly worse than a
+-- missing one, and the admission pair (`declaredOblArgOk`) could not admit a structured
+-- argument.  So
 -- `Conv (Wrap a) b` at a call instantiating `a := Char, b := Bool` becomes the goal
 -- `Conv (Wrap Char) Bool` — the shape #1937 is about.  A leaf among the entry's own
 -- ids [ids] that [subst] does not map still fails CLOSED for the whole predicate,
@@ -334,8 +325,8 @@ substMonos (id :: rest) subst = match lookupAssocI id subst
   Some mono => map (mono :: _) (substMonos rest subst)
   None => None
 
--- the k-th domain of a (possibly curried) function type — `nthFunDomain 0` is the
--- receiver of an index-0 dispatch, which is what every pre-#1815 caller asked for.
+-- the k-th domain of a (possibly curried) function type; `nthFunDomain 0` is the
+-- receiver of an index-0 dispatch.
 export
 nthFunDomain : Int -> Mono -> Option Mono
 nthFunDomain k m = match normalize m
@@ -372,8 +363,8 @@ containerParamScalarArg ft xt = match normalize ft
     TApp _ _ => match headTyconNameMono dom
       None => match normalize xt
         TCon n _ => Some n
-        -- answer-preserving (#1110): a rigid used to arrive here as `TCon n`
-        -- and named itself in the container-vs-scalar reframe.
+        -- answer-preserving (#1110): a rigid arrives as `TRigid n` and names itself
+        -- in the container-vs-scalar reframe.
         TRigid n => Some n
         _ => None
       Some _ => None
@@ -1629,13 +1620,12 @@ preferConcrete a b = match headTyconMono a
 
 -- match an impl-head type PATTERN against a concrete mono, binding the impl's
 -- type-variable names to monos (single-level: the pattern's args are bare vars).
--- #156 S1 / Fork B: matchTyMono is now a CONSISTENCY-ENFORCING frontend of the
+-- #156 S1 / Fork B: matchTyMono is a CONSISTENCY-ENFORCING frontend of the
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
--- matchEqMono).  The old body combined element substs with `xs ++ ys` and NEVER
--- checked a var bound twice, so a non-linear impl head (`Get (Box a) a`) could
--- "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool) even though NO
--- substitution exists — violating §3 `inst`'s "φ a most-general MATCHER" premise
--- and letting findImplEntryGo (iface=="") select the wrong impl's requires.  Now
+-- matchEqMono).  A var bound twice must agree: a non-linear impl head
+-- (`Get (Box a) a`) must not "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool)
+-- since NO substitution exists — §3 `inst`'s "φ a most-general MATCHER" premise, and
+-- findImplEntryGo (iface=="") would select the wrong impl's requires.  So
 -- a↦Int, a↦Bool fails matchEqMono ⇒ None (no false match); a CONSISTENT non-linear
 -- head (`Get (Box Int) Int`, a↦Int twice) still matches (the live canary in
 -- test/eval_typed_fixtures/return_only_param_dispatch.mdk).  The recovered subst
@@ -1708,7 +1698,7 @@ matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match peelQual m
   -- The pre-split answer this restores is a FORGERY: a rigid variable is not the
   -- builtin tuple head, and letting it match one is exactly the identity confusion
   -- DICT-SEMANTICS §8 I6.2(b) records as OWED-#1110.  Preserved deliberately —
-  -- this PR is the carrier step; changing answers is the follow-on.
+  -- the answer is preserved here; changing it is separate work.
   TRigid n2 => if n == n2 then MOk else MFail
   _ => MFail
 matchStep (TyApp a b) m = match peelQual m
@@ -1888,7 +1878,6 @@ cohApply subst m = match cohResolve subst m
   other => other
 
 -- A name no type or type variable can spell, standing in for a signature variable.
-export
 sigStandIn : Ref Tyvar -> String
 sigStandIn cell = "%sig\{intToString (tyvarId cell)}"
 
@@ -2266,9 +2255,6 @@ implDeclWithReqs _ = []
 (DTypeSig false "cellIdSetGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "cellIdSetGo" ((PList) (PVar "ids")) (EVar "ids"))
 (DFunDef false "cellIdSetGo" ((PCons (PVar "cell") (PVar "cells")) (PVar "ids")) (EApp (EApp (EVar "cellIdSetGo") (EVar "cells")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "cell"))) (ELit LUnit)) (EVar "ids"))))
-(DTypeSig true "nthArgMono" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "nthArgMono" ((PLit (LInt 0)) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild PWild) () (EApp (EVar "Some") (EVar "a"))) (arm PWild () (EVar "None"))))
-(DFunDef false "nthArgMono" ((PVar "n") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "nthArgMono") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
@@ -2755,7 +2741,7 @@ implDeclWithReqs _ = []
 (DFunDef false "findTvarInMonos" ((PCons (PVar "m") (PVar "rest")) (PVar "i")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "m")) (EVar "i")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMonos") (EVar "rest")) (EVar "i")))))
 (DTypeSig true "cohApply" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "cohApply" ((PVar "subst") (PVar "m")) (EMatch (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "m")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EVar "eff")) (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EVar "q"))) (arm (PVar "other") () (EVar "other"))))
-(DTypeSig true "sigStandIn" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "String")))
+(DTypeSig false "sigStandIn" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "String")))
 (DFunDef false "sigStandIn" ((PVar "cell")) (EBinOp "++" (EBinOp "++" (ELit (LString "%sig")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ""))))
 (DTypeSig true "sigCellsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))))))
 (DFunDef false "sigCellsOf" ((PVar "sigIds") (PVar "cells")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "c")))) (EVar "sigIds")))) (EVar "cells")))
@@ -2856,9 +2842,6 @@ implDeclWithReqs _ = []
 (DTypeSig false "cellIdSetGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "cellIdSetGo" ((PList) (PVar "ids")) (EVar "ids"))
 (DFunDef false "cellIdSetGo" ((PCons (PVar "cell") (PVar "cells")) (PVar "ids")) (EApp (EApp (EVar "cellIdSetGo") (EVar "cells")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "cell"))) (ELit LUnit)) (EVar "ids"))))
-(DTypeSig true "nthArgMono" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "nthArgMono" ((PLit (LInt 0)) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild PWild) () (EApp (EVar "Some") (EVar "a"))) (arm PWild () (EVar "None"))))
-(DFunDef false "nthArgMono" ((PVar "n") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "nthArgMono") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
@@ -3345,7 +3328,7 @@ implDeclWithReqs _ = []
 (DFunDef false "findTvarInMonos" ((PCons (PVar "m") (PVar "rest")) (PVar "i")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "m")) (EVar "i")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMonos") (EVar "rest")) (EVar "i")))))
 (DTypeSig true "cohApply" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "cohApply" ((PVar "subst") (PVar "m")) (EMatch (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "m")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EVar "eff")) (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "cohApply") (EVar "subst")) (EVar "a"))) (EVar "q"))) (arm (PVar "other") () (EVar "other"))))
-(DTypeSig true "sigStandIn" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "String")))
+(DTypeSig false "sigStandIn" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "String")))
 (DFunDef false "sigStandIn" ((PVar "cell")) (EBinOp "++" (EBinOp "++" (ELit (LString "%sig")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ""))))
 (DTypeSig true "sigCellsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Tyvar"))))))
 (DFunDef false "sigCellsOf" ((PVar "sigIds") (PVar "cells")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "c")))) (EVar "sigIds")))) (EVar "cells")))

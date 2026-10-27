@@ -126,7 +126,6 @@ monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
 newEffvarId : GraphCtx -> Unit -> Int
-nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
 nthMono : Int -> List Mono -> Option Mono
 nthTy : Int -> List Ty -> Option Ty

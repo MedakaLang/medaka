@@ -29,6 +29,7 @@ import types.tc_mono.{
   monoClosed,
   monoSameGiven,
   monoUnboundIds,
+  nthFunDomain,
   oblArgKey,
   peelArrows,
   resultAfterArrows,
@@ -309,6 +310,16 @@ test "resultAfterArrows is None past the arrow spine and the rest within it" =
     expectEqual (Some "Bool") (map ppMono (resultAfterArrows 2 fn)),
     expectTrue (isNone (resultAfterArrows 3 fn)),
     expectEqual 2 (arrowArity fn),
+  ]
+
+test "nthFunDomain reads the k-th curried domain and is None past the arrow spine" =
+  let int = tconBuiltin "Int"
+  let fn = TFun int pureRow (TFun (tconBuiltin "Bool") pureRow int)
+  expectAll [
+    expectEqual (Some "Int") (map ppMono (nthFunDomain 0 fn)),
+    expectEqual (Some "Bool") (map ppMono (nthFunDomain 1 fn)),
+    expectTrue (isNone (nthFunDomain 2 fn)),
+    expectTrue (isNone (nthFunDomain 0 int)),
   ]
 
 test "abstractSlotIds lists the variables of a vector in order and skips solved positions" =

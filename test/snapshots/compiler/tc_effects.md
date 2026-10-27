@@ -1,5 +1,5 @@
 # META
-source_lines=2009
+source_lines=2006
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -392,7 +392,7 @@ finishEffectContract dyn (saved, savedAuths) =
 -- tail var in RETURN position but in NO ROW-KINDED argument position — it is
 -- under-determined, so a caller can instantiate it to `<>` and LAUNDER the
 -- dispatched impl's real effect (a pure-typed wrapper silently performs it).
--- SCOPED to interface methods (the ratified scope); a top-level return-only
+-- SCOPED to interface methods (the scope of this check); a top-level return-only
 -- effect var is #797's separate territory.
 --
 -- This runs as a SEPARATE pass from checkEffectParams, deliberately AFTER
@@ -1243,7 +1243,7 @@ export
 collectProducedSummary : ModuleCtx -> List EffRow -> EffRow
 collectProducedSummary mctx rows =
   let summary = freshEffectSummary mctx ()
-  fold (_ row => recordEffectBody mctx summary row) () rows
+  each (row => recordEffectBody mctx summary row) rows
   summary
 
 export
@@ -1323,13 +1323,12 @@ finishFileValueScope mctx _ = match mctx.mcCells.fileValueScopes.value
   saved :: rest =>
     mctx.mcCells.fileValueScopes := rest
     let flows = wWindow mctx.mcCells.fileValueFlows (snd saved)
-    let _ = wRestore mctx.mcCells.fileValueFlows saved
-    let _ =
-      map
-        (flow =>
-          if isEmptyL rest || not (unsettledFileValueFlow flow) then
-            checkFileValueFlow mctx flow)
-        flows
+    wRestore mctx.mcCells.fileValueFlows saved
+    each
+      (flow =>
+        if isEmptyL rest || not (unsettledFileValueFlow flow) then
+          checkFileValueFlow mctx flow)
+      flows
     -- A local result can be shaped by a later use in its enclosing scope.
     -- Keep its producer evidence until that receiving type is determined.
     match rest
@@ -1626,11 +1625,9 @@ anyContainsI (x :: xs) ys = containsI x ys || anyContainsI xs ys
 -- A method effect var aliasing an INSTANCE-HEAD row parameter is REJECTED, not
 -- admitted: `checkMethodRigidityCore` pushes `T-IMPL-TOO-SPECIFIC` when a
 -- method effect var's tail is among `monoIndexEffvarIds` of the head monos,
--- before it calls this function.  What used to need the exception was Async
--- v1's `impl Mappable (Async e)`, whose `Suspend` arm stored the callback and
--- so forced method `e'` ~ head `e`; with the `Deferred*` family the head is the
--- bare constructor and the callback row rides the index, so no legal impl needs
--- that identification.  This function's own dup set is therefore the METHOD's
+-- before it calls this function.  No legal impl needs that identification: with
+-- the `Deferred*` family the head is the bare constructor and the callback row
+-- rides the index.  This function's own dup set is therefore the METHOD's
 -- own effect vars only — impl-head row tails never enter it.  (The TYPE-var
 -- half never had an exception either: a method type var may never alias an
 -- impl-head type var.)
@@ -2214,7 +2211,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DTypeSig true "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
 (DFunDef false "markBinders" ((PVar "table") (PVar "cells")) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "table") "value")) (EVar "cells"))))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
-(DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "summary"))))
+(DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig true "registerLocalGroupAbs" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "LetBind") (TyApp (TyCon "Option") (TyCon "ScopeId")))) (TyCon "Unit"))))))
 (DFunDef false "registerLocalGroupAbs" ((PVar "env") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PAs "bind" (PCon "LetBind" (PVar "name") PWild PWild PWild)) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
@@ -2237,7 +2234,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "fileValueShape" ((PCon "ELam" PWild PWild)) (ELit (LString "lambda")))
 (DFunDef false "fileValueShape" (PWild) (ELit (LString "value")))
 (DTypeSig false "finishFileValueScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
-(DFunDef false "finishFileValueScope" ((PVar "mctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value") (arm (PCons (PVar "saved") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EVar "rest"))) (DoLet false false (PVar "flows") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "snd") (EVar "saved")))) (DoLet false false PWild (EApp (EApp (EVar "wRestore") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EVar "saved"))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "flow")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "not") (EApp (EVar "unsettledFileValueFlow") (EVar "flow")))) (EApp (EApp (EVar "checkFileValueFlow") (EVar "mctx")) (EVar "flow")) (ELit LUnit)))) (EVar "flows"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "wPushAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "reverseL") (EApp (EApp (EVar "filterList") (EVar "unsettledFileValueFlow")) (EVar "flows"))))))) (DoExpr (ELit LUnit)))) (arm (PList) () (ELit LUnit))))
+(DFunDef false "finishFileValueScope" ((PVar "mctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value") (arm (PCons (PVar "saved") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EVar "rest"))) (DoLet false false (PVar "flows") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "snd") (EVar "saved")))) (DoExpr (EApp (EApp (EVar "wRestore") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "flow")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "not") (EApp (EVar "unsettledFileValueFlow") (EVar "flow")))) (EApp (EApp (EVar "checkFileValueFlow") (EVar "mctx")) (EVar "flow")) (ELit LUnit)))) (EVar "flows"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "wPushAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "reverseL") (EApp (EApp (EVar "filterList") (EVar "unsettledFileValueFlow")) (EVar "flows"))))))) (DoExpr (ELit LUnit)))) (arm (PList) () (ELit LUnit))))
 (DTypeSig false "unsettledFileValueFlow" (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono") (TyCon "Mono")) (TyCon "Bool")))
 (DFunDef false "unsettledFileValueFlow" ((PTuple PWild (PVar "upper") (PVar "lower"))) (EApp (EApp (EApp (EVar "unsettledPackedFileBound") (EVar "False")) (EVar "upper")) (EVar "lower")))
 (DTypeSig false "unsettledPackedFileBound" (TyFun (TyCon "Bool") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
@@ -2552,7 +2549,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DTypeSig true "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
 (DFunDef false "markBinders" ((PVar "table") (PVar "cells")) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "table") "value")) (EVar "cells"))))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
-(DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "summary"))))
+(DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig true "registerLocalGroupAbs" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "LetBind") (TyApp (TyCon "Option") (TyCon "ScopeId")))) (TyCon "Unit"))))))
 (DFunDef false "registerLocalGroupAbs" ((PVar "env") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PAs "bind" (PCon "LetBind" (PVar "name") PWild PWild PWild)) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
@@ -2575,7 +2572,7 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 (DFunDef false "fileValueShape" ((PCon "ELam" PWild PWild)) (ELit (LString "lambda")))
 (DFunDef false "fileValueShape" (PWild) (ELit (LString "value")))
 (DTypeSig false "finishFileValueScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
-(DFunDef false "finishFileValueScope" ((PVar "mctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value") (arm (PCons (PVar "saved") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EVar "rest"))) (DoLet false false (PVar "flows") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "snd") (EVar "saved")))) (DoLet false false PWild (EApp (EApp (EVar "wRestore") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EVar "saved"))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "flow")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "not") (EApp (EVar "unsettledFileValueFlow") (EVar "flow")))) (EApp (EApp (EVar "checkFileValueFlow") (EVar "mctx")) (EVar "flow")) (ELit LUnit)))) (EVar "flows"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "wPushAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "reverseL") (EApp (EApp (EVar "filterList") (EVar "unsettledFileValueFlow")) (EVar "flows"))))))) (DoExpr (ELit LUnit)))) (arm (PList) () (ELit LUnit))))
+(DFunDef false "finishFileValueScope" ((PVar "mctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value") (arm (PCons (PVar "saved") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EVar "rest"))) (DoLet false false (PVar "flows") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "snd") (EVar "saved")))) (DoExpr (EApp (EApp (EVar "wRestore") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "flow")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "not") (EApp (EVar "unsettledFileValueFlow") (EVar "flow")))) (EApp (EApp (EVar "checkFileValueFlow") (EVar "mctx")) (EVar "flow")) (ELit LUnit)))) (EVar "flows"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "wPushAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EApp (EVar "reverseL") (EApp (EApp (EVar "filterList") (EVar "unsettledFileValueFlow")) (EVar "flows"))))))) (DoExpr (ELit LUnit)))) (arm (PList) () (ELit LUnit))))
 (DTypeSig false "unsettledFileValueFlow" (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono") (TyCon "Mono")) (TyCon "Bool")))
 (DFunDef false "unsettledFileValueFlow" ((PTuple PWild (PVar "upper") (PVar "lower"))) (EApp (EApp (EApp (EVar "unsettledPackedFileBound") (EVar "False")) (EVar "upper")) (EVar "lower")))
 (DTypeSig false "unsettledPackedFileBound" (TyFun (TyCon "Bool") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
