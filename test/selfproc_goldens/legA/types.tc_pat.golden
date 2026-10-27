@@ -1,0 +1,41 @@
+anyExistential : GraphCtx -> List Int -> Bool
+bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
+closeExistentialScope : ModuleCtx -> ExistentialScope -> Mono -> Option Loc -> Unit
+ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
+inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
+inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
+inferPatAs : TcEnv -> String -> Loc -> BinderId -> Pat -> (Mono, List (String, Scheme))
+inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
+inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
+inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
+inferPatList : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferPatRec : TcEnv -> String -> List RecPatField -> (Mono, List (String, Scheme))
+inferPatRecWith : TcEnv -> String -> RecordInfo -> List RecPatField -> (Mono, List (String, Scheme))
+inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
+inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
+inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> BinderId -> Option Pat -> List (String, Scheme)
+inferRecPatFieldWith : TcEnv -> Mono -> String -> BinderId -> Option Pat -> List (String, Scheme)
+inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> List (String, Scheme)
+inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
+instantiateCtorPattern : ModuleCtx -> Scheme -> Mono
+instantiateRecordOpening : ModuleCtx -> RecordInfo -> ((Mono, List (String, Mono)), List (Ref Authvar))
+isConPat : Pat -> Bool
+openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
+openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
+parkOpenedExistentials : ModuleCtx -> Unit -> Unit
+patIsVar : Pat -> Bool
+patOpensExistentials : TcEnv -> Pat -> Bool
+recPatFieldOpens : TcEnv -> RecPatField -> Bool
+recordBinderType : GraphCtx -> BinderId -> String -> Mono -> Option Int -> Bool -> Unit
+recordHasExistentials : GraphCtx -> Option RecordInfo -> Bool
+recordLetBindType : GraphCtx -> (LetBind, (String, BindingSummary)) -> Unit
+recordLocalBind : ModuleCtx -> String -> Option Loc -> BinderId -> Mono -> Unit
+refuseBoxedLitPat : ModuleCtx -> String -> String -> Option Loc -> Unit
+refuseOpenedExistentials : ModuleCtx -> Unit -> Unit
+settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+substField : GraphCtx -> List (Int, Mono) -> List (Int, Authority) -> (String, Mono) -> (String, Mono)
+takeOpenedExistentials : ModuleCtx -> Unit -> List (Ref Authvar)
+takePatLits : ModuleCtx -> Unit -> List (Mono, Int, Option Loc)
