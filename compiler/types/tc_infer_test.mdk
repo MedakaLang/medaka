@@ -5,16 +5,17 @@
 -- scrutinee type is unknown), the wide-literal check (`checkWideLiterals`), the clause inference
 -- of a binding group (`inferMemberClauses`, `inferBindingChecked`), the signature
 -- pre-unification (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the span readers
--- (`appArgLoc`, `valueSpanLoc`) and the applications of an importer shadow and of a definer
--- shadow (a bare head, a marked head, and a spine whose receiver is not its first argument).
--- Each test builds the module record and the environment it reads and drives the recursion below
--- the entry module.  Two properties run over generated programs: a name in a chain of lambdas
--- means its innermost binder, and an argument flows into the parameter at its position.  Not
--- driven here: the occurrences of an ordinary method or dictionary (`EMethodAt`, `EDictAt`),
--- which read method scheme rows only a drive builds; the shadow verdicts that reject or defer to
--- the standalone when two interfaces declare one method name (`AdReject`, `AdStandalone`); and
--- the effect a standalone's arrow performs at its call; `typecheck_test` drives whole checks and
--- `drive_independence_test` the match-warning flag.
+-- (`appArgLoc`, `valueSpanLoc`), the applications of an importer shadow (a bare head, a marked
+-- head, and a spine whose receiver is not its first argument) and of a definer shadow with a
+-- marked head. Each test builds the module record and the environment it reads and drives the
+-- recursion below the entry module. Two properties run over generated programs: a name in a
+-- chain of lambdas means its innermost binder, and an argument flows into the parameter at its
+-- position. Not driven here: the occurrences of an ordinary method or dictionary (`EMethodAt`,
+-- `EDictAt`), which read method scheme rows only a drive builds; the definer shadow spine and
+-- variable-head arms; the shadow verdicts that reject or defer to the standalone when two
+-- interfaces declare one method name (`AdReject`, `AdStandalone`); and the effect a standalone's
+-- arrow performs at its call. `typecheck_test` drives whole checks and `drive_independence_test`
+-- the match-warning flag.
 
 import test.{Expectation, expectAll, expectEqual, expectTrue}
 import frontend.ast.{
