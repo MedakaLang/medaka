@@ -398,8 +398,7 @@ test "frozen selected manifests survive source cell mutation and P U P publicati
       False
   let (_, frozen, _) = select [("p", pub s)]
   let before = map manifestAtoms frozen
-  let _ =
-    cell := ALink 5500 (PPrefix None) (AConst (PPrefix (Some "changed/*")))
+  cell := ALink 5500 (PPrefix None) (AConst (PPrefix (Some "changed/*")))
   let (_, unrelated, _) = select [("p", pub (plainScheme intM))]
   let (_, republished, _) = select [("p", pub s)]
   expectEach [
@@ -655,7 +654,7 @@ test "a free Unbound is re-minted with its id and reported as FreeMeta" =
     TFun (TVar c) _ _ => c
     _ => src
   let found = liveCells "f" p
-  let _ = reminted := Link intM
+  reminted := Link intM
   expectEach [
     (
       "source cell not written",
@@ -706,7 +705,7 @@ test "a rebuilt EJoin keeps one frozen cell per member id" =
     _ => (pureRow, pureRow)
   let first = joinMembers r1
   let second = joinMembers r2
-  let _ = match first
+  match first
     c :: _ => c := EUnbound 1 99
     [] => ()
   let seenThroughOther = match second
@@ -755,7 +754,7 @@ test "freeze shares one cell per id between a scheme and its context" =
   let ctxCell = match p.psContext
     [VecObl { voArgs = [TVar c] }] => Some c
     _ => None
-  let _ = match schemeCell
+  match schemeCell
     Some c => c := Link intM
     None => ()
   let seen = match ctxCell

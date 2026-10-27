@@ -132,11 +132,11 @@ test "a shared labelled suffix costs nodes plus edges, not their product" =
   let leaf = Ref (EUnbound 1 0)
   let shared = labelChain 32 leaf
   let root = EffRow [] (Some (Ref (EJoin 2 0 (repeatCell 32 shared))))
-  let _ = setOpCounting True
+  setOpCounting True
   let before = opSnap ()
   let (labels, tails) = rowFlat root
   let visits = opSnap () - before
-  let _ = setOpCounting False
+  setOpCounting False
   expectAll [
     expectEqual 32 (listLen labels),
     expectEqual [1] (map effvarId tails),

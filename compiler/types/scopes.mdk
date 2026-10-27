@@ -83,20 +83,19 @@ freshScope store parent level moduleId owner =
       arr0
     else
       let grown = arrayMake (max 16 (2 * (i + 1))) None
-      let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
+      arrayBlit arr0 0 grown 0 (arrayLength arr0)
       store.ssFrames := grown
       grown
-  let _ =
-    arraySetUnsafe
-      i
-      (Some ScopeFrame {
-        sfId = sid,
-        sfParent = parent,
-        sfLevel = level,
-        sfModuleId = moduleId,
-        sfOwner = owner,
-      })
-      arr
+  arraySetUnsafe
+    i
+    (Some ScopeFrame {
+      sfId = sid,
+      sfParent = parent,
+      sfLevel = level,
+      sfModuleId = moduleId,
+      sfOwner = owner,
+    })
+    arr
   store.ssNext := i + 1
   sid
 

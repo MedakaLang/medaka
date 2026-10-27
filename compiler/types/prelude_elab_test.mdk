@@ -327,7 +327,7 @@ test "the process cache hits only on its own generation" =
     peBinderBase = 0,
   }
   let before = preludeElabHit (1, 2)
-  let _ = seedPreludeElab (1, 2) pe
+  seedPreludeElab (1, 2) pe
   expectAll [
     labelFail
       "empty before a seed"
@@ -353,7 +353,7 @@ test "a value whose rows do not fit its counter is not held" =
     peBinderCount = 0,
     peBinderBase = 0,
   }
-  let _ = seedPreludeElab (7, 8) bad
+  seedPreludeElab (7, 8) bad
   expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (7, 8)))
 
 -- ── the binder relocation walk ──────────────────────────────────────────────

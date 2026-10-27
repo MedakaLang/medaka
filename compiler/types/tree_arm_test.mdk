@@ -224,13 +224,12 @@ test "shipped trees retain core's owning abstract constructor basis" =
   match (cold.trChecked, onlyCore.trChecked)
     (Some c, Some basis) => match basis.cpTrees
       Some (trees, _) =>
-        let _ =
-          seedPreludeElab
-            (9980, 9981)
-            (preludeElabOf
-              trees
-              basis.cpEvidence
-              (map snd (entries basis.cpBinders)))
+        seedPreludeElab
+          (9980, 9981)
+          (preludeElabOf
+            trees
+            basis.cpEvidence
+            (map snd (entries basis.cpBinders)))
         let available = isSome (preludeElabFor (9980, 9981) core)
         let (_, warm, _) =
           elaborateModulesWithReport
