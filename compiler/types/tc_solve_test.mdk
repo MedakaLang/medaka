@@ -14,7 +14,7 @@ import test.{
 }
 import frontend.ast.{
   Decl(..), EvId(..), EvTable, EvVal(..), Expr(..), Loc(..), Route(..),
-  TyConOrigin(..), Decl
+  TyConOrigin(..)
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
