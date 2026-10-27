@@ -6,17 +6,20 @@
 -- grants a use records (`grantOrder`, `recordGrantOcc`, `recordStandaloneGrantOcc`,
 -- `markSourceless`, `markBinders`), and the file-bound values (`narrowFileAtom`,
 -- `hasFileBoundValue`, `fileBodyLoc`, `fileBoundSite`, `fileValueKey`, `recordFileBound`,
--- `recordClauseFileBound`, `recordValueFileBound`).  One property: joining one more
--- effect row into a summary never removes an effect the summary already had.  What a
--- whole check does with a binding's effects is in `typecheck_test`.
+-- `recordClauseFileBound`, `recordValueFileBound`), the method grants an interface records
+-- (`recordMethodGrants`) and the escape walk's report at the close of a group
+-- (`checkEffectEscape`, `flushPendingEscapes`).  One property: joining one more
+-- effect row into a summary never removes an effect the summary already had.  Each test
+-- builds the module record, group record and tables it reads; none reaches the inference
+-- recursion.
 
-import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import test.{Expectation, expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{EvId(..), Expr(..), Loc(..), Pat(..), Ty, TyConOrigin(..)}
 import frontend.parser.{parse}
 import map.{Map(..), get}
 import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
-import support.util.{contains, isEmptyL, isSome}
-import list.{sort}
+import support.util.{contains, isEmptyL}
+import list.{reverse, sort}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{
@@ -30,10 +33,12 @@ import types.effect_rows.{
   renderAtom,
 }
 import types.effect_solver.{noScopeRoles}
-import types.repr.{AuthResidual(..), Mono(..), Scheme(..)}
+import types.publish.{tcMsg}
+import types.repr.{AuthResidual(..), IfaceRef(..), Mono(..), Scheme(..)}
 import types.tc_effects.{
   appSpineArgCount,
   beginEffectSummaryScope,
+  checkEffectEscape,
   checkMethodEffVarRigidity,
   checkUndeterminedRetEffVars,
   clausesAt,
@@ -43,9 +48,9 @@ import types.tc_effects.{
   evOrdinal,
   fileBodyLoc,
   fileBoundSite,
-  fileGrantExterns,
   fileValueKey,
   finishEffectSummaryScopeKeeping,
+  flushPendingEscapes,
   grantOccOf,
   grantOrder,
   hasFileBoundValue,
@@ -55,15 +60,31 @@ import types.tc_effects.{
   recordClauseFileBound,
   recordFileBound,
   recordGrantOcc,
+  recordMethodGrants,
   recordStandaloneGrantOcc,
   recordValueFileBound,
-  revClauses,
   spineHeadEv,
 }
 import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
-import types.tc_state.{currentScopeStore, probeGraphCtx}
-import types.tc_test_support.{codesOf, fresh, intM, sigsOf}
-import types.tc_types.{GrantOcc(..), ModuleCtx(..)}
+import types.tc_state.{currentScopeStore, probeGraphCtx, wAll}
+import types.tc_test_support.{
+  codesOf,
+  firstSig,
+  fresh,
+  ifaceOf,
+  intM,
+  withFirstSig,
+}
+import types.tc_types.{
+  GrantOcc(..),
+  GraphCtx,
+  GroupCtx(..),
+  MethodGrant(..),
+  MethodPredicateTemplate(..),
+  MethodSchemeRow(..),
+  ModuleCtx(..),
+  dynFor,
+}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -84,8 +105,17 @@ topRead = atomBuiltin "FileRead" (PPrefix (Some ""))
 arrowOver : EffRow -> Mono
 arrowOver row = TFun intM row intM
 
+-- A cell of the authority variable [id], named after its id as a written binder would be.
 authCell : Int -> Ref Authvar
-authCell id = Ref (AUnbound id 0 (PPrefix None) False (Some "p"))
+authCell id =
+  let rangesOverPatternsOnly = False
+  Ref
+    (AUnbound
+      id
+      0
+      (PPrefix None)
+      rangesOverPatternsOnly
+      (Some "p\{intToString id}"))
 
 -- Int -> <FileRead p2> Int -> <FileRead p1> Int quantifying [ids].
 twoGrantScheme : List Int -> Scheme
@@ -149,10 +179,10 @@ test "a clause table answers a name's clauses in source order, and an unknown na
     omInsert "f" [([PWild], EVar "second"), ([PWild], EVar "first")] omEmpty
   let bodies =
     cs =>
-      map
+      flatMap
         (c => match snd c
-          EVar n => n
-          _ => "")
+          EVar n => [n]
+          _ => [])
         cs
   expectAll [
     expectEqual ["first", "second"] (bodies (clausesOf "f" table)),
@@ -160,7 +190,7 @@ test "a clause table answers a name's clauses in source order, and an unknown na
     expectEqual [] (bodies (clausesOf "g" table)),
     expectEqual
       ["b", "a"]
-      (bodies (revClauses [([PWild], EVar "a"), ([PWild], EVar "b")] [])),
+      (bodies (reverse [([PWild], EVar "a"), ([PWild], EVar "b")])),
   ]
 
 -- ── effect summaries ──────────────────────────────────────────────────────
@@ -175,7 +205,7 @@ closeOver rows =
 
 -- The effects of the summary the rows [rows] join into, after its scope closed.
 summaryOf : List EffRow -> List String
-summaryOf rows = sort (map renderAtom (effrowLabels (fst (closeOver rows))))
+summaryOf rows = closeOver rows |> fst |> effrowLabels |> map renderAtom |> sort
 
 stdout : EffRow
 stdout = rowOf "Stdout" PUnit
@@ -290,46 +320,43 @@ test "a signature whose effects its callback and result agree on is accepted" =
     (parse "twice : (Unit -> <e> Unit) -> Unit -> <e> Unit")
   expectEqual [] (codesOf m)
 
--- A method type whose effect variable [v] sits on an argument arrow.
-rigidityType : Option Ty
-rigidityType = match sigsOf (parse "g : (Unit -> <e> Unit) -> Unit -> <e> Unit")
-  t :: _ => Some t
-  [] => None
+-- A method type whose effect variable sits on an argument arrow.
+rigiditySource : String
+rigiditySource = "g : (Unit -> <e> Unit) -> Unit -> <e> Unit"
+
+-- Whether the method body's laundering was flagged by the checks before the rigidity check.
+launderFlagged : Bool
+launderFlagged = True
+
+-- The codes the rigidity check of [rigiditySource] pushes for the method effect variables
+-- [vars] of an impl method; a source that stopped parsing as a signature fails the test.
+rigidityCodes : List (String, Ref Effvar) ->
+  (List String -> Expectation) ->
+  Expectation
+rigidityCodes vars k = withFirstSig rigiditySource (ty =>
+  let m = fresh ()
+  checkMethodEffVarRigidity
+    m
+    "impl Run Foo"
+    []
+    []
+    ty
+    vars
+    launderFlagged
+    []
+    (Some here)
+  k (codesOf m))
 
 test "two method effect variables that share one tail are too specific for an impl" =
-  let m = fresh ()
   let shared = Ref (EUnbound 800 0)
-  match rigidityType
-    Some ty =>
-      checkMethodEffVarRigidity
-        m
-        "impl Run Foo"
-        []
-        []
-        ty
-        [("e", shared), ("f", shared)]
-        True
-        []
-        (Some here)
-    None => ()
-  expectEqual ["T-IMPL-TOO-SPECIFIC"] (codesOf m)
+  rigidityCodes
+    [("e", shared), ("f", shared)]
+    (codes => expectEqual ["T-IMPL-TOO-SPECIFIC"] codes)
 
 test "method effect variables with distinct tails are accepted" =
-  let m = fresh ()
-  match rigidityType
-    Some ty =>
-      checkMethodEffVarRigidity
-        m
-        "impl Run Foo"
-        []
-        []
-        ty
-        [("e", Ref (EUnbound 801 0)), ("f", Ref (EUnbound 802 0))]
-        True
-        []
-        (Some here)
-    None => ()
-  expectEqual [] (codesOf m)
+  rigidityCodes
+    [("e", Ref (EUnbound 801 0)), ("f", Ref (EUnbound 802 0))]
+    (codes => expectEqual [] codes)
 
 test "an index-only variable whose cell a body arrow carries as its tail was performed" =
   let cell = Ref (EUnbound 810 0)
@@ -424,12 +451,6 @@ test "binders mark each authority cell once by its id" =
     expectEqual None (get 4 table.value),
   ]
 
-test "the catalog's file externs are the operations whose authority names a path" = expectAll
-  [
-    expectTrue (isSome (omLookup "readFile" fileGrantExterns)),
-    expectEqual None (omLookup "println" fileGrantExterns),
-  ]
-
 -- ── file-bound values ─────────────────────────────────────────────────────
 
 test "only a built-in file label with a narrowed authority is a narrow file atom" = expectAll
@@ -480,25 +501,26 @@ test "a body's location is its own, else its first located child's, else none" =
     expectEqual None (map startOf (fileBodyLoc (EApp (EVar "f") (EVar "x")))),
   ]
 
-test "equal source spans in two modules are two file-bound sites" = expectAll [
-  expectNotEqual (fileBoundSite "a" here) (fileBoundSite "b" here),
-  expectEqual (fileBoundSite "a" here) (fileBoundSite "a" here),
-  expectNotEqual
-    (fileBoundSite "a" here)
-    (fileBoundSite "a" (Loc "m.mdk" 3 1 3 10)),
-]
+test "a file-bound site names its module's length and id, then the span" = expectAll
+  [
+    expectEqual "1:a:m.mdk:3:1:3:9" (fileBoundSite "a" here),
+    expectEqual "1:b:m.mdk:3:1:3:9" (fileBoundSite "b" here),
+    expectEqual "1:a:m.mdk:3:1:3:10" (fileBoundSite "a" (Loc "m.mdk" 3 1 3 10)),
+  ]
 
 test "a value's key names its module, span and shape" =
   let located = ELoc here (EVar "f")
   let call = EApp located (EVar "x")
   expectAll [
     expectEqual None (fileValueKey "m" (EVar "x")),
-    expectNotEqual (fileValueKey "m" call) (fileValueKey "n" call),
-    expectNotEqual
-      (fileValueKey "m" call)
+    expectEqual (Some "1:m:m.mdk:3:1:3:9:app1") (fileValueKey "m" call),
+    expectEqual (Some "1:n:m.mdk:3:1:3:9:app1") (fileValueKey "n" call),
+    expectEqual
+      (Some "1:m:m.mdk:3:1:3:9:app2")
       (fileValueKey "m" (EApp call (EVar "y"))),
-    expectNotEqual (fileValueKey "m" call) (fileValueKey "m" (ELam [] located)),
-    expectEqual (fileValueKey "m" call) (fileValueKey "m" call),
+    expectEqual
+      (Some "1:m:m.mdk:3:1:3:9:lambda")
+      (fileValueKey "m" (ELam [] located)),
   ]
 
 -- The keys the module has recorded closed-row bounds under.
@@ -536,4 +558,111 @@ test "a file-bound value's type is recorded under its key" =
   let e = ELoc here (EVar "f")
   recordValueFileBound m e (arrowOver (EffRow [narrowRead] None))
   recordValueFileBound m (ELoc (Loc "m.mdk" 9 1 9 2) (EVar "g")) intM
-  expectEqual 1 (length (omKeys m.mcGraph.graphRun.grants.gsValueBounds.value))
+  expectEqual
+    [fileValueKey "probe" e]
+    (map Some (omKeys m.mcGraph.graphRun.grants.gsValueBounds.value))
+
+-- ── method grants ─────────────────────────────────────────────────────────
+
+-- The type of the first signature of [src]; a fixture that stopped parsing as a signature
+-- fails the test.
+signatureOf : String -> Ty
+signatureOf src = match firstSig src
+  Some t => t
+  None => panic "the fixture has no signature: \{src}"
+
+-- The row of the interface method `Cap.read` of the type [src], with scheme [scheme].
+readRow : String -> Scheme -> MethodSchemeRow
+readRow src scheme = MethodSchemeRow {
+  msrIface = ifaceOf "Cap",
+  msrName = "read",
+  msrTyparams = ["a"],
+  msrType = signatureOf src,
+  msrScheme = scheme,
+  msrPredicateTemplate = MethodPredicateTemplate {
+    mptInterface = ifaceOf "Cap",
+    mptArguments = [],
+  },
+  msrMethodSlots = [],
+}
+
+-- The grants recorded for the method `Cap.read`, as (arity, parameter names).
+readGrants : GraphCtx -> Option (Int, List String)
+readGrants gctx =
+  map
+    (g => (g.mgArity, g.mgNames))
+    (omLookup "probe::Cap#read" gctx.graphRun.grants.gsMethods.value)
+
+test "a method whose scheme quantifies authorities records its arity and parameter names in grant order" =
+  let gctx = probeGraphCtx ()
+  recordMethodGrants gctx [
+    readRow "read : a -> Int -> Int" (twoGrantScheme [1, 2]),
+  ]
+  expectEqual (Some (2, ["p2", "p1"])) (readGrants gctx)
+
+test "a method that no longer quantifies an authority loses its recorded grants" =
+  let gctx = probeGraphCtx ()
+  recordMethodGrants gctx [
+    readRow "read : a -> Int -> Int" (twoGrantScheme [1, 2]),
+  ]
+  recordMethodGrants gctx [readRow "read : a -> Int -> Int" (twoGrantScheme [])]
+  expectEqual None (readGrants gctx)
+
+-- ── the escape walk's report ──────────────────────────────────────────────
+
+-- The messages the module has been given, oldest first.
+messagesOf : ModuleCtx -> List String
+messagesOf m = reverse (map tcMsg (wAll m.mcCells.typeErrors))
+
+-- A group record holding the walk's findings [pending], newest first.
+groupWith : List (String, Option Loc, String) -> GroupCtx
+groupWith pending = GroupCtx { gcMonos = [], gcPendingEscapes = Ref pending }
+
+test "a finding the solver said nothing about is reported when the group closes, oldest first" =
+  let m = fresh ()
+  let group =
+    groupWith [("g", Some here, "second finding"), ("f", None, "first finding")]
+  flushPendingEscapes m (Some group)
+  expectAll [
+    expectEqual ["T-EFFECT-LEAK", "T-EFFECT-LEAK"] (codesOf m),
+    expectEqual ["first finding", "second finding"] (messagesOf m),
+    expectTrue (isEmptyL group.gcPendingEscapes.value),
+  ]
+
+test "a finding for a binding the solver already reported is dropped" =
+  let m = fresh ()
+  m.mcCells.rowFailureReportedRef := omInsert "f" () omEmpty
+  let group =
+    groupWith [("g", Some here, "kept finding"), ("f", None, "dropped finding")]
+  flushPendingEscapes m (Some group)
+  expectAll [
+    expectEqual ["kept finding"] (messagesOf m),
+    expectTrue (isEmptyL group.gcPendingEscapes.value),
+  ]
+
+test "a binding outside every group has no findings to flush" =
+  let m = fresh ()
+  flushPendingEscapes m None
+  expectEqual [] (codesOf m)
+
+test "a body that performs an effect its signature does not declare is reported at the group's close, not before" =
+  let m = fresh ()
+  m.mcCells.sigTyMapRef :=
+    omInsert "f" (signatureOf "f : Unit -> <Stdout> Unit") omEmpty
+  let group = groupWith []
+  checkEffectEscape
+    { dynFor m | dcGroup = Some group }
+    []
+    "f"
+    [atomBuiltin "Stdout" PUnit, atomBuiltin "Clock" PUnit]
+  let beforeClose = codesOf m
+  flushPendingEscapes m (Some group)
+  expectAll [
+    expectEqual [] beforeClose,
+    expectEqual ["T-EFFECT-LEAK"] (codesOf m),
+    expectEqual
+      [
+        "`f` performs <Clock> but its signature allows only <Stdout>; add <Clock> to the declared row",
+      ]
+      (messagesOf m),
+  ]

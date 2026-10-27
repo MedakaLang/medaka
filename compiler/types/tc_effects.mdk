@@ -3,7 +3,7 @@
 -- values (authority bounds at binding boundaries: recording, flow and settle checks); wires the
 -- `effect_*` leaves into inference.
 --
--- Spec: EFFECTS section 5, section 6.2-6.9, section 8.
+-- Spec: EFFECTS section 2.3, section 5, section 6.2-6.9, section 8.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -174,12 +174,12 @@ import support.util.{
   lookupAssoc,
   reverseL,
 }
-import list.{findMap}
+import list.{findMap, reverse}
 import types.route_key.{ifaceWordOf}
 import frontend.desugar.{mapChildren, mapExpr}
 import types.effect_values.{producedInputTypes}
 import types.scopes as Scopes
-import types.runtime_grants as RuntimeGrants
+import types.runtime_grants.{fileGrantExterns}
 import types.effect_solver as EffectSolver
 import map as IdMap
 import types.scopes.{ScopeOwner(..)}
@@ -639,10 +639,9 @@ argPerformableOccs mctx _ _ _ = []
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 --
 -- THE SLOT'S atoms come from the head'S DECLARATION, not from the use site.
--- This used to pad every performable KRow slot to `(e, [])` — "the impl can
--- perform `e` here and nothing else is guaranteed" — the ARGUMENT-side twin of
--- the blind pad #2110 removed from `methodEffRetOccs`.  On this side the pad is
--- not an over-rejection but a LAUNDER: for
+-- Padding every performable KRow slot to `(e, [])` — "the impl can perform `e` here
+-- and nothing else is guaranteed" — is the blind pad `methodEffRetOccs` avoids
+-- (#2110).  On this argument side the pad is not an over-rejection but a LAUNDER: for
 --   `data Slot e = Slot (Unit -> <Stdout | e> Unit)`
 -- a `Slot e` ARGUMENT lets the callee run a field the declaration guarantees
 -- performs <Stdout> at EVERY instantiation, `Slot <>` included, so
@@ -889,14 +888,6 @@ recordLocalQuantified gctx sch = match schemeIds sch
   ids =>
     let st = gctx.graphRun.localAbs
     st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
-
--- The catalog externs whose authority parameter names a file path
--- (`stdlib/runtime.mdk`), each with its value arity and the number of paths it
--- names.  No other extern takes a grant: a foreign function is not a
--- parameterized file extern.
-export
-fileGrantExterns : OrdMap (Int, Int)
-fileGrantExterns = RuntimeGrants.fileGrantExterns
 
 -- Grants are passed only on a graph whose driver ran the marking preamble: a
 -- driver that never marks has no use that could carry one.
@@ -1157,13 +1148,11 @@ recordTopGrants gctx mid schemes grouped =
     [] => ()
     _ =>
       st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
-      fold
-        (_ (m, _) =>
-          fold
-            (_ clause => recordRecursiveGrants gctx mid m taking (snd clause))
-            ()
+      each
+        ((m, _) =>
+          each
+            (clause => recordRecursiveGrants gctx mid m taking (snd clause))
             (clausesOf m grouped))
-        ()
         schemes
 
 recordRecursiveGrants : GraphCtx ->
@@ -1201,8 +1190,8 @@ registerLocalGrants gctx name sch = match grantOrder sch
     st.gsLocalIds := omInsert name ids st.gsLocalIds.value
     let recOccs =
       optionOr [] (omLookup name gctx.graphRun.localAbs.lasRecOccs.value)
-    fold
-      (_ occ => setGrantOcc gctx (fst occ) GrantOcc {
+    each
+      (occ => setGrantOcc gctx (fst occ) GrantOcc {
         goCallee = name,
         goCells = [],
         goRecIds = ids,
@@ -1210,7 +1199,6 @@ registerLocalGrants gctx name sch = match grantOrder sch
         goChain = grantChainAt gctx (snd occ),
         goStandalone = False,
       })
-      ()
       recOccs
 
 -- Chunk C: number of arguments applied in this spine (`f a b c` ⇒ 3).
@@ -1881,14 +1869,7 @@ clausesAt n m = match omLookup n m
 
 export
 clausesOf : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
-clausesOf n m = revClauses (clausesAt n m) []
-
-export
-revClauses : List (List Pat, Expr) ->
-  List (List Pat, Expr) ->
-  List (List Pat, Expr)
-revClauses [] acc = acc
-revClauses (x :: xs) acc = revClauses xs (x :: acc)
+clausesOf n m = reverse (clausesAt n m)
 
 export
 memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit
@@ -1960,14 +1941,13 @@ flushPendingEscapes mctx None = ()
 flushPendingEscapes mctx (Some group) =
   let pending = reverseL group.gcPendingEscapes.value
   group.gcPendingEscapes := []
-  fold
-    (_ entry =>
+  each
+    (entry =>
       let (m, loc, msg) = entry
       if omHasKey m mctx.mcCells.rowFailureReportedRef.value then
         ()
       else
         pushTypeErrorAt mctx "T-EFFECT-LEAK" loc msg)
-    ()
     pending
 
 concreteAtom : Atom -> Bool

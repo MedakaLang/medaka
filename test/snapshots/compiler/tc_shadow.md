@@ -1,5 +1,5 @@
 # META
-source_lines=2153
+source_lines=2144
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
@@ -139,7 +139,7 @@ import types.private_mangle.{mangledName}
 import frontend.visibility.{useModId}
 
 -- ── #2809: the seed's ROUTE half and its TYPING half are different questions ──
--- `routeLocalSym` above is the ROUTE half: the symbol the emitter must call, which
+-- `routeLocalSym` (in `tc_solve`) is the ROUTE half: the symbol the emitter must call, which
 -- `mangleRoute` renames once mangling runs.  Every reader below that instead asked
 -- "is this occurrence a standalone shadow whose bare name no longer denotes the
 -- standalone?" used a non-empty `routeLocalSym` as its answer, and that reading was
@@ -633,30 +633,21 @@ occurrenceCarriesMangledShadowSym name tagRef =
 -- graph-wide one: doing so would fire for occurrences the mark pass never marked, and
 -- would pin genuine method-values, breaking dispatch.
 --
--- RUN-XMOD-045 CORRECTION (post-landing, slice-breaker finding) — REPLACES the
--- original "redundant-by-construction, F8" safety narrative below with the actual one.
--- F8's implication chain ("a non-empty route symbol implies the graph fact is True") is
--- still literally true, but it undersold what actually holds: `mangledFunDefsPresentRef`
--- is not merely implied True in that case, it is CONSTANT TRUE on every emit path,
--- unconditionally — see `graphCarriesMangledFunDefs`'s header for the mechanism
--- (`private_mangle.mdk:14-16` mangles core's own funDefs unconditionally, before this
--- flag is ever computed; measured ~70 `@mdk_<mid>__*` symbols in a feature-free build's
--- IR with zero shadows).  F8's phrasing hid its own precondition: it is only a
--- meaningful narrowing test if the flag CAN be False on some occurrence's compile, and
--- on the emit path it never is.  The actual safety property is therefore simpler and
--- stronger than "redundant, measured by a negative control": the flag is constant true
--- The moment mangling ran at all, so its conjunct can never be what rejects an
--- occurrence the un-mangled reading of `occurrenceCarriesMangledShadowSym` would have
--- accepted — the predicate's real discriminator is still, and only, the
--- per-occurrence route symbol.
+-- `mangledFunDefsPresentRef` is constant TRUE on every emit path, unconditionally (see
+-- `graphCarriesMangledFunDefs`'s header for the mechanism: `private_mangle.mdk:14-16`
+-- mangles core's own funDefs before the flag is computed, so a feature-free build's IR
+-- carries about 70 `@mdk_<mid>__*` symbols with zero shadows).  A narrowing test would
+-- need the flag to be False on some occurrence's compile, and on the emit path it never
+-- is, so its conjunct can never reject an occurrence the un-mangled reading of
+-- `occurrenceCarriesMangledShadowSym` would accept: the predicate's real discriminator
+-- is, and only is, the per-occurrence route symbol.
 --
 -- This fact currently has no discriminating consumer — L4's conjunct
 -- (`mangledFunDefsPresentRef`) is constant-True on emit and its partner
 -- (`occurrenceCarriesMangledShadowSym`) is always-empty off emit.  It is explicit
 -- documentation of an implicit invariant, not a live condition.  Do not migrate a
--- reader onto it expecting it to select.  KEPT rather than reverted (owner ruling,
--- RUN-XMOD-045): provably zero-risk, and "this graph was mangled" is more readable
--- than the anonymous `routeLocalSym … /= ""` idiom it replaced, even though it cannot
+-- reader onto it expecting it to select.  It stays because "this graph was mangled" is
+-- more readable than the anonymous `routeLocalSym … /= ""` idiom, even though it cannot
 -- currently narrow anything a build-time `medaka check`/`run`/`build` differential
 -- could observe from outside the compiler.
 importerShadowOnEmitPath : ModuleCtx -> String -> Ref Route -> Bool
@@ -665,7 +656,7 @@ importerShadowOnEmitPath mctx name tagRef =
     && mctx.mcGraph.mangledFunDefsPresentRef.value
     && occurrenceCarriesMangledShadowSym name tagRef
 
--- S1/S2 (THE INVERSION, 2026-07-14): is [name] a DEFINER shadow — a top-level fn defined in
+-- S1/S2: is [name] a DEFINER shadow — a top-level fn defined in
 -- THIS module that reuses a single-param interface method's name?  This is the exact
 -- predicate that decides whether the inversion applies (Fork 1: definer-only).
 --
@@ -690,7 +681,7 @@ isDefinerShadow mctx name =
   ifaceMethodName mctx name
     && omHasKey name mctx.mcCells.definerShadowNamesRef.value
 
--- S2 (THE INVERSION, 2026-07-14; SHADOW-INVERSION-DESIGN.md): True iff the shadow [name]
+-- S2 (SHADOW-INVERSION-DESIGN.md): True iff the shadow [name]
 -- applied to a receiver of type [xt] should DISPATCH to the interface method rather than
 -- call the standalone.
 --
@@ -782,12 +773,12 @@ dictVarSatisfiesIface mctx mIface id ((cIface, cm) :: rest)
 -- nothing to enforce (permissive fallback, unchanged).  [dloc] locates the check at the
 -- application so a mismatch localizes to the call, not the argument.
 --
--- S2 (THE INVERSION): a definer shadow now ALWAYS resolves to the standalone, so its domain
--- is ALWAYS enforced.  This used to skip enforcement whenever the receiver's grounded head
--- had a visible impl of the shadowed interface — that head dispatched, so no domain applied.
--- That skip is precisely what let `eq [1] [2]` sail through `check` against the PRELUDE's
--- `Eq.eq` while the user's `eq : List Int -> List Int -> Bool` was discarded.  The only
--- surviving exemption is the Fork-2 dict-var carve-out: imposing a concrete domain on the
+-- S2: a definer shadow ALWAYS resolves to the standalone, so its domain is ALWAYS
+-- enforced, whether or not the receiver's grounded head has a visible impl of the shadowed
+-- interface.  Skipping enforcement at such a head is what would let `eq [1] [2]` sail
+-- through `check` against the PRELUDE's `Eq.eq` while the user's
+-- `eq : List Int -> List Int -> Bool` was discarded.  The only exemption is the Fork-2
+-- dict-var carve-out: imposing a concrete domain on the
 -- enclosing group's `=>`-constraint var would monomorphise its written signature.
 -- #1815: [k] is the interface's dispatch index, so the domain imposed on the receiver is
 -- the standalone's k-th parameter.  `k = 0` is the pre-#1815 behavior verbatim (the
@@ -1375,7 +1366,7 @@ resolveRLocalSite : SiteCtx ->
   Unit
 resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs =
   match headTyconMono am
-    -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
+    -- S2: route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
     --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
     --     impl no longer steals the call.  (The APP path already forces this via the
@@ -1396,7 +1387,7 @@ resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs =
     -- dispatch path — route and type disagreeing is exactly the P0-20 bug class.  Keep the
     -- two gates identical.
     -- ARCH B-2.1-g: graph-global, off `bodyImplEnvRef` — see `ieImplExistsForHead`, and
-    -- see the `#415 item 2` block above for why this read could only move TOGETHER with
+    -- see the `#415 item 2` block in `typecheck` for why this read could only move TOGETHER with
     -- its sibling selection leg (`routesOfMonosTop … keyTable` → `keyForSite`, likewise
     -- repointed by this bite).  Both now read ONE table again, and it is the same table
     -- the emitter counts over.
@@ -2011,7 +2002,7 @@ buildStandaloneShadowsGraph sm allDecls userDecls =
   dedup (direct ++ mangled)
 
 -- ── #2153: S1's `nameable in M` for the PRELUDE unit ─────────────────────────
--- `moduleMarkCtx` (above) filters the definer-shadow map at the CONSUMING module.
+-- `moduleMarkCtx` (in `typecheck`) filters the definer-shadow map at the CONSUMING module.
 -- `core` is the one unit that never goes through that filter: its context is built
 -- from the RAW graph-wide map.  That is
 -- fine for `rpNames`/`argNames` — they are BARE method names, and core's references to its

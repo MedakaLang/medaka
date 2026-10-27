@@ -1658,8 +1658,8 @@ preferConcrete a b = match headTyconMono a
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
 -- matchEqMono).  A var bound twice must agree: a non-linear impl head
 -- (`Get (Box a) a`) must not "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool)
--- since NO substitution exists — §3 `inst`'s "φ a most-general MATCHER" premise, and
--- findImplEntryGo (iface=="") would select the wrong impl's requires.  So
+-- since NO substitution exists — §3 `inst`'s "φ a most-general MATCHER" premise, and a
+-- caller that selects an impl by this match would take the wrong impl's requires.  So
 -- a↦Int, a↦Bool fails matchEqMono ⇒ None (no false match); a CONSISTENT non-linear
 -- head (`Get (Box Int) Int`, a↦Int twice) still matches (the live canary in
 -- test/eval_typed_fixtures/return_only_param_dispatch.mdk).  The recovered subst

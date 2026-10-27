@@ -3,18 +3,40 @@
 -- occurrence-spelling test of the admitted set (`moduleSpellsShadowBare`,
 -- `shadowSymSpelledBare`), the definer-shadow table (`computeMangledShadowMap`) and the
 -- graph-wide shadow names (`buildStandaloneShadowsGraph`), the importer-side collision
--- report (`importedStandaloneShadowsIn`), the method-cell lookup, the import-definer test,
--- and the recorded-site resolution `resolveRLocalSite` for a receiver no impl answers.  One
--- property: the shadows a program has do not depend on the order its standalones are
--- declared in.  What a whole check does with a shadow is in `typecheck_test`.
+-- report (`importedStandaloneShadowsIn`), the method-cell lookup, the application heads of
+-- an imported shadow (`shadowStandaloneHead`, `plainAppHeadVar`), and the recorded-site
+-- resolution `resolveRLocalSite` for a receiver no impl answers and for one a live impl
+-- does.  One property: the shadows a program has do not depend on the order its standalones
+-- are declared in.  Each test builds the module record, interface scope and impl
+-- environment it reads; none reaches the inference recursion.
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import frontend.ast.{EvId(..), Route(..)}
+import frontend.ast.{
+  Decl(..),
+  EvId(..),
+  Expr(..),
+  Loc(..),
+  Route(..),
+  Ty,
+  TyConOrigin(..),
+}
 import frontend.parser.{parse}
 import types.evidence.{ScopeId(..)}
+import types.evidence_complete.{innerNone}
 import types.private_mangle.{mangledName}
-import types.repr.{ppMono, ppTy}
-import types.tc_mono.{tconBuiltin}
+import types.repr.{Mono, ppMono, ppTy}
+import types.tc_env.{
+  buildImplEnvGo,
+  bindingWithStandalone,
+  declEnvModule,
+  envFor,
+  extendBindings,
+  implAccFinish,
+  methodEnvGo,
+  ordinaryEnvBinding,
+  emptyDeclEnvAcc,
+}
+import types.tc_mono.{monoScheme}
 import types.tc_shadow.{
   buildStandaloneShadowsGraph,
   computeMangledShadowMap,
@@ -22,17 +44,31 @@ import types.tc_shadow.{
   importedStandaloneShadowsIn,
   isPreludeMid,
   methodCellLookup,
+  plainAppHeadVar,
   moduleSpellsShadowBare,
   recoveredShadowSym,
   resolveRLocalSite,
   shadowBareName,
+  shadowStandaloneHead,
   shadowSymSpelledBare,
   stampMethodArities,
   stampRoutes,
 }
-import types.tc_state.{probeGraphCtx}
-import types.tc_test_support.{fresh, intM, varM}
-import types.tc_types.{BareLocals(..), EvCell, SpellCtx(..), siteFor}
+import types.tc_state.{blankModuleCtx, probeGraphCtx}
+import types.tc_test_support.{boolM, fresh, intM, varM}
+import types.tc_types.{
+  BareLocals(..),
+  DeclEnvAcc(..),
+  DeclEnvs(..),
+  EvCell(..),
+  GraphCtx(..),
+  ModuleCtx(..),
+  SpellCtx(..),
+  TcEnv,
+  ValueScheme(..),
+  StandaloneOrigin(..),
+  siteFor,
+}
 import support.ordmap.{omEmpty, omInsert}
 import support.util.{joinNl}
 import list.{sort}
@@ -107,7 +143,7 @@ test "only the empty module id and core are the implicit prelude" = expectAll [
 ]
 
 test "a constraint's mono is the instantiation of its id, and an id the call did not instantiate is left out" =
-  let subst = [(1, intM), (3, tconBuiltin "Bool")]
+  let subst = [(1, intM), (3, boolM)]
   let shown = ids => map ppMono (constraintMonosOf ids subst)
   expectAll [
     expectEqual ["Int", "Bool"] (shown [1, 3]),
@@ -226,17 +262,28 @@ test "a standalone defined by two clauses is one shadow name" =
 
 -- ── the importer-side collision report ────────────────────────────────────
 
--- The collisions of a module [importer] against a dependency [lib], by (bound name,
--- interface); the index carries the one interface set of `importer`'s own declarations.
-collisions : String -> String -> List (String, String)
-collisions lib importer =
-  let prog = parse importer
-  let graph = [("lib", parse lib)]
-  let idx = omInsert "core" [] omEmpty
+-- The (bound name, interface) of each collision [found] reports.
+collidingPairs : List (String, String, Option Ty, Ty, a) ->
+  List (String, String)
+collidingPairs found =
   map
     (r => match r
       (local, iface, _, _, _) => (local, iface))
-    (importedStandaloneShadowsIn idx graph prog)
+    found
+
+-- The collisions of a module [importer] against the modules [graph], by (bound name,
+-- interface); the index carries the one interface set of `importer`'s own declarations.
+collisionsIn : List (String, List Decl) -> String -> List (String, String)
+collisionsIn graph importer =
+  collidingPairs
+    (importedStandaloneShadowsIn
+      (omInsert "core" [] omEmpty)
+      graph
+      (parse importer))
+
+-- The collisions of a module [importer] against a dependency [lib].
+collisions : String -> String -> List (String, String)
+collisions lib importer = collisionsIn [("lib", parse lib)] importer
 
 sizeMethod : String
 sizeMethod = """
@@ -244,32 +291,33 @@ interface Sizeable a where
   size : a -> Int
 """
 
+-- An importer that selects `size` from `lib` and declares the interface that has it.
+importsSize : String
+importsSize = joinNl ["import lib.{size}", sizeMethod]
+
 test "a selectively imported standalone whose scheme differs from a nameable method is reported" =
   expectEqual
     [("size", "Sizeable")]
-    (collisions (standalone "size") (joinNl ["import lib.{size}", sizeMethod]))
+    (collisions (standalone "size") importsSize)
 
 test "an alpha-equal standalone and method are not reported" =
   expectEqual
     []
-    (collisions
-      (joinNl ["size : b -> Int", "size x = 1"])
-      (joinNl ["import lib.{size}", sizeMethod]))
+    (collisions (joinNl ["size : b -> Int", "size x = 1"]) importsSize)
 
 test "a standalone declared without a signature counts as differing" =
-  expectEqual
-    [("size", "Sizeable")]
-    (collisions "size x = 1" (joinNl ["import lib.{size}", sizeMethod]))
+  expectEqual [("size", "Sizeable")] (collisions "size x = 1" importsSize)
 
 test "an aliased import is reported under the name it binds here" =
   expectEqual
     [("sz", "Sizeable")]
     (collisions
       (standalone "size")
-      (joinNl [
-        "import lib.{size as sz}", "interface Sizeable a where",
-        "  sz : a -> Int"
-      ]))
+      """
+import lib.{size as sz}
+interface Sizeable a where
+  sz : a -> Int
+""")
 
 test "a wildcard import and a name no interface declares report nothing" = expectAll
   [
@@ -284,38 +332,27 @@ test "a wildcard import and a name no interface declares report nothing" = expec
   ]
 
 test "a standalone reached through a re-export is reported" =
-  let importer = joinNl ["import lib.{size}", sizeMethod]
   let graph = [
     ("lib", parse "export import deep.{size}"),
     ("deep", parse (standalone "size")),
   ]
-  expectEqual
-    [("size", "Sizeable")]
-    (map
-      (r => match r
-        (local, iface, _, _, _) => (local, iface))
-      (importedStandaloneShadowsIn
-        (omInsert "core" [] omEmpty)
-        graph
-        (parse importer)))
+  expectEqual [("size", "Sizeable")] (collisionsIn graph importsSize)
 
 test "an empty interface index answers no collision" =
   expectEqual
     []
-    (map
-      (r => match r
-        (local, _, _, _, _) => local)
+    (collidingPairs
       (importedStandaloneShadowsIn
         omEmpty
         [("lib", parse (standalone "size"))]
-        (parse (joinNl ["import lib.{size}", sizeMethod]))))
+        (parse importsSize)))
 
 test "the reported method signature is the one the interface declares" =
   let found =
     importedStandaloneShadowsIn
       (omInsert "core" [] omEmpty)
       [("lib", parse (standalone "size"))]
-      (parse (joinNl ["import lib.{size}", sizeMethod]))
+      (parse importsSize)
   expectEqual
     [(Some "Int -> Int", "a -> Int")]
     (map
@@ -323,7 +360,7 @@ test "the reported method signature is the one the interface declares" =
         (_, _, sty, mty, _) => (map ppTy sty, ppTy mty))
       found)
 
--- ── the method-cell lookup, the import definers and the recorded site ─────
+-- ── the method-cell lookup ────────────────────────────────────────────────
 
 -- The reason a lookup has no cell, or `None` when it has one.
 reasonOf : Result String EvCell -> Option String
@@ -341,54 +378,182 @@ test "a method cell of an id the graph never minted is reported, not invented" =
       (reasonOf (methodCellLookup gctx (EvId "m" 0))),
   ]
 
-test "an ungrounded receiver of a name that is no definer shadow leaves the route untouched" =
-  let m = fresh ()
+test "a method cell below the graph's first ordinal is from an earlier graph" =
+  let gctx = probeGraphCtx ()
+  let later = { gctx | graphRun = { gctx.graphRun | evBase = 4 } }
+  expectEqual
+    (Some "method cell m#3 is from an earlier graph")
+    (reasonOf (methodCellLookup later (EvId "m" 3)))
+
+-- ── the recorded site ─────────────────────────────────────────────────────
+
+-- The symbol of the `RLocal` stamp [resolveRLocalSite] leaves on a `size` site whose receiver
+-- is [receiver] in the module [m], or `None` when it left the site's route untouched.
+stampedAt : ModuleCtx -> Mono -> Option String
+stampedAt m receiver =
   let tag = Ref RNone
   resolveRLocalSite
     (siteFor m)
     "size"
     tag
-    (varM 1)
+    receiver
     "enc"
     (ScopeId 0)
     "m__size"
     []
     []
     []
-  expectEqual None (localName tag.value)
+  localName tag.value
+
+-- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.
+libSource : String
+libSource =
+  """
+interface Sizeable a where
+  size : a -> Int
+impl Sizeable Int where
+  size n = n
+"""
+
+-- The declarations of [ds] stamped as declared in the module [mid].
+declaredIn : String -> List Decl -> List Decl
+declaredIn mid ds = map (declaredAs mid) ds
+
+declaredAs : String -> Decl -> Decl
+declaredAs mid (d@(DInterface { ifaceOrigin = _ })) =
+  DInterface { d | ifaceOrigin = OriginModule mid }
+declaredAs mid (d@(DImpl { implOrigin = _ })) =
+  DImpl { d | implOrigin = OriginModule mid }
+declaredAs _ d = d
+
+-- The reader `user` (ordinal 2) of the module `lib` (ordinal 1), which declares `Sizeable`
+-- and `impl Sizeable Int`.  The graph's method environment and the reader's impl
+-- environment are built the way `checkBodyImpl` installs them, so `size` is the one
+-- visible method and a live impl answers at `Int`.
+readerOfLib : Unit -> ModuleCtx
+readerOfLib _ =
+  let g = probeGraphCtx ()
+  let lib = declEnvModule g 1 "lib" (declaredIn "lib" (parse libSource))
+  let user = declEnvModule g 2 "user" []
+  let empty = g.declEnvsRef.value
+  g.declEnvsRef := { empty |
+    deMethods = methodEnvGo g [lib, user] empty.deMethods,
+  }
+  let m = blankModuleCtx g "user"
+  m.mcCells.methodScopeCtxRef := Some ([], 2)
+  m.mcCells.bodyImplEnvRef :=
+    implAccFinish (buildImplEnvGo [lib, user] emptyDeclEnvAcc.daImpls)
+  m
+
+test "an ungrounded receiver of a name that is no definer shadow leaves the route untouched" =
+  expectEqual None (stampedAt (fresh ()) (varM 1))
 
 test "an ungrounded receiver of a definer shadow is stamped as the standalone" =
   let m = fresh ()
-  let tag = Ref RNone
   m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
-  resolveRLocalSite
-    (siteFor m)
-    "size"
-    tag
-    (varM 1)
-    "enc"
-    (ScopeId 0)
-    "m__size"
-    []
-    []
-    []
-  expectEqual (Some "m__size") (localName tag.value)
+  expectEqual (Some "m__size") (stampedAt m (varM 1))
 
 test "a grounded receiver no impl of the method answers is stamped as the standalone" =
-  let m = fresh ()
-  let tag = Ref RNone
-  resolveRLocalSite
-    (siteFor m)
-    "size"
-    tag
-    intM
-    "enc"
-    (ScopeId 0)
-    "m__size"
-    []
-    []
-    []
-  expectEqual (Some "m__size") (localName tag.value)
+  expectEqual (Some "m__size") (stampedAt (fresh ()) intM)
+
+test "an importer shadow whose receiver head has a live impl keeps the method's route" =
+  expectEqual None (stampedAt (readerOfLib ()) intM)
+
+test "an importer shadow whose receiver head has no impl is stamped as the standalone" =
+  expectEqual (Some "m__size") (stampedAt (readerOfLib ()) boolM)
+
+test "a definer shadow is stamped as the standalone even where a live impl answers at the receiver head" =
+  let m = readerOfLib ()
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  expectEqual (Some "m__size") (stampedAt m intM)
+
+-- ── the heads of an imported shadow ───────────────────────────────────────
+
+-- The reader of `lib` with `size` also bound in its term environment as a standalone
+-- imported from another module, which is what makes `size` an importer shadow.
+shadowEnv : ModuleCtx -> TcEnv
+shadowEnv m =
+  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
+  let scheme = monoScheme intM
+  extendBindings (envFor m) [
+    (
+      "size",
+      bindingWithStandalone (ordinaryEnvBinding scheme) (
+        ImportedStandalone,
+        ValueScheme { vsScheme = scheme, vsDeclared = None },
+      ),
+    ),
+  ]
+
+-- The name `shadowStandaloneHead` finds at the head of [e], with how many arity and route
+-- cells it hands back to stamp.
+headOf : TcEnv -> Expr -> Option (String, Int, Int)
+headOf env e =
+  map
+    (r => match r
+      (name, arities, routes) => (name, length arities, length routes))
+    (shadowStandaloneHead env e)
+
+-- A method occurrence of `name` whose evidence cell the module [m] holds at ordinal 0.
+methodOccurrence : ModuleCtx -> String -> Expr
+methodOccurrence m name =
+  let ev = EvId "probe" 0
+  let cell = EvCell {
+    ecId = ev,
+    ecIface = Ref "",
+    ecArity = Ref None,
+    ecTag = Ref RNone,
+    ecImpl = Ref [],
+    ecMeth = Ref [],
+    ecLoc = Ref None,
+    ecName = Ref "",
+    ecInner = Ref innerNone,
+  }
+  m.mcGraph.graphRun.evCells := arrayMake 1 (Some cell)
+  EMethodAt name "" ev
+
+test "an unmarked head naming an importer shadow hands back no cell to stamp, under any located wrapper" =
+  let env = shadowEnv (readerOfLib ())
+  expectAll [
+    expectEqual (Some ("size", 0, 0)) (headOf env (EVar "size")),
+    expectEqual (Some ("size", 0, 0)) (headOf env (EVarId "size" 4)),
+    expectEqual
+      (Some ("size", 0, 0))
+      (headOf env (ELoc (Loc "m.mdk" 1 1 1 5) (EVar "size"))),
+  ]
+
+test "a marked head naming an importer shadow hands back its occurrence's arity and route cells" =
+  let m = readerOfLib ()
+  let env = shadowEnv m
+  expectEqual (Some ("size", 1, 1)) (headOf env (methodOccurrence m "size"))
+
+test "a head that names no importer shadow is not a standalone head" =
+  let env = shadowEnv (readerOfLib ())
+  expectAll [
+    expectEqual None (headOf env (EVar "other")),
+    expectEqual None (headOf env (EApp (EVar "size") (EVar "x"))),
+  ]
+
+test "a name with no imported standalone in the environment is not an importer shadow" =
+  let m = readerOfLib ()
+  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
+  expectEqual None (headOf (envFor m) (EVar "size"))
+
+test "a plain application head is neither an importer shadow nor a definer shadow" =
+  let m = readerOfLib ()
+  let env = shadowEnv m
+  expectAll [
+    expectTrue (plainAppHeadVar env (EVar "other")),
+    expectFalse (plainAppHeadVar env (EVar "size")),
+  ]
+
+test "a head that only a definer shadow names is not plain" =
+  let m = readerOfLib ()
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  expectAll [
+    expectFalse (plainAppHeadVar (envFor m) (EVar "size")),
+    expectTrue (plainAppHeadVar (envFor m) (EVar "other")),
+  ]
 
 -- ── the declaration order of unrelated standalones ────────────────────────
 

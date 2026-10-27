@@ -450,6 +450,7 @@ import list.{
   head,
   get,
   range,
+  reverse,
 }
 import support.util.{
   splitOnChar,
@@ -549,7 +550,7 @@ import types.runtime_types.{
   addBinderRow,
   runtimeTypeOf,
 }
-import types.runtime_grants as RuntimeGrants
+import types.runtime_grants.{fileGrantExterns}
 import types.program_facts.{ProgramFacts, factsOfElab}
 import types.serve_policy.{ServeOps(..), serveStateOf, diagsServe, treeServe}
 import types.module_interface.{
@@ -1271,7 +1272,6 @@ import types.tc_effects.{
   evOrdinal,
   fileBodyLoc,
   fileBoundSite,
-  fileGrantExterns,
   fileValueKey,
   finishEffectContract,
   finishEffectSummaryScopeKeeping,
@@ -1305,7 +1305,6 @@ import types.tc_effects.{
   registerLocalAbsIf,
   registerLocalGroupAbs,
   reportEffectSummaryFailures,
-  revClauses,
   spineHeadEv,
 }
 
@@ -19292,8 +19291,9 @@ publicValNames (_ :: rest) = publicValNames rest
 
 -- ⚠️ #1557 A-3.5a REMOVED THE COMPLETENESS LINE from this fold, with the
 -- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
--- guarantee this comment records ("this module's own decls are visible at the read")
--- is no longer what impl-completeness depends on: it reads stage K's `CE`, whose rows
+-- guarantee of this fold, which `checkBodyImpl`'s Module arm calls BEFORE the shadow
+-- reads so that this module's own decls are visible at the read, is no longer what
+-- impl-completeness depends on: it reads stage K's `CE`, whose rows
 -- carry their declaring module's ordinal, and `declEnvVisibleAt cur o` (`o <= cur`)
 -- admits the reader's OWN row — the same 0..cur-inclusive prefix the accumulator held
 -- here.  Do not re-add a completeness accumulator to restore an ordering property that
@@ -24521,7 +24521,7 @@ mapGroupClauses f (m :: rest) grouped =
   mapGroupClauses
     f
     rest
-    (omInsert m (revClauses (map f (clausesOf m grouped)) []) grouped)
+    (omInsert m (reverse (map f (clausesOf m grouped))) grouped)
 
 -- At group close: the members this group promoted join the dict-name set, and the
 -- group's own occurrences of them — the recursive calls, which were still `EVar`

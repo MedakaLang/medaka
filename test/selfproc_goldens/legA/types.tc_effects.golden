@@ -42,7 +42,6 @@ failureBound : SummaryFailure ObligationSite -> Option Authority
 fileBodyLoc : Expr -> Option Loc
 fileBoundKey : Loc -> String
 fileBoundSite : String -> Loc -> String
-fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
 finishEffectContract : DynCtx -> (Map Int Unit, Map Int Unit) -> Unit
@@ -100,7 +99,6 @@ registerLocalGroupAbs : TcEnv -> Int -> Int -> List (LetBind, Option ScopeId) ->
 reportEffectSummaryFailures : ModuleCtx -> List (SummaryFailure ObligationSite) -> Unit
 reportRowFailure : ModuleCtx -> SummaryFailure ObligationSite -> Unit
 retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
-revClauses : List (List Pat, Expr) -> List (List Pat, Expr) -> List (List Pat, Expr)
 scopeFileBoundModule : ModuleCtx -> Unit -> String
 setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
 spineHeadEv : Expr -> Option EvId
