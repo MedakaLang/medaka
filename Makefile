@@ -253,6 +253,11 @@ inlang-backend-wasm-emit-trapmsg-test:
 inlang-backend-wasm-emit-paramname-test:
 	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
 
+## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
+## beside a valid same-name control, plus whole programs through the emitter.
+inlang-backend-wasm-symbols-test:
+	./medaka test compiler/backend/wasm_symbols_test.mdk
+
 ## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
 ## payload, shared by every site that spells the same bytes.
 inlang-backend-wasm-emit-strseg-test:

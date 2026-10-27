@@ -40,8 +40,9 @@ watOf src =
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (plan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-  let (text, _) = emitProgramRecord input plan prepared
-  text
+  match emitProgramRecord input plan prepared
+    Ok (text, _) => text
+    Err _ => ""
 
 -- the lines of the top-level `(func $<name> ` definition, from its header through `  )`
 funcBlock : String -> String -> List String

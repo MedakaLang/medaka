@@ -40,8 +40,9 @@ watOf src =
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (plan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-  let (text, _) = emitProgramRecord input plan prepared
-  text
+  match emitProgramRecord input plan prepared
+    Ok (text, _) => text
+    Err _ => ""
 
 -- the bytes one helper body writes: each `i32.const N` line contributes the byte N
 bodyChars : List String -> List Char

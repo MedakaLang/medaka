@@ -127,9 +127,9 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
-  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
-  'progInFn prog = progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding }' \
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
+  'progInFn prog = progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding, origin = (progFnCtx prog).origin, }' \
   'progWithTrmc ctx prog =' \
   'progWithDisp ctx prog ='; do
   has_wasm_pin "$required" || {
@@ -176,24 +176,22 @@ for required in \
   'nextLambdaId : Ref Int' \
   'liftedDefinitions : Ref (List (List String))' \
   'liftedDefinitionNames : Ref (OrdMap Unit)' \
-  'functionReferences : Ref (List String)' \
-  'functionReferenceNames : Ref (OrdMap Unit)' \
+  'symbols : Ref SymbolRegistry' \
   'nextLambdaId = Ref 0' \
   'liftedDefinitions = Ref []' \
   'liftedDefinitionNames = Ref omEmpty' \
-  'functionReferences = Ref []' \
-  'functionReferenceNames = Ref omEmpty' \
+  'symbols = Ref emptyRegistry' \
   'freshLamId : WasmEmit -> Int' \
-  'addLifted : WasmEmit -> List String -> Unit' \
-  'addLiftedNamed : WasmEmit -> String -> List String -> Unit' \
-  'noteFuncRef : WasmEmit -> String -> Unit' \
+  'addLifted : Prog -> String -> WasmShape -> List String -> Unit' \
+  'addLiftedNamed : Prog -> String -> WasmShape -> List String -> Unit' \
+  'noteFuncRef : Prog -> String -> Unit' \
   'emitElemDeclare : WasmEmit -> String' \
   'let n = freshLamId (progEmit prog)' \
   'let gid = freshLamId (progEmit prog)' \
-  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured (envRestrict captured env) body)' \
-  'addLifted (progEmit prog) def' \
+  'addLifted prog lamName codeShapeW (emitLamDefine prog lamName pats captured (envRestrict captured env) body)' \
+  'addLifted prog lamName codeShapeW def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
-  'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
+  'let names = map ("$" ++ _) (elemNames !emit.symbols)' \
   'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' \
   'let emit = freshWasmEmit WGapRecord'; do
   has_wasm_pin "$required" || {
@@ -205,9 +203,10 @@ done
   echo "FAIL H2B7-ROUTES: expected four lambda-id routes"
   exit 1
 }
-# emitFfiEtaW lifts one named wrapper and notes one function reference: 3 and 8, up from 2 and 7.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 3 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 8 ] || {
+# Each count is the definition plus its routes: four named lifts (the extern, constructor
+# and foreign etas, and the foreign wrapper) and eight function-reference routes.
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed prog' | wc -l | tr -d '[:space:]')" -eq 5 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef prog' | wc -l | tr -d '[:space:]')" -eq 9 ] || {
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
@@ -331,12 +330,12 @@ for required in \
   }
 done
 for required in \
-  'site : Int, binding : String, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
-  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
+  'site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
   'progBinding : Prog -> String' \
   'progBinding prog = (progFnCtx prog).binding' \
-  'progForBinding : String -> Int -> Prog -> Prog' \
-  'progForBinding name site prog = progWithFnCtx prog { freshFnCtx () | site = site, binding = name }'; do
+  'progForBinding : String -> Loc -> Int -> Prog -> Prog' \
+  'progForBinding name loc site prog = progWithFnCtx prog { freshFnCtx () | site = site, binding = name, origin = bindingOrigin name loc, }'; do
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B5-CARRIER: missing $required"
     exit 1

@@ -56,6 +56,7 @@ import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import entries.entry_support.{driveModules}
+import driver.diagnostics.{refuseSymbolDefects}
 
 main : <IO> Unit
 main = driveModules runEmit
@@ -89,8 +90,9 @@ runEmit inputs runtimeDecls coreDecls modules =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
   let (plan, prepared) =
     prepareWasmPlan (runtimeDomain (externDecls runtimeDecls)) omEmpty cp
-  let gaps = emitProgramGaps input plan prepared
-  printGaps gaps
+  match emitProgramGaps input plan prepared
+    Ok gaps => printGaps gaps
+    Err defects => refuseSymbolDefects "" defects
 
 printGaps : List String -> <IO> Unit
 printGaps [] = ()
