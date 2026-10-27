@@ -684,6 +684,7 @@ Some ()
 interface Alternative f
   noMatch : f a
   orElse : f a -> f a -> f a
+  orElseWith : f a -> (Unit -> <e> f a) -> <e> f a
 ```
 
 Containers with a notion of failure and a fallback.
@@ -693,10 +694,17 @@ is `a` unless `a` failed, in which case it is `b`. For lists, `orElse` is
 concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
 associative.
 
+`orElseWith a k` is `orElse a (k ())`, except that for `Option` the
+fallback `k` runs only when `a` failed.
+
 ```medaka
 > orElse None (Some 2)
 Some 2
 > orElse [1, 2] [3]
+[1, 2, 3]
+> orElseWith None (u => Some 2)
+Some 2
+> orElseWith [1, 2] (u => [3])
 [1, 2, 3]
 ```
 
@@ -745,6 +753,22 @@ Err 6
 
 ## Containers
 
+### `ControlFlow`
+
+```
+data ControlFlow b
+  = Continue b
+  | Break b
+```
+
+The step result of `foldUntil`: `Continue` carries the accumulator
+onward, `Break` ends the fold with its payload as the final result.
+
+```medaka
+> foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+3
+```
+
 ### `Foldable`
 
 ```
@@ -752,10 +776,12 @@ interface Foldable t
   fold : (b -> a -> <e> b) -> b -> t a -> <e> b
   foldRight : (a -> b -> <e> b) -> b -> t a -> <e> b
   foldMap : Monoid m => (a -> <e> m) -> t a -> <e> m
+  foldUntil : (b -> a -> <e> ControlFlow b) -> b -> t a -> <e> b
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
   foldMap : _
+  foldUntil : _
   length : _
   isEmpty : _
 ```
@@ -765,14 +791,20 @@ Containers whose elements can be reduced to a single value.
 `fold` is a strict left fold. `foldRight` is the right fold, which
 preserves element order in the result and is the one to use when the
 step builds a structure. An instance defines `fold`, `foldRight`, and
-`toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
-instance may override where a faster version exists.
+`toList`; `foldMap`, `foldUntil`, `length`, and `isEmpty` have defaults,
+which an instance may override where a faster version exists.
+
+`foldUntil` is a left fold that can stop early: the step returns
+`Continue acc` to go on or `Break r` to finish with `r`, leaving the
+remaining elements unvisited.
 
 ```medaka
 > fold (acc x => acc + x) 0 [1, 2, 3]
 6
 > length (Some 5)
 1
+> foldUntil (acc x => if x > 2 then Break x else Continue acc) 0 [1, 2, 3, 4]
+3
 ```
 
 ### `Filterable`
@@ -1090,6 +1122,25 @@ The value inside a `Some`, or the default for `None`.
 0
 ```
 
+### `optionOrElse`
+
+```
+optionOrElse : (Unit -> <e> a) -> Option a -> <e> a
+optionOrElse k _
+```
+
+The value inside a `Some`, or the result of calling `k ()` for `None`.
+
+The fallback runs only when there is no value, so it can be expensive or
+effectful.
+
+```medaka
+> optionOrElse (u => 0) (Some 42)
+42
+> optionOrElse (u => 0) None
+0
+```
+
 ### `optionOrPanic`
 
 ```
@@ -1190,6 +1241,25 @@ The value inside an `Ok`, or the default for `Err`.
 0
 ```
 
+### `resultOrElse`
+
+```
+resultOrElse : (err -> <e> a) -> Result err a -> <e> a
+resultOrElse k _
+```
+
+The value inside an `Ok`, or the result of applying `k` to the error of
+an `Err`.
+
+The fallback runs only for an `Err`.
+
+```medaka
+> resultOrElse stringLength (Ok 42)
+42
+> resultOrElse stringLength (Err "boom")
+4
+```
+
 ### `resultOrPanic`
 
 ```
@@ -1207,6 +1277,22 @@ recovers with a default instead.
 ```medaka
 > resultOrPanic "this name and value are literals" (Ok 42 : Result String Int)
 42
+```
+
+### `bestEffort`
+
+```
+bestEffort : String -> Result e a -> Unit
+```
+
+Discards a `Result`, value and error alike, and returns `()`.
+
+For a failure that is acceptable, where `reason` states at the call site
+why. There is no form without `reason`, and no `Option` twin.
+
+```medaka
+> bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
+()
 ```
 
 ### `result`

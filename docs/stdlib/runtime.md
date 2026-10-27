@@ -1266,6 +1266,18 @@ stringSlice : Int -> Int -> String -> String
 
 The characters at positions `[lo, hi)`, clamped to the string.
 
+### `stringCodepointAtByte`
+
+```
+stringCodepointAtByte : String -> Int -> Int
+```
+
+### `stringSliceBytes`
+
+```
+stringSliceBytes : Int -> Int -> String -> String
+```
+
 ### `stringConcat`
 
 ```

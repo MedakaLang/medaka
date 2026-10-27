@@ -835,6 +835,61 @@ Unchanged when the string is already at least `n` long.
 ".ab.."
 ```
 
+## Cursors
+
+### `StrCursor`
+
+```
+data StrCursor  -- abstract: the constructors are not exported
+```
+
+A position in a string, on a codepoint boundary.
+
+Walk a string with `nextChar` and cut pieces out with `sliceBetween`.
+The position is a UTF-8 byte offset, so a step costs the width of one
+character however long the string is. A cursor can only come from
+`startCursor` and `nextChar`, never from a number.
+
+### `startCursor`
+
+```
+startCursor : String -> StrCursor
+startCursor s
+```
+
+A cursor at the start of the string.
+
+### `nextChar`
+
+```
+nextChar : StrCursor -> Option (Char, StrCursor)
+```
+
+The character at the cursor and the cursor after it, or `None` at the
+end of the string.
+
+```medaka
+> isNone (nextChar (startCursor ""))
+True
+```
+
+### `sliceBetween`
+
+```
+sliceBetween : StrCursor -> StrCursor -> String
+```
+
+The text between two cursors, from the first up to the second.
+
+Both cursors must come from the same string. Cursors from different
+strings that happen to bound a valid range of this one give that slice;
+otherwise this panics, and the result is never an invalid string.
+
+```medaka
+> sliceBetween (startCursor "héllo") (startCursor "héllo")
+""
+```
+
 ## Instances
 
 - `String`: `Eq`, `Semigroup`, `Monoid`, `Ord`, `Debug`, `Display`, `Hashable`, [`Index`](#index-string-int-char), [`Slice`](#slice-string), `Arbitrary`, `Generic`

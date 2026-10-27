@@ -835,8 +835,8 @@ startCursor s = StrCursor s 0
 {- | The character at the cursor and the cursor after it, or `None` at the
    end of the string.
 
-   > nextChar (startCursor "")
-   None -}
+   > isNone (nextChar (startCursor ""))
+   True -}
 export
 nextChar : StrCursor -> Option (Char, StrCursor)
 nextChar (StrCursor s off) =
