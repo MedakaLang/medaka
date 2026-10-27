@@ -176,7 +176,7 @@ strictArgs exe argv =
       "MEDAKA_EMITTER=" ++ underRoot "medaka_emitter",
       "perl",
       "-e",
-      "alarm 180; exec @ARGV",
+      "alarm 180; exec @ARGV or die qq(exec: $!)",
       exe,
     ]
     ++ argv
@@ -243,7 +243,7 @@ runWat path wat want trap = match writeFile (path ++ ".wat") wat
   Ok _ =>
     let parsed = expectSpawnOk "perl" [
       "-e",
-      "alarm 30; exec @ARGV",
+      "alarm 30; exec @ARGV or die qq(exec: $!)",
       "wasm-tools",
       "parse",
       path ++ ".wat",
@@ -255,7 +255,7 @@ runWat path wat want trap = match writeFile (path ++ ".wat") wat
     else
       let validated = expectSpawnOk "perl" [
         "-e",
-        "alarm 30; exec @ARGV",
+        "alarm 30; exec @ARGV or die qq(exec: $!)",
         "wasm-tools",
         "validate",
         "--features=all",
