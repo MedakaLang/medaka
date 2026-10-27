@@ -700,6 +700,10 @@ import types.tc_mono.{
   tyvarId,
   tyVarNames,
   unquantifiedAuthIds,
+  oblArgKey,
+  unrigidSig,
+  abstractSlotIds,
+  declaredOblArgOk,
 }
 import types.tc_state.{
   builtinCtors,
@@ -1138,7 +1142,6 @@ import types.tc_solve_givens.{
   goalGivenAt,
   indexOfId,
   lookupPredicateSlots,
-  oblArgKey,
   predicateSlotIds,
   predicateSlotIdsAt,
   predicateSlotKnownSupers,
@@ -1233,22 +1236,17 @@ import types.tc_solve.{
   solvedCleanly,
   solvedOnWalk,
   solveExactReturnOnce,
-  stampMethodArities,
   stampNoting,
-  stampRoutes,
-  unrigidSig,
   uOblArgs,
   walkGoalFollowed,
 }
 import types.tc_solve_check.{
-  abstractSlotIds,
   callOblsWindow,
   callPredOf,
   checkCallObligationsU,
   checkSigVarGoals,
   checkSurvivorDispatchMonos,
   checkSurvivorObligations,
-  declaredOblArgOk,
   declaredPredicateSlots,
   dedupPredicateSlotsTable,
   dedupSlotVecs,
@@ -9132,6 +9130,25 @@ inferShadowApp env mname arityRefs tagRefs f x =
         else
           inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
       None => inferApp env (EApp f x) (inferShadowAppHead env f) tx
+
+-- stamp every route ref (one for the marked EMethodAt form, none for the unmarked
+-- check-path EVar form) RLocal.  S-1: the standalone's own constraint dicts are NOT
+-- resolvable here (inference has not solved the receiver yet) — the caller ALSO pushes
+-- an RLocalSite so resolveRLocalSites re-stamps the same ref with the filled dicts
+-- post-inference.  An unconstrained standalone never gets a second stamp that differs.
+export
+stampRoutes : List (Ref Route) -> Unit
+stampRoutes [] = ()
+stampRoutes (r :: rest) =
+  r := RLocal (routeLocalSym !r) []
+  stampRoutes rest
+
+export
+stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
+stampMethodArities [] _ = ()
+stampMethodArities (r :: rest) arity =
+  r := Some arity
+  stampMethodArities rest arity
 
 -- The STANDALONE arm of `inferShadowApp`, factored out verbatim so S2-DECL (d)'s
 -- `AdStandalone` and `AdReject` verdicts reach exactly the arm the impl-query miss

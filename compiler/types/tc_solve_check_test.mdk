@@ -8,7 +8,7 @@
 -- omits a required prerequisite, and a numeric literal's defaulting.  One property:
 -- defaulting twice is defaulting once.
 
-import types.tc_mono.{tconFrom, tconBuiltin}
+import types.tc_mono.{tconFrom, tconBuiltin, abstractSlotIds, declaredOblArgOk}
 import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Loc(..), TyConOrigin(..)}
 import frontend.parser.{parse}
@@ -16,9 +16,15 @@ import support.util.{joinNl}
 import types.repr.{IfaceRef(..), Mono(..), Tyvar(..), ppMono}
 import types.effect_rows.{pureRow}
 import types.tc_solve_check.{
-  abstractSlotIds, callPredOf, declaredOblArgOk, declaredPredicateSlots,
-  dedupSlotVecs, defaultLiveNumRoots, dispatchMonosOf, numConstrainedIds,
-  predicateSlotTableWithoutArgs, predicateSlotView, survivorNameOfId
+  callPredOf,
+  declaredPredicateSlots,
+  dedupSlotVecs,
+  defaultLiveNumRoots,
+  dispatchMonosOf,
+  numConstrainedIds,
+  predicateSlotTableWithoutArgs,
+  predicateSlotView,
+  survivorNameOfId,
 }
 import types.tc_solve_test_support.{
   checkDiagsOver, expectChecks, expectRejectedWith, numericPreludeSource

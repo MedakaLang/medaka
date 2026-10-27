@@ -1,5 +1,4 @@
 absorbMeeting : Map Int Unit -> List (List Int) -> List (List Int) -> Bool -> (Map Int Unit, List (List Int), Bool)
-abstractSlotIds : List Mono -> List Int
 armNumGuard : GraphCtx -> NumGuard -> ArmedGuard
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
@@ -24,7 +23,6 @@ consumeExactReturnOutcome : ModuleCtx -> ImplUniverse -> MethodReturnRequest -> 
 cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 declaredIfacesOn : String -> Ty -> List String
-declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
 declaredPredicateSlots : List (IfaceRef, List Mono) -> List (List Mono) -> List PredicateSlot
 dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)
 dedupPredicateSlotsTable : ModuleCtx -> Unit -> Unit

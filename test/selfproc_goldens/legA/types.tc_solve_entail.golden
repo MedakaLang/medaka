@@ -5,8 +5,11 @@ argReqRoute : SiteCtx -> IfaceRef -> String -> ScopeId -> List (String, Mono) ->
 augmentWithParams : ModuleCtx -> List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 binopBuiltinHead : String -> String -> Bool
 binopPrimitiveHead : String -> Bool
+bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
+bucketArgsMatchReqs : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
 candsOneIface : List KeyEntry -> Option String
 committedSuperRoute : SiteCtx -> String -> ScopeId -> IfaceRef -> ReqWalk -> List Mono -> Route
+concreteReqMatchByIface : SiteCtx -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
 determinedGoalInstance : ModuleCtx -> IfaceRef -> List Mono -> Option ImplRow
 directSuperGoals : GraphCtx -> IfaceRef -> List Mono -> List (IfaceRef, Option (List Mono))
@@ -22,7 +25,9 @@ entailRigidLead : SiteCtx -> Mono -> String -> ScopeId -> EntailKind -> Option (
 enteredGoalKey : ReqWalk -> String
 entryCovers : KeyEntry -> KeyEntry -> Bool
 entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
+findMatchingImplReqsU : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
+firstReqMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 freshRowHeads : ModuleCtx -> ImplRow -> List Mono
 freshRowHeadsTvs : ModuleCtx -> ImplRow -> (List (String, Mono), List Mono)
 goalCandidates : ModuleCtx -> Map String Unit -> List Mono -> List ImplRow -> List (ImplRow, List (Int, Mono))
@@ -41,7 +46,10 @@ ieSelectRowByIface : SiteCtx -> ImplEnv -> IfaceRef -> List Mono -> Option ImplR
 ieSelectRowByMethod : SiteCtx -> ImplEnv -> String -> List Mono -> Option ImplRow
 ifaceParamMonos : ModuleCtx -> String -> Mono -> Option (List Mono)
 implDictRoutesForRow : SiteCtx -> String -> ScopeId -> List Mono -> ImplRow -> List Route
+implHeadMatchesArgs : ModuleCtx -> List Ty -> List Mono -> Bool
 implHeadSubst : ModuleCtx -> List Ty -> List Mono -> Option (List (String, Mono))
+implMatchesU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
+implMatchesWithReqsU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
 innerDefaultMethod : String -> String
 isCompareMethod : String -> Bool
 keyForSite : SiteCtx -> String -> List Mono -> (Option String, Option ImplRow)
@@ -92,3 +100,5 @@ superRoutesAt : SiteCtx -> IfaceRef -> String -> ScopeId -> List Mono -> ReqWalk
 tyIsQualified : Ty -> Bool
 undeterminedRoute : SiteCtx -> String -> ScopeId -> IfaceRef -> Undetermined -> ReqWalk -> List Mono -> Route
 undeterminedRowRoute : SiteCtx -> ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
+univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
+univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)

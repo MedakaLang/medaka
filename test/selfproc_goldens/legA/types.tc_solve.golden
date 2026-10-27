@@ -4,13 +4,10 @@ answeredOnlyByBindingHead : ModuleCtx -> Map String Unit -> IfaceRef -> List Mon
 anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyIn : List Int -> List Int -> Bool
 arithEntry : Obligation -> List (Ref Route, Mono)
-bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
-bucketArgsMatchReqs : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
 builtinClassPresent : GraphCtx -> BuiltinClass -> Bool
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 commitImprovement : DynCtx -> Map String Unit -> List (Mono, Mono) -> Unit
-concreteReqMatchByIface : SiteCtx -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
 currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 dedupWalkGoals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
@@ -34,9 +31,7 @@ exactReturnRoutes : SiteCtx -> String -> String -> ScopeId -> Bool -> MethodRetu
 fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
 fileGoal : GraphCtx -> Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fillOmittedTemplateArgs : List String -> List (Option Mono) -> List (String, Mono) -> List (Option Mono)
-findMatchingImplReqsU : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 finishMethodReturnTrace : TraceSink -> List EvEntry -> List MethodReturnTraceEntry
-firstReqMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 goalAnsweredBy : GraphCtx -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 goalDefersOpenWorld : ModuleCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 goalIdsClaimed : ModuleCtx -> List Int -> Bool
@@ -53,9 +48,6 @@ goalsOnVar : GoalWindow -> Int -> List Int
 goalsSince : GraphCtx -> Int -> List Obligation
 ifaceRefBare : String -> IfaceRef
 ifaceRefNone : IfaceRef
-implHeadMatchesArgs : ModuleCtx -> List Ty -> List Mono -> Bool
-implMatchesU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
-implMatchesWithReqsU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
 improveByUniqueImpl : DynCtx -> Map String Unit -> List UObligation -> Unit
 improveGoal : DynCtx -> Map String Unit -> IfaceRef -> List Mono -> Unit
 improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
@@ -186,17 +178,12 @@ solvedCleanly : ModuleCtx -> (a -> List Mono) -> (Unit -> a) -> (Bool, a)
 solvedOnWalk : ModuleCtx -> ReqWalk -> IfaceRef -> List Mono -> (Unit -> List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono)
 spanKeys : List (Option Loc) -> List String
 stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
-stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
 stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
-stampRoutes : List (Ref Route) -> Unit
 superGoalClosure : GraphCtx -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superGoalClosureGo : GraphCtx -> List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 topRouteV : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 uOblArgs : GraphCtx -> UObligation -> List Mono
 uniqueMethodTemplateGiven : GraphCtx -> MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
-univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
-univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
-unrigidSig : List (Ref Tyvar) -> Mono -> Mono
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool

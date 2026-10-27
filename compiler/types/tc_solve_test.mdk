@@ -36,18 +36,43 @@ import types.tc_state.{
   beginEvidenceObservation, beginMethodReturnTrace, finishEvidenceObservation
 }
 import types.typecheck.{
-  chainArgs, checkModulesChainReportFor, checkModulesChainReportForGraph,
-  checkOneDiags, defaultDriveInputs, elaborateModules, elaborateOne, isLiveSpan,
-  ModDiags, tcCode, tcMsg
+  chainArgs,
+  checkModulesChainReportFor,
+  checkModulesChainReportForGraph,
+  checkOneDiags,
+  defaultDriveInputs,
+  elaborateModules,
+  elaborateOne,
+  isLiveSpan,
+  ModDiags,
+  tcCode,
+  tcMsg,
+  stampMethodArities,
+  stampRoutes,
 }
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omInsert, omKeys}
 import support.util.{joinNl, listLen}
 import types.tc_solve.{
-  finishMethodReturnTrace, methodReturnMemoCurrentViews, spanKeys,
-  walkGoalSameProbe, anyIn, consSiteFn, enclosingVarIds, goalKindName,
-  goalKindTag, ifaceRefBare, ifaceRefNone, isLocalAbsName, localSourceName,
-  nthInt, outerRigidIds, predicateSlotKnownArgs, resolveArithSite,
-  returnPosMethodNames, routeLocalSym, sitesFor, stampMethodArities, stampRoutes
+  finishMethodReturnTrace,
+  methodReturnMemoCurrentViews,
+  spanKeys,
+  walkGoalSameProbe,
+  anyIn,
+  consSiteFn,
+  enclosingVarIds,
+  goalKindName,
+  goalKindTag,
+  ifaceRefBare,
+  ifaceRefNone,
+  isLocalAbsName,
+  localSourceName,
+  nthInt,
+  outerRigidIds,
+  predicateSlotKnownArgs,
+  resolveArithSite,
+  returnPosMethodNames,
+  routeLocalSym,
+  sitesFor,
 }
 import types.tc_solve_test_support.{
   numPrelude, accRenderChecked, rendered, linkCount, absentReturnSource,

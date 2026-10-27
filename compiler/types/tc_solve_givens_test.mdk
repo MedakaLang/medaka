@@ -6,7 +6,7 @@
 -- One property: adding a given never removes a goal a given already answered.  Each test
 -- mints its own graph record.
 
-import types.tc_mono.{tconFrom, tconBuiltin}
+import types.tc_mono.{tconFrom, tconBuiltin, oblArgKey}
 import list.{lookup, reverse, zip}
 import support.util.{joinNl}
 import test.{
@@ -20,10 +20,20 @@ import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
 import types.scopes.{ScopeOwner(..), binderAt, freshScope}
 import types.tc_mono_test.{MTy(..), genClosed}
 import types.tc_solve_givens.{
-  anyGivenMatches, enclSlot, givenAnswers, givenInScope, givenRoute,
-  givensForScope, goalMatchesGiven, indexOfId, oblArgKey,
-  predicateRequestMatchesSlot, predicateSlotIds, predicateSlotIdsAt,
-  projectedGivenOf, pushGiven, assumAnswerEvidence
+  anyGivenMatches,
+  enclSlot,
+  givenAnswers,
+  givenInScope,
+  givenRoute,
+  givensForScope,
+  goalMatchesGiven,
+  indexOfId,
+  predicateRequestMatchesSlot,
+  predicateSlotIds,
+  predicateSlotIdsAt,
+  projectedGivenOf,
+  pushGiven,
+  assumAnswerEvidence,
 }
 import types.tc_solve_test_support.{expectChecks, expectRejectedWith}
 import types.tc_state.{currentScopeStore, dictParamName, probeGraphCtx}

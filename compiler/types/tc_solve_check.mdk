@@ -99,6 +99,10 @@ import types.tc_mono.{
   substMono,
   tconBuiltin,
   tyvarId,
+  abstractSlotIds,
+  declaredOblArgOk,
+  oblArgKey,
+  unrigidSig,
 }
 import types.tc_diag_text.{
   ambiguousImplMsg,
@@ -148,7 +152,6 @@ import types.tc_solve_givens.{
   activeDictVarOf,
   givenAnswers,
   goalGivenAt,
-  oblArgKey,
   predicateSlotKnownSupers,
   pushGiven,
   registerActiveDictVars,
@@ -171,6 +174,11 @@ import types.tc_solve_entail.{
   reqWalkStart,
   rowCountsFor,
   rowHeadMatches,
+  findMatchingImplReqsU,
+  implMatchesU,
+  implMatchesWithReqsU,
+  univConcreteBucket,
+  univHeadless,
 }
 import types.tc_solve.{
   answeredOnlyByBindingHead,
@@ -181,15 +189,12 @@ import types.tc_solve.{
   determinationCandidates,
   dictAppsSince,
   enclosingVarIds,
-  findMatchingImplReqsU,
   goalAnsweredBy,
   goalDefersOpenWorld,
   goalsOnVar,
   goalWindowOf,
   ifaceRefBare,
   ifaceRefNone,
-  implMatchesU,
-  implMatchesWithReqsU,
   improvementPool,
   methodReturnAmbiguousWithoutGiven,
   methodReturnArgs,
@@ -208,9 +213,6 @@ import types.tc_solve.{
   solvedOnWalk,
   solveExactReturnOnce,
   superGoalClosure,
-  univConcreteBucket,
-  univHeadless,
-  unrigidSig,
   uOblArgs,
   walkDispatch,
   walkGoalDischarged,
@@ -2715,18 +2717,6 @@ registerPredicateSlotIds gctx scope kept (slot :: rest) =
   let _ = registerEachActiveId gctx slot.psBoundIds (Scopes.binderAt scope kept)
   registerPredicateSlotIds gctx scope (kept + 1) rest
 
--- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
--- `declaredPredicateSlots` and `keptConstraintArgs` must agree on, factored so the two
--- cannot drift (they decide, respectively, whether a slot exists and whether its
--- argument vector is recorded — a disagreement desynchronizes `funConstraintArgsRef`
--- from `funConstraintsRef`).
-export
-abstractSlotIds : List Mono -> List Int
-abstractSlotIds [] = []
-abstractSlotIds (mono :: rest) = match normalize mono
-  TVar cell => tyvarId cell :: abstractSlotIds rest
-  _ => abstractSlotIds rest
-
 -- ── inferred-constraint promotion (unsignatured `=>` — the two-pass layer) ──
 -- After a group is generalized, an UNSIGNATURED eligible member that uses a
 -- return-position method (methodSiteFns) — or calls a constrained fn (dictAppFns)
@@ -2788,20 +2778,6 @@ maybeInferConstraint mctx sigs callObls addedObls m scope sch
       dedupI
         (inferredConstraintIds mctx m boundIds ++ map inferredPredLead vecs)
     registerInferredFor mctx m scope ids vecs
-
--- #1937: a STRUCTURED argument whose free ids are ALL scheme-bound now carries too.
--- The clause this replaces required a structured argument to be GROUND, because
--- `substOblArgs` substituted only at a top-level `TVar` and would have carried the
--- signature's own tyvar cell into the caller's goal.  That walk is now structural, so
--- the instantiation this admission promises is one the channel can actually perform;
--- the two halves are a single change (admitting without it substitutes to a
--- wrong-but-CONCRETE goal, strictly worse than the missing one it replaces).  An
--- UNBOUND tyvar anywhere in the argument is still refused — it has no id to defer on.
-export
-declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
-declaredOblArgOk isBound m = match normalize m
-  TVar cell => isBound (tyvarId cell)
-  _ => allList isBound (monoTyvarIds m)
 
 -- #991: the impl-channel arm only — a call-channel obligation is re-instantiated from
 -- `schemeObligationsRef` by its own path and contributes nothing here.

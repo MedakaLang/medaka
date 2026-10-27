@@ -42,7 +42,6 @@ lookupPredicateSlots : String -> Map String (List PredicateSlot) -> Option (List
 methodLevelPredicateSlot : ModuleCtx -> List String -> List (String, Mono) -> Constraint -> List PredicateSlot
 methodLevelPredicateSlots : ModuleCtx -> List String -> Ty -> List (String, Mono) -> List PredicateSlot
 noteAssumption : GraphCtx -> ScopeId -> AssumAnswer -> Unit
-oblArgKey : Mono -> String
 predicateNodeKey : IfaceRef -> List Mono -> String
 predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool

@@ -1,5 +1,5 @@
 # META
-source_lines=1112
+source_lines=1069
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_givens: the given and assumption store of the solver: registering, scoping and answering
@@ -37,6 +37,7 @@ import types.tc_mono.{
   monoVecSameGiven,
   peelQual,
   tyvarId,
+  oblArgKey,
 }
 import types.tc_state.{currentScopeStore, renderEvidenceBinder}
 import types.tc_env.{
@@ -1016,50 +1017,6 @@ predicateSlotOfNode n = PredicateSlot {
   psBoundIds = dedupI (flatMap monoTyvarIds n.superPayload),
 }
 
--- S-nonlead-arg-identity (#1904): ONE predicate-argument position, rendered as a
--- PREFIX-FREE PREORDER of the normalized mono, so the key REALISES the sprint's settled
--- notion of "same predicate" — pointwise `monoSameGiven` over the vector — rather than a
--- weaker local one.  Every arm below mirrors an arm of `monoSameGiven`:
---   * `TVar` keys on the tyvar's IDENTITY, not on its mere presence.  This is the whole
---     fix: the old encoding keyed EVERY tyvar position as the constant "*", so
---     `(Ix a b c, Ix a c b)` rendered `Ix|*,*,*` twice and `dedupSlotVecs` collapsed two
---     predicates into ONE dict slot (#1904, S0: `ix n x y + ix n y x` summed 333+333
---     instead of 333+111).  `vecOblKey` survived that only because `voIds` carries every
---     position's id in a SECOND component; `cslotVecKey` composes `cslotKey`, which
---     carries the LEAD id alone (`csId`), so it had no per-position id anywhere.
---   * `TCon`/`TRigid` fold to the same rendering because `monoSameGiven` equates them by
---     name across those two constructors.
---   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
---     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
---     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
---   * `TEff` and `TAuth` (the remaining arms) key as the constant "*", realising
---     `monoSameGiven`'s erasure: it equates any two effect rows, and any two authorities.
--- One deliberate residual under-split: TYCON ORIGIN is dropped (name only, as
--- `headTyconNameMono` always did).  It cannot be folded into a key string at all:
--- `sameTyConHead`'s absent-origin arm is non-transitive, so no string equivalence can
--- realise it.
--- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
--- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
--- key is injective over the vector.
--- Raw tyvar ids in A KEY STRING: safe HERE, and not by an "ids are unique" claim.
--- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
--- come from the SAME predicate occurrence in the SAME signature, normalized together.
--- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
--- (a call's declared slots, `setFunConstraintEntry`'s declared prefix) and
--- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
--- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
--- no key here consults.
-export
-oblArgKey : Mono -> String
-oblArgKey m = match normalize m
-  TVar cell => "v\{intToString (tyvarId cell)}."
-  TCon name _ => "c\{lenKey name}"
-  TRigid name => "c\{lenKey name}"
-  TApp a b => "a\{oblArgKey a}\{oblArgKey b}"
-  TFun a _ b => "f\{oblArgKey a}\{oblArgKey b}"
-  TQual a _ => oblArgKey a
-  _ => "*"
-
 -- is there an in-scope PREDICATE-keyed given that answers this goal exactly?
 -- Deliberately `registerPredGiven`'s own shape — the WHOLE argument vector, structural,
 -- matched by `monoVecSameGiven` (pointwise `monoSameGiven` on rigid/cell IDENTITY) rather
@@ -1116,7 +1073,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
   registerActiveDictVars gctx scope (slot + 1) rest
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_types") ((mem "AssumAnswer" true) (mem "AssumptionTraceEntry" true) (mem "AssumptionTraceKind" true) (mem "GivenEntry" true) (mem "GivenMatch" true) (mem "GivenProvenance" true) (mem "GivenScope" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "GraphCtx" false) (mem "MethodBodyInstance" false) (mem "ModuleCtx" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "isBareTyvarMono" false) (mem "monoTyvarIds" false) (mem "monoVecSameGiven" false) (mem "peelQual" false) (mem "tyvarId" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "isBareTyvarMono" false) (mem "monoTyvarIds" false) (mem "monoVecSameGiven" false) (mem "peelQual" false) (mem "tyvarId" false) (mem "oblArgKey" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "renderEvidenceBinder" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "methodLevelConstraintVarNames" false) (mem "oblIfaceKey" false) (mem "sameIfaceDecl" false) (mem "superLookup" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false))))
@@ -1305,8 +1262,6 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DFunDef false "predicateSuperStep" ((PVar "typarams") (PVar "args") (PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "typarams"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EVar "typarams")) (EVar "args")))) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "predicateSlotOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PredicateSlot")))
 (DFunDef false "predicateSlotOfNode" ((PVar "n")) (ERecordCreate "PredicateSlot" ((fa "psIface" (EFieldAccess (EVar "n") "superIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EFieldAccess (EVar "n") "superPayload"))) (fa "psBoundIds" (EApp (EVar "dedupI") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EFieldAccess (EVar "n") "superPayload")))))))
-(DTypeSig true "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "goalMatchesGiven" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "goalMatchesGiven" ((PVar "gctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "goalMatchesGiven" ((PVar "gctx") (PVar "scope") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (EVar "scope")) (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "scope"))))
@@ -1320,7 +1275,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DFunDef false "registerActiveDictVars" ((PVar "gctx") (PVar "scope") (PVar "slot") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerEachActiveId") (EVar "gctx")) (EFieldAccess (EVar "s") "psBoundIds")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (EVar "slot")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerActiveDictVars") (EVar "gctx")) (EVar "scope")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
 # MARK
 (DUse false (UseGroup ("types" "tc_types") ((mem "AssumAnswer" true) (mem "AssumptionTraceEntry" true) (mem "AssumptionTraceKind" true) (mem "GivenEntry" true) (mem "GivenMatch" true) (mem "GivenProvenance" true) (mem "GivenScope" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "GraphCtx" false) (mem "MethodBodyInstance" false) (mem "ModuleCtx" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "isBareTyvarMono" false) (mem "monoTyvarIds" false) (mem "monoVecSameGiven" false) (mem "peelQual" false) (mem "tyvarId" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "isBareTyvarMono" false) (mem "monoTyvarIds" false) (mem "monoVecSameGiven" false) (mem "peelQual" false) (mem "tyvarId" false) (mem "oblArgKey" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "renderEvidenceBinder" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "methodLevelConstraintVarNames" false) (mem "oblIfaceKey" false) (mem "sameIfaceDecl" false) (mem "superLookup" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false))))
@@ -1509,8 +1464,6 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DFunDef false "predicateSuperStep" ((PVar "typarams") (PVar "args") (PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "typarams"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EVar "typarams")) (EVar "args")))) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "predicateSlotOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PredicateSlot")))
 (DFunDef false "predicateSlotOfNode" ((PVar "n")) (ERecordCreate "PredicateSlot" ((fa "psIface" (EFieldAccess (EVar "n") "superIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EFieldAccess (EVar "n") "superPayload"))) (fa "psBoundIds" (EApp (EVar "dedupI") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EFieldAccess (EVar "n") "superPayload")))))))
-(DTypeSig true "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "goalMatchesGiven" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "goalMatchesGiven" ((PVar "gctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "goalMatchesGiven" ((PVar "gctx") (PVar "scope") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (EVar "scope")) (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "scope"))))

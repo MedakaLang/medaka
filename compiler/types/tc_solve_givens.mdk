@@ -33,6 +33,7 @@ import types.tc_mono.{
   monoVecSameGiven,
   peelQual,
   tyvarId,
+  oblArgKey,
 }
 import types.tc_state.{currentScopeStore, renderEvidenceBinder}
 import types.tc_env.{
@@ -1011,50 +1012,6 @@ predicateSlotOfNode n = PredicateSlot {
   psArgs = PSArgsKnown n.superPayload,
   psBoundIds = dedupI (flatMap monoTyvarIds n.superPayload),
 }
-
--- S-nonlead-arg-identity (#1904): ONE predicate-argument position, rendered as a
--- PREFIX-FREE PREORDER of the normalized mono, so the key REALISES the sprint's settled
--- notion of "same predicate" — pointwise `monoSameGiven` over the vector — rather than a
--- weaker local one.  Every arm below mirrors an arm of `monoSameGiven`:
---   * `TVar` keys on the tyvar's IDENTITY, not on its mere presence.  This is the whole
---     fix: the old encoding keyed EVERY tyvar position as the constant "*", so
---     `(Ix a b c, Ix a c b)` rendered `Ix|*,*,*` twice and `dedupSlotVecs` collapsed two
---     predicates into ONE dict slot (#1904, S0: `ix n x y + ix n y x` summed 333+333
---     instead of 333+111).  `vecOblKey` survived that only because `voIds` carries every
---     position's id in a SECOND component; `cslotVecKey` composes `cslotKey`, which
---     carries the LEAD id alone (`csId`), so it had no per-position id anywhere.
---   * `TCon`/`TRigid` fold to the same rendering because `monoSameGiven` equates them by
---     name across those two constructors.
---   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
---     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
---     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
---   * `TEff` and `TAuth` (the remaining arms) key as the constant "*", realising
---     `monoSameGiven`'s erasure: it equates any two effect rows, and any two authorities.
--- One deliberate residual under-split: TYCON ORIGIN is dropped (name only, as
--- `headTyconNameMono` always did).  It cannot be folded into a key string at all:
--- `sameTyConHead`'s absent-origin arm is non-transitive, so no string equivalence can
--- realise it.
--- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
--- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
--- key is injective over the vector.
--- Raw tyvar ids in A KEY STRING: safe HERE, and not by an "ids are unique" claim.
--- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
--- come from the SAME predicate occurrence in the SAME signature, normalized together.
--- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
--- (a call's declared slots, `setFunConstraintEntry`'s declared prefix) and
--- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
--- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
--- no key here consults.
-export
-oblArgKey : Mono -> String
-oblArgKey m = match normalize m
-  TVar cell => "v\{intToString (tyvarId cell)}."
-  TCon name _ => "c\{lenKey name}"
-  TRigid name => "c\{lenKey name}"
-  TApp a b => "a\{oblArgKey a}\{oblArgKey b}"
-  TFun a _ b => "f\{oblArgKey a}\{oblArgKey b}"
-  TQual a _ => oblArgKey a
-  _ => "*"
 
 -- is there an in-scope PREDICATE-keyed given that answers this goal exactly?
 -- Deliberately `registerPredGiven`'s own shape — the WHOLE argument vector, structural,
