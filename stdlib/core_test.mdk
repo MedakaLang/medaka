@@ -257,3 +257,41 @@ test "floatToString renders the canonical lexeme" =
       floatToString 1e-07,
       floatToString 1e+20,
     ]
+
+-- # Lazy fallbacks
+--
+-- The fallback panics if it runs on the hit path, and bumps a counter on the
+-- miss path so "exactly once" is observable.
+
+test "optionOrElse does not call the fallback for Some" =
+  expectEqual 1 (optionOrElse (u => panic "fallback ran") (Some 1))
+
+test "optionOrElse calls the fallback once for None" =
+  let calls = Ref 0
+  let v = optionOrElse (u => setRef calls (!calls + 1) |> (x => 7)) None
+  expectEqual (7, 1) (v, !calls)
+
+test "resultOrElse does not call the fallback for Ok" =
+  expectEqual
+    1
+    (resultOrElse (e => panic "fallback ran") (Ok 1 : Result String Int))
+
+test "resultOrElse calls the fallback once with the error for Err" =
+  let calls = Ref 0
+  let v =
+    resultOrElse
+      (e => setRef calls (!calls + 1) |> (x => stringLength e))
+      (Err "boom")
+  expectEqual (4, 1) (v, !calls)
+
+test "orElseWith on Some does not call the fallback" =
+  expectEqual (Some 1) (orElseWith (Some 1) (u => panic "fallback ran"))
+
+test "orElseWith on None calls the fallback once" =
+  let calls = Ref 0
+  let v = orElseWith (None : Option Int) (u =>
+    setRef calls (!calls + 1) |> (x => Some 7))
+  expectEqual (Some 7, 1) (v, !calls)
+
+test "orElseWith on List appends the fallback" =
+  expectEqual [1, 2, 3] (orElseWith [1, 2] (u => [3]))
