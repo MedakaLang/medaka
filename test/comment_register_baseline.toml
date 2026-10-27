@@ -640,6 +640,11 @@ class = "draft"
 count = 3
 
 [[entry]]
+file = "compiler/types/tc_groups.mdk"
+class = "history"
+count = 4
+
+[[entry]]
 file = "compiler/types/tc_occurrence.mdk"
 class = "history"
 count = 1
@@ -677,7 +682,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 39
+count = 36
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -692,7 +697,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 140
+count = 128
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -707,7 +712,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 142
+count = 134
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

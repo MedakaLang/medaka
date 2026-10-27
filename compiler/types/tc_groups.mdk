@@ -1,0 +1,2161 @@
+-- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
+-- free-variable walk that forms groups, the value restriction, group generalization, goals required
+-- below, signature constraints.
+--
+-- Spec: HM-CORE section 1 (gen-value), section 4, section 5 (owed, #2555); DICT section 4.1 G2,
+-- section 6.3 at binders.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+
+import types.tc_types.{
+  OblProjection(..),
+  GoalReach(..),
+  BindingRole(..),
+  Predicate(..),
+  UObligation(..),
+  ConstraintReg,
+  DynCtx,
+  GraphCtx,
+  ImplRow,
+  ModuleCtx,
+  ReqWalk,
+  ScopedMember,
+  siteFor,
+  TcEnv,
+}
+import types.tc_mono.{
+  abstractSlotIds,
+  anyMember,
+  authIdsIn,
+  boundTyvarIds,
+  cohApply,
+  containsI,
+  declaredOblArgId,
+  declaredOblArgOk,
+  hasDupI,
+  headsUnifier,
+  isBareTyvarMono,
+  monoUnboundIds,
+  monoVarCells,
+  monoVectorClosed,
+  oblArgKey,
+  patVarsListTc,
+  patVarsTc,
+  qualifierAuthIds,
+  schemeIds,
+  schemeMono,
+  sigCellsOf,
+  sigTvarIds,
+  tyvarId,
+  tyVarNames,
+  unrigidSig,
+}
+import types.tc_diag_text.{
+  annotTooGeneralMsg,
+  letRecNonFunctionMsg,
+  missingConstraintMsg,
+  missingConstraintVecMsg,
+  sigOverExpansiveMsg,
+  sigTooGeneralMsg,
+  varNameForId,
+}
+import types.tc_state.{mctxAtIfSome}
+import types.tc_env.{
+  extendLocalVar,
+  funClausePair,
+  lookupCtor,
+  namesToSet,
+  oblIfaceKey,
+  sameIfaceDecl,
+  seedAlphaLets,
+  superLookup,
+}
+import types.tc_diag.{
+  boundaryOwnsOpen, pushTypeError, pushTypeErrorAt, pushTypeErrorOnceAt
+}
+import types.tc_unify.{
+  generalizeBindingDeclared,
+  lowerAuthLevels,
+  lowerRowLevels,
+  lowerToCurrent,
+  unifyInto,
+  wantAuthorityWith,
+}
+import types.tc_decls_types.{fromAstType, sigConstraintsOf}
+import types.tc_decls.{constraintNameMonos}
+import types.tc_solve_givens.{goalGivenAt}
+import types.tc_solve_entail.{
+  freshRowHeadsTvs,
+  goalCandidates,
+  goalIsProjection,
+  goalReach,
+  goalRows,
+  selectedRowReqMatch,
+}
+import types.tc_solve.{goalVarsAllHeld, reqToObligation, uOblArgs}
+import types.tc_solve_check.{
+  callPredOf,
+  ifaceForInferredId,
+  inferredConstraintIds,
+  oblPredOf,
+  residualBoundPreds,
+  undeterminedGoalExempt,
+}
+import types.tc_effects.{clausesAt, clausesOf}
+import types.tc_occurrence.{ctorHeadShaped}
+import frontend.ast.{
+  Arm(..),
+  Constraint(..),
+  Decl(..),
+  DoStmt(..),
+  Expr(..),
+  FieldAssign(..),
+  FunClause(..),
+  Guard(..),
+  GuardArm(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  InterpPart(..),
+  LetBind(..),
+  Loc(..),
+  MethodDefault(..),
+  Pat(..),
+  Require(..),
+  Section(..),
+  Super(..),
+  Ty(..),
+  firstTyLoc,
+  letBindName,
+}
+import types.repr.{
+  AuthResidual(..),
+  IfaceRef(..),
+  Mono(..),
+  Scheme(..),
+  VecObl(..),
+  normalize,
+  ppMono,
+}
+import types.effect_bindings.{BindingSummary(..)}
+import types.effect_rows.{EffRow(..), pureRow}
+import map.{Map(..)}
+import support.ordmap.{
+  omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
+}
+import types.effect_solver.{ScopeRoles(..)}
+import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
+import support.util.{
+  allList,
+  anyList,
+  contains,
+  dedup,
+  dedupBy,
+  filterList,
+  isEmptyL,
+  isSome,
+  joinWith,
+  lenKey,
+  listLen,
+  lookupAssoc,
+}
+import frontend.desugar.{exprSpanLoc}
+import types.registry.{regKeyOfTab, regKeyRender}
+import support.scc.{tarjanSCCs}
+import map as IdMap
+
+idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
+idSetInsertAll [] m = m
+idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
+
+-- ── value restriction (T1) ────────────────────────────────────────────────
+-- A binding RHS is *non-expansive* (a syntactic value) iff it cannot allocate a
+-- mutable cell: literals, variables and lambdas are values; annotations are
+-- transparent; tuples/lists are values iff their elements are.  Constructor
+-- applications of non-expansive arguments are non-expansive (SML value
+-- restriction relaxation, Phase 66 extension) EXCEPT `Ref`, excluded by name in
+-- `isCtorAppSpine` below: generalizing `Ref x` would be unsound (polymorphic
+-- reference: write at one type, read at another).
+--
+-- The head test is an actual constructor lookup, not A SPELLING TEST —
+-- issue 1150 (S0, memory-safety), fixed 2026-08-26.  `isCtorAppSpine`'s head
+-- arms ask `lookupCtor env name`, so the predicate now answers "is this name a
+-- REAL, DECLARED constructor?" instead of "does this name start with a capital
+-- letter?".  Threading the `TcEnv` this needs is why `isNonexpansive`,
+-- `isCtorAppSpine`, `clausesAreValue`/`clauseIsValue`,
+-- `memberClauseIsValue` and `sccSchemes` all take an env parameter.
+--
+-- What the old first-character heuristic (`ctorHeadShaped`, retained below
+-- only as a cheap pre-filter) got wrong: a MODULE ALIAS is REQUIRED to be
+-- uppercase (`aliasNameFor`, frontend/parser.mdk — lowercase is a hard parse
+-- error) and an alias-qualified value desugars to a FLAT `EVar` carrying the
+-- dotted name (`rewriteAliasQual`, frontend/desugar.mdk, via `qualifiedLocal`
+-- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` (its first form) read
+-- `'H'` and said True: EVERY alias-qualified call in the language was
+-- CLASSIFIED as a constructor application.  Classification is not the whole
+-- test — `isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x`
+-- still rejects the spine if any argument is expansive, so `H.f (g 1)` was
+-- classified but NOT generalized.  It was enough for the repro, whose argument
+-- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yielded a
+-- polymorphic mutable table — `check` exit 0, `run` E-NOT-A-FUNCTION, built
+-- binary SEGFAULT.  Under the lookup, `"H.new"` is absent from the ctor map and
+-- the binding is value-restricted: `check` REJECTS the program.
+--
+-- Why the lookup is sound (i.e. why "present in the ctor map" implies "really a
+-- constructor").  `lookupCtor` reads `TcEnv`'s 2nd `OrdMap`, and that map is
+-- written in exactly TWO places — `addCtor` (sole call site, inside
+-- `addVariants`, reached only from `registerVariants`, itself called only from
+-- `registerData`'s `DData` and `DNewtype` arms) and the two prelude ctors
+-- `True`/`False`, hand-seeded straight into the map by `builtinCtors`, bypassing
+-- `addCtor` entirely.  Both writers are constructor-only.  ("Populated only by
+-- `addCtor`", which this comment asserted until 2026-07-31, was false — hence
+-- the second clause.)  Re-derive with
+-- `grep -n 'addCtor\|builtinCtors' compiler/types/typecheck.mdk`.
+--
+-- The uppercase-mutable-cell-extern hazard this comment used to warn about is
+-- retired BY CONSTRUCTION rather than by audit: the grammar still permits an
+-- uppercase extern NAME (`externNameFor (TUpper x) = emit x`,
+-- frontend/parser.mdk, vs `identNameFor`, which accepts only `TIdent`), but an
+-- extern is never passed to `addCtor`, so no extern — uppercase or not — can
+-- pass the head test any more.  `Ref` (`extern Ref : a -> Ref a`,
+-- stdlib/runtime.mdk) is exactly such an extern; its by-name exclusion is kept
+-- below purely as defense-in-depth, since the lookup alone already rejects it.
+-- See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
+--
+-- Record creates are non-expansive iff all field expressions are.
+-- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
+-- generalizes — the separate `mut`-gen hole is a both-sides follow-up (T1b).
+export
+isNonexpansive : TcEnv -> Expr -> Bool
+isNonexpansive env (ELoc _ e) = isNonexpansive env e
+isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
+isNonexpansive env (ELit _) = True
+isNonexpansive env (EVar _) = True
+isNonexpansive env (EVarId _ _) = True
+-- `run`/`build` rewrite a method reference into a dictionary-marked node before
+-- typechecking (`prePassDict`); the marked node is still a variable, so the value
+-- predicate must answer as it does for the `EVar` that `check` sees — otherwise
+-- `callMin = min` is a value under one verb and expansive under another
+-- (check green, build panics on an unbound dictionary witness).
+isNonexpansive env (EMethodAt _ _ _) = True
+isNonexpansive env (EDictAt _ _) = True
+isNonexpansive env (EMethodRef _) = True
+isNonexpansive env (ELam _ _) = True
+isNonexpansive env (EAnnot e _) = isNonexpansive env e
+isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
+isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
+isNonexpansive env (EListLit es) = allList (isNonexpansive env) es
+-- Constructor application: non-expansive iff the spine head is an EVar naming a
+-- REAL, DECLARED constructor (`lookupCtor env`, see the above and issue
+-- 1150) — that is NOT `Ref`, and every spine argument is itself non-expansive.
+-- Partial ctor applications (e.g. `MkTwo []`) are also non-expansive — they are
+-- closures, not mutable cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers
+-- before testing.
+isNonexpansive env (app@(EApp _ _)) = isCtorAppSpine env app
+-- Record creation: non-expansive iff every field expression is non-expansive.
+isNonexpansive env (ERecordCreate _ fs) =
+  allList
+    (fa => match fa
+      FieldAssign _ e => isNonexpansive env e)
+    fs
+isNonexpansive env _ = False
+
+-- Walk the left spine of an application to its head, testing EVERY argument met
+-- on the way, and finally test whether the head IS a constructor that is safe to
+-- generalize: an EVar naming a constructor DECLARED in this `TcEnv`, asked of
+-- the environment via `lookupCtor` rather than guessed from the name's spelling
+-- (issue 1150, fixed 2026-08-26 — see the on `isNonexpansive` above for why
+-- the ctor map's two writers make the lookup sound).  `Ref` stays excluded by
+-- name as defense-in-depth: it is an extern FUNCTION, never passed to
+-- `addCtor`, so `lookupCtor` already rejects it on its own.
+--
+-- `ctorHeadShaped` is retained as a pure FAST PATH in front of the lookup: an
+-- ordinary function-application head — the overwhelmingly common `let` RHS —
+-- fails on a character read instead of an `OrdMap` probe.  It can only ever
+-- narrow, never widen.  It DID narrow on the emit path (#2089's census): the
+-- emitter's tree carries constructors mangled to `<mid>__<Ctor>`
+-- (`types/private_mangle.mdk`), so a first-character-uppercase test judged every
+-- constructor CAF (`regEmpty = Registry omEmpty`) expansive there, narrowed it at
+-- first use, and every later use at another element type was a type mismatch —
+-- discarded, because nothing read them.  The fast path now accepts both spellings.
+--
+-- The arguments are tested HERE, on the single walk to the head, rather than by
+-- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
+-- the whole spine per level, i.e. quadratic in the constructor's arity.  Testing
+-- only the LAST argument was issue 1139 — a `Ref` in any non-final position
+-- escaped the exclusion entirely, so `let b = BR (Ref []) True` generalized and
+-- a cell written at `Int` could be read at `Int -> Int`.
+--
+-- The head is tested BEFORE the argument: `&&` short-circuits, and the common
+-- RHS at a `let` is an ordinary function application, whose head fails the test
+-- immediately.  Testing the argument first would walk its whole subtree before
+-- discovering the spine was never a constructor application at all.  Both
+-- operands are pure `Bool`, so the order is semantically invisible.
+isCtorAppSpine : TcEnv -> Expr -> Bool
+isCtorAppSpine env (ELoc _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
+isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
+isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
+isCtorAppSpine env _ = False
+
+-- The head test itself: `name` is a real, declared constructor and is not the
+-- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
+-- authority, why `ctorHeadShaped` is only a fast path in front of it, and why
+-- the `Ref` exclusion is redundant-but-kept.
+isDeclaredCtorHead : TcEnv -> String -> Bool
+isDeclaredCtorHead env name =
+  name /= "Ref" && ctorHeadShaped name && isSome (lookupCtor env name)
+
+-- Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
+-- otherwise.  monoScheme leaves the mono ungeneralized.
+export
+genBindingRestricted : DynCtx ->
+  Map Int Unit ->
+  List AuthResidual ->
+  Bool ->
+  EffRow ->
+  Mono ->
+  Scheme
+genBindingRestricted dyn declared residual isValue force t
+  | isValue = generalizeBindingDeclared dyn declared residual force t
+  | otherwise =
+    lowerToCurrent dyn.dcModule t
+    lowerRowLevels dyn.dcModule.mcCells.currentLevel.value force
+    -- a binding that turns out monomorphic after its scope kept residuals
+    -- (a local pinned for dictionary forwarding) owes them where it lives
+    fold
+      (_ r =>
+        let _ =
+          lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arLower
+        let _ =
+          lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arUpper
+        wantAuthorityWith dyn.dcModule r.arExact r.arLower r.arUpper)
+      ()
+      residual
+    Forall [] [] [] [] force t
+
+-- Expected-type propagation for an application whose argument is a lambda.
+-- Inferring `andThen e (stream => Ok [JArray stream])` naively infers the lambda
+-- BODY first with `stream : freshVar`, so a downstream conflicting use inside the
+-- body (`JArray stream` wants `Array Json`) pins `stream` to the WRONG type before
+-- the function's declared param type (`List Json`) is ever reconciled — the later
+-- reconciliation then fails at the application with no good site, and the hover
+-- side-channel records the wrong `stream` type.  Fix (bidirectional "checking"
+-- mode, the do-bind/higher-order case): infer `f` first, peel its parameter type,
+-- and unify it onto the lambda's parameter BEFORE inferring the body.  Then the
+-- body sees `stream : List Json` and the type error localizes to the `JArray`
+-- USE, and recordLocalBind captures the right hover type.  Purely additive: the
+-- final `unify ft (TFun xt …)` in inferApp imposes the same equality regardless,
+-- so the solution is unchanged — we only make it available earlier.
+export
+exprLoc : Expr -> Option Loc
+exprLoc (ELoc l _) = Some l
+exprLoc (EDoOrigin l _) = Some l
+exprLoc _ = None
+
+-- the tyvar NAME a constraint argument mentions (`Num a` → "a"); None for a non-tyvar
+-- argument (a concrete head), which carries no per-call obligation here.
+constraintArgVarName : Ty -> Option String
+constraintArgVarName (TyVar v) = Some v
+constraintArgVarName _ = None
+
+export
+checkRecursiveValue : DynCtx -> BindingSummary -> Unit
+checkRecursiveValue dyn owned =
+  unifyInto dyn True owned.bsRecursiveValue owned.bsValue
+
+-- C3: each type variable named in the
+-- annotation asserts polymorphism, so after unification it must still be a
+-- DISTINCT, unbound variable.  If one ground to a concrete type, or two
+-- annotation variables collapsed to the same variable, the annotation is more
+-- polymorphic than the expression — reject.  `sigTvarIds` keeps only the entries
+-- that normalize to a TVar, so a grounded var drops out (count shrinks) and a
+-- collapse shows as a duplicate id.  EHeadAnnot is exempt (no call to this).
+export
+checkAnnotTooGeneral : ModuleCtx -> Ty -> List Mono -> Unit
+checkAnnotTooGeneral mctx ty resolved =
+  let ids = sigTvarIds resolved
+  if listLen ids < listLen resolved || hasDupI ids then
+    pushTypeError mctx "T-TYPE-TOO-GENERAL" (annotTooGeneralMsg ty)
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would, so a helper may be used
+-- at two types and keeps its own authority residual (#3487).  Members keep
+-- their source order inside a component.  A block that repeats a name stays
+-- one group: its components are not well defined.
+export
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindName binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses _ _) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindName b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
+
+-- True iff the expression is an explicit lambda at the top level.
+-- #807 (pre-existing, out of scope here): does NOT see through an ELoc
+-- wrapper, so a zero-param `let rec f = x => …` clause — whose RHS the parser
+-- wraps in ELoc — is WRONGLY rejected as non-function even though it plainly
+-- is one. Confirmed this predates #799's fix (reproduces identically against
+-- pre-#799 top-level `let rec`, the only call site old enough to hit it) —
+-- not something introduced by the block/expr-level guards added here.
+isSyntacticLambda : Expr -> Bool
+isSyntacticLambda (ELam _ _) = True
+isSyntacticLambda _ = False
+
+-- D2 fix: check all top-level DLetGroup declarations for non-function recursive
+-- bindings.  A binding is illegal
+-- when ALL its clauses have zero params AND none is a syntactic lambda.
+-- Pushes the error into typeErrors for each violating member.
+export
+checkLetRecDecls : ModuleCtx -> List Decl -> Unit
+checkLetRecDecls mctx [] = ()
+checkLetRecDecls mctx ((DLetGroup _ binds) :: rest) =
+  checkLetBinds mctx binds
+  checkLetRecDecls mctx rest
+checkLetRecDecls mctx (_ :: rest) = checkLetRecDecls mctx rest
+
+checkLetBinds : ModuleCtx -> List LetBind -> Unit
+checkLetBinds mctx [] = ()
+checkLetBinds mctx ((LetBind name clauses _ _) :: rest) =
+  checkLetBind mctx name clauses
+  checkLetBinds mctx rest
+
+checkLetBind : ModuleCtx -> String -> List FunClause -> Unit
+checkLetBind mctx name clauses
+  | allList clauseIsNonFunction clauses =
+    pushTypeError
+      (mctxAtIfSome (clausesSpanLoc clauses) mctx)
+      "T-NONREC-VALUE-LET"
+      (letRecNonFunctionMsg name)
+  | otherwise = ()
+
+clauseIsNonFunction : FunClause -> Bool
+clauseIsNonFunction (FunClause [] rhs) = not (isSyntacticLambda rhs)
+clauseIsNonFunction (FunClause _ _) = False
+
+-- blockRecLet/inferRecLet already have the bound name's (possibly-curried) RHS
+-- expr in hand: `curryLam pats e1` for a function-form clause is always an
+-- ELam, so this only ever flags the genuinely zero-param, non-lambda case —
+-- identical discrimination to clauseIsNonFunction, just on the curried form.
+-- Both call sites are ELet, produced ONLY from a singleton binding (a plain
+-- `let f a… = e1 [in e2]` or an explicit `let rec` — "with" mutual-grouping was
+-- removed), so — unlike ELetGroup below — there is no risk of an innocent
+-- bystander binding riding along; mirroring the top-level "not a syntactic
+-- lambda ⇒ reject" rule verbatim is safe here. Unlike the top-level call site
+-- (which has no expression in hand to locate against), this DOES have the RHS
+-- expr and passes it to pushTypeErrorAt via exprLoc (ERROR-QUALITY.md) — but
+-- that is a BEST-EFFORT location, not a guaranteed one: exprLoc only recognizes
+-- an ELoc/EDoOrigin wrapper, and not every Expr shape the parser produces is
+-- wrapped in one (e.g. a bare `EBinOp` RHS like `let rec x = x + 1` has no
+-- ELoc, so exprLoc returns None and the diagnostic falls back to the zero
+-- range — same as the top-level guard's own unlocated call). A wrapped RHS
+-- (the common case — most expressions ARE ELoc-wrapped) gets a real range.
+export
+checkRecBindNonFunction : ModuleCtx -> String -> Expr -> Unit
+checkRecBindNonFunction mctx name e
+  | isSyntacticLambda e = ()
+  | otherwise =
+    pushTypeErrorAt
+      mctx
+      "T-NONREC-VALUE-LET"
+      (exprLoc e)
+      (letRecNonFunctionMsg name)
+
+-- inferLetGroup's ELetGroup is DIFFERENT: it is the SAME node `where` clauses
+-- desugar to (parser.mdk whereEol/whereTail/guard-arm-where — verified: no
+-- `rec` keyword involved, no AST field distinguishing the two), and a `where`
+-- group routinely bundles plain, NON-recursive value helpers alongside real
+-- functions (e.g. stdlib/list.mdk's `split`: `where sepLen = length sep; go
+-- ys = …` — sepLen never mentions itself or any sibling). Applying
+-- checkRecBindNonFunction's blunt "not a lambda ⇒ reject" rule here false-
+-- positived on exactly that (confirmed against the tree before landing this).
+--
+-- So this check is narrower and more precise instead of broader: a zero-param,
+-- non-lambda clause is illegal only if its RHS EAGERLY (i.e. not deferred
+-- behind a nested lambda) mentions itself or a NOT-YET-INSTALLED sibling — the
+-- actual hazard (evalLetGroup pre-binds every member's cell to Ref VUnit and
+-- installs each member's value in SOURCE ORDER, so an eager reference to a
+-- cell installed BEFORE this one is already set — safe — while a reference to
+-- itself or a cell installed AFTER this one reads stale VUnit — unsafe).
+--
+-- Concretely: for the clause at index i, only a self-or-FORWARD reference
+-- (index >= i) is illegal; a BACKWARD reference (index < i) is the ordinary,
+-- safe `where`-clause shape (`f x = b where a = x + 1; b = a + 100` — `b`
+-- referencing the earlier `a` is fine, `a` referencing the later `b` would not
+-- be). checkLetGroupBindsGo threads exactly that suffix: at each step the
+-- current binding's own name is prepended to the REST of the list (every
+-- sibling that installs after it), so "names" passed down is always "self +
+-- forward", never "self + every sibling" — an earlier false-positive this
+-- fixed (confirmed against the tree: it rejected working `where`-bound values
+-- that only referenced an EARLIER sibling).
+export
+checkLetGroupBindsLocated : ModuleCtx -> List LetBind -> Unit
+checkLetGroupBindsLocated mctx = checkLetGroupBindsGo mctx
+
+checkLetGroupBindsGo : ModuleCtx -> List LetBind -> Unit
+checkLetGroupBindsGo mctx [] = ()
+checkLetGroupBindsGo mctx ((LetBind name clauses _ _) :: rest) =
+  let selfAndForward = name :: map letBindName rest
+  checkClausesNonFunctionLocated mctx selfAndForward name clauses
+  checkLetGroupBindsGo mctx rest
+
+checkClausesNonFunctionLocated : ModuleCtx ->
+  List String ->
+  String ->
+  List FunClause ->
+  Unit
+checkClausesNonFunctionLocated mctx names name clauses
+  | allList clauseIsNonFunction clauses
+    && anyClauseEagerlyRefsGroup names clauses =
+    pushTypeErrorAt
+      mctx
+      "T-NONREC-VALUE-LET"
+      (clausesLoc clauses)
+      (letRecNonFunctionMsg name)
+  | otherwise = ()
+
+anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
+anyClauseEagerlyRefsGroup names clauses =
+  anyList (clauseEagerlyRefsGroup names) clauses
+
+clauseEagerlyRefsGroup : List String -> FunClause -> Bool
+clauseEagerlyRefsGroup names (FunClause _ rhs) = anyMember names (eagerRefs rhs)
+
+clausesLoc : List FunClause -> Option Loc
+clausesLoc [] = None
+clausesLoc ((FunClause _ rhs) :: _) = exprLoc rhs
+
+-- The span of the first clause's right-hand side, unwrapped nodes included.
+clausesSpanLoc : List FunClause -> Option Loc
+clausesSpanLoc [] = None
+clausesSpanLoc ((FunClause _ rhs) :: _) = exprSpanLoc rhs
+
+-- Names `e` reads WITHOUT first going under a lambda (a lambda DEFERS
+-- evaluation, so a reference inside one cannot observe a still-uninstalled
+-- letrec-group cell). Deliberately UNDER-approximates: an Expr shape not
+-- explicitly handled falls to the catch-all `[]` (no eager reference
+-- detected) rather than guessing — that can only make this check MORE
+-- permissive than exhaustive coverage would, never less, so an unhandled
+-- shape is a missed catch (no worse than status quo before #799's fix), not a
+-- new false positive. Mirrors marker.mdk's collectVars (the DCE reference
+-- walk) with ONE change: collectVars descends into ELam bodies (DCE needs
+-- every eventually-reachable name); this stops at ELam (its body is deferred,
+-- not eager).
+eagerRefs : Expr -> List String
+eagerRefs (EVar x) = [x]
+eagerRefs (EVarId x _) = [x]
+-- #2705: a marked occurrence is still a reference to the name (every driver marks
+-- before inference now); dropping it here would make this check more permissive
+-- than the un-marked tree it mirrors.
+eagerRefs (EMethodAt x _ _) = [x]
+eagerRefs (EDictAt x _) = [x]
+eagerRefs (EApp a b) = eagerRefs a ++ eagerRefs b
+eagerRefs (ELam _ _) = []
+eagerRefs (ELet _ _ _ e1 e2) = eagerRefs e1 ++ eagerRefs e2
+eagerRefs (ELetGroup bs e2) = flatMap eagerRefsLetBind bs ++ eagerRefs e2
+eagerRefs (EMatch e0 arms) = eagerRefs e0 ++ flatMap eagerRefsArm arms
+eagerRefs (EIf c t el) = eagerRefs c ++ eagerRefs t ++ eagerRefs el
+eagerRefs (EBinOp _ a b _) = eagerRefs a ++ eagerRefs b
+eagerRefs (EUnOp _ a _) = eagerRefs a
+eagerRefs (EInfix op a b) = op :: eagerRefs a ++ eagerRefs b
+eagerRefs (EFieldAccess e0 _ _) = eagerRefs e0
+eagerRefs (ERecordCreate _ fs) = flatMap eagerRefsFieldAssign fs
+eagerRefs (ERecordUpdate e0 fs _) =
+  eagerRefs e0 ++ flatMap eagerRefsFieldAssign fs
+eagerRefs (EVariantUpdate _ e0 fs) =
+  eagerRefs e0 ++ flatMap eagerRefsFieldAssign fs
+eagerRefs (EArrayLit es) = flatMap eagerRefs es
+eagerRefs (EListLit es) = flatMap eagerRefs es
+eagerRefs (ETuple es) = flatMap eagerRefs es
+eagerRefs (EIndex e0 i) = eagerRefs e0 ++ eagerRefs i
+eagerRefs (ERangeList lo hi _) = eagerRefs lo ++ eagerRefs hi
+eagerRefs (ERangeArray lo hi _) = eagerRefs lo ++ eagerRefs hi
+eagerRefs (ESlice e0 lo hi _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
+eagerRefs (EBlock stmts) = flatMap eagerRefsDoStmt stmts
+eagerRefs (EDo _ stmts) = flatMap eagerRefsDoStmt stmts
+eagerRefs (EAnnot e0 _) = eagerRefs e0
+eagerRefs (EHeadAnnot e0 _) = eagerRefs e0
+eagerRefs (EStringInterp parts) = flatMap eagerRefsInterp parts
+eagerRefs (EGuards arms) = flatMap eagerRefsGuardArm arms
+eagerRefs (ESection (SecRight _ e0)) = eagerRefs e0
+eagerRefs (ESection (SecLeft e0 _)) = eagerRefs e0
+eagerRefs (EAsPat _ e0) = eagerRefs e0
+eagerRefs (EMapLit _ kvs) = flatMap eagerRefsPair kvs
+eagerRefs (ESetLit _ es) = flatMap eagerRefs es
+eagerRefs (ELoc _ e) = eagerRefs e
+eagerRefs (EDoOrigin _ e) = eagerRefs e
+eagerRefs _ = []
+
+eagerRefsLetBind : LetBind -> List String
+eagerRefsLetBind (LetBind _ clauses _ _) =
+  flatMap eagerRefsClauseAllPats clauses
+
+-- Unlike the group-membership test above (which only examines zero-param
+-- clauses), a NESTED ELetGroup's own function-form members are legitimately
+-- deferred (their body only runs once applied) — so only fold in a nested
+-- zero-param clause's refs eagerly; a nested function clause's body is safe
+-- to skip, matching the ELam short-circuit above.
+eagerRefsClauseAllPats : FunClause -> List String
+eagerRefsClauseAllPats (FunClause [] rhs) = eagerRefs rhs
+eagerRefsClauseAllPats (FunClause _ _) = []
+
+eagerRefsArm : Arm -> List String
+eagerRefsArm (Arm _ gs body) = flatMap eagerRefsGuard gs ++ eagerRefs body
+
+eagerRefsGuard : Guard -> List String
+eagerRefsGuard (GBool e) = eagerRefs e
+eagerRefsGuard (GBind _ e) = eagerRefs e
+
+eagerRefsGuardArm : GuardArm -> List String
+eagerRefsGuardArm (GuardArm gs body) =
+  flatMap eagerRefsGuard gs ++ eagerRefs body
+
+eagerRefsFieldAssign : FieldAssign -> List String
+eagerRefsFieldAssign (FieldAssign _ e) = eagerRefs e
+
+eagerRefsDoStmt : DoStmt -> List String
+eagerRefsDoStmt (DoExpr e) = eagerRefs e
+eagerRefsDoStmt (DoBind _ e) = eagerRefs e
+eagerRefsDoStmt (DoLet _ _ _ e _) = eagerRefs e
+eagerRefsDoStmt _ = []
+
+eagerRefsInterp : InterpPart -> List String
+eagerRefsInterp (InterpExpr e) = eagerRefs e
+eagerRefsInterp _ = []
+
+eagerRefsPair : (Expr, Expr) -> List String
+eagerRefsPair (k, v) = eagerRefs k ++ eagerRefs v
+
+export
+groupNames : List (String, (List Pat, Expr)) -> OrdMap Unit -> List String
+groupNames [] _ = []
+groupNames ((n, _) :: rest) seen = match omLookup n seen
+  Some _ => groupNames rest seen
+  None => n :: groupNames rest (omInsert n () seen)
+
+-- Whether a where/let group member generalizes, and its type.
+export
+letBindGeneralizes : TcEnv ->
+  (LetBind, (String, BindingSummary)) ->
+  (Bool, Mono)
+letBindGeneralizes env (LetBind _ clauses _ _, (_, summary)) =
+  (clausesAreValue env clauses, summary.bsValue)
+
+export
+generalizeGroup : TcEnv ->
+  List (Int, AuthResidual) ->
+  Int ->
+  List (LetBind, (String, Scheme)) ->
+  TcEnv
+generalizeGroup env _ _ [] = env
+generalizeGroup env residuals index ((LetBind name clauses _ _, (_, sch)) :: rest) =
+  let mono = schemeMono sch
+  let isVal = clausesAreValue env clauses
+  -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
+  -- alphaCollectBinds rule); a multi-clause / parameterized binding is not a
+  -- known prefix.
+  let env1 =
+    extendLocalVar
+      env
+      name
+      (genBindingRestricted
+        env.teDyn
+        Tip
+        (residualsOf index residuals)
+        isVal
+        pureRow
+        mono)
+  let env2 = match clauses
+    [FunClause [] rhs] => seedAlphaLets env1 name rhs
+    _ => env1
+  generalizeGroup env2 residuals (index + 1) rest
+
+-- A where-clause binding is a value (generalizable) iff every clause has params
+-- (it's a function) or its zero-arg RHS is non-expansive.
+clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesAreValue env clauses = allList (clauseIsValue env) clauses
+
+clauseIsValue : TcEnv -> FunClause -> Bool
+clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
+clauseIsValue env (FunClause _ _) = True
+
+-- [o]'s prerequisites, each entered on [o]'s walk by [enter].
+export
+requireGoalsBelow : ModuleCtx ->
+  (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  (UObligation, ReqWalk) ->
+  List (UObligation, ReqWalk)
+requireGoalsBelow mctx enter rigidIds liveIds (o, walk) =
+  let args = map normalize (uOblArgs mctx.mcGraph o)
+  let iface = o.pred.iface
+  let parentIds = flatMap monoUnboundIds args
+  if isEmptyL args
+    || monoVectorClosed args
+    || goalVarsAllHeld rigidIds args
+    || goalGivenAt mctx.mcGraph iface args o.uoScope
+    || anyList (i => omHasKey (intToString i) liveIds) parentIds
+      && not (undeterminedGoalExempt mctx iface args o.uoScope) then
+    []
+  else
+    let rows = goalRows mctx iface args
+    let reach =
+      if goalIsProjection args rows then
+        ReachMany
+      else
+        goalReach mctx args (goalCandidates mctx rigidIds args rows)
+    match reach
+      ReachOne row =>
+        let goalsOf =
+          ids subst reqs =>
+            flatMap
+              (req =>
+                flatMap
+                  (enter walk)
+                  (requireGoalAt o ids (reqToObligation mctx subst req)))
+              reqs
+        match selectedRowReqMatch mctx args row
+          Some (subst, reqs) => goalsOf parentIds subst reqs
+          None => match unifiedRowReqs mctx rigidIds args row
+            Some (subst, fresh, reqs) => goalsOf (parentIds ++ fresh) subst reqs
+            None => []
+      _ => []
+
+-- The prerequisites of [row] under the unifier of its heads with [args] (every
+-- variable in [rigidIds] held rigid), for a goal the row's head determines without
+-- matching it as it stands (`B ?a` under `impl B (List b)`).  The unifier is not
+-- committed, so the head variable it introduces (`?b` in `?a := List ?b`) stands
+-- for a part of the goal's variable only while nothing outside the boundary can
+-- still bind that variable: every goal variable it binds must be the boundary's.
+-- One a scheme quantifies makes the goal the caller's, and the caller walks it on
+-- its own variables.  The substitution keeps the goal's own variables where the
+-- unifier held them rigid, and the variables it introduces are returned beside it.
+unifiedRowReqs : ModuleCtx ->
+  OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (String, Mono), List Int, List Require)
+unifiedRowReqs mctx rigidIds args (row@(ImplRow _ _ _ _ reqs _ _)) =
+  let (tvs, heads) = freshRowHeadsTvs mctx row
+  let goalIds = flatMap monoUnboundIds args
+  match headsUnifier mctx.mcGraph rigidIds args heads
+    Some scratch =>
+      if allList
+        (b =>
+          not (containsI (fst b) goalIds)
+            || boundaryOwnsOpen mctx rigidIds (fst b))
+        !scratch then
+        let sigCells = sigCellsOf rigidIds (flatMap monoVarCells args)
+        let bound =
+          map
+            (nv => (fst nv, unrigidSig sigCells (cohApply scratch (snd nv))))
+            tvs
+        Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
+      else
+        None
+    None => None
+
+-- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
+-- instance's head does not fix is left to the module's obligation check.
+requireGoalAt : UObligation ->
+  List Int ->
+  (IfaceRef, List Mono) ->
+  List UObligation
+requireGoalAt o parentIds (iface, args)
+  | not (allList (i => containsI i parentIds) (flatMap monoUnboundIds args)) =
+    []
+  | otherwise = [
+    UObligation {
+      pred = Predicate { iface = iface, args = args },
+      originId = o.originId,
+      prov = o.prov,
+      loc = o.loc,
+      uoScope = o.uoScope,
+      oblProj = OpProjected,
+    },
+  ]
+
+-- every variable reference in an expr, bound ones included (an over-approximation
+-- of its free references); the dependency graph uses `freeEVars` instead
+export
+allEVars : Expr -> List String
+allEVars (EVar x) = [x]
+allEVars (EVarId x _) = [x]
+allEVars (EMethodAt n _ _) = [n]
+allEVars (EDictAt n _) = [n]
+allEVars (ELit _) = []
+allEVars (EApp f x) = allEVars f ++ allEVars x
+allEVars (ELam _ b) = allEVars b
+allEVars (ELet _ _ _ e1 e2) = allEVars e1 ++ allEVars e2
+allEVars (ELetGroup binds body) = flatMap letBindEVars binds ++ allEVars body
+allEVars (EMatch e arms) = allEVars e ++ flatMap armEVars arms
+allEVars (EIf c t e) = allEVars c ++ allEVars t ++ allEVars e
+allEVars (EBinOp _ l r _) = allEVars l ++ allEVars r
+allEVars (EUnOp _ e _) = allEVars e
+allEVars (EInfix op l r) = op :: allEVars l ++ allEVars r
+allEVars (EFieldAccess e _ _) = allEVars e
+allEVars (ETuple es) = flatMap allEVars es
+allEVars (EListLit es) = flatMap allEVars es
+allEVars (EArrayLit es) = flatMap allEVars es
+allEVars (ERangeList a b _) = allEVars a ++ allEVars b
+allEVars (ERangeArray a b _) = allEVars a ++ allEVars b
+allEVars (ESlice e a b _) = allEVars e ++ allEVars a ++ allEVars b
+allEVars (EIndex e i) = allEVars e ++ allEVars i
+allEVars (EAnnot e _) = allEVars e
+allEVars (EBlock stmts) = flatMap doStmtEVars stmts
+allEVars (ERecordCreate _ fs) = flatMap fieldAssignEVars fs
+allEVars (ERecordUpdate e fs _) = allEVars e ++ flatMap fieldAssignEVars fs
+allEVars (EVariantUpdate _ e fs) = allEVars e ++ flatMap fieldAssignEVars fs
+allEVars (ELoc _ e) = allEVars e
+allEVars (EDoOrigin _ e) = allEVars e
+allEVars (EHeadAnnot e _) = allEVars e
+allEVars (EAsPat _ e) = allEVars e
+allEVars (EMapLit _ kvs) = flatMap kvEVars kvs
+allEVars (ESetLit _ es) = flatMap allEVars es
+allEVars (EDo _ stmts) = flatMap doStmtEVars stmts
+allEVars (EStringInterp parts) = flatMap interpEVars parts
+allEVars (EGuards arms) = flatMap guardArmEVars arms
+allEVars (ESection s) = sectionEVars s
+-- The arms above mirror `rewriteArgScoped`'s traversal (children only, binders
+-- ignored).  What is left for the catch-all, derived against `Expr`'s full
+-- constructor set, is exactly four
+-- constructors that carry no sub-`Expr` reachable here:
+--   ENumLit, EDictApp  — leaves;
+--   EMethodRef         — no production verb mints one (see `declRefNames` below);
+--   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
+-- A new reference-bearing constructor therefore needs an arm above: falling to the
+-- catch-all silently drops a dependency edge rather than erroring.
+allEVars _ = []
+
+kvEVars : (Expr, Expr) -> List String
+kvEVars (k, v) = allEVars k ++ allEVars v
+
+interpEVars : InterpPart -> List String
+interpEVars (InterpStr _) = []
+interpEVars (InterpExpr e) = allEVars e
+
+guardArmEVars : GuardArm -> List String
+guardArmEVars (GuardArm guards body) =
+  flatMap guardEVars guards ++ allEVars body
+
+sectionEVars : Section -> List String
+sectionEVars (SecBare op) = [op]
+sectionEVars (SecRight op e) = op :: allEVars e
+sectionEVars (SecLeft e op) = op :: allEVars e
+
+letBindEVars : LetBind -> List String
+letBindEVars (LetBind _ clauses _ _) = flatMap funClauseEVars clauses
+
+funClauseEVars : FunClause -> List String
+funClauseEVars (FunClause _ body) = allEVars body
+
+armEVars : Arm -> List String
+armEVars (Arm _ guards body) = flatMap guardEVars guards ++ allEVars body
+
+guardEVars : Guard -> List String
+guardEVars (GBool e) = allEVars e
+guardEVars (GBind _ e) = allEVars e
+
+doStmtEVars : DoStmt -> List String
+doStmtEVars (DoExpr e) = allEVars e
+doStmtEVars (DoLet _ _ _ e _) = allEVars e
+doStmtEVars (DoBind _ e) = allEVars e
+doStmtEVars (DoAssign _ e) = allEVars e
+doStmtEVars (DoFieldAssign _ _ e) = allEVars e
+
+fieldAssignEVars : FieldAssign -> List String
+fieldAssignEVars (FieldAssign _ e) = allEVars e
+
+-- The names `e` reads that are not bound by a binder inside `e` or in `bound`:
+-- `allEVars` with the binders subtracted, for the dependency graph (`clauseRefs`).
+-- Scoping follows resolve's `stampExpr`, the walk that decides which binding an
+-- occurrence names: a lambda's and a clause's params, a let's pattern (in its own
+-- right-hand side too when recursive), a let group's names, an arm's pattern and
+-- its `<-` guards, and a statement's pattern for the statements after it.  An
+-- `EVarId` is read by its name: a local letrec's bodies are stamped before they
+-- are grouped, and every local occurrence carries the same id 0.
+-- A recursive `DoLet` and a recursive non-`PVar` `ELet` bind the pattern in their own
+-- right-hand side here, wider than `stampExpr`; the worst case is a group split that
+-- could have stayed merged.
+freeEVars : OrdMap Unit -> Expr -> List String
+freeEVars bound (EVar x) = freeName bound x
+freeEVars bound (EVarId x _) = freeName bound x
+freeEVars _ (EMethodAt n _ _) = [n]
+freeEVars _ (EDictAt n _) = [n]
+freeEVars bound (EApp f x) = freeEVars bound f ++ freeEVars bound x
+freeEVars bound (ELam ps b) = freeEVars (namesToSet (patVarsListTc ps) bound) b
+freeEVars bound (ELet _ r p e1 e2) =
+  let after = namesToSet (patVarsTc p) bound
+  freeEVars (if r then after else bound) e1 ++ freeEVars after e2
+freeEVars bound (ELetGroup binds body) =
+  let inner = namesToSet (map letBindName binds) bound
+  flatMap (freeLetBindEVars inner) binds ++ freeEVars inner body
+freeEVars bound (EMatch e arms) =
+  freeEVars bound e ++ flatMap (freeArmEVars bound) arms
+freeEVars bound (EIf c t e) =
+  freeEVars bound c ++ freeEVars bound t ++ freeEVars bound e
+freeEVars bound (EBinOp _ l r _) = freeEVars bound l ++ freeEVars bound r
+freeEVars bound (EUnOp _ e _) = freeEVars bound e
+freeEVars bound (EInfix op l r) =
+  freeName bound op ++ freeEVars bound l ++ freeEVars bound r
+freeEVars bound (EFieldAccess e _ _) = freeEVars bound e
+freeEVars bound (ETuple es) = flatMap (freeEVars bound) es
+freeEVars bound (EListLit es) = flatMap (freeEVars bound) es
+freeEVars bound (EArrayLit es) = flatMap (freeEVars bound) es
+freeEVars bound (ERangeList a b _) = freeEVars bound a ++ freeEVars bound b
+freeEVars bound (ERangeArray a b _) = freeEVars bound a ++ freeEVars bound b
+freeEVars bound (ESlice e a b _) =
+  freeEVars bound e ++ freeEVars bound a ++ freeEVars bound b
+freeEVars bound (EIndex e i) = freeEVars bound e ++ freeEVars bound i
+freeEVars bound (EAnnot e _) = freeEVars bound e
+freeEVars bound (EBlock stmts) = freeStmtsEVars bound stmts
+freeEVars bound (ERecordCreate _ fs) = flatMap (freeFieldEVars bound) fs
+freeEVars bound (ERecordUpdate e fs _) =
+  freeEVars bound e ++ flatMap (freeFieldEVars bound) fs
+freeEVars bound (EVariantUpdate _ e fs) =
+  freeEVars bound e ++ flatMap (freeFieldEVars bound) fs
+freeEVars bound (ELoc _ e) = freeEVars bound e
+freeEVars bound (EDoOrigin _ e) = freeEVars bound e
+freeEVars bound (EHeadAnnot e _) = freeEVars bound e
+freeEVars bound (EAsPat _ e) = freeEVars bound e
+freeEVars bound (EMapLit _ kvs) = flatMap (freeKvEVars bound) kvs
+freeEVars bound (ESetLit _ es) = flatMap (freeEVars bound) es
+freeEVars bound (EDo _ stmts) = freeStmtsEVars bound stmts
+freeEVars bound (EStringInterp parts) = flatMap (freeInterpEVars bound) parts
+freeEVars bound (EGuards arms) = flatMap (freeGuardArmEVars bound) arms
+freeEVars bound (ESection (SecBare op)) = freeName bound op
+freeEVars bound (ESection (SecRight op e)) =
+  freeName bound op ++ freeEVars bound e
+freeEVars bound (ESection (SecLeft e op)) =
+  freeName bound op ++ freeEVars bound e
+-- Leaves.  `EMethodRef` and `EVarAt` never reach the dependency graph (see
+-- `allEVars`'s catch-all), and are not counted there either.
+freeEVars _ (ELit _) = []
+freeEVars _ (ENumLit _ _ _) = []
+freeEVars _ (EWideLit _ _ _ _) = []
+freeEVars _ (EDictApp _) = []
+freeEVars _ (EMethodRef _) = []
+freeEVars _ (EVarAt _ _) = []
+
+freeKvEVars : OrdMap Unit -> (Expr, Expr) -> List String
+freeKvEVars bound (k, v) = freeEVars bound k ++ freeEVars bound v
+
+freeName : OrdMap Unit -> String -> List String
+freeName bound x = if omHasKey x bound then [] else [x]
+
+freeInterpEVars : OrdMap Unit -> InterpPart -> List String
+freeInterpEVars _ (InterpStr _) = []
+freeInterpEVars bound (InterpExpr e) = freeEVars bound e
+
+freeFieldEVars : OrdMap Unit -> FieldAssign -> List String
+freeFieldEVars bound (FieldAssign _ e) = freeEVars bound e
+
+freeLetBindEVars : OrdMap Unit -> LetBind -> List String
+freeLetBindEVars bound (LetBind _ clauses _ _) =
+  flatMap (c => clauseRefsUnder bound (funClausePair c)) clauses
+
+clauseRefsUnder : OrdMap Unit -> (List Pat, Expr) -> List String
+clauseRefsUnder bound (ps, body) =
+  freeEVars (namesToSet (patVarsListTc ps) bound) body
+
+freeArmEVars : OrdMap Unit -> Arm -> List String
+freeArmEVars bound (Arm p guards body) =
+  freeGuardsEVars (namesToSet (patVarsTc p) bound) guards body
+
+freeGuardArmEVars : OrdMap Unit -> GuardArm -> List String
+freeGuardArmEVars bound (GuardArm guards body) =
+  freeGuardsEVars bound guards body
+
+-- guards left to right, a `p <- e` guard binding `p` for the guards after it and
+-- for the body
+freeGuardsEVars : OrdMap Unit -> List Guard -> Expr -> List String
+freeGuardsEVars bound [] body = freeEVars bound body
+freeGuardsEVars bound ((GBool e) :: rest) body =
+  freeEVars bound e ++ freeGuardsEVars bound rest body
+freeGuardsEVars bound ((GBind p e) :: rest) body =
+  freeEVars bound e
+    ++ freeGuardsEVars (namesToSet (patVarsTc p) bound) rest body
+
+freeStmtsEVars : OrdMap Unit -> List DoStmt -> List String
+freeStmtsEVars _ [] = []
+freeStmtsEVars bound ((DoExpr e) :: rest) =
+  freeEVars bound e ++ freeStmtsEVars bound rest
+freeStmtsEVars bound ((DoLet _ r p e _) :: rest) =
+  let after = namesToSet (patVarsTc p) bound
+  freeEVars (if r then after else bound) e ++ freeStmtsEVars after rest
+freeStmtsEVars bound ((DoBind p e) :: rest) =
+  freeEVars bound e ++ freeStmtsEVars (namesToSet (patVarsTc p) bound) rest
+freeStmtsEVars bound ((DoAssign x e) :: rest) =
+  freeEVars bound e ++ freeStmtsEVars (namesToSet [x] bound) rest
+freeStmtsEVars bound ((DoFieldAssign _ _ e) :: rest) =
+  freeEVars bound e ++ freeStmtsEVars bound rest
+
+export
+depGraphMap : List String ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List String)
+depGraphMap names grouped =
+  buildAdj names (namesToSet names omEmpty) grouped omEmpty
+
+-- defs grouped by name ONCE (name -> its clauses, in defs order), so `depsOf`
+-- does an O(log n) lookup instead of re-scanning all defs per name (was
+-- O(names·defs)). Built by prepend (O(1)); `clausesOf` reverses on read to
+-- restore defs order — so the per-name clause list is identical to the old
+-- `clausesFor name defs`, keeping dep lists / SCC order / output byte-identical.
+export
+groupClauses : List (String, (List Pat, Expr)) -> OrdMap (List (List Pat, Expr))
+groupClauses defs = groupClausesGo defs omEmpty
+
+groupClausesGo : List (String, (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+groupClausesGo [] m = m
+groupClausesGo ((n, c) :: rest) m =
+  groupClausesGo rest (omInsert n (c :: clausesAt n m) m)
+
+buildAdj : List String ->
+  OrdMap Unit ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
+buildAdj [] _ _ m = m
+buildAdj (n :: rest) nameSet cbn m =
+  buildAdj rest nameSet cbn (omInsert n (depsOf n nameSet cbn) m)
+
+-- per-name dependencies: the other group names a binding's bodies reference FREE.
+-- Consumed by depGraphMap → Tarjan.  An over-approximated edge is not harmless:
+-- it merges two bindings into one SCC, which infers them monomorphically together
+-- and can leak one member's constraints into the other's scheme.  So a local
+-- binder or parameter that shadows a group name must not count as a reference to
+-- it (`clauseRefs` → `freeEVars`).
+depsOf : String -> OrdMap Unit -> OrdMap (List (List Pat, Expr)) -> List String
+depsOf name nameSet cbn =
+  filterNonSelf
+    name
+    (keepGroupNames nameSet (dedup (groupRefs (clausesOf name cbn))))
+
+groupRefs : List (List Pat, Expr) -> List String
+groupRefs clauses = flatMap clauseRefs clauses
+
+clauseRefs : (List Pat, Expr) -> List String
+clauseRefs clause = clauseRefsUnder omEmpty clause
+
+keepGroupNames : OrdMap Unit -> List String -> List String
+keepGroupNames nameSet refs = filterList (r => omHasKey r nameSet) refs
+
+filterNonSelf : String -> List String -> List String
+filterNonSelf name xs = filterList (/= name) xs
+
+-- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
+-- just Num) a group's constrained-callee instantiations recorded on the call/dict
+-- deltas.  Unlike numCallObls/numDictObls (which feed only Num-defaulting), these
+-- feed registerSchemeObligations so a constraint FORWARDED from a constrained callee
+-- (`useApp g = app2 g`, whose Num lives on the call/dict deltas, never on
+-- pendingImplObligations) is recorded in schemeObligationsRef — so a caller of the
+-- forwarder (`main = println (useApp (==))`) re-instantiates it (instantiateVarTracked),
+-- surfacing the constraint on the caller's own delta where group Num-defaulting can
+-- ground the shared ambiguous var.  Without this the forwarded var never grounds on
+-- the check path and a downstream Eq/Ord obligation on it is falsely ambiguous.
+-- #23 two-hop forward, VECTOR-PRESERVING.  A constraint forwarded from a constrained
+-- callee lives on the pendingCallObligations delta, never in addedObls, so a caller of
+-- this group must re-instantiate it from schemeObligationsRef.
+--
+-- This used to detour through a SYNTHETIC addedObls entry (iface, ["a"], TyVar "a",
+-- mono, loc) that schemeObligationOne re-read via dispatchMonosOf.  That entry
+-- structurally carries ONE Mono, so a joint predicate could not pass through it: it was
+-- flat-mapped per ARGUMENT, and because each 1-ary shard lands on a bound tyvar,
+-- boundTyvarIds SUCCEEDED and FABRICATED `Ix a` + `Ix i` alongside the real `Ix a i`
+-- (one violation reported three times; `(Ix a, Ix a b, Ix b) =>` displayed).
+--
+-- The detour was pure overhead: dispatchMonosOf ["a"] (TyVar "a") m is an IDENTITY —
+-- walkDispatch hits `contains "a" ["a"]` giving [("a", normalize m)], and collectByParam
+-- reads it straight back out as [normalize m].  A pendingCallObligations entry ALREADY
+-- carries its joint `List Mono`, so map it to bound tyvar ids DIRECTLY and the vector
+-- survives at every arity.  Identical at arity 1 (boundTyvarIds normalizes too), and it
+-- closes the UNSIGNED forwarding hole, which the declared-context path cannot reach
+-- (lookupSigTvMap is None for an unsigned binding).
+-- #1549: both scheme-obligation channels now project their entry to a PREDICATE
+-- (`callPredOf` / `oblPredOf`) and map it through the ONE `vecOblOfPred` — so the
+-- residual reduction §4 `gen` requires cannot be present on one channel and absent
+-- from the other (this file's signature failure mode).
+forwardedVecObls : ModuleCtx ->
+  Bool ->
+  List Int ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  List VecObl
+forwardedVecObls mctx generalizing boundIds callObls =
+  flatMap
+    (vecOblOfPred mctx generalizing boundIds)
+    (flatMap callPredOf callObls)
+
+-- A multi-member SCC is a mutually-recursive group (always a function group, like
+-- the oracle's DLetGroup); a singleton is a plain binding gated on its RHS.  Self-
+-- recursive singletons have had their self-edge stripped (filterNonSelf) so they
+-- arrive as size-1 SCCs — strict evaluation rules out a self-recursive zero-arg
+-- value, so gating them on the RHS is sound and matches the oracle's DFunDef path.
+export
+isLetrecGroup : List String -> Bool
+isLetrecGroup [] = False
+isLetrecGroup [_] = False
+isLetrecGroup _ = True
+
+export
+memberForce : ScopedMember -> EffRow
+memberForce member =
+  optionOr (optionOr pureRow member.smForce) member.smForceBound.value
+
+sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
+sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
+
+-- A declared signature variable is a caller-chosen universal, so Num defaulting
+-- never grounds it, whatever the group's shape. Every recursive occurrence of a
+-- signed member instantiates its written contract afresh (`preunifySigsEx` installs
+-- the declared scheme as `smRecursive`), so a declared variable never appears in
+-- another member's type: an unsigned sibling's copy is its own inference variable
+-- and defaults or generalizes under the ordinary rules. The former "shared by every
+-- generalizable member" bound assumed monomorphic recursion, under which the
+-- declared variable and the sibling's copy were one cell; with fresh contracts that
+-- bound protected nothing, and both members of a signed mutual group defaulted to
+-- Int without any too-general diagnostic.
+export
+sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> OrdMap Unit
+sccProtectedSignatureIds sigTvMaps =
+  omFromNames (map intToString (flatMap sigTvMapUnboundIds sigTvMaps)) omEmpty
+
+-- One entry per predicate (S-dict-arity-contract, #1318/B-4) — the (iface, bare
+-- tyvar NAMES) pairs of a signature's `=>` constraints, ONE per constraint that has at
+-- least one bare type variable ANYWHERE in its argument types, direct or NESTED
+-- (`tyVarArgNames`'s `dedup (flatMap tyVarNames tys)` walks into `TyApp`/`TyFun`/`TyTuple`
+-- spines, not just top-level `TyVar` arguments — S-structured-predicate-carry). So a
+-- STRUCTURED-only constraint (`Tag (Wrap a) =>`, no bare argument, `a` only reachable by
+-- descending into `Wrap a`) DOES carry a dict slot now.  Only a constraint whose
+-- arguments are entirely ground/closed — no bare type variable anywhere in them, nested
+-- or not — carries no dict slot and contributes nothing.
+--
+-- This list IS the dict-param cardinality of a `=>`-constrained top-level fn: it feeds
+-- `registerMemberSlots` → `funConstraintsRef`, which `dictArityOf` (define side) and
+-- `inferDictAtFound` (call side) both size from.  It used to emit one entry per bare
+-- tyvar ARGUMENT — `Ix a b =>` shattered into TWO dict params for ONE predicate, both
+-- routed from the same single-argument goal — so the emitted convention disagreed with
+-- the METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
+-- one slot per constraint since #818) and with the impl-`requires` channel
+-- (`registerReqSlots`, one slot per ENTRY).  All three channels now agree: one dict per
+-- predicate.  The names are kept as a LIST, not collapsed to the first one here,
+-- because WHICH of them is still an abstract tyvar after body inference is not knowable
+-- until `registerMemberSlots` normalizes the instantiated monos — and every abstract one
+-- must still reach `activeDictVars`, or a body use dispatching on the predicate's SECOND
+-- variable loses its route.
+export
+sigConstraints : Ty -> List (IfaceRef, List String)
+sigConstraints (TyConstrained cs _) = flatMap constraintTyVars cs
+sigConstraints _ = []
+
+-- U1b (#1482): carries `constraintOrigin` (the #1110 interface-occurrence identity)
+-- alongside the spelling, so `registerMember`'s slot-parallel iface list — and hence
+-- every obligation `recordCallObligations` later mints from it — is identity-carrying.
+constraintTyVars : Constraint -> List (IfaceRef, List String)
+constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys, constraintOrigin = co }) =
+  match tyVarArgNames tys
+    [] => []
+    ns => [(IfaceRef { irName = iface, irOrigin = co }, ns)]
+
+tyVarArgNames : List Ty -> List String
+tyVarArgNames tys = dedup (flatMap tyVarNames tys)
+
+-- #1161 (F-3a-ii): slot-parallel to `sigConstraints` — the WHOLE predicate's argument
+-- type list, ONE per slot.  `Ix a Char` and `Ix a b` are each ONE slot carrying their
+-- full argument list (`[TyVar a, TyCon Char]` / `[TyVar a, TyVar b]`) — evidence for one
+-- predicate, so one goal.
+-- Length-parallel to sigConstraints by construction: both are `flatMap … cs` over the
+-- SAME constraint list, and both emit one element per constraint that has at least one
+-- bare tyvar argument.
+-- Matches sigConstraints' TOP-LEVEL-`TyConstrained`-only shape deliberately, so the two
+-- cannot desynchronize on a nested-constraint spine.
+export
+sigConstraintArgTys : Ty -> List (List Ty)
+sigConstraintArgTys (TyConstrained cs _) = flatMap constraintTyVarArgs cs
+sigConstraintArgTys _ = []
+
+constraintTyVarArgs : Constraint -> List (List Ty)
+constraintTyVarArgs (Constraint { constraintArgs = tys }) =
+  match tyVarArgNames tys
+    [] => []
+    _ => [tys]
+
+-- like constraintVarMonos but KEEPS the iface name paired with each constraint var's
+-- mono (slot order preserved), so registerMember can register call-obligation ifaces.
+-- S-dict-arity-contract: the payload is now the predicate's WHOLE bare-tyvar mono list,
+-- one entry per predicate.  An entry survives when at least one of its names is in
+-- [tvMap] (the drop rule `constraintVarArgMonos` mirrors exactly); the monos of the
+-- names that are absent are simply not carried, which is what the per-name walk did.
+export
+constraintVarIfaceMonos : List (IfaceRef, List String) ->
+  List (String, Mono) ->
+  List (IfaceRef, List Mono)
+constraintVarIfaceMonos [] _ = []
+constraintVarIfaceMonos ((iface, names) :: rest) tvMap =
+  match constraintNameMonos names tvMap
+    [] => constraintVarIfaceMonos rest tvMap
+    monos => (iface, monos) :: constraintVarIfaceMonos rest tvMap
+
+-- #1161 (F-3a-ii): as constraintVarIfaceMonos, but yields each kept slot's predicate
+-- argument vector as MONOS at the signature instantiation.  Drops exactly the slots
+-- constraintVarIfaceMonos drops (same `lookupAssoc name tvMap` test, same walk), so the
+-- two lists stay slot-parallel.
+-- Resolves arguments with `fromAstType tvMap`, NOT `constraintArgMonos` — the latter
+-- returns `None` for any argument that is not a bare type variable, i.e. exactly the
+-- concrete `Char` in `Ix a Char` that is the whole point of recording the vector.
+-- Every tyvar NAME reachable inside an argument is in [tvMap]: instantiateSigTracked
+-- builds it from `tyVarNamesWithConstraints`, whose constraint half
+-- (`constraintArgVarNames`) is a full structural `tyVarNames` walk of each argument —
+-- so the interior `b` of `List b` is mapped, and fromAstType's unmapped-var → `TCon n`
+-- fallback is unreachable here.
+export
+constraintVarArgMonos : ModuleCtx ->
+  List (IfaceRef, List String) ->
+  List (List Ty) ->
+  List (String, Mono) ->
+  List (List Mono)
+constraintVarArgMonos mctx [] _ _ = []
+constraintVarArgMonos mctx _ [] _ = []
+constraintVarArgMonos mctx ((_, names) :: rest) (args :: argsRest) tvMap =
+  match constraintNameMonos names tvMap
+    [] => constraintVarArgMonos mctx rest argsRest tvMap
+    _ =>
+      map (fromAstType mctx tvMap) args
+        :: constraintVarArgMonos mctx rest argsRest tvMap
+
+-- generalize each member's (sig-and-body-unified) placeholder.  A signature was
+-- already unified into the placeholder by preunifySigs, so generalizing the
+-- result respects it AND any further specialization the body forces (e.g.
+-- sum : t a -> a with body `fold (+) 0` reports a Int -> Int, not the raw sig).
+-- Value restriction (DICT-SEMANTICS §4.1 G2): generalize a member only if it is
+-- a syntactic *value* — every one of its clauses has params, or its zero-arg RHS
+-- is non-expansive (`isNonexpansive`).  The decision is per MEMBER and purely
+-- syntactic, on every group shape:
+--   * a multi-member SCC gets no exemption (#2554): a zero-arg expansive member
+--     such as `cell = Ref (helper 0)` inside a mutually-recursive group is a
+--     polymorphic reference if generalized, and its siblings with params are
+--     values on their own account, so "a group is always a function group" was
+--     never the premise that made generalizing it safe;
+--   * a signed binding gets no exemption from its type (#2556): the old
+--     "post-unify type is an arrow" reading admitted `weird : a -> a ;
+--     weird = mk ()`, whose RHS allocates a Ref before returning the arrow, so
+--     one cell was read at two types.  A point-free binding is a value only
+--     if G2 says so — write `maximum xs = fold step None xs`, not
+--     `maximum = fold step None`.
+-- A non-function expansive binding (`r = Ref []`) is value-restricted and stays
+-- monomorphic whether or not it is signed.  The `isLetrec` argument is retained
+-- for the (unchanged) caller signature; it no longer influences the decision.
+export
+sccSchemes : TcEnv ->
+  List (String, Ty) ->
+  OrdMap (List (List Pat, Expr)) ->
+  Bool ->
+  List (Int, AuthResidual) ->
+  Int ->
+  List ScopedMember ->
+  List (String, Scheme)
+sccSchemes env _ _ _ _ _ [] = []
+sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
+  let m = member.smName
+  let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
+  (
+      m,
+      genBindingRestricted
+        env.teDyn
+        member.smDeclaredAuths.value
+        (residualsOf index residuals)
+        isVal
+        (memberForce member)
+        member.smMono,
+    )
+    :: sccSchemes env sigs grouped isLetrec residuals (index + 1) rest
+
+-- The authority variables each member of a group will quantify, keyed to the
+-- member's index: the argument-position authorities of an unsigned value
+-- member (`qualifierAuthIds`, the ones publication keeps).  A variable two
+-- members' types share is a recursive group's monomorphic link and is solved
+-- as before; a signed member publishes its signature, so it keeps none.
+export
+quantifiableAuthorities : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List ScopedMember ->
+  ScopeRoles
+quantifiableAuthorities env grouped members =
+  scopeRolesOf
+    (map
+      (member => (
+        memberRole
+          -- the presence set, not a scan of every signature: this runs once
+          -- per binding group (`sigNameSetRef`)
+          (omHasKey
+            member.smName
+            env.teDyn.dcModule.mcCells.sigNameSetRef.value)
+          (allList (memberClauseIsValue env) (clausesOf member.smName grouped)),
+        member.smMono,
+      ))
+      members)
+
+memberRole : Bool -> Bool -> BindingRole
+memberRole True _ = RoleDeclared
+memberRole False True = RoleQuantifies
+memberRole False False = RoleMonomorphic
+
+-- [members] in group order, each with its role and type.  A quantifying
+-- member's argument-position authorities are quantified (a variable two
+-- members share is a recursive group's monomorphic link and is solved as
+-- before); a monomorphic member hands every authority of its type outward.
+export
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
+scopeRolesOf members =
+  let owners =
+    fold
+      ((acc, index) (role, mono) =>
+        let ids = match role
+          RoleQuantifies => IdMap.keys (qualifierAuthIds mono Tip)
+          _ => []
+        (
+          fold
+            (m id => IdMap.set id (index :: optionOr [] (IdMap.get id m)) m)
+            acc
+            ids,
+          index + 1,
+        ))
+      (Tip, 0)
+      members
+  ScopeRoles {
+    rlQuantified =
+      IdMap.foldlWithKey
+        (acc id indices => match indices
+          [index] => IdMap.set id index acc
+          _ => acc)
+        Tip
+        (fst owners),
+    rlOutward =
+      fold
+        (acc (role, mono) => match role
+          RoleMonomorphic => authIdsIn mono acc
+          _ => acc)
+        Tip
+        members,
+    rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
+    rlMemberAuths = _ => map ((_, mono) => authIdsIn mono Tip) members,
+  }
+
+export
+residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
+residualsOf index residuals =
+  flatMap ((owner, r) => if owner == index then [r] else []) residuals
+
+-- a top-level clause is a value if it has params (function) or a non-expansive RHS
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
+memberClauseIsValue env (_, _) = True
+
+-- ── polymorphic signature over an expansive body ─────────────────────────────
+-- HM-CORE-SEMANTICS §1 clause 4 / DICT-SEMANTICS §4.1 G2.  A signed member whose
+-- signature quantifies a type variable but whose clauses are not syntactic values
+-- cannot generalize to what it declares: `sccSchemes` keeps it monomorphic, and
+-- the declared scheme would otherwise be exported over a body that carries no
+-- dictionary parameter — `check` narrowed it silently to its first use while
+-- `build` panicked on an unbound witness (the former "point-free constrained
+-- CAF", `sumOf : (Foldable t, Num a) => t a -> a ; sumOf = fold (+) 0`).  Reject
+-- at the definition and name the remedy.
+export
+checkSigsOverExpansive : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsOverExpansive env _ [] = ()
+checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
+  if not (isEmpty tvs)
+    && not (allList (memberClauseIsValue env) (clausesOf m grouped)) then
+    pushTypeError
+      env.teDyn.dcModule
+      "T-SIG-OVER-EXPANSIVE"
+      (sigOverExpansiveMsg m ty)
+  checkSigsOverExpansive env grouped rest
+
+-- ── signature-too-general check ──────────────────────────────────────────────
+-- After body inference, the declared signature's type variables must map to
+-- DISTINCT TVar refs.  If two declared tyvars (e.g. `a` and `b` in `a -> b`)
+-- collapse to the SAME TVar or become a concrete type, the body is not universal.
+-- Recursive calls instantiate the written contract, so silently narrowing its
+-- definition can also change dictionary arity underneath those calls.
+export
+checkSigsTooGeneral : ModuleCtx ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsTooGeneral mctx [] = ()
+checkSigsTooGeneral mctx ((m, ty, tvs) :: rest) =
+  checkSigTooGeneral mctx m ty tvs
+  checkSigsTooGeneral mctx rest
+
+checkSigTooGeneral : ModuleCtx -> String -> Ty -> List (String, Mono) -> Unit
+checkSigTooGeneral mctx name ty tvs =
+  let tvarIds = sigTvarIds (map snd tvs)
+  match groundedSignatureVariable tvs
+    Some (vname, actual) =>
+      pushTypeErrorOnceAt
+        mctx
+        "T-TYPE-TOO-GENERAL"
+        (firstTyLoc ty)
+        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the body requires `\{ppMono actual}`; write that type in the signature or make the body work for every `\{vname}`"
+    None =>
+      if hasDupI tvarIds then
+        pushTypeError mctx "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+
+groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
+groundedSignatureVariable [] = None
+groundedSignatureVariable ((name, mono) :: rest) = match normalize mono
+  TVar _ => groundedSignatureVariable rest
+  actual => Some (name, actual)
+
+-- The third way a declared variable stops being universal: a value-restricted
+-- sibling in the same group shares it.  `sccSchemes` keeps that sibling
+-- monomorphic (it is evaluated once, so it has one type), which fixes the signed
+-- member's declared variable to that one evaluation; the group can neither
+-- generalize the variable for the sibling nor default it for the signed member,
+-- and publishing the sibling with the variable free would let a later use pick
+-- the type after the shared value already ran.  Reported at the signature, like
+-- the grounded and collapsed forms, because the contract is what the body fails.
+-- A signed expansive member is `checkSigsOverExpansive`'s case and is skipped here.
+export
+checkSigsFixedByExpansive : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List ScopedMember ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsFixedByExpansive env grouped members sigTvMaps =
+  let fixed =
+    flatMap
+      (member =>
+        if member.smSigned.value
+          || allList
+            (memberClauseIsValue env)
+            (clausesOf member.smName grouped) then
+          []
+        else
+          map (id => (id, member.smName)) (monoUnboundIds member.smMono))
+      members
+  match fixed
+    [] => ()
+    _ => checkSigsFixedBy env.teDyn.dcModule fixed sigTvMaps
+
+checkSigsFixedBy : ModuleCtx ->
+  List (Int, String) ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsFixedBy mctx _ [] = ()
+checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
+  match sigVarFixedBy fixed tvs
+    Some (vname, sibling) =>
+      pushTypeErrorOnceAt
+        mctx
+        "T-TYPE-TOO-GENERAL"
+        (firstTyLoc ty)
+        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the zero-argument sibling `\{sibling}` shares it and is evaluated once; give `\{sibling}` a parameter or declare its monomorphic type"
+    None => ()
+  checkSigsFixedBy mctx fixed rest
+
+sigVarFixedBy : List (Int, String) ->
+  List (String, Mono) ->
+  Option (String, String)
+sigVarFixedBy _ [] = None
+sigVarFixedBy fixed ((vname, mono) :: rest) = match normalize mono
+  TVar cell => match fixedSibling (tyvarId cell) fixed
+    Some sibling => Some (vname, sibling)
+    None => sigVarFixedBy fixed rest
+  _ => sigVarFixedBy fixed rest
+
+fixedSibling : Int -> List (Int, String) -> Option String
+fixedSibling _ [] = None
+fixedSibling id ((i, sibling) :: rest)
+  | i == id = Some sibling
+  | otherwise = fixedSibling id rest
+
+-- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
+-- obligations it quantifies over — an addedObls entry whose discriminating mono is a
+-- TVar among the member's scheme ids becomes (iface, that id).  A signed member's
+-- declared `=>` constraints come from its sig instead (registered via funConstraints);
+-- but recording the inferred obligation list here too is harmless (a satisfiable
+-- concrete instantiation passes; an unsatisfiable one SHOULD error).  Runs on every
+-- path (NOT gated on dictEligibleSetRef), so the plain check path catches the hole.
+-- SOURCING (#619 DECLARED-ONLY; supersedes the #607/#610 UNION): the predicates a
+-- binding abstracts are its PRINCIPAL context, and per DICT-SEMANTICS §4 `gen`/`var`
+-- an ASCRIBED signature IS that context — a contract the body must satisfy, not a
+-- floor it can raise (Jones; Hall-Peyton-Jones-Wadler; Haskell).  So:
+--   • SIGNED binding   → obligations come SOLELY from the declared `=>` context
+--       (declaredSchemeOblsFor).  The body's inferred obligations
+--       (schemeObligationsOf / forwardedVecObls) are NOT merged in — they are
+--       CHECKED as entailed by the declared context (checkSigConstraintCoverage);
+--       a body that genuinely needs MORE than the signature declares is a def-site
+--       type error (T-MISSING-CONSTRAINT), not a silent widening.
+--   • UNSIGNED binding → no declared context exists, so the inferred principal
+--       context stands: direct body dispatch (schemeObligationsOf) plus any
+--       constraint forwarded from a constrained callee (forwardedVecObls).  Its
+--       inferred constraints are promoted, not checked (see checkSigConstraintOne).
+-- #610 stays satisfied: a declared constraint the body never dispatches on
+-- (`sz2 : Sz a => a -> Int; sz2 x = 9`) is still sourced from declaredSchemeOblsFor,
+-- so the scheme keeps `Sz a` and every caller discharges it.  #619 additionally drops
+-- the union's redundant superclass display — `when : Thenable m => …` whose body's
+-- `pure` infers Applicative now renders just `Thenable a =>` (Applicative is entailed
+-- by `Thenable requires Applicative`, so it is checked-and-dropped, not merged).
+-- #837: [memberDefIds] carries each TOP-LEVEL member's binding id (processSCC passes
+-- schemeDefIdsRef); the local/where call sites pass omEmpty so their members key under
+-- the sentinel id 0.  A member absent from [memberDefIds] is a local/where binder → 0.
+export
+registerSchemeObligations : ModuleCtx ->
+  OrdMap Int ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  List UObligation ->
+  List (String, Scheme) ->
+  Unit
+registerSchemeObligations mctx _ _ _ _ [] = ()
+registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls ((m, sch) :: rest) =
+  -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
+  -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
+  -- (each use re-instantiates it fresh), so an end-of-run call obligation carrying
+  -- that exact id is this binding's own deferred predicate — undeterminedGoalExempt
+  -- defers it into the scheme instead of a spurious `Ambiguous instance` reject.
+  -- CRITICAL (S0 #855-review): this uses the POST-generalization `schemeIds`, NOT the
+  -- pre-generalization member monos.  A value-restricted intermediate (`let x = mk n`,
+  -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
+  -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
+  mctx.mcCells.deferrableVarIds :=
+    idSetInsertAll (schemeIds sch) mctx.mcCells.deferrableVarIds.value
+  let obs =
+    dedupVecObls (schemeOblsForMember mctx sigTvMaps callObls addedObls m sch)
+  if isEmptyL obs then
+    ()
+  else
+    let defId = optionOr 0 (omLookup m memberDefIds)
+    mctx.mcCells.schemeObligationsRef :=
+      ((m, defId), obs) :: mctx.mcCells.schemeObligationsRef.value
+  registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls rest
+
+-- #619: a SIGNED binding's scheme context is EXACTLY its declared `=>` predicates
+-- (authoritative); an UNSIGNED binding's is its inferred principal context (direct
+-- dispatch + forwarded).  Signedness is `lookupSigTvMap … = Some` — true for any
+-- signed member, including a signed binding with an EMPTY `=>` (whose declared
+-- context is correctly empty), which is what distinguishes it from an unsigned one.
+schemeOblsForMember : ModuleCtx ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  List UObligation ->
+  String ->
+  Scheme ->
+  List VecObl
+schemeOblsForMember mctx sigTvMaps callObls addedObls m sch =
+  match lookupSigTvMap m sigTvMaps
+    Some _ => declaredSchemeOblsFor mctx sigTvMaps m (schemeIds sch)
+    None =>
+      schemeObligationsOf mctx True (schemeIds sch) addedObls
+        ++ forwardedVecObls mctx True (schemeIds sch) callObls
+
+-- the DECLARED `=>` predicates of signed member [m], each as its argument vector of
+-- scheme-quantified tyvar ids.  A predicate is kept only if EVERY argument is a plain
+-- tyvar that instantiated to one of this scheme's quantified vars: a concrete-grounded
+-- argument (`Sz Int =>`) carries no per-use obligation here, and a partial vector would
+-- be a different predicate.  An unsigned member contributes nothing.
+declaredSchemeOblsFor : ModuleCtx ->
+  List (String, Ty, List (String, Mono)) ->
+  String ->
+  List Int ->
+  List VecObl
+declaredSchemeOblsFor mctx sigTvMaps m boundIds =
+  match lookupSigTvMap m sigTvMaps
+    None => []
+    Some (ty, tvMap) =>
+      flatMap (declaredOblOne mctx boundIds tvMap) (sigConstraintsOf ty)
+
+declaredOblOne : ModuleCtx ->
+  List Int ->
+  List (String, Mono) ->
+  Constraint ->
+  List VecObl
+declaredOblOne mctx boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args, constraintOrigin = co }) =
+  -- U1b (#1482): `constraintOrigin` is the #1110 interface-OCCURRENCE identity of the
+  -- `=>` predicate as written in this module's scope — the same layer `DImpl.implOrigin`
+  -- is stamped in, which is what makes the goal and the impl comparable.
+  let ifref = IfaceRef { irName = iface, irOrigin = co }
+  match constraintArgMonos args tvMap
+    None => declaredOblMixed mctx boundIds ifref tvMap args
+    Some monos => match boundTyvarIds boundIds monos
+      Some ids => [VecObl { voIface = ifref, voIds = ids, voArgs = [] }]
+      None => []
+
+-- #1161 SYMPTOM 2: the predicate has an argument that is not a bare tyvar, so
+-- `constraintArgMonos` answered `None` and the WHOLE predicate used to be discarded —
+-- `Ix a Bool =>` with no `impl Ix _ Bool` anywhere reached neither the displayed scheme
+-- nor any caller's obligation list, and `check` accepted it at exit 0 while the call
+-- dispatched to an unrelated impl.  DICT-SEMANTICS §3 makes `match(IE, Ix Int Bool)`
+-- empty and the goal a missing-instance rejection, so the predicate must survive the
+-- channel: record its WHOLE argument vector in `voArgs`, and the ids of its bare-tyvar
+-- positions in `voIds` (one dict slot per deferred variable, unchanged cardinality).
+--
+-- The admission test is deliberately narrow, and every clause of it is load-BEARING —
+-- this is a NARROWING (programs that were accepted now reject), so an argument this
+-- function admits without being able to instantiate CORRECTLY would substitute to a
+-- wrong-but-CONCRETE goal, which is strictly worse than the missing one it replaces:
+--   * a BARE tyvar bound by this scheme — `recordSchemeCallObligations` maps it through
+--     the call's instantiation subst, exactly as the ids-only path always did;
+--   * a GROUND argument (no tyvars anywhere, `monoTyvarIds` empty) — it needs no
+--     substitution, so the signature's mono IS the call's mono;
+--   * #1937: a STRUCTURED argument whose tyvar leaves are ALL bound by this scheme
+--     (`Conv (Wrap a) b =>`) — `substOblArgs` now walks `TApp`/`TFun` structurally and
+--     substitutes at each leaf, so the caller's goal is `Conv (Wrap Char) Bool`, not the
+--     signature's own cell.  Before that walk existed this class HAD to be dropped, and
+--     the two halves must stay together: admitting without the structural walk
+--     substitutes to a wrong-but-CONCRETE goal;
+--   * nothing else.  An unbound tyvar — bare, or as a leaf of a structured argument —
+--     has no id to defer on and is dropped exactly as before.
+-- At least one bare bound tyvar is REQUIRED: a fully ground declared context (`Sz Int =>`)
+-- carries no per-use obligation on this channel and stays dropped, which keeps the
+-- narrowing to the shape the issue is about.
+declaredOblMixed : ModuleCtx ->
+  List Int ->
+  IfaceRef ->
+  List (String, Mono) ->
+  List Ty ->
+  List VecObl
+declaredOblMixed mctx boundIds ifref tvMap args =
+  let monos = map (fromAstType mctx tvMap) args
+  let ids = flatMap (declaredOblArgId boundIds) monos
+  if isEmptyL ids
+    || not (allList (declaredOblArgOk (i => containsI i boundIds)) monos) then
+    []
+  else
+    [VecObl { voIface = ifref, voIds = ids, voArgs = monos }]
+
+-- the monos a predicate's arguments resolve to under a tyvar-name -> mono map, in
+-- declaration order; None if ANY argument is not a plain tyvar or is absent from the
+-- map (a partial vector is a DIFFERENT predicate, so the whole thing is dropped).
+-- Shared by the declared-context sourcing and recordSigConstraintArgs.
+constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
+constraintArgMonos [] _ = Some []
+constraintArgMonos (a :: rest) tvMap = match constraintArgMono a tvMap
+  None => None
+  Some mono => map (mono :: _) (constraintArgMonos rest tvMap)
+
+-- the mono ONE predicate argument resolves to: None unless it is a plain tyvar
+-- present in [tvMap] (a concrete-grounded argument like `Sz Int =>` carries no
+-- per-use obligation here).
+constraintArgMono : Ty -> List (String, Mono) -> Option Mono
+constraintArgMono a tvMap = match constraintArgVarName a
+  None => None
+  Some v => lookupAssoc v tvMap
+
+lookupSigTvMap : String ->
+  List (String, Ty, List (String, Mono)) ->
+  Option (Ty, List (String, Mono))
+lookupSigTvMap _ [] = None
+lookupSigTvMap m ((n, ty, tvMap) :: rest)
+  | m == n = Some (ty, tvMap)
+  | otherwise = lookupSigTvMap m rest
+
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed and
+-- the id VECTOR is comma-joined — ints carry no comma, so the encoding is
+-- injective over both components.
+-- Keyed on the SPELLING (`voIface.irName`), deliberately: this dedup decides what a
+-- binding's DISPLAYED and re-instantiated scheme context is, and keying it on identity
+-- would split one printed `Num a =>` into two.  U1b (#1482) carries identity through the
+-- payload without changing what counts as the same entry.
+dedupVecObls : List VecObl -> List VecObl
+dedupVecObls xs = dedupBy vecOblKey xs
+
+-- #1161: the GROUND half of the vector joins the key.  `(Ix a Bool, Ix a Char)` is two
+-- predicates sharing one interface AND one id vector — without the ground positions the
+-- dedup would collapse them into one, silently dropping half a declared context.  An
+-- ids-only entry contributes a constant empty suffix, so its key is order-equivalent to
+-- the pre-widening one.
+-- S-nonlead-arg-identity (#1904) made `oblArgKey` structural and id-carrying.  On THIS
+-- channel that is mostly redundant — `voIds` already carries every position's id — but
+-- not entirely: `voIds` is a FLATTENED concatenation with no position boundaries, so
+-- `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` shared both `voIds` and the
+-- old head-name-only suffix.  The partition this key induces is strictly FINER than
+-- before and identical on bare-tyvar vectors (the shape `dedupVecObls`' spelling caveat
+-- above is about), so a printed `Num a =>` still does not split.
+vecOblKey : VecObl -> String
+vecOblKey o =
+  "\{lenKey o.voIface.irName}\{joinWith "," (map intToString o.voIds)}|\{joinWith "," (map oblArgKey o.voArgs)}"
+
+-- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
+-- dedup, and the declared set is a handful of entries, so it stays a scan.
+containsVecObl : VecObl -> List VecObl -> Bool
+containsVecObl _ [] = False
+containsVecObl o (o2 :: rest) =
+  sameIfaceDecl o.voIface o2.voIface && eqIntList o.voIds o2.voIds
+    || containsVecObl o rest
+
+eqIntList : List Int -> List Int -> Bool
+eqIntList [] [] = True
+eqIntList (a :: xs) (b :: ys) = a == b && eqIntList xs ys
+eqIntList _ _ = False
+
+-- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
+-- all quantified ids of this scheme.  Deduped on (iface, ids).
+schemeObligationsOf : ModuleCtx ->
+  Bool ->
+  List Int ->
+  List UObligation ->
+  List VecObl
+schemeObligationsOf mctx generalizing boundIds obls =
+  flatMap
+    (vecOblOfPred mctx generalizing boundIds)
+    (flatMap (oblPredOf mctx.mcGraph) obls)
+
+-- a single recorded predicate contributes ONE joint (iface, ids) entry iff EVERY one of
+-- its dispatch monos is a bound tyvar of the scheme.  Before #607 the multi-mono case
+-- fell into a `_ => []` wildcard and the obligation was DISCARDED — which is why an
+-- unsatisfiable `Ix a i =>` reached neither the displayed scheme nor any caller's
+-- obligation list, and `check` accepted it at exit 0 while the built binary did raw
+-- pointer arithmetic.
+-- #1549: a predicate whose argument vector is NOT all bare bound tyvars is no longer
+-- simply discarded — it is first REDUCED by §3 entailment (`residualVecObls`), and the
+-- residual that reduction leaves over this scheme's own quantified vars is deferred
+-- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
+-- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
+vecOblOfPred : ModuleCtx ->
+  Bool ->
+  List Int ->
+  (IfaceRef, List Mono, Option Loc) ->
+  List VecObl
+vecOblOfPred mctx generalizing boundIds (iface, ds, loc) =
+  match boundTyvarIds boundIds ds
+    Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
+    None => residualVecObls mctx generalizing boundIds iface ds loc
+
+-- ── #1549: residual reduction at `gen` ──────────────────────────────────────
+-- DICT-SEMANTICS §4 `gen` makes a binding's principal context `P'` = "the predicates
+-- DEFERRED to this binding", and §4.2 OD2 says a non-ground predicate defers to the
+-- binder that quantifies its variables.  A predicate like `Tag (Wrap t)` is neither
+-- deferrable as written (its head is concrete, so it is not `P'`) nor dischargeable
+-- (its `t` is generalizable): §3 `inst` reduces it against `impl Tag (Wrap a) requires
+-- Tag a`, and the RESIDUAL `Tag t` is what defers.  Reducing here is what makes the
+-- deferral OD2 already performs on the CHECK side (`undeterminedGoalExempt`
+-- defers `Tag t` "to the caller") actually reach a caller: without the residual in the
+-- scheme there is no context for `(var)` to discharge and no `λd̄.` for `gen` to
+-- abstract, so `check` was silent, `run` fell back to declaration order, and the built
+-- binary read a dict word that was never passed (issue 1549, S0).
+--
+-- Deliberately the FALLBACK arm only: when every argument is already a bound tyvar the
+-- predicate IS its own residual and the direct path above owns it, so this returns []
+-- for that case and the behaviour of every predicate that reached a VecObl before is
+-- unchanged.  A predicate mentioning none of this scheme's quantified vars can have no
+-- residual over them either (grounding is monotone), and is rejected by the cheap guard
+-- before any impl lookup — that keeps the common ground obligation (`Display String`)
+-- off the reduction path entirely.
+--
+-- [loc] IS LOAD-bearing and is not decoration — dropping it moves A DIAGNOSTIC.
+-- `residualPredsOf` reaches `findMatchingImplReqsU`, which asks the min⊑ selector WHICH
+-- impl matched — so this is a SECOND goal-posing site outside the five resolver drains
+-- (the first is `checkNestedReqs`, whose header says the same thing).  When the goal is
+-- ambiguous the selector calls `reportAmbiguousOverlap`, which reads the context's `sxSite` and
+-- falls back to the record's `mcLoc` when it is `None`.  At a generalized group's close
+-- that is the construct around the close, not the site that recorded the
+-- predicate; and because `pushTypeErrorOnceAt` dedups on the message, that badly-located
+-- push WINS over the well-located one a later resolver drain would emit.
+-- MEASURED on `test/dict_fixtures/s6-c1-rigid-goal-no-call-discriminator.mdk`
+-- (`firstRow xss = index xss 0`): with the recorded loc dropped, the caret moved off the
+-- `index` call at 29:15 onto the literal `0` at 29:25 — same code, same message, worse
+-- span, and NO gate saw it because the dict-semantics gate asserted the code alone.
+-- So hand the reduction a context whose `sxSite` is the obligation's OWN snapshotted span,
+-- as `checkNestedReqs` does; a walk outside a drain gets no site and the selector falls
+-- back rather than inheriting a stale span.
+residualVecObls : ModuleCtx ->
+  Bool ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  List VecObl
+residualVecObls mctx generalizing boundIds iface ds loc =
+  map
+    keepBoundResidual
+    (residualBoundPreds (siteFor mctx) generalizing boundIds iface ds loc)
+
+-- `voArgs` IS THE ids-only `[]` for an all-bare residual and the whole vector for A
+-- MIXED ONE — the same split `declaredOblOne` makes between its own arm and
+-- `declaredOblMixed`, so the OBLIGATION channel's readers (`substVecOblArgs`,
+-- `dedupVecObls`, `reportUncoveredVec`) see, for each shape, precisely the shape they
+-- have always seen from the declared channel.  Every residual that reached a `VecObl`
+-- before this change is all-bare by construction (it came through `boundTyvarIds`), so
+-- its entry is byte-identical; the mixed entries are the ones #1905 adds.
+-- The argument vector the DICT channel consumes (`funConstraintArgsRef`) is the third
+-- component of the triple and is unaffected by this projection.
+keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
+keepBoundResidual (iface, ids, args) =
+  VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs ids args }
+
+-- #1937: this test used to be `listLen ids == listLen args`, and that equivalence died
+-- With the admission widening.  It relied on `declaredOblArgId` contributing exactly one
+-- id per BARE-tyvar position and none for anything else, so equal lengths meant "every
+-- position is a bare tyvar".  Now that a STRUCTURED argument contributes its own bound
+-- leaves, `Conv (Wrap a) b` has two ids for two arguments and would have taken the
+-- ids-only `[]` arm — instantiating through `substMonos o.voIds` to the goal `Conv a b`,
+-- i.e. silently DROPPING the `Wrap`.  Ask the structural question directly instead:
+-- every position a bare tyvar, and each of them one of [ids] (a bare variable the
+-- scheme does not quantify contributes no id, and the ids-only arm would drop it).
+residualOblArgs : List Int -> List Mono -> List Mono
+residualOblArgs ids args
+  | allList isBareTyvarMono args && listLen ids == listLen args = []
+  | otherwise = args
+
+-- shatter vector obligations into (interface declaration, id) pairs — the currency of the
+-- coverage subset test.  See checkSigConstraintCoverage's header.
+-- A signed body's inferred predicate is covered only by the same interface declaration;
+-- same spelling from a foreign module is not evidence.
+pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
+pairsOfVecObls [] = []
+pairsOfVecObls (o :: rest) =
+  map (id => (o.voIface, id)) o.voIds ++ pairsOfVecObls rest
+
+-- ── signature-constraint soundness check ─────────────────────────────────────
+-- For each SIGNED member, the interface constraints its body INFERS on the
+-- member's own quantified vars must be covered by the DECLARED `=>` context,
+-- closed under the interface `requires` (superclass) graph.  An uncovered
+-- inferred constraint ⇒ def-site type_error (the constraint analogue of
+-- checkEffectEscape).  Under #619 DECLARED-ONLY this is the SOLE enforcement of the
+-- body's inferred obligations: registerSchemeObligations no longer merges them into
+-- the scheme, so a body needing more than its signature declares is caught HERE or
+-- silently severed.  The inferred obligations are the UNION of the flat-path
+-- (schemeObligationsOf over addedObls), the FORWARDED path (forwardedVecObls over the
+-- constrained-callee call delta — #619: a signed forwarder that under-declares is no
+-- longer backstopped by the union, so it must be checked here), and the marked-path
+-- (inferredConstraintIds + ifaceForInferredId) sources — a return-position-method
+-- constraint lands only in the last.
+-- #607: the PAIR test runs in (iface, var-id) currency on both sides — a multi-param
+-- predicate is shattered per argument before the subset test (pairsOfVecObls /
+-- declaredPairsFor).  Shattering both sides is sound for a COVERAGE (subset) question
+-- — declared `Ix a i` covers inferred `Ix a` and `Ix i` — and it makes the reject
+-- direction live at n>=2.  On its own it UNDER-rejects the exotic cross-pairing
+-- (declared `Ix a b, Ix c d` vs inferred `Ix a d`: all four pairs a,b,c,d are declared,
+-- so pair coverage passes though the JOINT `Ix a d` is undeclared).
+-- #619/#607 item 4: reportUncoveredVec closes that gap — an inferred JOINT vector
+-- (arity >= 2) whose EXACT argument vector is not among the declared vectors
+-- (vector-valued superclass closure, censusSuperCloseVec) is
+-- uncovered, and is reported when the pair test did not already flag one of its args.
+export
+checkSigConstraintCoverage : ModuleCtx ->
+  List ConstraintReg ->
+  List (String, Ty) ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  List UObligation ->
+  List (String, Scheme) ->
+  Unit
+checkSigConstraintCoverage mctx _ _ _ _ _ [] = ()
+checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls ((m, sch) :: rest) =
+  checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch
+  checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls rest
+
+checkSigConstraintOne : ModuleCtx ->
+  List ConstraintReg ->
+  List (String, Ty) ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  List UObligation ->
+  String ->
+  Scheme ->
+  Unit
+checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch =
+  match omLookup m mctx.mcCells.sigTyMapRef.value
+    None => ()  -- unsigned member: its inferred constraints are promoted, not checked
+    Some _ =>
+      let declaredPairs =
+        censusSuperClose mctx.mcGraph (declaredPairsFor m regs)
+      let boundIds = schemeIds sch
+      let bodyVecs =
+        quantifiedVecObls
+          boundIds
+          (schemeObligationsOf mctx False boundIds addedObls)
+      let fwdVecs =
+        quantifiedVecObls
+          boundIds
+          (forwardedVecObls mctx False boundIds callObls)
+      let inferredB = inferredIfacePairs mctx m boundIds
+      let inferred =
+        dedupIfacePairs
+          (pairsOfVecObls bodyVecs ++ pairsOfVecObls fwdVecs ++ inferredB)
+      reportUncovered mctx m sigTvMaps declaredPairs inferred
+      let declaredVecs =
+        censusSuperCloseVec
+          mctx.mcGraph
+          (declaredSchemeOblsFor mctx sigTvMaps m boundIds)
+      reportUncoveredVec
+        mctx
+        m
+        sigTvMaps
+        declaredPairs
+        declaredVecs
+        (bodyVecs ++ fwdVecs)
+
+-- The vectors over [boundIds] alone.  A signature can declare no predicate on a
+-- variable it does not quantify, so a residual that mentions one is never this
+-- check's to cover: its verdict is the undetermined goal's, or `checkSigVarGoals`'.
+quantifiedVecObls : List Int -> List VecObl -> List VecObl
+quantifiedVecObls boundIds vecs =
+  filterList
+    (o =>
+      allList (id => containsI id boundIds) (flatMap monoUnboundIds o.voArgs))
+    vecs
+
+-- inferred (iface, id) pairs from the marked path: each inferred constraint var id
+-- paired with its recovered iface (skip an id whose iface can't be recovered).
+inferredIfacePairs : ModuleCtx -> String -> List Int -> List (IfaceRef, Int)
+inferredIfacePairs mctx m boundIds =
+  flatMap (pairIface mctx m) (inferredConstraintIds mctx m boundIds)
+
+pairIface : ModuleCtx -> String -> Int -> List (IfaceRef, Int)
+pairIface mctx m id =
+  let ir = ifaceForInferredId mctx m id
+  match ir.irName
+    "" => []
+    _ => [(ir, id)]
+
+-- the declared (iface, id) constraint pairs of member m: each declared constraint
+-- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
+-- constraints — no tyvar — carry no dict slot and are skipped).
+declaredPairsFor : String -> List ConstraintReg -> List (IfaceRef, Int)
+declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
+
+-- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
+-- accessor (`snd`/`lookupAssoc` no longer apply).  Both spellings — first-match by name,
+-- and the whole-list projection — are exactly what the two consumers used before.
+regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
+regIfaceMonosFor _ [] = []
+regIfaceMonosFor m (reg :: rest)
+  | m == reg.crName = reg.crIfaceMonos
+  | otherwise = regIfaceMonosFor m rest
+
+declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
+declaredPairOne (iface, monos) = map (id => (iface, id)) (abstractSlotIds monos)
+
+-- Superclass closure over declared (iface, id) slots, so prelude super chains
+-- (Applicative requires Mappable, Thenable requires Applicative, …) are included.  It
+-- only feeds the read-only subset test; no dict slot comes from it.
+censusSuperClose : GraphCtx -> List (IfaceRef, Int) -> List (IfaceRef, Int)
+censusSuperClose gctx declared =
+  map
+    (n => (n.superIface, n.superPayload))
+    (superClosure
+      (superLookup gctx)
+      censusSuperStep
+      (iface id => ifacePairKey (iface, id))
+      declared)
+
+-- A super shares the sub-predicate's lead id (0 for a nullary super) when every one of
+-- its parameters is one of the sub's type parameters.
+censusSuperStep : List String -> Int -> Super -> Option Int
+censusSuperStep typarams id (Super { superParams = params, ... })
+  | not (all (p => contains p typarams) params) = None
+  | isEmptyL params = Some 0
+  | otherwise = Some id
+
+-- #619/#607 item 4: VECTOR-valued superclass closure over declared constraint vectors.
+-- Unlike censusSuperClose (which collapses each predicate to per-arg pairs), this
+-- preserves the whole argument vector, so an inferred JOINT predicate can be tested for
+-- membership as a unit — the exotic cross-pairing `Ix a d` is NOT a member of
+-- {`Ix a b`, `Ix c d`} even though every one of its args appears in some declared
+-- predicate.  Ungated, like censusSuperClose.  The interface's type parameters map
+-- POSITIONALLY onto a predicate's ids, so a multi-param super carries the right per-arg
+-- ids; a super's ground argument positions are not recovered.
+censusSuperCloseVec : GraphCtx -> List VecObl -> List VecObl
+censusSuperCloseVec gctx declared =
+  map
+    vecOblOfNode
+    (superClosure
+      (superLookup gctx)
+      censusVecSuperStep
+      (iface payload =>
+        vecOblKey
+          (vecOblOfNode SuperNode {
+            superPath = [],
+            superIface = iface,
+            superPayload = payload,
+          }))
+      (map (o => (o.voIface, (o.voIds, o.voArgs))) declared))
+
+censusVecSuperStep : List String ->
+  (List Int, List Mono) ->
+  Super ->
+  Option (List Int, List Mono)
+censusVecSuperStep typarams (ids, _) (Super { superParams = params, ... }) =
+  map (mapped => (mapped, [])) (mapAll (p => lookupPos p typarams ids) params)
+
+vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
+vecOblOfNode n =
+  let (ids, args) = n.superPayload
+  VecObl { voIface = n.superIface, voIds = ids, voArgs = args }
+
+-- one type_error per inferred JOINT vector (arity >= 2) whose exact vector the declared
+-- (super-closed) set does not contain.  Skipped when the pair test already flagged one
+-- of the vector's args (allPairsIn False) — so a genuinely absent constraint reports
+-- ONCE, via reportUncovered, and only the cross-pairing (all args present, joint
+-- vector absent) reports here.  Arity < 2 is fully handled by the pair test.
+reportUncoveredVec : ModuleCtx ->
+  String ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, Int) ->
+  List VecObl ->
+  List VecObl ->
+  Unit
+reportUncoveredVec mctx _ _ _ _ [] = ()
+reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs (o :: rest) =
+  if listLen o.voIds < 2 then
+    ()
+  else if containsVecObl o declaredVecs then
+    ()
+  else if not (allPairsIn o.voIface o.voIds declaredPairs) then
+    ()
+  else
+    pushTypeError
+      mctx
+      "T-MISSING-CONSTRAINT"
+      (missingConstraintVecMsg
+        m
+        o.voIface.irName
+        (map (varNameForId sigTvMaps m) o.voIds))
+  reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs rest
+
+allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
+allPairsIn iface ids declaredPairs =
+  allList (id => containsIfacePair (iface, id) declaredPairs) ids
+
+-- one type_error per inferred (iface, id) not covered by the declared-closed set.
+reportUncovered : ModuleCtx ->
+  String ->
+  List (String, Ty, List (String, Mono)) ->
+  List (IfaceRef, Int) ->
+  List (IfaceRef, Int) ->
+  Unit
+reportUncovered mctx _ _ _ [] = ()
+reportUncovered mctx m sigTvMaps declared ((iface, id) :: rest) =
+  if containsIfacePair (iface, id) declared then
+    ()
+  else
+    pushTypeError
+      mctx
+      "T-MISSING-CONSTRAINT"
+      (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
+  reportUncovered mctx m sigTvMaps declared rest
+
+containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
+containsIfacePair _ [] = False
+containsIfacePair (i, d) ((i2, d2) :: rest) =
+  sameIfaceDecl i i2 && d == d2 || containsIfacePair (i, d) rest
+
+dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
+dedupIfacePairs xs = dedupBy ifacePairKey xs
+
+ifacePairKey : (IfaceRef, Int) -> String
+ifacePairKey (iface, id) =
+  regKeyRender (regKeyOfTab (oblIfaceKey iface)) ++ intToString id
+
+export
+declRefNames : Decl -> List String
+declRefNames (DAttrib _ d) = declRefNames d
+declRefNames (DFunDef _ _ _ body _ _) = allEVars body
+declRefNames (DProp _ _ _ body) = allEVars body
+declRefNames (DTest _ _ body) = allEVars body
+declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
+declRefNames (DImpl { methods, ... }) = flatMap implMethodEVars methods
+declRefNames (DInterface { methods, ... }) = flatMap ifaceMethodEVars methods
+declRefNames _ = []
+
+implMethodEVars : ImplMethod -> List String
+implMethodEVars (ImplMethod _ _ body) = allEVars body
+
+ifaceMethodEVars : IfaceMethod -> List String
+ifaceMethodEVars (IfaceMethod _ _ d _) = match d
+  Some (MethodDefault _ body) => allEVars body
+  None => []
+
+-- Write each group's marked clauses back over the declarations that produced them.
+-- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
+-- order and `clausesOf` returns a name's clauses in that order, so consuming them
+-- head-first as the declarations are walked restores every clause to its own slot.
+-- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
+-- `funDefs` collects clauses from but this walk passes through would drop those
+-- clauses' marks from the returned tree without a panic (the reverse direction
+-- panics in `popMarkedClause`).
+export
+rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
+rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
+
+rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List Decl ->
+  (List Decl, OrdMap (List (List Pat, Expr)))
+rebuildGroupDeclsGo _ pending [] = ([], pending)
+rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _ site bid) :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DFunDef pub n ps e site bid :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
+  let (binds2, pending2) = rebuildLetBinds grouped pending binds
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DLetGroup pub binds2 :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DAttrib attrs d) :: rest) =
+  let (inner, pending2) = rebuildGroupDeclsGo grouped pending [d]
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (map (d2 => DAttrib attrs d2) inner ++ ds, pending3)
+rebuildGroupDeclsGo grouped pending (d :: rest) =
+  let (ds, pending2) = rebuildGroupDeclsGo grouped pending rest
+  (d :: ds, pending2)
+
+rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List LetBind ->
+  (List LetBind, OrdMap (List (List Pat, Expr)))
+rebuildLetBinds _ pending [] = ([], pending)
+rebuildLetBinds grouped pending ((LetBind n clauses site bid) :: rest) =
+  let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
+  let (binds, pending3) = rebuildLetBinds grouped pending2 rest
+  (LetBind n clauses2 site bid :: binds, pending3)
+
+rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  List FunClause ->
+  (List FunClause, OrdMap (List (List Pat, Expr)))
+rebuildFunClauses _ pending _ [] = ([], pending)
+rebuildFunClauses grouped pending n (_ :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
+  (FunClause ps e :: cs, pending3)
+
+-- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
+-- written back, in source order, minted from `clausesOf` on first use.
+popMarkedClause : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  ((List Pat, Expr), OrdMap (List (List Pat, Expr)))
+popMarkedClause grouped pending n =
+  let remaining = match omLookup n pending
+    Some cs => cs
+    None => clausesOf n grouped
+  match remaining
+    c :: cs => (c, omInsert n cs pending)
+    [] => panic "rebuildGroupDecls: no marked clause left for \{n}"

@@ -58,6 +58,7 @@ loadAll = do
   tcShadow <- readFile (underRoot "compiler/types/tc_shadow.mdk")
   tcEffects <- readFile (underRoot "compiler/types/tc_effects.mdk")
   tcOccurrence <- readFile (underRoot "compiler/types/tc_occurrence.mdk")
+  tcGroups <- readFile (underRoot "compiler/types/tc_groups.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
   ck <- readFile (underRoot "compiler/types/chain_key.mdk")
   ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
@@ -65,7 +66,7 @@ loadAll = do
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
   Ok (
     astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcEffects}\n\{tcOccurrence}\n\{rp}\n\{ck}\n\{ec}",
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcEffects}\n\{tcOccurrence}\n\{tcGroups}\n\{rp}\n\{ck}\n\{ec}",
     siteLedger,
     declLedger,
   )

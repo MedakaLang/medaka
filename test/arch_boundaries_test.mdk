@@ -1119,6 +1119,7 @@ typecheckFamily = [
   "types.tc_shadow",
   "types.tc_effects",
   "types.tc_occurrence",
+  "types.tc_groups",
 ]
 
 -- The lines of module [m], empty when it is not loaded.
