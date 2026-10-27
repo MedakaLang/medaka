@@ -1,5 +1,5 @@
 # META
-source_lines=3254
+source_lines=3255
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -1364,9 +1364,9 @@ joinNlStr xs = joinWith "\n" xs
 -- `scanTriple`/`scanInterpTripleCont` dedent each raw segment INDEPENDENTLY,
 -- and `stripIndent` is a no-op unless the segment ITSELF opens with a raw
 -- '\n' (matching plain `TString`'s single-segment case). Of an interpolated
--- triple string's pieces, only `TInterpOpen` can ever start that way — a
+-- triple string's pieces, only `RTripleInterpOpen` can ever start that way — a
 -- `TInterpMid`/`TInterpEnd` always resumes mid-line right after a `}` — and
--- `scanTriple`'s `TInterpOpen` branch doesn't even call `maybeStrip` (unlike
+-- `scanTriple`'s interpolated branch doesn't even call `maybeStrip` (unlike
 -- its `TString` sibling two lines above it). So the interpolated case never
 -- gets dedented past the first `\{`: the leading raw '\n' survives into the
 -- value (reads as an extra blank line wherever it's printed) and the final
@@ -1374,9 +1374,10 @@ joinNlStr xs = joinWith "\n" xs
 -- the trailing blank line the dedent should have produced instead).
 --
 -- Fixed as a post-pass over the fully-scanned raw stream: re-dedent each
--- triple-quoted interpolation group (`TInterpOpen` .. `TInterpMid*` ..
--- `TInterpEnd`) as ONE unit. The embedded `\{expr}` tokens between segments
--- are ordinary code, not string content, so concatenating the segments'
+-- triple-quoted interpolation group (`RTripleInterpOpen` .. `TInterpMid*` ..
+-- `TInterpEnd`) as ONE unit, emitting a public `TInterpOpen`. The embedded
+-- `\{expr}` tokens between segments are ordinary code, not string content,
+-- so concatenating the segments'
 -- literal text directly (no separator) reproduces exactly the string with
 -- every `\{expr}` deleted — which is exactly what a shared minimum-indent
 -- computation needs. (Nested string interpolation inside an embedded expr
