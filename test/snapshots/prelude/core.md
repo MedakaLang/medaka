@@ -1,5 +1,5 @@
 # META
-source_lines=2476
+source_lines=2486
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -1263,14 +1263,16 @@ runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
-  andThen xs f = splice [] xs
+  andThen xs f = revOnto (collect xs []) []
     where
-      -- One self-recursive function so the `::` arm is tail-modulo-cons (stack
-      -- safe for long inputs and long inner lists); `f` runs once per element,
-      -- left to right, when the previous inner list is exhausted.
-      splice [] [] = []
-      splice [] (x :: rest) = splice (f x) rest
-      splice (y :: ys) rest = y :: splice ys rest
+      -- Every recursive call is a tail call, so no engine grows its stack with
+      -- the input or inner-list length; `f` runs once per element, left to
+      -- right, building the result reversed. (core has no `reverse`; that
+      -- lives in `list.mdk`.)
+      collect [] acc = acc
+      collect (x :: rest) acc = collect rest (revOnto (f x) acc)
+      revOnto [] acc = acc
+      revOnto (y :: ys) acc = revOnto ys (y :: acc)
 
 export impl Thenable Option where
   andThen None _ = None
@@ -1378,8 +1380,13 @@ export impl Bimappable (,) where
    > foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
    3 -}
 -- `Result` would read as failure: `Break` is a successful early exit, not an error.
+-- No `Display`: each `Display` impl adds about 4 KB to every wasm module
+-- (`test/wasm/diff_wasm_emitted_size.sh`), and `debug` already renders it.
 -- lint-disable-next-line rule-clone-type
-public export data ControlFlow b = Continue b | Break b
+public export data ControlFlow b =
+  | Continue b
+  | Break b
+  deriving (Eq, Ord, Debug, Hashable)
 
 {- | Containers whose elements can be reduced to a single value.
 
@@ -1390,8 +1397,8 @@ public export data ControlFlow b = Continue b | Break b
    which an instance may override where a faster version exists.
 
    `foldUntil` is a left fold that can stop early: the step returns
-   `Continue acc` to go on or `Break r` to finish with `r`, leaving the
-   remaining elements unvisited.
+   `Continue acc` to go on or `Break result` to finish with `result`,
+   leaving the remaining elements unvisited.
 
    > fold (acc x => acc + x) 0 [1, 2, 3]
    6
@@ -1708,8 +1715,11 @@ export impl Traversable (Result e) where
 -- # Folding
 
 -- `any`, `all`, `elem` and `find` stop at the first decisive element via
--- `foldUntil`.  The `Continue` results of a miss are shared constants so a
--- miss allocates nothing per element.
+-- `foldUntil`.  The `Continue` results of a miss are shared constants, so a
+-- miss allocates no step result per element.  The `Foldable` default of
+-- `foldUntil` goes through `toList`, which conses one cell per element and
+-- builds the whole list even when the first element decides; only `List` and
+-- `Array` override it to walk in place.
 anyMiss : ControlFlow Bool
 anyMiss = Continue False
 
@@ -2007,8 +2017,8 @@ resultOrPanic context (Err e) = panic "\{context}: \{e}"
 
 {- | Discards a `Result`, value and error alike, and returns `()`.
 
-   For a failure that is acceptable, where `reason` states at the call site
-   why. There is no form without `reason`, and no `Option` twin.
+   For a failure that is acceptable, where the `String` argument states at
+   the call site why. There is no form without it, and no `Option` twin.
 
    > bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
    () -}

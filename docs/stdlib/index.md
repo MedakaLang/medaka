@@ -954,8 +954,6 @@ The host primitives.
 - [`stringLength`](runtime.md#stringlength)
 - [`stringByteLength`](runtime.md#stringbytelength)
 - [`stringSlice`](runtime.md#stringslice)
-- [`stringCodepointAtByte`](runtime.md#stringcodepointatbyte)
-- [`stringSliceBytes`](runtime.md#stringslicebytes)
 - [`stringConcat`](runtime.md#stringconcat)
 - [`stringIndexOf`](runtime.md#stringindexof)
 - [`stringStartsWith`](runtime.md#stringstartswith)

@@ -769,6 +769,8 @@ onward, `Break` ends the fold with its payload as the final result.
 3
 ```
 
+Instances: `Eq`, `Ord`, `Debug`, `Hashable`
+
 ### `Foldable`
 
 ```
@@ -795,8 +797,8 @@ step builds a structure. An instance defines `fold`, `foldRight`, and
 which an instance may override where a faster version exists.
 
 `foldUntil` is a left fold that can stop early: the step returns
-`Continue acc` to go on or `Break r` to finish with `r`, leaving the
-remaining elements unvisited.
+`Continue acc` to go on or `Break result` to finish with `result`,
+leaving the remaining elements unvisited.
 
 ```medaka
 > fold (acc x => acc + x) 0 [1, 2, 3]
@@ -1287,8 +1289,8 @@ bestEffort : String -> Result e a -> Unit
 
 Discards a `Result`, value and error alike, and returns `()`.
 
-For a failure that is acceptable, where `reason` states at the call site
-why. There is no form without `reason`, and no `Option` twin.
+For a failure that is acceptable, where the `String` argument states at
+the call site why. There is no form without it, and no `Option` twin.
 
 ```medaka
 > bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
