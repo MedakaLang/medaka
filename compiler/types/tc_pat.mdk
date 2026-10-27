@@ -1,0 +1,532 @@
+-- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
+-- patterns, binder types.
+--
+-- Spec: HM-CORE section 3 (owed, #2555); language-design Data Types; EFFECTS section 4.1.
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_infer_records`,
+-- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+
+import types.tc_types.{
+  DynCtx,
+  ExistentialScope,
+  GraphCtx,
+  ModuleCtx,
+  PendingBinder,
+  RecordInfo,
+  TcEnv,
+}
+import types.tc_mono.{
+  authCellsIn,
+  foldrFun,
+  litType,
+  monoScheme,
+  recordAuthCells,
+  substMono,
+  tconBuiltin,
+  tupleMono,
+}
+import types.tc_diag_text.{
+  existentialEscapeMsg,
+  existentialScopeMsg,
+  unknownCtorMsg,
+  unknownFieldMsg,
+  unknownRecordMsg,
+}
+import types.tc_state.{dynAtIfSome}
+import types.tc_env.{lookupCtor, lookupRecordByName}
+import types.tc_diag.{pushTypeError, pushTypeErrorAt, recordTypeError}
+import types.tc_unify.{
+  bindFrom,
+  enterLevel,
+  exitLevel,
+  freshAuthSubstOpening,
+  freshAuthSubstOpeningIn,
+  freshEffSubst,
+  freshSubst,
+  freshVar,
+  raiseAuthvarLevel,
+  unifyAll,
+  unifyIn,
+}
+import types.tc_solve.{localSourceName}
+import types.tc_effects.{markSourceless}
+import types.effect_authority.{
+  Authority(..), Authvar(..), authvarId, authvarLevel, authvarName
+}
+import frontend.ast.{
+  BinderId(..),
+  LetBind(..),
+  Lit(..),
+  Loc(..),
+  Pat(..),
+  RecPatField(..),
+  isBoxed64Head,
+  isI64Head,
+  isTaggedFixedHead,
+  orElseLoc,
+}
+import types.effect_bindings.{BindingSummary(..)}
+import types.repr.{Mono(..), Scheme(..), normalize, ppMono}
+import types.publish.{TcDiag(..)}
+import support.util.{anyList, i64HalvesLiteral, lookupAssoc, u64HalvesHex}
+import map as IdMap
+import map.{Map(..)}
+
+-- `loc` is the BINDER's own source span (#2092) — `None` only where the binding
+-- site genuinely has none to give.  Discarding it is what made the hover tier
+-- order unfixable: without a position there is no way to tell a local that is
+-- in scope at the cursor from one bound in an unrelated declaration.
+export
+recordLocalBind : ModuleCtx -> String -> Option Loc -> BinderId -> Mono -> Unit
+recordLocalBind mctx name loc bid v =
+  recordBinderType mctx.mcGraph bid name v None False
+  mctx.mcCells.localBindRefs :=
+    (localSourceName name, loc, v) :: mctx.mcCells.localBindRefs.value
+
+-- Queue binder [bid]'s type for the runtime-type table.  [arity] is `Some n` for
+-- a function binder, whose return type is read after its n declared parameters;
+-- [signed] is whether that function has a declared type signature.
+-- A binder no minting pass visited (a node the typechecker or a later pass
+-- synthesized) has no id to publish under and is skipped.
+export
+recordBinderType : GraphCtx ->
+  BinderId ->
+  String ->
+  Mono ->
+  Option Int ->
+  Bool ->
+  Unit
+recordBinderType gctx bid name v arity signed = match bid
+  BinderId _ i =>
+    if i < 0 then
+      ()
+    else
+      let g = gctx.graphRun
+      g.binderPending :=
+        PendingBinder bid (localSourceName name) v arity signed
+          :: g.binderPending.value
+
+-- A constructor in PATTERN position: its universals freshen as at any use,
+-- but an existential binder (§4.1) is OPENED — a fresh RIGID authority the
+-- arm may relate values by and never solve — and parked for the pattern
+-- site (`takePatLits`/`settlePatLits`), which decides whether it may open one.
+instantiateCtorPattern : ModuleCtx -> Scheme -> Mono
+instantiateCtorPattern mctx (Forall ids evars avars _ _ t) =
+  let (asub, opened) = freshAuthSubstOpening mctx avars t
+  openExistentials mctx opened
+  substMono mctx.mcGraph (freshSubst mctx ids) (freshEffSubst mctx evars) asub t
+
+openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
+openExistentials mctx [] = ()
+openExistentials mctx cells =
+  markSourceless mctx.mcGraph (map authvarId cells)
+  mctx.mcCells.openedExistentialsRef :=
+    cells ++ mctx.mcCells.openedExistentialsRef.value
+
+-- ── pattern inference: returns the pattern's type + the bindings it adds ───
+export
+inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
+inferPat env (PVar x xloc bid) =
+  let v = freshVar env.teDyn.dcModule ()
+  recordLocalBind env.teDyn.dcModule x (Some xloc) bid v
+  (v, [(x, monoScheme v)])
+inferPat env PWild = (freshVar env.teDyn.dcModule (), [])
+inferPat env (PLit (LInt n)) = inferIntLitPat env.teDyn.dcModule n
+inferPat env (PLit (LU64 hi lo)) = inferU64LitPat env.teDyn.dcModule hi lo
+inferPat env (PLit (LI64 hi lo)) =
+  refuseBoxedLitPat
+    env.teDyn.dcModule
+    "I64"
+    (i64HalvesLiteral hi lo)
+    env.teDyn.dcModule.mcLoc
+  (tconBuiltin "I64", [])
+inferPat env (PLit l) = (litType l, [])
+inferPat env (PCon name pats) = inferPatCon env name pats
+inferPat env (PTuple pats) = inferPatTuple env pats
+inferPat env (PCons h t) = inferPatCons env h t
+inferPat env (PList pats) = inferPatList env pats
+inferPat env (PAs x xloc bid p) = inferPatAs env x xloc bid p
+inferPat env (PRec name fields _) = inferPatRec env name fields
+inferPat env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
+inferPat env _ = panic "typecheck: unsupported pattern"
+
+-- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
+-- binds no variables
+inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
+inferPatRng mctx (LInt _) (LInt _) = (tconBuiltin "Int", [])
+inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
+inferPatRng mctx lo hi =
+  pushTypeError
+    mctx
+    "T-TYPE-MISMATCH"
+    "type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
+  (tconBuiltin "Int", [])
+
+inferPatRec : TcEnv ->
+  String ->
+  List RecPatField ->
+  (Mono, List (String, Scheme))
+inferPatRec env name fields = match lookupRecordByName env.teDyn.dcModule name
+  None =>
+    pushTypeError env.teDyn.dcModule "T-UNKNOWN-RECORD" (unknownRecordMsg name)
+    (freshVar env.teDyn.dcModule (), bindRecPatFieldsFresh env fields)
+  Some ri => inferPatRecWith env name ri fields
+
+-- bind a record pattern's fields against fresh types, NO unknown-field check
+-- (the record itself is already-reported unknown; see inferPatRec error path)
+bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
+bindRecPatFieldsFresh env [] = []
+bindRecPatFieldsFresh env ((RecPatField fname _ bid mp) :: rest) =
+  inferRecPatFieldWith env (freshVar env.teDyn.dcModule ()) fname bid mp
+    ++ bindRecPatFieldsFresh env rest
+
+inferPatRecWith : TcEnv ->
+  String ->
+  RecordInfo ->
+  List RecPatField ->
+  (Mono, List (String, Scheme))
+inferPatRecWith env rname ri fields =
+  let (ir, opened) = instantiateRecordOpening env.teDyn.dcModule ri
+  openExistentials env.teDyn.dcModule opened
+  (fst ir, inferRecPatFields env rname (snd ir) fields)
+
+inferRecPatFields : TcEnv ->
+  String ->
+  List (String, Mono) ->
+  List RecPatField ->
+  List (String, Scheme)
+inferRecPatFields env _ _ [] = []
+inferRecPatFields env rname fieldTypes ((RecPatField fname _ bid mp) :: rest) =
+  inferRecPatField env rname fieldTypes fname bid mp
+    ++ inferRecPatFields env rname fieldTypes rest
+
+inferRecPatField : TcEnv ->
+  String ->
+  List (String, Mono) ->
+  String ->
+  BinderId ->
+  Option Pat ->
+  List (String, Scheme)
+inferRecPatField env rname fieldTypes fname bid mp =
+  match lookupAssoc fname fieldTypes
+    None =>
+      pushTypeError
+        env.teDyn.dcModule
+        "T-UNKNOWN-FIELD"
+        (unknownFieldMsg fname rname)
+      inferRecPatFieldWith env (freshVar env.teDyn.dcModule ()) fname bid mp
+    Some ft => inferRecPatFieldWith env ft fname bid mp
+
+-- A pun binds the field's own type.  It is published to the runtime-type table
+-- but not to the LSP hover list, which has never carried puns.
+inferRecPatFieldWith : TcEnv ->
+  Mono ->
+  String ->
+  BinderId ->
+  Option Pat ->
+  List (String, Scheme)
+inferRecPatFieldWith env ft fname bid None =
+  recordBinderType env.teDyn.dcModule.mcGraph bid fname ft None False
+  [(fname, monoScheme ft)]
+inferRecPatFieldWith env ft _ _ (Some p) =
+  let pr = inferPat env p
+  bindFrom env.teDyn (fst pr) ft
+  snd pr
+
+-- INTEGER-TYPES-DESIGN §3.2 item 5: an integer literal PATTERN takes its type from
+-- the scrutinee when that is a builtin integer head, and is `Int` otherwise.  It is
+-- inferred as a fresh var and parked on `patLitPending`; the pattern site that
+-- unifies the pattern with its scrutinee (or a signature's domain) then settles it
+-- with `settlePatLits`, or defers it to `generalize` when the scrutinee's type is
+-- not known yet.  Either way the var is settled before anything can quantify it,
+-- so a literal pattern never makes a binding polymorphic.
+inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
+inferIntLitPat mctx n =
+  let a = freshVar mctx ()
+  mctx.mcCells.patLitPending :=
+    (a, n, mctx.mcLoc) :: mctx.mcCells.patLitPending.value
+  (a, [])
+
+-- Open a pattern site: park the literals of any enclosing site and start
+-- empty.  The existentials a pattern opens are parked the same way; a match
+-- arm or a clause takes them (`takeOpenedExistentials`) before settling, every
+-- other site finds them still parked at `settlePatLits` and refuses them,
+-- since only an arm or a clause has a scope to close them in.
+export
+takePatLits : ModuleCtx -> Unit -> List (Mono, Int, Option Loc)
+takePatLits mctx _ =
+  parkOpenedExistentials mctx ()
+  let saved = mctx.mcCells.patLitPending.value
+  mctx.mcCells.patLitPending := []
+  saved
+
+-- Close a pattern site, after its pattern met its scrutinee.  A literal whose var
+-- is now a fixed-width head keeps that type and joins the literal range check; one
+-- whose var is any other type is `Int`, exactly as a literal pattern always was (a
+-- non-integer scrutinee is the same `Int vs T` mismatch).  A var still unknown here
+-- (a lambda's parameter, typed only by a later argument) is deferred: `generalize`
+-- defaults it to `Int` before it could be quantified, and the module's end settles
+-- whatever remains (`settleDeferredPatLits`).
+export
+settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+settlePatLits dyn saved =
+  refuseOpenedExistentials dyn.dcModule ()
+  settlePatLitsOnly dyn saved
+
+parkOpenedExistentials : ModuleCtx -> Unit -> Unit
+parkOpenedExistentials mctx _ =
+  mctx.mcCells.openedExistentialsStackRef :=
+    mctx.mcCells.openedExistentialsRef.value
+      :: mctx.mcCells.openedExistentialsStackRef.value
+  mctx.mcCells.openedExistentialsRef := []
+
+-- The existentials the current pattern site opened, handed to the site that
+-- may close them; the site's accumulator is left empty for `settlePatLits`.
+export
+takeOpenedExistentials : ModuleCtx -> Unit -> List (Ref Authvar)
+takeOpenedExistentials mctx _ =
+  let opened = mctx.mcCells.openedExistentialsRef.value
+  mctx.mcCells.openedExistentialsRef := []
+  opened
+
+refuseOpenedExistentials : ModuleCtx -> Unit -> Unit
+refuseOpenedExistentials mctx _ =
+  let opened = mctx.mcCells.openedExistentialsRef.value
+  match opened
+    [] => ()
+    cell :: _ =>
+      pushTypeErrorAt
+        mctx
+        "T-AUTHORITY-EXISTENTIAL-SCOPE"
+        mctx.mcLoc
+        (existentialScopeMsg (authvarName cell))
+  match mctx.mcCells.openedExistentialsStackRef.value
+    outer :: rest =>
+      mctx.mcCells.openedExistentialsRef := outer
+      mctx.mcCells.openedExistentialsStackRef := rest
+    [] => mctx.mcCells.openedExistentialsRef := []
+
+settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsOnly dyn saved =
+  settlePatLitsGo dyn False dyn.dcModule.mcCells.patLitPending.value
+  dyn.dcModule.mcCells.patLitPending := saved
+
+-- [final]: the module is done, so an unknown var defaults instead of deferring.
+export
+settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsGo dyn _ [] = ()
+settlePatLitsGo dyn final ((a, n, loc) :: rest) =
+  match normalize a
+    TCon tag _ if isTaggedFixedHead tag =>
+      dyn.dcModule.mcCells.numlitRanges :=
+        (a, n, loc) :: dyn.dcModule.mcCells.numlitRanges.value
+    TCon tag _ if isBoxed64Head tag =>
+      refuseBoxedLitPat dyn.dcModule tag (intToString n) loc
+    TVar _ if not final =>
+      dyn.dcModule.mcCells.patLitDeferred :=
+        (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
+    _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
+  settlePatLitsGo dyn final rest
+
+-- A `U64` or `I64` is a boxed cell, and no engine's pattern matcher compares one
+-- against a constant, so a literal pattern cannot match it (INTEGER-TYPES-DESIGN
+-- §3.2 item 5 builds the tagged heads only).  Refused, never compiled to an arm
+-- that silently never matches: an ordinary literal whose scrutinee grounded to
+-- `U64` or `I64` (`settlePatLitsGo`), and a wide one wherever it is written
+-- (`exprToPat` keeps it as `LU64`).
+refuseBoxedLitPat : ModuleCtx -> String -> String -> Option Loc -> Unit
+refuseBoxedLitPat mctx tag lit loc =
+  recordTypeError
+    mctx
+    (TcDiag
+      "T-TYPE-MISMATCH"
+      1
+      (orElseLoc loc mctx.mcLoc)
+      "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
+      (Some "compare in a guard instead: `x if x == \{lit}`")
+      None)
+
+inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
+inferU64LitPat mctx hi lo =
+  refuseBoxedLitPat mctx "U64" ("0x" ++ u64HalvesHex hi lo) mctx.mcLoc
+  (tconBuiltin "U64", [])
+
+inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
+inferPatCon env name pats = match lookupCtor env name
+  None =>
+    pushTypeError env.teDyn.dcModule "T-UNKNOWN-CTOR" (unknownCtorMsg name)
+    let pr = inferPats env pats
+    (freshVar env.teDyn.dcModule (), snd pr)
+  Some scheme => inferPatConWith env scheme pats
+
+inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
+inferPatConWith env scheme pats =
+  let ctorType = instantiateCtorPattern env.teDyn.dcModule scheme
+  let pr = inferPats env pats
+  let resultVar = freshVar env.teDyn.dcModule ()
+  unifyIn env.teDyn ctorType (foldrFun (fst pr) resultVar)
+  (resultVar, snd pr)
+
+export
+inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
+inferPats env [] = ([], [])
+inferPats env (p :: ps) =
+  let pr = inferPat env p
+  let rest = inferPats env ps
+  (fst pr :: fst rest, snd pr ++ snd rest)
+
+inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferPatTuple env pats =
+  let pr = inferPats env pats
+  (tupleMono (fst pr), snd pr)
+
+inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
+inferPatCons env h t =
+  let hr = inferPat env h
+  let tr = inferPat env t
+  let listTy = TApp (tconBuiltin "List") (fst hr)
+  unifyIn env.teDyn (fst tr) listTy
+  (listTy, snd hr ++ snd tr)
+
+inferPatList : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferPatList env pats =
+  let elem = freshVar env.teDyn.dcModule ()
+  let pr = inferPats env pats
+  unifyAll env.teDyn elem (fst pr)
+  (TApp (tconBuiltin "List") elem, snd pr)
+
+inferPatAs : TcEnv ->
+  String ->
+  Loc ->
+  BinderId ->
+  Pat ->
+  (Mono, List (String, Scheme))
+inferPatAs env x xloc bid p =
+  let pr = inferPat env p
+  recordLocalBind env.teDyn.dcModule x (Some xloc) bid (fst pr)
+  (fst pr, (x, monoScheme (fst pr)) :: snd pr)
+
+export
+patIsVar : Pat -> Bool
+patIsVar (PVar _ _ _) = True
+patIsVar _ = False
+
+export
+isConPat : Pat -> Bool
+isConPat (PCon _ _) = True
+isConPat _ = False
+
+-- Does the pattern name a constructor with an existential binder?  Decided
+-- before inference so the arm can enter its level first.
+export
+patOpensExistentials : TcEnv -> Pat -> Bool
+patOpensExistentials env (PCon name pats) =
+  ctorHasExistentials env.teDyn.dcModule.mcGraph (lookupCtor env name)
+    || anyList (patOpensExistentials env) pats
+patOpensExistentials env (PRec name fields _) =
+  recordHasExistentials
+      env.teDyn.dcModule.mcGraph
+      (lookupRecordByName env.teDyn.dcModule name)
+    || anyList (recPatFieldOpens env) fields
+patOpensExistentials env (PTuple pats) = anyList (patOpensExistentials env) pats
+patOpensExistentials env (PList pats) = anyList (patOpensExistentials env) pats
+patOpensExistentials env (PCons h t) =
+  patOpensExistentials env h || patOpensExistentials env t
+patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
+patOpensExistentials env _ = False
+
+recPatFieldOpens : TcEnv -> RecPatField -> Bool
+recPatFieldOpens env (RecPatField _ _ _ (Some p)) = patOpensExistentials env p
+recPatFieldOpens env _ = False
+
+ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
+ctorHasExistentials gctx (Some (Forall _ _ avars _ _ _)) =
+  anyExistential gctx avars
+ctorHasExistentials gctx None = False
+
+recordHasExistentials : GraphCtx -> Option RecordInfo -> Bool
+recordHasExistentials gctx (Some (RecordInfo _ authIds _ _ _)) =
+  anyExistential gctx authIds
+recordHasExistentials gctx None = False
+
+anyExistential : GraphCtx -> List Int -> Bool
+anyExistential gctx ids =
+  anyList (id => IdMap.has id gctx.graphRun.ctorExistentialsRef.value) ids
+
+export
+openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
+openExistentialScope mctx [] = ExistentialScope [] 0
+openExistentialScope mctx opened =
+  enterLevel mctx ()
+  let level = mctx.mcCells.currentLevel.value
+  fold (_ cell => raiseAuthvarLevel level cell) () opened
+  ExistentialScope opened level
+
+-- A cell in the scope's value, or lowered below the scope's level, escaped
+-- (`T-AUTHORITY-ESCAPE`): the value cannot carry an authority nothing outside
+-- the scope can name.  A row the scope performed at the authority is checked
+-- against the enclosing declaration as any row is (rigid: only the label bare
+-- admits it), and an inferred row publishes it as the domain's top
+-- (`defaultSourcelessAuthorities`).
+export
+closeExistentialScope : ModuleCtx ->
+  ExistentialScope ->
+  Mono ->
+  Option Loc ->
+  Unit
+closeExistentialScope mctx (ExistentialScope [] _) _ _ = ()
+closeExistentialScope mctx (ExistentialScope opened level) t loc =
+  exitLevel mctx ()
+  let inValue = authCellsIn t Tip
+  fold
+    (_ cell =>
+      if IdMap.has (authvarId cell) inValue || authvarLevel cell < level then
+        mctx.mcCells.escapedExistentialsRef :=
+          IdMap.set
+            (authvarId cell)
+            ()
+            mctx.mcCells.escapedExistentialsRef.value
+        pushTypeErrorAt
+          mctx
+          "T-AUTHORITY-ESCAPE"
+          loc
+          (existentialEscapeMsg (authvarName cell)))
+    ()
+    opened
+
+-- A record's params and authorities freshened together; the constructor's
+-- existentials are OPENED (rigid cells, parked at the pattern site) rather
+-- than freshened flexible — the record-pattern twin of `instantiateCtorPattern`.
+-- A record CREATE goes through `instantiateRecordShared`, which freshens every
+-- authority flexible, since packing takes the value's own index.
+instantiateRecordOpening : ModuleCtx ->
+  RecordInfo ->
+  ((Mono, List (String, Mono)), List (Ref Authvar))
+instantiateRecordOpening mctx (RecordInfo paramIds authIds result fields _) =
+  let subst = freshSubst mctx paramIds
+  let (asub, opened) =
+    freshAuthSubstOpeningIn mctx authIds (recordAuthCells authIds result fields)
+  (
+    (
+      substMono mctx.mcGraph subst [] asub result,
+      map (substField mctx.mcGraph subst asub) fields,
+    ),
+    opened,
+  )
+
+substField : GraphCtx ->
+  List (Int, Mono) ->
+  List (Int, Authority) ->
+  (String, Mono) ->
+  (String, Mono)
+substField gctx subst asub (fn, fm) = (fn, substMono gctx subst [] asub fm)
+
+-- A where/let group member's own type cell, the one its clauses are inferred
+-- into, published with the member's declared parameter count.  A member is never
+-- signed: a `LetBind` carries no type signature.
+export
+recordLetBindType : GraphCtx -> (LetBind, (String, BindingSummary)) -> Unit
+recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
+  recordBinderType gctx bid name summary.bsValue (Some summary.bsArity) False
