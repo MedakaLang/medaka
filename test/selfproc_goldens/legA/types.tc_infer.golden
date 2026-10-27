@@ -12,7 +12,6 @@ argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
 argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
 armIsUnguarded : List Guard -> Bool
 armUnreachable : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
-arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 beginsWithSpan : Option Loc -> Loc -> Bool
 binderMarker : String
 binopSpanLoc : Expr -> Expr -> Option Loc
