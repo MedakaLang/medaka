@@ -1,0 +1,308 @@
+-- Sibling test for `compiler/backend/wasm_symbols.mdk` ([P-TEST-SIBLING]).
+--
+-- Each mutation demands its own defect from the registry, beside a control that
+-- uses the same names validly, so the mutation is what the defect answers.  The
+-- last rows drive whole prelude-free programs through `emitProgram` and
+-- `emitProgramRecord`, as `compiler/entries/wasm_emit_main.mdk` does.
+
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{EmitPlan, prepareWasmPlan}
+import ir.core_ir.{CProgram}
+import test.{Expectation, expectAll, expectEqual, expectSatisfies, labelFail}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{ctorFieldTypeNames, lowerProgramEmitWith}
+import backend.wasm_emit.{
+  WasmEmitInput,
+  emitProgram,
+  emitProgramRecord,
+  inputCtorFloatFieldsW,
+  makeWasmEmitInput,
+}
+import backend.wasm_symbols.{
+  SymbolDefect(..),
+  SymbolOrigin(..),
+  SymbolRegistry,
+  WasmShape(..),
+  WasmSymbol(..),
+  checkCall,
+  checkRef,
+  checkTypeUse,
+  declareSymbol,
+  defectCode,
+  defineSymbol,
+  elemNames,
+  emptyRegistry,
+  excuseSymbol,
+  unresolved,
+}
+
+at : String -> SymbolOrigin
+at b = SymbolOrigin b "" 0 0
+
+-- run registry steps in order, stopping at the first defect
+steps : List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  Result SymbolDefect SymbolRegistry
+steps fs = stepsFrom emptyRegistry fs
+
+stepsFrom : SymbolRegistry ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  Result SymbolDefect SymbolRegistry
+stepsFrom reg [] = Ok reg
+stepsFrom reg (f :: rest) = match f reg
+  Ok next => stepsFrom next rest
+  Err d => Err d
+
+-- the first defect of [fs], or the defects left unresolved once they all ran
+verdict : List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+verdict fs = match steps fs
+  Err d => [d]
+  Ok reg => unresolved reg
+
+test "a function defined twice is refused; two names defined once each are not" = expectAll
+  [
+    labelFail
+      "twice"
+      (expectEqual
+        [DuplicateDefinition (WasmFunc "f") (at "second") (at "first")]
+        (verdict [
+          defineSymbol (WasmFunc "f") (FuncParams 1) (at "first"),
+          defineSymbol (WasmFunc "f") (FuncParams 1) (at "second"),
+        ])),
+    labelFail
+      "once each"
+      (expectEqual
+        []
+        (verdict [
+          defineSymbol (WasmFunc "f") (FuncParams 1) (at "first"),
+          defineSymbol (WasmFunc "g") (FuncParams 1) (at "second"),
+        ])),
+    labelFail
+      "an import and a definition share the function namespace"
+      (expectEqual
+        [DuplicateDefinition (WasmFunc "f") (at "body") (at "module")]
+        (verdict [
+          declareSymbol (WasmFunc "f") FuncImported (at "module"),
+          defineSymbol (WasmFunc "f") (FuncParams 0) (at "body"),
+        ])),
+    labelFail
+      "a function and a global may share a name"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (WasmGlobal "f") GlobalDecl (at "module"),
+          defineSymbol (WasmFunc "f") (FuncParams 0) (at "body"),
+        ])),
+  ]
+
+test "a call supplying the wrong operand count is refused, before or after the definition" = expectAll
+  [
+    labelFail
+      "after"
+      (expectEqual
+        [ShapeMismatch "f" 2 3 (at "caller") (at "f")]
+        (verdict [
+          defineSymbol (WasmFunc "f") (FuncParams 2) (at "f"),
+          checkCall (WasmFunc "f") 3 (at "caller"),
+        ])),
+    labelFail
+      "before"
+      (expectEqual
+        [ShapeMismatch "f" 2 3 (at "caller") (at "f")]
+        (verdict [
+          checkCall (WasmFunc "f") 3 (at "caller"),
+          defineSymbol (WasmFunc "f") (FuncParams 2) (at "f"),
+        ])),
+    labelFail
+      "the right count, both orders"
+      (expectEqual
+        []
+        (verdict [
+          checkCall (WasmFunc "f") 2 (at "early"),
+          defineSymbol (WasmFunc "f") (FuncParams 2) (at "f"),
+          checkCall (WasmFunc "f") 2 (at "late"),
+        ])),
+    labelFail
+      "a function declared through a type takes that type's count"
+      (expectEqual
+        [ShapeMismatch "w" 2 1 (at "caller") (at "w")]
+        (verdict [
+          declareSymbol (WasmType "codety") TypeDecl (at "module"),
+          defineSymbol (WasmFunc "w") (FuncOfType "codety" 2) (at "w"),
+          checkCall (WasmFunc "w") 1 (at "caller"),
+        ])),
+  ]
+
+test "a reference nothing defines is unresolved at the end; defined later, it is not" = expectAll
+  [
+    labelFail
+      "never defined"
+      (expectEqual
+        [UndefinedReference (WasmFunc "f") (at "first caller")]
+        (verdict [
+          checkCall (WasmFunc "f") 1 (at "first caller"),
+          checkCall (WasmFunc "f") 1 (at "second caller"),
+        ])),
+    labelFail
+      "defined after the call"
+      (expectEqual
+        []
+        (verdict [
+          checkCall (WasmFunc "f") 1 (at "caller"),
+          defineSymbol (WasmFunc "f") (FuncParams 1) (at "f"),
+        ])),
+    labelFail
+      "an undeclared global is refused at the access"
+      (expectEqual
+        [UndefinedReference (WasmGlobal "g") (at "reader")]
+        (verdict [checkRef (WasmGlobal "g") (at "reader")])),
+    labelFail
+      "a declared global"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (WasmGlobal "g") GlobalDecl (at "module"),
+          checkRef (WasmGlobal "g") (at "reader"),
+        ])),
+    labelFail
+      "a use a recorded gap accounts for"
+      (expectEqual
+        []
+        (match steps [checkCall (WasmFunc "force_x") 0 (at "reader")]
+          Ok reg => unresolved (excuseSymbol (WasmFunc "force_x") reg)
+          Err d => [d])),
+  ]
+
+test "a type use the type section does not declare is refused at the use" = expectAll
+  [
+    labelFail
+      "undeclared"
+      (expectEqual
+        [UndeclaredType "codety" "mdk_w_inc" (at "inc")]
+        (verdict [
+          declareSymbol (WasmType "boxint") TypeDecl (at "module"),
+          checkTypeUse "codety" "mdk_w_inc" (at "inc"),
+        ])),
+    labelFail
+      "declared"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (WasmType "codety") TypeDecl (at "module"),
+          checkTypeUse "codety" "mdk_w_inc" (at "inc"),
+        ])),
+  ]
+
+test "a ref.func no element declaration lists is refused; a listed one is not" = expectAll
+  [
+    labelFail
+      "unlisted"
+      (expectEqual
+        [UndeclaredFuncRef "mdk_lam0" (at "outer")]
+        (verdict [
+          defineSymbol (WasmFunc "mdk_lam0") (FuncParams 2) (at "outer"),
+          checkRef (WasmFunc "mdk_lam0") (at "outer"),
+          checkRef (WasmElem "mdk_lam0") (at "outer"),
+        ])),
+    labelFail
+      "listed"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (WasmElem "mdk_lam0") ElemDecl (at "outer"),
+          defineSymbol (WasmFunc "mdk_lam0") (FuncParams 2) (at "outer"),
+          checkRef (WasmFunc "mdk_lam0") (at "outer"),
+          checkRef (WasmElem "mdk_lam0") (at "outer"),
+        ])),
+  ]
+
+test "element entries are a set kept in first-declared order" =
+  expectEqual
+    (Ok ["mdk_pap", "b", "a"])
+    (map
+      elemNames
+      (steps [
+        declareSymbol (WasmElem "mdk_pap") ElemDecl (at "module"),
+        declareSymbol (WasmElem "b") ElemDecl (at "x"),
+        declareSymbol (WasmElem "a") ElemDecl (at "x"),
+        declareSymbol (WasmElem "b") ElemDecl (at "y"),
+      ]))
+
+-- ── whole programs ──────────────────────────────────────────────────────────
+
+-- [src] lowered as the prelude-free entry lowers it, and handed to [emit]
+withLowered : (WasmEmitInput -> EmitPlan -> CProgram -> r) -> String -> r
+withLowered emit src =
+  let decls = grantWholeDomain (desugar (parse src))
+  let input =
+    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let (plan, prepared) =
+    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  emit input plan prepared
+
+-- each defect [src]'s strict emission is refused with: its code, the identity,
+-- and the bindings it cites; [] when the module is written
+strictDefects : String -> List (List String)
+strictDefects src = match withLowered emitProgram src
+  Ok _ => []
+  Err defects => map defectFacts defects
+
+defectFacts : SymbolDefect -> List String
+defectFacts (d@(DuplicateDefinition (WasmFunc f) (SymbolOrigin b2 _ _ _) (SymbolOrigin b1 _ _ _))) =
+  [defectCode d, f] ++ (if b1 <= b2 then [b1, b2] else [b2, b1])
+defectFacts (d@(UndeclaredType t user (SymbolOrigin b _ _ _))) =
+  [defectCode d, t, user, b]
+defectFacts d = [defectCode d]
+
+-- `gname` spells `self` as `u__self`, a name the program can also define.
+test "two bindings the emitter spells alike are refused as one duplicate function" = expectAll
+  [
+    labelFail
+      "self and u__self"
+      (expectEqual
+        [["E-PHYS-DUPLICATE", "u__self", "self", "u__self"]]
+        (strictDefects
+          "self : Int -> Int\nself x = x + 1\nu__self : Int -> Int\nu__self x = x + 2\nmain = self 1 + u__self 1\n")),
+    labelFail
+      "self and v__self"
+      (expectEqual
+        []
+        (strictDefects
+          "self : Int -> Int\nself x = x + 1\nv__self : Int -> Int\nv__self x = x + 2\nmain = self 1 + v__self 1\n")),
+  ]
+
+test "record mode keeps a gap's census and finds no physical defect" =
+  let src =
+    "anchor = \"ref\"\nf : Int -> Int\nf x = notDefinedAnywhere x\nmain = f 1\n"
+  match withLowered emitProgramRecord src
+    Ok (_, events) =>
+      expectSatisfies
+        "a gap event names the unbound variable"
+        (any (e => isSome (stringIndexOf "notDefinedAnywhere" e)))
+        events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+-- #4528: a parameter named like a top-level function is a local, not a value use
+-- of the function, so no `$codety` wrapper is written for a module that declares
+-- no closure types.
+test "a local named like a top-level function needs no closure wrapper" = expectAll
+  [
+    labelFail
+      "inc shadowed by twice's parameter"
+      (expectEqual
+        []
+        (strictDefects
+          "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\ntwice : Int -> Int\ntwice inc = inc + inc\nmain = twice 4\n")),
+    labelFail
+      "inc passed as a value still gets its wrapper"
+      (expectEqual
+        []
+        (strictDefects
+          "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\napply : (Int -> Int) -> Int -> Int\napply f x = f x\nmain = apply inc 4\n")),
+  ]

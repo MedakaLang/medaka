@@ -89,12 +89,14 @@ import backend.core_validate.{
   validateScalarOperators
 }
 import backend.wasm_emit.{
-  emitProgram as wasmStrict,
-  emitProgramUnchecked as wasmUnchecked,
-  emitProgramGaps,
-  emitProgramRecord as wasmRecord,
+  WasmEmitInput,
+  emitProgram as wasmStrictChecked,
+  emitProgramUnchecked as wasmUncheckedChecked,
+  emitProgramGaps as wasmCensusChecked,
+  emitProgramRecord as wasmRecordChecked,
   makeWasmEmitInput,
 }
+import backend.wasm_symbols.{SymbolDefect, defectCode}
 import backend.llvm_emit.{
   emitProgram as llvmStrict,
   emitProgramWithStats as llvmStats,
@@ -109,6 +111,28 @@ import backend.global_plan.{GlobalInitPlan(..)}
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
 import string.{contains, split, stripPrefix}
+
+-- The Wasm emitters as these tests read them.  None of the programs here has a
+-- physical-symbol defect, so a defect stands in the text as its codes.
+wasmStrict : WasmEmitInput -> EmitPlan -> CProgram -> String
+wasmStrict wi plan cp = textOrCodes (wasmStrictChecked wi plan cp)
+
+wasmUnchecked : WasmEmitInput -> EmitPlan -> CProgram -> String
+wasmUnchecked wi plan cp = textOrCodes (wasmUncheckedChecked wi plan cp)
+
+wasmRecord : WasmEmitInput -> EmitPlan -> CProgram -> (String, List String)
+wasmRecord wi plan cp = match wasmRecordChecked wi plan cp
+  Ok emitted => emitted
+  Err defects => ("", map defectCode defects)
+
+emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
+emitProgramGaps wi plan cp = match wasmCensusChecked wi plan cp
+  Ok events => events
+  Err defects => map defectCode defects
+
+textOrCodes : Result (List SymbolDefect) String -> String
+textOrCodes (Ok text) = text
+textOrCodes (Err defects) = joinNl (map defectCode defects)
 
 lowered : String -> CProgram
 lowered src =

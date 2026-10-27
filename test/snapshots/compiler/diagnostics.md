@@ -1,5 +1,5 @@
 # META
-source_lines=3626
+source_lines=3672
 stages=DESUGAR,MARK
 # SOURCE
 import driver.main_autoprint.{executedMainInputs}
@@ -131,6 +131,14 @@ import support.util.{
   reverseL,
 }
 import support.timer.{takePerfSink}
+import support.stage_count.{stageExit}
+import backend.wasm_symbols.{
+  SymbolDefect,
+  SymbolOrigin(..),
+  defectCode,
+  defectMessage,
+  defectOrigin,
+}
 import json.{Json(..), jObject, stringify}
 
 -- ── types ──────────────────────────────────────────────────────────────────
@@ -3125,6 +3133,44 @@ export
 emitDiagExitCode : Int
 emitDiagExitCode = 3
 
+-- The Wasm emitter's physical-symbol defects (backend/wasm_symbols.mdk) as
+-- diagnostics, each at the binding whose emission found it.  The code leads the
+-- message because the text renderers print none.  [file] names the program for
+-- an origin parsed without a file name.
+export
+renderSymbolDefects : String -> List SymbolDefect -> List String
+renderSymbolDefects file ds =
+  map
+    (d =>
+      let (at, diag) = symbolDefectDiag file d
+      ppDiagCliLines (arrayFromList []) at diag)
+    ds
+
+-- the file a defect is reported in, and its diagnostic
+symbolDefectDiag : String -> SymbolDefect -> (String, Diag)
+symbolDefectDiag file d =
+  let (SymbolOrigin _ f line col) = defectOrigin d
+  let at = if f == "" then file else f
+  let loc =
+    if line > 0 && at /= "" then Some (Loc at line col line col) else None
+  let code = defectCode d
+  (at, mkDiag SevError code "[\{code}] \{defectMessage d}" loc)
+
+-- The emit driver's refusal of a module with physical-symbol defects: their
+-- diagnostics on stderr, each with its source line, under the code that tells
+-- `medaka build` they are diagnostics rather than a backend crash.  No module
+-- text is written.
+export
+refuseSymbolDefects : String -> List SymbolDefect -> <IO> Unit
+refuseSymbolDefects file ds =
+  let _ =
+    map
+      (d =>
+        let (at, diag) = symbolDefectDiag file d
+        ePutStrLn (ppDiagCliLines (srcLinesArr (readFileSafe at)) at diag))
+      ds
+  stageExit emitDiagExitCode
+
 -- The emit driver's whole diagnostic face (ARCH §E), over the per-file buckets
 -- `frontEnd` folded from ONE elaboration: the located per-file error lines and
 -- the warning lines `build` prints, rendered exactly as `check` renders them.
@@ -3653,6 +3699,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
+(DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolOrigin" true) (mem "defectCode" false) (mem "defectMessage" false) (mem "defectOrigin" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
@@ -4049,6 +4097,12 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
 (DTypeSig true "emitDiagExitCode" (TyCon "Int"))
 (DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))
+(DTypeSig true "renderSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "renderSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EBlock (DoLet false false (PTuple (PVar "at") (PVar "diag")) (EApp (EApp (EVar "symbolDefectDiag") (EVar "file")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "arrayFromList") (EListLit))) (EVar "at")) (EVar "diag")))))) (EVar "ds")))
+(DTypeSig false "symbolDefectDiag" (TyFun (TyCon "String") (TyFun (TyCon "SymbolDefect") (TyTuple (TyCon "String") (TyCon "Diag")))))
+(DFunDef false "symbolDefectDiag" ((PVar "file") (PVar "d")) (EBlock (DoLet false false (PCon "SymbolOrigin" PWild (PVar "f") (PVar "line") (PVar "col")) (EApp (EVar "defectOrigin") (EVar "d"))) (DoLet false false (PVar "at") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "file") (EVar "f"))) (DoLet false false (PVar "loc") (EIf (EBinOp "&&" (EBinOp ">" (EVar "line") (ELit (LInt 0))) (EBinOp "/=" (EVar "at") (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "at")) (EVar "line")) (EVar "col")) (EVar "line")) (EVar "col"))) (EVar "None"))) (DoLet false false (PVar "code") (EApp (EVar "defectCode") (EVar "d"))) (DoExpr (ETuple (EVar "at") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "code"))) (ELit (LString "] "))) (EApp (EVar "display") (EApp (EVar "defectMessage") (EVar "d")))) (ELit (LString "")))) (EVar "loc"))))))
+(DTypeSig true "refuseSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "refuseSymbolDefects" ((PVar "file") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EBlock (DoLet false false (PTuple (PVar "at") (PVar "diag")) (EApp (EApp (EVar "symbolDefectDiag") (EVar "file")) (EVar "d"))) (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "at")))) (EVar "at")) (EVar "diag"))))))) (EVar "ds"))) (DoExpr (EApp (EVar "stageExit") (EVar "emitDiagExitCode")))))
 (DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitGateDiags" ((PVar "modsWithPath") (PVar "buckets")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "buckets"))) (DoLet false false (PVar "warnSrc") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "triples")) (arm PWild () (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))) (DoExpr (ETuple (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples")) (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EBinOp "++" (EVar "warnSrc") (EApp (EVar "mainShapeTriple") (EVar "modsWithPath"))))))))
 (DTypeSig false "mainShapeTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
@@ -4163,6 +4217,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
+(DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolOrigin" true) (mem "defectCode" false) (mem "defectMessage" false) (mem "defectOrigin" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
@@ -4559,6 +4615,12 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
 (DTypeSig true "emitDiagExitCode" (TyCon "Int"))
 (DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))
+(DTypeSig true "renderSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "renderSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EBlock (DoLet false false (PTuple (PVar "at") (PVar "diag")) (EApp (EApp (EVar "symbolDefectDiag") (EVar "file")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "arrayFromList") (EListLit))) (EVar "at")) (EVar "diag")))))) (EVar "ds")))
+(DTypeSig false "symbolDefectDiag" (TyFun (TyCon "String") (TyFun (TyCon "SymbolDefect") (TyTuple (TyCon "String") (TyCon "Diag")))))
+(DFunDef false "symbolDefectDiag" ((PVar "file") (PVar "d")) (EBlock (DoLet false false (PCon "SymbolOrigin" PWild (PVar "f") (PVar "line") (PVar "col")) (EApp (EVar "defectOrigin") (EVar "d"))) (DoLet false false (PVar "at") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "file") (EVar "f"))) (DoLet false false (PVar "loc") (EIf (EBinOp "&&" (EBinOp ">" (EVar "line") (ELit (LInt 0))) (EBinOp "/=" (EVar "at") (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "at")) (EVar "line")) (EVar "col")) (EVar "line")) (EVar "col"))) (EVar "None"))) (DoLet false false (PVar "code") (EApp (EVar "defectCode") (EVar "d"))) (DoExpr (ETuple (EVar "at") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EApp (EVar "defectMessage") (EVar "d")))) (ELit (LString "")))) (EVar "loc"))))))
+(DTypeSig true "refuseSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "refuseSymbolDefects" ((PVar "file") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EBlock (DoLet false false (PTuple (PVar "at") (PVar "diag")) (EApp (EApp (EVar "symbolDefectDiag") (EVar "file")) (EVar "d"))) (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "at")))) (EVar "at")) (EVar "diag"))))))) (EVar "ds"))) (DoExpr (EApp (EVar "stageExit") (EVar "emitDiagExitCode")))))
 (DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitGateDiags" ((PVar "modsWithPath") (PVar "buckets")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "buckets"))) (DoLet false false (PVar "warnSrc") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "triples")) (arm PWild () (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))) (DoExpr (ETuple (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples")) (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EBinOp "++" (EVar "warnSrc") (EApp (EVar "mainShapeTriple") (EVar "modsWithPath"))))))))
 (DTypeSig false "mainShapeTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))

@@ -448,6 +448,32 @@ asserts) stay **bare** and carry no code.
 | `E-NOT-A-FUNCTION` | applied a non-function value (borderline) |
 | `E-MISSING-FIELD` | reserved — record-field miss (borderline; no live emit site on current tree, see design §5) |
 
+### Emitter / physical identity — `E-PHYS-*` (`compiler/backend/wasm_symbols.mdk`, Wasm emission)
+
+A module the emitter would write is refused when its physical identities do not
+close: every function, type, global and element entry it names has to be declared
+or defined exactly once, and every direct call has to supply the operand count the
+definition takes. The Wasm emitter keeps a per-emission registry
+(`SymbolRegistry`) and returns its defects to the emit driver instead of the module
+text, so nothing is written. The driver renders them with
+`renderSymbolDefects`/`refuseSymbolDefects` (`compiler/driver/diagnostics.mdk`) at
+the binding whose emission found the defect, with the code leading the message, and
+exits `emitDiagExitCode`, which `medaka build` forwards as a diagnostic. A binding
+with no source position (the prelude-free probe entries) is reported by name under
+`<unknown location>`. These are reachable on a well-typed program, as the runtime
+`E-*` codes are, but they are compile-time refusals: each one names a compiler
+defect, never a fault in the program. The gap census (`emitProgramGaps`) refuses
+only the duplicate and shape codes; it writes no module, so a use need not find its
+identity there. Record mode excuses only an identity whose definer recorded a gap.
+
+| Code | Meaning |
+|---|---|
+| `E-PHYS-DUPLICATE` | one function, type or global is declared or defined twice (for example `self` and `u__self`, which `gname` spells alike) |
+| `E-PHYS-SHAPE` | a direct call supplies a different operand count from the definition's parameter count |
+| `E-PHYS-UNDEFINED` | a call, `ref.func` or global access names an identity nothing in the module defines |
+| `E-PHYS-UNDECLARED-TYPE` | a function is declared `(type $T)` and the type section declares no `$T` (#4528) |
+| `E-PHYS-UNDECLARED-FUNCREF` | a `ref.func` in a body names a function no `(elem declare func …)` lists |
+
 ---
 
 ## 3. Diag ADT + threading mechanism

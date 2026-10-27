@@ -339,6 +339,22 @@ import backend.emit_support.{
   implEntryDeclaredArity,
   forEachU,
 }
+import backend.wasm_symbols.{
+  SymbolDefect,
+  SymbolOrigin(..),
+  SymbolRegistry,
+  WasmShape(..),
+  WasmSymbol(..),
+  checkCall,
+  checkRef,
+  checkTypeUse,
+  declareSymbol,
+  defineSymbol,
+  elemNames,
+  emptyRegistry,
+  excuseSymbol,
+  unresolved,
+}
 import backend.wasm_preamble.{
   preambleHeadLines,
   plannedImportLines,
@@ -441,8 +457,12 @@ data WasmEmit = WasmEmit {
   constClosIdx : Ref (OrdMap String),
   constClosCells : Ref (List (String, String)),
   nextConstClosId : Ref Int,
-  functionReferences : Ref (List String),
-  functionReferenceNames : Ref (OrdMap Unit),
+  -- the module's physical identities so far and the defects found against them,
+  -- latest first (backend/wasm_symbols.mdk).  `closureChecked` is False for the
+  -- gap census, which writes no module: there a use need not find its identity.
+  symbols : Ref SymbolRegistry,
+  symbolDefects : Ref (List SymbolDefect),
+  closureChecked : Bool,
   trapImportNeeded : Ref Bool,
   trapIntNeeded : Ref Bool,
   -- located traps: the files a trap site names, in reverse number order, and
@@ -519,8 +539,9 @@ freshWasmEmit mode = WasmEmit {
   constClosIdx = Ref omEmpty,
   constClosCells = Ref [],
   nextConstClosId = Ref 0,
-  functionReferences = Ref [],
-  functionReferenceNames = Ref omEmpty,
+  symbols = Ref emptyRegistry,
+  symbolDefects = Ref [],
+  closureChecked = True,
   trapImportNeeded = Ref False,
   trapIntNeeded = Ref False,
   siteFiles = Ref [],
@@ -712,6 +733,7 @@ data FnCtx = FnCtx {
   disp : WDispCtx,
   site : Int,
   binding : String,
+  origin : SymbolOrigin,
   localSlots : Ref (OrdMap LocalSlot),
   localTypes : Ref (List WasmRepr),
   nextLocal : Ref Int,
@@ -723,6 +745,7 @@ freshFnCtx () = FnCtx {
   disp = WDispOff,
   site = 0,
   binding = "?",
+  origin = SymbolOrigin "?" "" 0 0,
   localSlots = Ref omEmpty,
   localTypes = Ref [],
   nextLocal = Ref 0,
@@ -750,13 +773,30 @@ progFnCtx (Prog _ _ _ _ _ _ _ fn) = fn
 -- [prog] for emitting the body of another function: no TMC loop, no dispatch
 -- group, no clause site; the binding name is inherited.
 progInFn : Prog -> Prog
-progInFn prog =
-  progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding }
+progInFn prog = progWithFnCtx prog { freshFnCtx () |
+  binding = (progFnCtx prog).binding,
+  origin = (progFnCtx prog).origin,
+}
 
--- [progInFn prog] for the binding [name] whose first clause is at [site].
-progForBinding : String -> Int -> Prog -> Prog
-progForBinding name site prog =
-  progWithFnCtx prog { freshFnCtx () | site = site, binding = name }
+-- [progInFn prog] for the binding [name] at [loc], whose first clause is at [site].
+progForBinding : String -> Loc -> Int -> Prog -> Prog
+progForBinding name loc site prog = progWithFnCtx prog { freshFnCtx () |
+  site = site,
+  binding = name,
+  origin = bindingOrigin name loc,
+}
+
+-- where the binding [name] at [loc] is, as the registry reports it: no position
+-- for the placeholder span of a binding without a source location
+bindingOrigin : String -> Loc -> SymbolOrigin
+bindingOrigin name (Loc f 1 0 1 0) = SymbolOrigin name f 0 0
+bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
+
+-- [prog] with its physical definitions and uses attributed to [label], for a
+-- body that has no source binding of its own (an impl method, `main`, a value).
+progWithOrigin : String -> Prog -> Prog
+progWithOrigin label prog =
+  progWithFnCtx prog { progFnCtx prog | origin = SymbolOrigin label "" 0 0 }
 
 -- The binding name the body being emitted with [prog] cites in a gap message.
 progBinding : Prog -> String
@@ -921,7 +961,7 @@ emitFfiAppW prog env d hd name args end = match jsImportForW prog name
   Ok imp =>
     if listLen args == listLen imp.params then
       flatMap (a => emitRefExpr prog env d a) args
-        ++ [callInstrW end (jsffiWrapperW prog imp)]
+        ++ [callFnW prog end (jsffiWrapperW prog imp) (listLen args)]
     else
       emitIndirectApp prog env d hd args end
 
@@ -938,11 +978,12 @@ emitFfiEtaW prog name = match jsImportForW prog name
       flatMap argLoadAt (zipIdx params 0)
         ++ map (p => "local.get $" ++ gname p) params
         ++ ["call $" ++ jsffiWrapperW prog imp, "return"]
-    let _ = noteFuncRef (progEmit prog) lamName
+    let _ = noteFuncRef prog lamName
     let _ =
       addLiftedNamed
-        (progEmit prog)
+        prog
         lamName
+        codeShapeW
         ([
             "  (func "
               ++ lamName
@@ -951,7 +992,7 @@ emitFfiEtaW prog name = match jsImportForW prog name
           ++ map ("    " ++ _) (map localDeclRef params)
           ++ indent body
           ++ ["  )"])
-    wConstClos (progEmit prog) lamName arity
+    wConstClos prog lamName arity
 
 -- The binding's wrapper, lifted once; its name without the `$`.  Its traps are
 -- the native boundary's (compiler/FFI-ABI.md section 2.1a, 2.4).
@@ -986,8 +1027,9 @@ jsffiWrapperW prog imp =
       []
   let _ =
     addLiftedNamed
-      emit
+      prog
       ("$" ++ name)
+      (FuncParams (listLen imp.params))
       (jsffiWrapperLines imp intTrap charTrap copyTrap)
   name
 
@@ -1394,15 +1436,21 @@ freshLamId emit =
   let _ = setRef emit.nextLambdaId (n + 1)
   n
 
-addLifted : WasmEmit -> List String -> Unit
-addLifted emit def =
+-- Lift the definition [def] of function [name], whose shape is [shape].  The
+-- lifted section is written only for a module with closures, so only there does
+-- the registry learn of the definition.
+addLifted : Prog -> String -> WasmShape -> List String -> Unit
+addLifted prog name shape def =
+  let emit = progEmit prog
+  let _ = if progUseClos prog then defineFnW prog name shape
   setRef emit.liftedDefinitions (def :: !emit.liftedDefinitions)
 
 -- addLifted, but keyed by a unique define name: a second call
 -- with an already-seen name is a no-op, so a point-free ctor/extern used at N sites
 -- lifts its (func …) exactly once.
-addLiftedNamed : WasmEmit -> String -> List String -> Unit
-addLiftedNamed emit name def =
+addLiftedNamed : Prog -> String -> WasmShape -> List String -> Unit
+addLiftedNamed prog name shape def =
+  let emit = progEmit prog
   if omHasKey name !emit.liftedDefinitionNames then
     ()
   else
@@ -1410,7 +1458,80 @@ addLiftedNamed emit name def =
       setRef
         emit.liftedDefinitionNames
         (omInsert name () !emit.liftedDefinitionNames)
-    addLifted emit def
+    addLifted prog name shape def
+
+-- the shape of a `$codety` function: its self and its argument array
+codeShapeW : WasmShape
+codeShapeW = FuncOfType "codety" 2
+
+-- ── the physical-identity registry (backend/wasm_symbols.mdk) ─────────────────
+
+-- Apply one registry step for [emit]: keep the registry it returns, or keep the
+-- defect it found.
+registerW : WasmEmit ->
+  (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  Unit
+registerW emit step = match step !emit.symbols
+  Ok reg => setRef emit.symbols reg
+  Err d => setRef emit.symbolDefects (d :: !emit.symbolDefects)
+
+-- a physical name as the registry keys it: without its `$`
+symNameW : String -> String
+symNameW n = if startsWith "$" n then stringSlice 1 (stringLength n) n else n
+
+-- [prog] defines function [name] with [shape]; a function declared through a
+-- type uses that type, which the type section must declare.
+defineFnW : Prog -> String -> WasmShape -> Unit
+defineFnW prog name shape =
+  let emit = progEmit prog
+  let origin = (progFnCtx prog).origin
+  let _ = match shape
+    FuncOfType t _ =>
+      if emit.closureChecked then
+        registerW emit (checkTypeUse t (symNameW name) origin)
+    _ => ()
+  registerW emit (defineSymbol (WasmFunc (symNameW name)) shape origin)
+
+-- the instruction that calls `$<target>` with [operands] operands
+callFnW : Prog -> CallEndW -> String -> Int -> String
+callFnW prog end target operands =
+  let _ =
+    registerW
+      (progEmit prog)
+      (checkCall (WasmFunc target) operands (progFnCtx prog).origin)
+  callInstrW end target
+
+-- `ref.func` of [name] in a body: the function must exist and an element
+-- declaration must list it.
+refFuncW : Prog -> String -> String
+refFuncW prog name =
+  let origin = (progFnCtx prog).origin
+  let _ = registerW (progEmit prog) (checkRef (WasmFunc (symNameW name)) origin)
+  let _ = registerW (progEmit prog) (checkRef (WasmElem (symNameW name)) origin)
+  "ref.func " ++ name
+
+-- the module-level identities, declared before any body is emitted: the type
+-- section, the host imports, the globals and the closure-apply element entry
+seedSymbolsW : Prog -> WasmDemandPlan -> List String -> Unit
+seedSymbolsW prog physical globals =
+  let emit = progEmit prog
+  let origin = SymbolOrigin "module" "" 0 0
+  let declare = sym shape => registerW emit (declareSymbol sym shape origin)
+  let _ =
+    forEachU (t => declare (WasmType t) TypeDecl) physical.representationTypes
+  let _ =
+    forEachU
+      (imp => declare (WasmFunc imp.watSymbol) FuncImported)
+      physical.imports
+  let _ = forEachU (g => declare (WasmGlobal g) GlobalDecl) globals
+  if progUseClos prog then declare (WasmElem "mdk_pap") ElemDecl
+
+-- every defect this emission found: those found as it went, then (unless it is
+-- the census) one for each identity a use still waits for
+symbolDefectsW : WasmEmit -> List SymbolDefect
+symbolDefectsW emit =
+  reverseL !emit.symbolDefects
+    ++ (if emit.closureChecked then unresolved !emit.symbols else [])
 
 -- ── S-4: capture-free closure hoisting (the WasmGC peer of S-1/S-2's LLVM cells) ──
 -- A `$clos` struct whose capture set is EMPTY has fields that are ALL constant: the
@@ -1447,14 +1568,26 @@ addLiftedNamed emit name def =
 -- a closure value has no identity in this language (no reference equality on
 -- functions), and `$mdk_apply`/`$mdk_pap` only READ the struct, allocating any partial
 -- application into a fresh cell.
-wConstClos : WasmEmit -> String -> Int -> List String
-wConstClos emit lamName arity =
+wConstClos : Prog -> String -> Int -> List String
+wConstClos prog lamName arity =
+  let emit = progEmit prog
+  let origin = (progFnCtx prog).origin
+  -- a global's initializer declares its own function reference, so only the
+  -- function and the `$clos` type have to exist
+  let _ = registerW emit (checkRef (WasmFunc (symNameW lamName)) origin)
+  let _ =
+    if emit.closureChecked then
+      registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
   let initBody =
     "(struct.new $clos (ref.func \{lamName}) (i32.const \{intToString arity}) (array.new_fixed $argarr 0))"
   match omLookup initBody !emit.constClosIdx
     Some g => ["global.get " ++ g]
     None =>
       let g = "$mdk_cc_" ++ intToString !emit.nextConstClosId
+      let _ =
+        registerW
+          emit
+          (declareSymbol (WasmGlobal (symNameW g)) GlobalDecl origin)
       let _ = setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
       let _ = setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
       let _ = setRef emit.constClosCells ((g, initBody) :: !emit.constClosCells)
@@ -1470,19 +1603,21 @@ wConstClosGlobalLines emit =
 oneConstClosGlobal : (String, String) -> String
 oneConstClosGlobal (g, initBody) = "  (global \{g} (ref $clos) \{initBody})"
 
-noteFuncRef : WasmEmit -> String -> Unit
-noteFuncRef emit nm =
-  if omHasKey nm !emit.functionReferenceNames then
-    ()
-  else
-    let _ =
-      setRef
-        emit.functionReferenceNames
-        (omInsert nm () !emit.functionReferenceNames)
-    setRef emit.functionReferences (nm :: !emit.functionReferences)
+-- [nm] is taken by `ref.func`, so the element declaration lists it.  That
+-- declaration is written only for a module with closures.
+noteFuncRef : Prog -> String -> Unit
+noteFuncRef prog nm =
+  if progUseClos prog then
+    registerW
+      (progEmit prog)
+      (declareSymbol (WasmElem (symNameW nm)) ElemDecl (progFnCtx prog).origin)
 
+-- The module text, or the physical defects that keep it from being written.
 export
-emitProgram : WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgram : WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) String
 emitProgram input plan cp =
   emitProgramWith (freshWasmEmit WGapStrict) input plan cp
 
@@ -1500,7 +1635,10 @@ emitProgram input plan cp =
 -- for that harness ONLY; every real caller (build/run, every fixture-driven
 -- gate) stays on the checked `emitProgram`.
 export
-emitProgramUnchecked : WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgramUnchecked : WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) String
 emitProgramUnchecked input plan cp =
   emitProgramCore (freshWasmEmit WGapStrict) input plan cp
 
@@ -1510,24 +1648,28 @@ export
 emitProgramRecord : WasmEmitInput ->
   EmitPlan ->
   CProgram ->
-  (String, List String)
+  Result (List SymbolDefect) (String, List String)
 emitProgramRecord input plan cp =
   let emit = freshWasmEmit WGapRecord
-  let text = emitProgramWith emit input plan cp
-  (text, gapEventsOfW emit)
+  map (text => (text, gapEventsOfW emit)) (emitProgramWith emit input plan cp)
 
-emitProgramWith : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
-emitProgramWith emit input plan cp =
-  let text = emitProgramCore emit input plan cp
-  -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
-  -- continues past an unsupported node by RECORDING a gap event instead of
-  -- aborting, so its assembled text is intentionally allowed to be incomplete/
-  -- self-inconsistent -- not a real module, so not this check's business.
-  -- Only WGapStrict (the real, on-by-default production path) is asserted.
-  let _ = match emit.gapMode
-    WGapStrict => assertEmittedClosureW text
-    WGapRecord => ()
-  text
+emitProgramWith : WasmEmit ->
+  WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) String
+emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
+  Err defects => Err defects
+  Ok text =>
+    -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
+    -- continues past an unsupported node by RECORDING a gap event instead of
+    -- aborting, so its assembled text is intentionally allowed to be incomplete/
+    -- self-inconsistent -- not a real module, so not this check's business.
+    -- Only WGapStrict (the real, on-by-default production path) is asserted.
+    let _ = match emit.gapMode
+      WGapStrict => assertEmittedClosureW text
+      WGapRecord => ()
+    Ok text
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1555,7 +1697,11 @@ refuseUnprovidedExternsW emit input plan cp =
             (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
             findings
 
-emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgramCore : WasmEmit ->
+  WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) String
 emitProgramCore emit input plan cp =
   emitUniqueProgram
     { emit |
@@ -1566,7 +1712,11 @@ emitProgramCore emit input plan cp =
     plan
     cp
 
-emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
+emitUniqueProgram : WasmEmit ->
+  WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
   let _ = refuseUnprovidedExternsW emit input plan cp
   let physical = physicalPlanW plan
@@ -1737,13 +1887,17 @@ checkCalledNamesW defined (name :: rest) =
 -- calls the main-requiring emitRefMain.  Each binding is wrapped with setGapBindingOfW
 -- so a recorded gap is attributed to its source binding.
 export
-emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
+emitProgramGaps : WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Result (List SymbolDefect) (List String)
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = cp0
   let emit = freshWasmEmit WGapRecord
   let emit = { emit |
     externFacts = requirementFacts plan.externRequirements,
     physical = plan.wasmPhysical,
+    closureChecked = False,
   }
   let _ =
     refuseUnprovidedExternsW
@@ -1775,7 +1929,9 @@ emitProgramGaps input plan cp0 =
   let _ = emitFnsGapsW prog (userFnBinds groups)
   let _ = emitImplsGapsW prog (implGroups prog impls)
   let _ = emitValsGapsW prog (filterList isValBind groups)
-  gapEventsOfW emit
+  match symbolDefectsW emit
+    [] => Ok (gapEventsOfW emit)
+    defects => Err defects
 
 emitFnsGapsW : Prog -> List CBind -> Unit
 emitFnsGapsW _ [] = ()
@@ -1882,9 +2038,13 @@ cFieldExpr (CField _ _ e) = e
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
+-- `locals` is the scope's locally-bound names (parameters, let, lambda and
+-- let-group binders): a local named like a top-level fn shadows it, so it is not a
+-- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
+-- rule `exprUsesClosures` applies.
 scanFnValueUses : OrdMap Unit -> List (String, Int) -> List CBind -> List String
 scanFnValueUses fnNames ctorArs groups =
-  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs) groups)
+  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs envEmpty) groups)
 
 -- W9: the impl method bodies + interface defaults also use top-level fns as values
 -- (e.g. `toList = identity` in `impl Foldable List`), so their fn-value uses must seed
@@ -1900,23 +2060,43 @@ scanImplEntryValueUses : OrdMap Unit ->
   List (String, Int) ->
   CImplEntry ->
   List String
-scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
-  CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
+scanImplEntryValueUses fnNames ctorArs (ent@(CImplEntry _ _ _ body)) =
+  let locals =
+    envExtendUnstamped (flatMap patVars (implEntryPatsW ent)) envEmpty
+  match body
+    CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
+    CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
 
-scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
-scanBindValueUses fnNames ctorArs (CBind _ clauses _ _) =
-  flatMap (c => scanExprValueUses fnNames ctorArs (clauseBodyOf c)) clauses
+scanBindValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CBind ->
+  List String
+scanBindValueUses fnNames ctorArs locals (CBind _ clauses _ _) =
+  flatMap
+    ((CClause pats body) =>
+      scanExprValueUses
+        fnNames
+        ctorArs
+        (envExtendUnstamped (flatMap patVars pats) locals)
+        body)
+    clauses
 
-scanExprValueUses : OrdMap Unit -> List (String, Int) -> CExpr -> List String
-scanExprValueUses fnNames ctorArs (CVar x _) =
-  if fnMemberIndexW fnNames x then
+scanExprValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CExpr ->
+  List String
+scanExprValueUses fnNames ctorArs locals (CVar x _) =
+  if envHas x locals then
+    []
+  else if fnMemberIndexW fnNames x then
     [x]
   else if fnMemberIndexW fnNames ("core__" ++ x) then
     ["core__" ++ x]
   else
     []
-scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
+scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
   let (hd, args, mode) = appParts app
   let here = match hd
     CVar fn0 _ =>
@@ -1927,7 +2107,12 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
           "core__" ++ fn0
         else
           fn0
-      if fnMemberIndexW fnNames fn && not (isExactCall mode) then [fn] else []
+      if not (envHas fn0 locals)
+        && fnMemberIndexW fnNames fn
+        && not (isExactCall mode) then
+        [fn]
+      else
+        []
     -- P1: an RLocal method-ref head is a DIRECT call to a shadowing standalone top-level
     -- fn — the same direct call the CVar arm above describes, reached by a different
     -- route.  So it needs the SAME rule: when the call is not exact, emitMethodRef
@@ -1944,77 +2129,115 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
         [target]
       else
         []
-    _ => scanExprValueUses fnNames ctorArs hd
-  here ++ flatMap (scanExprValueUses fnNames ctorArs) args
-scanExprValueUses fnNames ctorArs (CLam _ b) =
-  scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBinPrim _ l r _ _) =
-  scanExprValueUses fnNames ctorArs l ++ scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CUnOp _ x) =
-  scanExprValueUses fnNames ctorArs x
-scanExprValueUses fnNames ctorArs (CIf c t f) =
-  scanExprValueUses fnNames ctorArs c
-    ++ scanExprValueUses fnNames ctorArs t
-    ++ scanExprValueUses fnNames ctorArs f
-scanExprValueUses fnNames ctorArs (CLet _ _ a b) =
-  scanExprValueUses fnNames ctorArs a ++ scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBlock stmts) =
-  flatMap (s => scanStmtValueUses fnNames ctorArs s) stmts
-scanExprValueUses fnNames ctorArs (CDecision scrut arms _) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CMatch scrut arms) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CLetGroup binds b) =
-  flatMap (bd => scanBindValueUses fnNames ctorArs bd) binds
-    ++ scanExprValueUses fnNames ctorArs b
+    _ => scanExprValueUses fnNames ctorArs locals hd
+  here ++ flatMap (scanExprValueUses fnNames ctorArs locals) args
+scanExprValueUses fnNames ctorArs locals (CLam pats b) =
+  scanExprValueUses
+    fnNames
+    ctorArs
+    (envExtendUnstamped (flatMap patVars pats) locals)
+    b
+scanExprValueUses fnNames ctorArs locals (CBinPrim _ l r _ _) =
+  scanExprValueUses fnNames ctorArs locals l
+    ++ scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CUnOp _ x) =
+  scanExprValueUses fnNames ctorArs locals x
+scanExprValueUses fnNames ctorArs locals (CIf c t f) =
+  scanExprValueUses fnNames ctorArs locals c
+    ++ scanExprValueUses fnNames ctorArs locals t
+    ++ scanExprValueUses fnNames ctorArs locals f
+scanExprValueUses fnNames ctorArs locals (CLet _ pat a b) =
+  scanExprValueUses fnNames ctorArs locals a
+    ++ scanExprValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      b
+scanExprValueUses fnNames ctorArs locals (CBlock stmts) =
+  scanBlockValueUses fnNames ctorArs locals stmts
+scanExprValueUses fnNames ctorArs locals (CDecision scrut arms _) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CMatch scrut arms) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CLetGroup binds b) =
+  let inGroup = envExtendUnstamped (map bindName binds) locals
+  flatMap (bd => scanBindValueUses fnNames ctorArs inGroup bd) binds
+    ++ scanExprValueUses fnNames ctorArs inGroup b
 -- Composite arms emitVarRef descends into at emit time — each can hold a fn-VALUE
 -- use (`map (mapIfaceMethod f) ms` lives in a CRecordUpdate; `map (substField s) fs`
 -- in a CTuple; `flatMap dataArity prog` in a CRecord field).  Missing these here
 -- under-counted fn-value uses → the closure wrapper `$mdk_w_<f>` was referenced
 -- (ref.func emitted) but never DEFINED → "unknown func" at assemble.
-scanExprValueUses fnNames ctorArs (CTuple xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CList xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CArray xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CRecord _ fs) =
-  flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CFieldAccess r _ _ _) =
-  scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CRecordUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CVariantUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CRangeList lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs (CRangeArray lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs _ = []
+scanExprValueUses fnNames ctorArs locals (CTuple xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CList xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CArray xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CRecord _ fs) =
+  flatMap (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd)) fs
+scanExprValueUses fnNames ctorArs locals (CFieldAccess r _ _ _) =
+  scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CRecordUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CVariantUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CRangeList lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses fnNames ctorArs locals (CRangeArray lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses _ _ _ _ = []
 
 -- scan an arm's guards (refutable `Pat <- e` / boolean `if e`) AND its body — a
 -- guard scrutinee can carry a fn-value use just like the body.
-scanArmValueUses : OrdMap Unit -> List (String, Int) -> CArm -> List String
-scanArmValueUses fnNames ctorArs (CArm _ guards body) =
-  flatMap (g => scanGuardValueUses fnNames ctorArs g) guards
-    ++ scanExprValueUses fnNames ctorArs body
+scanArmValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CArm ->
+  List String
+scanArmValueUses fnNames ctorArs locals (CArm _ guards body) =
+  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
+    ++ scanExprValueUses fnNames ctorArs locals body
 
-scanGuardValueUses : OrdMap Unit -> List (String, Int) -> CGuard -> List String
-scanGuardValueUses fnNames ctorArs (CGBool e) =
-  scanExprValueUses fnNames ctorArs e
-scanGuardValueUses fnNames ctorArs (CGBind _ e) =
-  scanExprValueUses fnNames ctorArs e
+scanGuardValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CGuard ->
+  List String
+scanGuardValueUses fnNames ctorArs locals (CGBool e) =
+  scanExprValueUses fnNames ctorArs locals e
+scanGuardValueUses fnNames ctorArs locals (CGBind _ e) =
+  scanExprValueUses fnNames ctorArs locals e
 
-scanStmtValueUses : OrdMap Unit -> List (String, Int) -> CStmt -> List String
-scanStmtValueUses fnNames ctorArs (CSExpr e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses fnNames ctorArs (CSLet _ _ e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses _ _ _ = []
+-- a block's statements, each later one seeing the names an earlier `let` bound
+scanBlockValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  List CStmt ->
+  List String
+scanBlockValueUses _ _ _ [] = []
+scanBlockValueUses fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      rest
+scanBlockValueUses fnNames ctorArs locals ((CSExpr e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses fnNames ctorArs locals rest
+scanBlockValueUses fnNames ctorArs locals (_ :: rest) =
+  scanBlockValueUses fnNames ctorArs locals rest
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
@@ -2234,7 +2457,10 @@ fixedWidthWrapW tag op = match fixedWidthMask tag
     else
       []
 
-emitRefProgram : Prog -> EmitPlan -> List CBind -> String
+emitRefProgram : Prog ->
+  EmitPlan ->
+  List CBind ->
+  Result (List SymbolDefect) String
 emitRefProgram prog plan groups =
   let header = preambleHeadLines
   let typeSection =
@@ -2267,6 +2493,15 @@ emitRefProgram prog plan groups =
       ++ dispGlobals
       ++ map (if rawProgramW prog then oneGlobalI32 else oneGlobalRef) valNames
       ++ lazyStateGlobals
+  let _ =
+    seedSymbolsW
+      prog
+      physical
+      (flatMap wDispGlobalNames dispGroups
+        ++ map gname valNames
+        ++ map
+          (n => "gs_" ++ gname n)
+          (filterList (isLazyGlobalW prog) valNames))
   -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
@@ -2299,22 +2534,26 @@ emitRefProgram prog plan groups =
   -- the `$trapmsg_K` helpers, bound last of all: every coded trap they hold was
   -- interned during the body emission above.
   let trapMsgRt = trapMsgRuntimeOf (progEmit prog)
-  joinNl
-    (header
-      ++ typeSection
-      ++ imports
-      ++ elemDecl
-      ++ globals
-      ++ constClosGlobals
-      ++ fns
-      ++ implFns
-      ++ lifted
-      ++ runtime
-      ++ dataSegs
-      ++ forceFns
-      ++ initLines
-      ++ trapMsgRt
-      ++ [")"])
+  match symbolDefectsW (progEmit prog)
+    [] =>
+      Ok
+        (joinNl
+          (header
+            ++ typeSection
+            ++ imports
+            ++ elemDecl
+            ++ globals
+            ++ constClosGlobals
+            ++ fns
+            ++ implFns
+            ++ lifted
+            ++ runtime
+            ++ dataSegs
+            ++ forceFns
+            ++ initLines
+            ++ trapMsgRt
+            ++ [")"]))
+    defects => Err defects
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
 -- distinct payload (`freshStrSeg`), emitted in segment-index order.  `array.new_data`
@@ -2344,7 +2583,7 @@ insertSeg (i, b) ((j, c) :: rest) =
 -- validates.  Drained from WasmEmit after all bodies are emitted.
 emitElemDeclare : WasmEmit -> String
 emitElemDeclare emit =
-  let names = "$mdk_pap" :: reverseL !emit.functionReferences
+  let names = map ("$" ++ _) (elemNames !emit.symbols)
   "  (elem declare func " ++ joinWith " " names ++ ")"
 
 oneGlobalRef : String -> String
@@ -2542,8 +2781,12 @@ emitRefInit prog plan groups =
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
   let valBinds = plannedValBinds plan groups
-  let initProg = progInFn prog
-  let mainProg = progInFn prog
+  let initProg = progWithOrigin "value initialization" (progInFn prog)
+  let mainProg = progWithOrigin "main" (progInFn prog)
+  let _ =
+    forEachU
+      (f => defineFnW (progWithOrigin "module" prog) f (FuncParams 0))
+      ["__main", "__entry_split", "__init"]
   let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit initProg) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
@@ -2628,7 +2871,7 @@ emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
 emitRefForceFns : Prog -> List CBind -> List String
 emitRefForceFns prog groups =
   flatMap
-    (emitRefForceFn prog)
+    (b => emitRefForceFn (progWithOrigin (bindName b) prog) b)
     (filterList
       (b => isLazyGlobalW prog (bindName b))
       (filterList isValBind groups))
@@ -2636,6 +2879,7 @@ emitRefForceFns prog groups =
 emitRefForceFn : Prog -> CBind -> List String
 emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let g = gname name
+  let _ = defineFnW prog ("force_" ++ g) (FuncParams 0)
   let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog envEmpty 0 body
   let bodyLocals = dedupKeep (collectExprLocals body)
@@ -2687,7 +2931,15 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
     ++ ["    else"]
     ++ unforced
     ++ ["    end", "    end", "  )"]
-emitRefForceFn prog _ = gapLP prog "value binding must be a nullary clause"
+emitRefForceFn prog (CBind name _ _ _) =
+  -- in record mode the gap stands in for this force function
+  let _ =
+    setRef
+      (progEmit prog).symbols
+      (excuseSymbol
+        (WasmFunc ("force_" ++ gname name))
+        !(progEmit prog).symbols)
+  gapLP prog "value binding must be a nullary clause"
 
 -- main: compute the body (a (ref eq)), then unbox to i32 and route to the print
 -- import by the body's STATIC kind (Int vs Bool — the only printable scalar mains
@@ -2886,7 +3138,8 @@ refPrintFor prog WRef =
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
 emitRefFnBind outer (CBind name clauses bindLoc _) =
-  let prog = progForBinding name (sitePackedW (progEmit outer) bindLoc) outer
+  let prog =
+    progForBinding name bindLoc (sitePackedW (progEmit outer) bindLoc) outer
   let arity = clauseArityOf clauses
   let params =
     if rawProgramW prog then match clauses
@@ -2972,6 +3225,7 @@ emitOrdinaryFnW prog name params arity clauses =
       map (_ => " (param i64)") params
     else
       map paramDeclRef params
+  let _ = defineFnW prog (gname name) (FuncParams (listLen params))
   let sig =
     "  (func $\{gname name}\{joinWith "" paramDecls} (result \{physicalType (programReprW prog)})"
   let localDecls = map localDeclRef (extraLocals ++ scratch)
@@ -3407,9 +3661,9 @@ clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 -- Prog's invocation-private index; lookup is O(log n) with no ambient authority.
 -- Never in raw mode: a raw program declares no closure types, and the demand
 -- planner routes every genuine value use of a function to ref mode.  The scan
--- behind the index is keyed by bare name, so in raw mode a hit can only be a
--- local that shadows the function's name (`twice inc = inc + inc`), whose
--- wrapper would reference the undeclared `$codety`.
+-- behind the index does not see match-arm binders, so in raw mode a hit can only
+-- be such a local shadowing the function's name, whose wrapper would reference
+-- the undeclared `$codety`.
 needsClosWrapper : Prog -> String -> Bool
 needsClosWrapper prog name =
   not (rawProgramW prog)
@@ -3421,8 +3675,11 @@ needsClosWrapper prog name =
 -- at the value-reference site (emitVarRef) so partial application threads its arity.
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
-  let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ name)
-  closWrapperLines ("$mdk_w_" ++ name) (gname name) arity
+  let wrapper = "$mdk_w_" ++ name
+  let _ = noteFuncRef prog wrapper
+  let _ = defineFnW prog wrapper codeShapeW
+  let _ = callFnW prog CallTailW (gname name) arity
+  closWrapperLines wrapper (gname name) arity
 
 -- A `$codety` function [wrapper] that loads [arity] arguments out of its argument
 -- array and tail-calls `$<target>` on them.
@@ -3578,7 +3835,7 @@ emitMethodRef prog env d name _ _ (RLocal sym dicts) implRoutes methRoutes args 
       emitIndirectApp prog env d (CVar target AGlobal) args end
     else
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-      argInstrs ++ [callInstrW end (gname target)]
+      argInstrs ++ [callFnW prog end (gname target) (listLen args)]
   else
     emitDictRef prog env d target dicts args mode end
 emitMethodRef prog env d name _ _ (RScalar _) implRoutes methRoutes args _ end =
@@ -3624,13 +3881,20 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
     -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
     -- all its dicts is byte-identical.
     Some entry =>
-      let keptWords =
-        flatMap
-          (routeWitness prog env d)
-          (staticEntryDictRoutesW
-            entry
-            (MethodEvidence iface siteArity route implRoutes methRoutes))
-      keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW name entry)]
+      let kept =
+        staticEntryDictRoutesW
+          entry
+          (MethodEvidence iface siteArity route implRoutes methRoutes)
+      let keptWords = flatMap (routeWitness prog env d) kept
+      keptWords
+        ++ argInstrs
+        ++ [
+          callFnW
+            prog
+            end
+            (implEntrySymW name entry)
+            (listLen kept + listLen args),
+        ]
     None =>
       gapLP
           prog
@@ -3743,9 +4007,9 @@ dispatchCallSeqW : Prog -> ImplArmW -> String -> Int -> CallEndW -> List String
 dispatchCallSeqW prog arm name nArgs end =
   let memoName = "$memo_\{armSymTagW arm}_\{name}"
   if nArgs == 0 && isLazyGlobalW prog memoName then
-    [callInstrW end ("force_" ++ gname memoName)]
+    [callFnW prog end ("force_" ++ gname memoName) 0]
   else
-    [callInstrW end (armFnSymW arm)]
+    [callFnW prog end (armFnSymW arm) (armDictCountW (armEntryW arm) 0 + nArgs)]
 
 -- F10 (#1450/#1668 follow-on): a dispatch site pushes exactly the arguments THAT
 -- SITE saw, and the entry a runtime dictionary selects need not take that many: two
@@ -3766,10 +4030,14 @@ armClosureW : Prog -> ImplArmW -> List String
 armClosureW prog arm =
   let arity = listLen (implEntryPatsW (armEntryW arm))
   let wrapper = "$mdk_lam" ++ intToString (freshLamId (progEmit prog))
-  let _ = noteFuncRef (progEmit prog) wrapper
+  let _ = noteFuncRef prog wrapper
   let _ =
-    addLifted (progEmit prog) (closWrapperLines wrapper (armFnSymW arm) arity)
-  wConstClos (progEmit prog) wrapper arity
+    addLifted
+      prog
+      wrapper
+      codeShapeW
+      (closWrapperLines wrapper (armFnSymW arm) arity)
+  wConstClos prog wrapper arity
 
 -- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
 -- routeKey?  if so: load this impl's nested requires-dicts from the dict param's
@@ -3815,7 +4083,14 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs 
           callInstrW end "__mdk_apply",
         ]
     else if meth.mdCount > 0 then
-      pushed ++ [callInstrW end (armFnSymW arm)]
+      pushed
+        ++ [
+          callFnW
+            prog
+            end
+            (armFnSymW arm)
+            (meth.mdCount + armDictCountW (armEntryW arm) meth.mdCount + nArgs),
+        ]
     else
       pushed ++ dispatchCallSeqW prog arm name nArgs end
   let armExit = match end
@@ -3997,7 +4272,9 @@ emitDictRef prog env d name routes args mode end =
     if isExactCall mode then
       let dictWords = flatMap (routeWitness prog env d) routes
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-      dictWords ++ argInstrs ++ [callInstrW end (gname name)]
+      dictWords
+        ++ argInstrs
+        ++ [callFnW prog end (gname name) (listLen routes + listLen args)]
     else
       emitIndirectApp prog env d (CDict name routes) args end
   else
@@ -4274,7 +4551,7 @@ implGroupArity [] = 0
 emitImplGroup : Prog -> ImplG -> List String
 emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
   -- an impl method has no first-clause site of its own
-  let prog = progInFn outer
+  let prog = progWithOrigin "impl \{method} for \{key}" (progInFn outer)
   let params = synthParams arity
   -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
   -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
@@ -4289,6 +4566,7 @@ emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
+      let _ = defineFnW prog fnName (FuncParams arity)
       let sig =
         "  (func $\{fnName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
       let localDecls = map localDeclRef (extraLocals ++ scratch)
@@ -4762,10 +5040,10 @@ emitVarRefPlain prog env d x =
     else
       emitCtorEtaClosure prog x
   else if progFnMemberW prog x then
-    let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
+    let _ = noteFuncRef prog ("$mdk_w_" ++ x)
     -- S-4: captureless by construction (a top-level fn's wrapper closes over nothing)
     -- ⇒ one hoisted module global, not a fresh `$clos` on every evaluation of `x`.
-    wConstClos (progEmit prog) ("$mdk_w_" ++ x) (fnParamCountW prog x)
+    wConstClos prog ("$mdk_w_" ++ x) (fnParamCountW prog x)
   else if canonFn prog x /= x then
     -- W9: a bare prelude reference synthesized post-mangle (string-interp / `/=`) →
     -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
@@ -4794,14 +5072,15 @@ emitExternEtaClosure prog name =
       None => panic ("internal error: missing-extern-abi: " ++ name)
     None => panic ("internal error: missing-extern-requirement: " ++ name)
   let lamName = "$mdk_ext_" ++ injectiveIdent name
-  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = noteFuncRef prog lamName
   let _ =
     addLiftedNamed
-      (progEmit prog)
+      prog
       lamName
+      codeShapeW
       (emitExternEtaDefine prog lamName name arity)
   -- S-4: an extern eta captures nothing (the comment above says so) ⇒ hoisted global.
-  wConstClos (progEmit prog) lamName arity
+  wConstClos prog lamName arity
 
 -- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (the array-extern
 -- rows of w7LocalKinds at depth 0) that an ARRAY-extern eta (func …)
@@ -4875,14 +5154,15 @@ emitCtorEtaClosure : Prog -> String -> List String
 emitCtorEtaClosure prog ctor =
   let arity = ctorArity prog ctor
   let lamName = "$mdk_wctor_" ++ gname ctor
-  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = noteFuncRef prog lamName
   let _ =
     addLiftedNamed
-      (progEmit prog)
+      prog
       lamName
+      codeShapeW
       (emitCtorEtaDefine prog lamName ctor arity)
   -- S-4: a ctor eta is captureless ⇒ hoisted global, not a per-reference `$clos`.
-  wConstClos (progEmit prog) lamName arity
+  wConstClos prog lamName arity
 
 emitCtorEtaDefine : Prog -> String -> String -> Int -> List String
 emitCtorEtaDefine prog lamName ctor arity =
@@ -5255,6 +5535,13 @@ trapMsgCall emit text = match omLookup text !emit.trapMsgIds
         ++ map ("    " ++ _) (flatMap trapByteInstr (strBytesW text))
         ++ ["  )"]
     let _ = setRef emit.trapMsgFns (reverseL def ++ !emit.trapMsgFns)
+    let _ =
+      registerW
+        emit
+        (defineSymbol
+          (WasmFunc ("trapmsg_" ++ intToString k))
+          (FuncParams 0)
+          (SymbolOrigin "coded trap" "" 0 0))
     ["call $trapmsg_" ++ intToString k]
 
 -- the `$trapmsg_K` helper definitions this emission made, in number order.
@@ -5646,7 +5933,7 @@ emitAppRef prog env d app =
         _ =>
           if progFnMemberW prog f && isExactCall mode then
             let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-            argInstrs ++ ["call $" ++ gname f]
+            argInstrs ++ [callFnW prog CallValueW (gname f) (listLen args)]
           else
             emitIndirectApp prog env d hd args CallValueW
     -- W5: a method occurrence applied to its args (the common return-/arg-position
@@ -7670,6 +7957,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
     w7LocalDecls
       (w7ScopeClose (progEmit prog) w7Outer)
       (clausesMaxDepth clauses)
+  let _ = defineFnW prog funcSym (FuncParams (listLen params))
   let sig =
     "  (func $\{funcSym}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
   wTmcMarker funcSym "trmc"
@@ -7739,6 +8027,12 @@ wDispLoopName : String -> String
 wDispLoopName root = root ++ "__disploop"
 
 -- one group's three dest globals (mutable; reset per outer entry by the wrapper).
+-- the names of the globals `wDispGlobalLines` declares, without their `$`
+wDispGlobalNames : DispGroup -> List String
+wDispGlobalNames grp =
+  let root = dispRootOf grp
+  map symNameW [wDispHeadL root, wDispDestL root, wDispFirstL root]
+
 wDispGlobalLines : DispGroup -> List String
 wDispGlobalLines grp =
   let root = dispRootOf grp
@@ -7795,6 +8089,7 @@ emitWDispRoot prog grp arity clauses =
   let name = dispRootOf grp
   let params = synthParams arity
   let loopName = wDispLoopName name
+  let _ = defineFnW prog (gname name) (FuncParams arity)
   let resetWrapper = wDispResetWrapper name loopName params arity
   let inner = emitWDispMemberFn prog grp loopName name arity clauses
   wTmcMarker name "group-root" :: resetWrapper ++ inner
@@ -7874,6 +8169,7 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   let allLocals = clauseLocals clauses
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
+  let _ = defineFnW prog (gname emitName) (FuncParams arity)
   let sig =
     "  (func $\{gname emitName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
   -- census marker for a NON-root member (the root's marker is emitted by
@@ -8040,7 +8336,7 @@ emitTailCallW prog env app =
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && isExactCall mode then
         flatMap (a => emitRefExpr prog env 0 a) args
-          ++ ["return_call $" ++ gname f]
+          ++ [callFnW prog CallTailW (gname f) (listLen args)]
       else
         emitIndirectApp prog env 0 hd args CallTailW
     -- #1349: a dispatched method in tail position.  An RKey route return_calls the
@@ -8447,19 +8743,21 @@ emitClosure prog env d pats body =
   let boundVars = flatMap patVars pats
   let captured =
     filterList (c => envHas c env) (dedupKeep (freeVarsExpr boundVars body))
-  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = noteFuncRef prog lamName
   let _ =
     addLifted
-      (progEmit prog)
+      prog
+      lamName
+      codeShapeW
       (emitLamDefine prog lamName pats captured (envRestrict captured env) body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   -- S-4: with NO captures every operand is constant, so hoist the struct to a module
   -- global (wConstClos) instead of rebuilding it on each evaluation of the `CLam`.
   match captured
-    [] => wConstClos (progEmit prog) lamName (listLen pats)
+    [] => wConstClos prog lamName (listLen pats)
     _ =>
       let capInstrs = flatMap (c => ["local.get $" ++ gname c]) captured
-      ["ref.func " ++ lamName, "i32.const " ++ intToString (listLen pats)]
+      [refFuncW prog lamName, "i32.const " ++ intToString (listLen pats)]
         ++ capInstrs
         ++ [
           "array.new_fixed $argarr " ++ intToString (listLen captured),
@@ -8708,7 +9006,7 @@ liftedMemberRebuilds prog gid groupCaps binds =
 constLgClosure : Prog -> Int -> CBind -> List String
 constLgClosure prog gid (CBind name clauses _ _) =
   wConstClos
-      (progEmit prog)
+      prog
       "$mdk_lg\{intToString gid}_\{gname name}"
       (clauseArityOf clauses)
     ++ ["local.set $" ++ gname name]
@@ -8748,9 +9046,13 @@ emitLgLifted : Prog ->
   Unit
 emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc _) =
   let memberProg =
-    progForBinding ("lg:" ++ name) (sitePackedW (progEmit prog) bindLoc) prog
+    progForBinding
+      ("lg:" ++ name)
+      bindLoc
+      (sitePackedW (progEmit prog) bindLoc)
+      prog
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
-  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = noteFuncRef prog lamName
   let arity = clauseArityOf clauses
   -- synthetic names: this member also declares its group captures and sibling
   -- names as locals, so a source-named param could collide with either.
@@ -8791,7 +9093,7 @@ emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc
       ++ indent
         (setup ++ capPrologue ++ memberRebuilds ++ argPrologue ++ bodyLines)
       ++ ["  )"]
-  addLifted (progEmit prog) def
+  addLifted prog lamName codeShapeW def
 
 -- rebuild ONE member's closure value (ref.func + arity + $argarr of groupCaps) and
 -- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
@@ -8801,7 +9103,7 @@ rebuildLgClosure prog gid groupCaps (CBind name clauses _ _) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let arity = clauseArityOf clauses
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) groupCaps
-  ["ref.func " ++ lamName, "i32.const " ++ intToString arity]
+  [refFuncW prog lamName, "i32.const " ++ intToString arity]
     ++ capInstrs
     ++ [
       "array.new_fixed $argarr " ++ intToString (listLen groupCaps),

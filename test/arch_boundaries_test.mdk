@@ -640,6 +640,9 @@ test "arch_boundaries: frontend.ast_codec closure matches its golden" =
 test "arch_boundaries: ir.core_ir closure matches its golden" =
   closurePin "ir.core_ir"
 
+test "arch_boundaries: backend.wasm_symbols closure matches its golden" =
+  closurePin "backend.wasm_symbols"
+
 -- Defined names (column-0, first word not a declaration keyword): an
 -- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
 definedName : String -> Option String

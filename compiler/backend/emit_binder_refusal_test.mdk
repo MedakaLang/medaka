@@ -106,7 +106,12 @@ wasmText cp = wasmFor RawUnchecked cp
 wasmFor : ManifestRequirement -> CProgram -> String
 wasmFor requirement cp =
   let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
-  wasmEmit (makeWasmEmitInput requirement PreludeFreeRuntime []) plan prepared
+  match (wasmEmit
+    (makeWasmEmitInput requirement PreludeFreeRuntime [])
+    plan
+    prepared)
+    Ok wat => wat
+    Err _ => ""
 
 -- What the refusal says about `x`.
 refusal : String

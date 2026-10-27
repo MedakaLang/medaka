@@ -404,7 +404,7 @@ test "paired helper/type/import omissions cannot erase unchanged Core prerequisi
 test "gap census preserves its forced reference walk without requiring main" =
   let (plan, cp) = prepared "f x y = x + y"
   expectEqual
-    []
+    (Ok [])
     (emitProgramGaps
       (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
       plan

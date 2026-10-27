@@ -118,6 +118,7 @@ import driver.diagnostics.{
   parseErrCode,
   codeKind,
   missingMainDiag,
+  renderSymbolDefects,
 }
 import driver.main_autoprint.{
   executedTrees,
@@ -143,7 +144,7 @@ import entries.entry_support.{
   stampModulePaths,
   failWith,
 }
-import support.util.{startsWith, splitOnChar, filterList, stringTrim}
+import support.util.{joinNl, startsWith, splitOnChar, filterList, stringTrim}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import types.typecheck.{
@@ -762,8 +763,11 @@ runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
       lowered
   if emit then
     let wat = emitProgram input plan reached
-    let _ = emitWatMarker warnTriples
-    putStr wat
+    match wat
+      Ok text =>
+        let _ = emitWatMarker warnTriples
+        putStr text
+      Err defects => failWith (joinNl (renderSymbolDefects "" defects))
   else
     let validation =
       validateForEmission
