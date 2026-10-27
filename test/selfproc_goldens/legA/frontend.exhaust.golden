@@ -60,6 +60,7 @@ guardsDecidablyExhaustive : List Guard -> Bool
 headBucketRow : List Pat -> Map String (List (List Pat)) -> Map String (List (List Pat))
 headBuckets : List (List Pat) -> Map String (List (List Pat)) -> Map String (List (List Pat))
 headCtors : List (List Pat) -> List String
+ifaceDefaultClauses : List IfaceMethod -> List (String, (List Pat, Expr))
 ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
 implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)

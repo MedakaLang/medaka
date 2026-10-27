@@ -1,5 +1,5 @@
 # META
-source_lines=1180
+source_lines=1188
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -1153,7 +1153,8 @@ declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
     ++ flatMap (implMethodBodyWarnings oracle) methods
 declBodyWarnings oracle (DInterface { methods, ... }) =
-  flatMap (ifaceMethodWarnings oracle) methods
+  flatMap (checkNamedGroup oracle) (groupByName (ifaceDefaultClauses methods))
+    ++ flatMap (ifaceMethodWarnings oracle) methods
 declBodyWarnings oracle (DProp _ _ _ body) = letGroupWarnings oracle body
 declBodyWarnings oracle (DTest _ _ body) = letGroupWarnings oracle body
 declBodyWarnings _ _ = []
@@ -1162,6 +1163,13 @@ implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implClauses [] = []
 implClauses ((ImplMethod n pats body) :: rest) =
   (n, (pats, body)) :: implClauses rest
+
+-- A default carries one clause's patterns; defaults sharing a name group as clauses.
+ifaceDefaultClauses : List IfaceMethod -> List (String, (List Pat, Expr))
+ifaceDefaultClauses [] = []
+ifaceDefaultClauses ((IfaceMethod n _ (Some (MethodDefault pats body)) _) :: rest) =
+  (n, (pats, body)) :: ifaceDefaultClauses rest
+ifaceDefaultClauses (_ :: rest) = ifaceDefaultClauses rest
 
 implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
 implMethodBodyWarnings oracle (ImplMethod _ _ body) =
@@ -1574,13 +1582,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
-(DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods")))
+(DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "ifaceDefaultClauses") (EVar "methods")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" (PWild PWild) (EListLit))
 (DTypeSig false "implClauses" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "implClauses" ((PList)) (EListLit))
 (DFunDef false "implClauses" ((PCons (PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "implClauses") (EVar "rest"))))
+(DTypeSig false "ifaceDefaultClauses" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
+(DFunDef false "ifaceDefaultClauses" ((PList)) (EListLit))
+(DFunDef false "ifaceDefaultClauses" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest"))))
+(DFunDef false "ifaceDefaultClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest")))
 (DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "implMethodBodyWarnings" ((PVar "oracle") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
@@ -1982,13 +1994,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
-(DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods")))
+(DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "ifaceDefaultClauses") (EVar "methods")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" (PWild PWild) (EListLit))
 (DTypeSig false "implClauses" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "implClauses" ((PList)) (EListLit))
 (DFunDef false "implClauses" ((PCons (PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "implClauses") (EVar "rest"))))
+(DTypeSig false "ifaceDefaultClauses" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
+(DFunDef false "ifaceDefaultClauses" ((PList)) (EListLit))
+(DFunDef false "ifaceDefaultClauses" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest"))))
+(DFunDef false "ifaceDefaultClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest")))
 (DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "implMethodBodyWarnings" ((PVar "oracle") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))

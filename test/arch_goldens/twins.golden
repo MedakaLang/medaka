@@ -22,7 +22,6 @@ emitExternEtaDefine
 emitFieldAccess
 emitFnsGaps
 emitGuardChain
-emitIf
 emitImplsGaps
 emitLamDefine
 emitLeaf

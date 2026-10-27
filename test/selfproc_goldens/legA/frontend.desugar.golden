@@ -1,6 +1,5 @@
 andAll : List Expr -> Expr
 andLeft : Expr -> List Expr -> Expr
-anyRefutable : List Pat -> Bool
 appliedHead : String -> List String -> Ty
 appliedHeadGo : Ty -> List String -> Ty
 applyDeriveParams : String -> List String -> List (Option KindAnn) -> Decl -> Decl
@@ -63,7 +62,6 @@ insertMethod : (Map String IfaceMethod, List String) -> IfaceMethod -> (Map Stri
 intLit : Int -> Expr
 interpPartToExpr : InterpPart -> Expr
 interpToCore : List InterpPart -> Expr
-isRefutable : Pat -> Bool
 isVarExpr : Expr -> Bool
 joinLocs : List Loc -> Option Loc
 kvToTuple : (Expr, Expr) -> Expr
