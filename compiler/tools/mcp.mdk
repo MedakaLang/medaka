@@ -85,6 +85,7 @@ import tools.lint.{
   applyFindingDeny,
   splitLintNames,
   buildStdlibIndex,
+  buildStdlibIndexResult,
   emptyStdlibIndex,
   stdlibIndexNeeded,
   StdlibIndex,
@@ -1409,9 +1410,8 @@ anyDiagErr (d :: rest) = diagIsError d || anyDiagErr rest
 -- file's `diagnostics` array — its synthesized-entry fallback for a
 -- duplicate's partner file lying outside `paths` is unreachable here, since
 -- `paths` is exactly the set every cross-file rule runs over. `isError` is
--- true iff any
--- diagnostic is a hard error (severity 1) — only reachable via `deny`
--- promotion, since every seed rule defaults to SevWarning.
+-- true iff any diagnostic is a hard error (severity 1), including parse
+-- errors and findings promoted by `deny`.
 runLintTool : String -> String -> String -> Json -> <IO> Json
 runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
   None =>
@@ -1424,16 +1424,20 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     -- at most once per REQUEST, not per path (see lintPathsToDiagQuads) — and
     -- not at all when `rule-stdlib-reimpl`, the sole `StdlibIndex` reader, is
     -- outside the active `disable`/`only` set (see `stdlibIndexNeeded`).
-    let idx =
+    let indexResult =
       if stdlibIndexNeeded only disable then
-        buildStdlibIndex
+        buildStdlibIndexResult
       else
-        emptyStdlibIndex
-    let quads = lintPathsToDiagQuads idx disable only deny paths
-    let triples = map dropQuadParse quads
-    let cross = crossFileMcpFindings disable only deny quads
-    let merged = mergeCrossFileIntoTriples cross triples
-    toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
+        Ok emptyStdlibIndex
+    match indexResult
+      Err (path, src, diag) =>
+        toolTextResult (cjAllToJson [(path, src, [diag])]) True
+      Ok idx =>
+        let quads = lintPathsToDiagQuads idx disable only deny paths
+        let triples = map dropQuadParse quads
+        let cross = crossFileMcpFindings disable only deny quads
+        let merged = mergeCrossFileIntoTriples cross triples
+        toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 

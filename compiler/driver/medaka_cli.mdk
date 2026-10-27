@@ -161,6 +161,7 @@ import driver.diagnostics.{
   FrontPolicy(..),
   FrontOutput(..),
   ppDiagCli,
+  ppDiagCliSrc,
   ppDiagCliLines,
   renderTcDiags,
   ppDiagBuckets,
@@ -274,6 +275,7 @@ import tools.lint.{
   lintProgram,
   StdlibIndex,
   buildStdlibIndex,
+  buildStdlibIndexResult,
   emptyStdlibIndex,
   stdlibIndexNeeded,
   applySuppressions,
@@ -3466,6 +3468,7 @@ runDocTargets (target :: _) =
     prelude <- readPreludeSources stdlibDir
     let _ = seedCheckPrelude prelude
     tsrc <- readSource target
+    let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
     Ok
       (putStr (runDoc prelude.pnRuntimeSrc prelude.pnCoreSrc tsrc target roots))
   match r
@@ -3948,11 +3951,44 @@ runLintCmd argv0 =
   -- still build the real index — an `emptyStdlibIndex`-computed entry would
   -- silently omit that rule's findings for every later `--cache` read, even a
   -- default-rules one that never named it.
-  let stdlibIdx =
+  let indexResult =
     if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
-      buildStdlibIndex
+      buildStdlibIndexResult
     else
-      emptyStdlibIndex
+      Ok emptyStdlibIndex
+  match indexResult
+    Err (path, src, diag) =>
+      let _ =
+        if jsonMode then
+          putStr (cjAllToJson [(path, src, [diag])])
+        else
+          ePutStrLn (ppDiagCliSrc src path diag)
+      stageExit 1
+    Ok stdlibIdx =>
+      runLintWithIndex
+        stdlibIdx
+        a
+        disableNames
+        onlyNames
+        denyNames
+        fixMode
+        jsonMode
+        baselineArg
+        writeBaselineArg
+        files
+
+runLintWithIndex : StdlibIndex ->
+  Args ->
+  List String ->
+  List String ->
+  List String ->
+  Bool ->
+  Bool ->
+  Option String ->
+  Option String ->
+  List String ->
+  <IO> Unit
+runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode baselineArg writeBaselineArg files =
   -- The baseline keys on paths relative to the process's working directory (see
   -- lint_baseline.mdk's header), so the anchor is resolved once, here, and
   -- handed down alongside the parsed rows.
@@ -4068,12 +4104,25 @@ runLintWriteBaselineCmd : StdlibIndex ->
 runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
   let triples =
     lintFilesToDiagTriples idx disableNames onlyNames denyNames None files
-  let perFile = map (t => baselineFileCodes cwd t) triples
-  match writeFile out (renderLintBaseline perFile)
-    Err msg => dieMsg "medaka lint: cannot write `\{out}`: \{msg}"
-    Ok _ =>
-      ePutStrLn
-        "medaka lint: wrote \{out} from \{intToString (listLen files)} file(s)"
+  let parseFailures = flatMap lintBaselineParseFailures triples
+  if listLen parseFailures > 0 then
+    let _ = emitWarningLines parseFailures
+    stageExit 1
+  else
+    let perFile = map (t => baselineFileCodes cwd t) triples
+    match writeFile out (renderLintBaseline perFile)
+      Err msg => dieMsg "medaka lint: cannot write `\{out}`: \{msg}"
+      Ok _ =>
+        ePutStrLn
+          "medaka lint: wrote \{out} from \{intToString (listLen files)} file(s)"
+
+lintBaselineParseFailures : (String, String, List Diag) -> List String
+lintBaselineParseFailures (path, src, diags) =
+  map (ppDiagCliSrc src path) (filter isLintParseDiagnostic diags)
+
+isLintParseDiagnostic : Diag -> Bool
+isLintParseDiagnostic (Diag _ code _ _ _ _) =
+  startsWith "P-" code || startsWith "L-" code
 
 -- #1173 rejected the SPACE form of `--disable`/`--only`/`--deny` outright,
 -- because the old `lintTargets` skipped any `--`-prefixed token without
