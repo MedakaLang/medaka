@@ -308,6 +308,9 @@ never bare — a bare statement is a monadic `>>` and must be in the block's mon
 so an `<IO>` call (or an untracked mutation) is rejected; `let _ =` stays a plain
 let and the block types as `<e> Result _`.
 
+In a plain (non-`do`) block a `Unit` statement is written bare; `let _ =` is for a
+`do` block or for discarding a non-`Unit` value.
+
 ```
 -- BAD: pass-through match repackages the error; comprehension/`?` removed
 findTable db name = match readSchema db

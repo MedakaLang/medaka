@@ -551,7 +551,7 @@ resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
 resolveArgStamps sx [] = ()
 resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   let sx = { sx | sxSite = loc }
-  let _ = match kind
+  match kind
     SKArg implRef fullMono omitted =>
       resolveArgStamp sx name tagRef implRef am fullMono omitted encl loc scope
     _ => ()
@@ -589,7 +589,7 @@ resolveArgStamp : SiteCtx ->
   Unit
 resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
   let (route, routes) = entail sx name am encl scope (EKArg fullMono omitted)
-  let _ = match route
+  match route
     RNone => ()
     _ => tagRef := route
   implRef := routes
@@ -708,18 +708,17 @@ solvedOnWalk mctx walk iface args solve =
     [] =>
       let (clean, found) = solvedCleanly mctx (goals => flatMap snd goals) solve
       let residuals = dedupWalkGoals found
-      let _ =
-        if clean then
-          let entry = SolvedGoalEntry {
-            sgeIface = iface,
-            sgeGoals = args,
-            sgeResiduals = residuals,
-          }
-          memo.wmSolved :=
-            omInsert
-              key
-              (entry :: optionOr [] (omLookup key memo.wmSolved.value))
-              memo.wmSolved.value
+      if clean then
+        let entry = SolvedGoalEntry {
+          sgeIface = iface,
+          sgeGoals = args,
+          sgeResiduals = residuals,
+        }
+        memo.wmSolved :=
+          omInsert
+            key
+            (entry :: optionOr [] (omLookup key memo.wmSolved.value))
+            memo.wmSolved.value
       residuals
 
 -- Runs [act] and says whether its result can stand for running it again: it
@@ -813,7 +812,7 @@ pushLocalDictApp : ModuleCtx ->
   Unit
 pushLocalDictApp mctx name ev la subst useScope =
   let monos = map (localSlotLead mctx subst) la.laSlots
-  let _ = pushDictApp mctx.mcGraph PendingDictApp {
+  pushDictApp mctx.mcGraph PendingDictApp {
     pdaRoutesRef = Ref [],
     pdaEv = ev,
     pdaMonos = monos,
@@ -1018,7 +1017,7 @@ resolveSite sx rpNames name tagRef implRef resultMono fullMono encl origin scope
       encl
       scope
       (EKReturn fullMono (omHasKey name rpNames))
-  let _ = match route
+  match route
     RNone => ()
     _ => tagRef := route
   implRef := routes
@@ -1071,7 +1070,7 @@ resolveExactReturnSite sx rpNames name tagRef implRef resultMono request encl or
     noteMethodReturnTrace sx.sxModule MRTStamped request None []
   else match methodReturnArgs sx.sxModule.mcGraph request
     None =>
-      let _ = noteMethodReturnTrace sx.sxModule MRTStamped request None []
+      noteMethodReturnTrace sx.sxModule MRTStamped request None []
       resolveSite
         sx
         rpNames
@@ -1085,16 +1084,14 @@ resolveExactReturnSite sx rpNames name tagRef implRef resultMono request encl or
         scope
     Some _ =>
       let resolution = solveExactReturnOnce sx request
-      let _ =
-        if methodReturnResolutionValid sx.sxModule request resolution then
-          ()
-        else
-          panic "ordinary return route received invalid solver evidence"
+      if methodReturnResolutionValid sx.sxModule request resolution then
+        ()
+      else
+        panic "ordinary return route received invalid solver evidence"
       let (route, routes) =
         exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
-      let _ =
-        noteMethodReturnTrace sx.sxModule MRTStamped request (Some route) routes
-      let _ = match route
+      noteMethodReturnTrace sx.sxModule MRTStamped request (Some route) routes
+      match route
         RNone => ()
         _ => tagRef := route
       implRef := routes
@@ -1179,7 +1176,7 @@ resolveNumLitSite sx rpNames name tagRef resultMono fullMono predicate encl orig
       encl
       scope
       (EKNumReturn predicate fullMono (omHasKey name rpNames) origin)
-  let _ = match route
+  match route
     RNone => ()
     _ => tagRef := numericReturnRoute route routes
   ()
@@ -1639,7 +1636,7 @@ solveExactReturn sx request = match methodReturnWanted sx.sxModule request
           wanted.scope)
     match given
       Some answer =>
-        let _ = noteAssumption sx.sxModule.mcGraph wanted.scope answer
+        noteAssumption sx.sxModule.mcGraph wanted.scope answer
         MethodReturnResolution {
           mrrWanted = wanted,
           mrrOutcome = Solved (assumAnswerEvidence answer),
@@ -1821,12 +1818,11 @@ export
 improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
 improveByUniqueImpl dyn _ [] = ()
 improveByUniqueImpl dyn sigIds (o :: rest) =
-  let _ =
-    improveGoal
-      dyn
-      sigIds
-      o.pred.iface
-      (map normalize (uOblArgs dyn.dcModule.mcGraph o))
+  improveGoal
+    dyn
+    sigIds
+    o.pred.iface
+    (map normalize (uOblArgs dyn.dcModule.mcGraph o))
   improveByUniqueImpl dyn sigIds rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
@@ -1928,12 +1924,12 @@ determineHeldGoal mctx rigidIds window o args
         let sizeBefore = monoSizes args
         -- Minted inside the boundary's level: a goal variable unified with one
         -- of these keeps its level and still generalizes.
-        let _ = enterLevel mctx ()
+        enterLevel mctx ()
         let heads = freshRowHeads mctx row
-        let _ = exitLevel mctx ()
-        let _ = commitImprovement (dynFor mctx) rigidIds (zip args heads)
-        let _ = fileDeterminedRow mctx row args
-        let _ = refileGoals mctx.mcGraph window oldIds
+        exitLevel mctx ()
+        commitImprovement (dynFor mctx) rigidIds (zip args heads)
+        fileDeterminedRow mctx row args
+        refileGoals mctx.mcGraph window oldIds
         monoSizes args /= sizeBefore
           || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
       _ => False
@@ -2485,7 +2481,7 @@ export
 stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 stampNoting stamp resolve o =
   let acc = Ref innerNone
-  let _ = resolve { siteFor stamp | sxInner = Some acc } o
+  resolve { siteFor stamp | sxInner = Some acc } o
   o.oInner := innerOr o.oInner.value acc.value
 
 -- test-only observation: declarations whose only callers are tests and probes.
@@ -2677,7 +2673,7 @@ scopeGivenProbe _ =
     psArgs = PSArgsKnown args,
     psBoundIds = [41],
   }
-  let _ = pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
+  pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
   let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
   let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
   let truncated = PredicateRequest {
@@ -2697,13 +2693,7 @@ scopeGivenProbe _ =
     prIface = witnessIface,
     prArgs = PSArgsKnown [tconBuiltin "Int"],
   }
-  let _ =
-    pushGiven
-      gctx
-      GMIdWitnessed
-      DirectGiven
-      witnessSlot
-      (Scopes.binderAt owner 1)
+  pushGiven gctx GMIdWitnessed DirectGiven witnessSlot (Scopes.binderAt owner 1)
   let compatibleIface = IfaceRef {
     irName = "CompatibleGiven",
     irOrigin = OriginModule "given-probe",
@@ -2717,13 +2707,12 @@ scopeGivenProbe _ =
     prIface = compatibleIface,
     prArgs = PSArgsKnown [tconBuiltin "Int"],
   }
-  let _ =
-    pushGiven
-      gctx
-      GMPredicate
-      DirectGiven
-      compatibleSlot
-      (Scopes.binderAt owner 2)
+  pushGiven
+    gctx
+    GMPredicate
+    DirectGiven
+    compatibleSlot
+    (Scopes.binderAt owner 2)
   let givens = givensForScope gctx owner
   let result = [
     anyGivenMatches gctx exact owner givens,
@@ -2822,7 +2811,7 @@ methodReturnProbeScope mctx moduleId =
       0
       moduleId
       ModuleOwner
-  let _ = openScope mctx scope
+  openScope mctx scope
   scope
 
 export
@@ -2831,7 +2820,7 @@ methodReturnProbeOccurrence : ModuleCtx ->
   MethodTrackedInstantiation
 methodReturnProbeOccurrence mctx row =
   let inst = instantiateMethodTracked mctx row.msrScheme
-  let _ = unify mctx (stripArrows inst.mtiBody) (tconBuiltin "Int")
+  unify mctx (stripArrows inst.mtiBody) (tconBuiltin "Int")
   inst
 
 export

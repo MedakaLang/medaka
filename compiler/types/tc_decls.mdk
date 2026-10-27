@@ -891,14 +891,13 @@ aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut name =
   else
     onStackRef := name :: !onStackRef
     onStackSetRef := omInsert name () !onStackSetRef
-    let _ =
-      aliasDfsVisitNeighbors
-        graph
-        visitedRef
-        onStackRef
-        onStackSetRef
-        cyclicOut
-        (optionOr [] (omLookup name graph))
+    aliasDfsVisitNeighbors
+      graph
+      visitedRef
+      onStackRef
+      onStackSetRef
+      cyclicOut
+      (optionOr [] (omLookup name graph))
     onStackRef := filterList (/= name) !onStackRef
     onStackSetRef := omDelete name !onStackSetRef
     visitedRef := omInsert name () !visitedRef
@@ -912,7 +911,7 @@ aliasDfsVisitNeighbors : OrdMap (List String) ->
   Unit
 aliasDfsVisitNeighbors _ _ _ _ _ [] = ()
 aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut (n :: ns) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut n
+  aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut n
   aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut ns
 
 aliasDfsVisitAll : OrdMap (List String) ->
@@ -924,7 +923,7 @@ aliasDfsVisitAll : OrdMap (List String) ->
   Unit
 aliasDfsVisitAll _ _ _ _ _ [] = ()
 aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
+  aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
   aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
 
 -- Each report is located at the alias's right-hand side, the type that refers
@@ -949,13 +948,12 @@ emitCyclicAliasErrors mctx prog table (name :: rest) =
             importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner
           None => None)
         named
-  let _ =
-    pushTypeErrorOnce
-      (mctxAtIfSome loc mctx)
-      "T-RECURSIVE-ALIAS"
-      ("type alias `"
-        ++ name
-        ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
+  pushTypeErrorOnce
+    (mctxAtIfSome loc mctx)
+    "T-RECURSIVE-ALIAS"
+    ("type alias `"
+      ++ name
+      ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
   emitCyclicAliasErrors mctx prog table rest
 
 -- Does module [reader] declare the alias keyed [key]?  A key with no module
@@ -999,16 +997,9 @@ rejectCyclicAliases mctx prog =
   let onStackRef = Ref []
   let onStackSetRef = Ref omEmpty
   let cyclicOut = Ref []
-  let _ =
-    aliasDfsVisitAll
-      graph
-      visitedRef
-      onStackRef
-      onStackSetRef
-      cyclicOut
-      aliasKeys
+  aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut aliasKeys
   let cyclic = !cyclicOut
-  let _ = emitCyclicAliasErrors mctx prog table cyclic
+  emitCyclicAliasErrors mctx prog table cyclic
   let cyclicSet = omFromNames cyclic omEmpty
   setRef
     mctx.mcCells.aliasTableRef
@@ -1088,7 +1079,7 @@ sigVarsForWith mctx ty rowNames auths =
   let authNames = map fst auths
   let uses =
     binderDomainsIn mctx.mcGraph ty ++ namedAtomBinders mctx.mcGraph ty ++ auths
-  let _ = reportBinderDomains mctx ty uses
+  reportBinderDomains mctx ty uses
   let ranged =
     binderIsPattern
       mctx.mcGraph
@@ -1103,7 +1094,7 @@ sigVarsForWith mctx ty rowNames auths =
           (b => authorityBinderBound named authNames (fst b))
           (dedupBinders uses [])),
   }
-  let _ = reportUnboundAuthorityNames mctx ty sv
+  reportUnboundAuthorityNames mctx ty sv
   sv
 
 -- The type-variable names a signature quantifies as ORDINARY type variables:
@@ -1362,7 +1353,7 @@ registerRecordInfoKeyed mctx o key typeName params kinds binders fields =
   let paramReprs = mintParamReprs mctx params kinds
   let tvs = ktypeTvs params kinds paramReprs
   let opened = existentialCells mctx binders
-  let _ = recordExistentials mctx.mcGraph opened
+  recordExistentials mctx.mcGraph opened
   let etbl = sigVarsWithAuths opened (paramEtbl params kinds paramReprs)
   let result = applyParams (tconFrom o typeName) paramReprs
   let fieldMonos = map (recFieldMono mctx etbl tvs) fields
@@ -1424,30 +1415,28 @@ registerVariants o env name params anns variants binders =
   -- IT STANDS, and must not be shadowed by a lenient single-pass recompute
   -- prepended in front of it.  Only a key the seed never saw (a `registerData`
   -- call outside `registerAllData`) is computed here.
-  let _ =
-    match (lookupTab
-      (tyTabKey o name)
-      env.teDyn.dcModule.mcCells.dataParamPolarityRef.value)
-      Some _ => ()
-      None =>
-        recordParamPolarities
-          env.teDyn.dcModule
-          o
-          name
-          (inferParamPolarities
-            env.teDyn.dcModule.mcCells.dataParamPolarityRef.value
-            params
-            anns
-            variants)
+  match (lookupTab
+    (tyTabKey o name)
+    env.teDyn.dcModule.mcCells.dataParamPolarityRef.value)
+    Some _ => ()
+    None =>
+      recordParamPolarities
+        env.teDyn.dcModule
+        o
+        name
+        (inferParamPolarities
+          env.teDyn.dcModule.mcCells.dataParamPolarityRef.value
+          params
+          anns
+          variants)
   -- #2110: the ATOM-GUARANTEE twin, registered in the same breath and from the
   -- same decl-borne identity for the same reason the polarity twin is.  Unlike
   -- that one it reads NO table, so its ordering among these three lines is free.
-  let _ =
-    recordParamRowAtoms
-      env.teDyn.dcModule
-      o
-      name
-      (inferParamRowAtoms env.teDyn.dcModule.mcGraph params variants)
+  recordParamRowAtoms
+    env.teDyn.dcModule
+    o
+    name
+    (inferParamRowAtoms env.teDyn.dcModule.mcGraph params variants)
   let paramReprs = mintParamReprs env.teDyn.dcModule params kinds
   let tvs = ktypeTvs params kinds paramReprs
   let etbl = paramEtbl params kinds paramReprs
@@ -1455,15 +1444,14 @@ registerVariants o env name params anns variants binders =
   let rowEffvarIds = collectRowEffvarIds paramReprs
   let authvarIds = collectAuthvarIds paramReprs
   let result = applyParams (tconFrom o name) paramReprs
-  let _ =
-    registerNamedFieldVariants
-      env.teDyn.dcModule
-      o
-      name
-      params
-      kinds
-      variants
-      binders
+  registerNamedFieldVariants
+    env.teDyn.dcModule
+    o
+    name
+    params
+    kinds
+    variants
+    binders
   addVariants
     env
     tvs
@@ -1716,7 +1704,7 @@ registerNamedFieldVariantsGo : ModuleCtx ->
   List (List (String, KindAnn)) ->
   Unit
 registerNamedFieldVariantsGo mctx o tyName params kinds ((Variant cname (ConNamed fields _)) :: rest) (bs :: brest) =
-  let _ = registerRecordInfoKeyed mctx o cname tyName params kinds bs fields
+  registerRecordInfoKeyed mctx o cname tyName params kinds bs fields
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
 registerNamedFieldVariantsGo mctx o tyName params kinds (_ :: rest) (_ :: brest) =
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
@@ -1734,13 +1722,12 @@ addVariants : TcEnv ->
   TcEnv
 addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cname payload) :: rest) (binders :: brest) =
   let opened = existentialCells env.teDyn.dcModule binders
-  let _ = recordExistentials env.teDyn.dcModule.mcGraph opened
+  recordExistentials env.teDyn.dcModule.mcGraph opened
   let ctorEtbl = sigVarsWithAuths opened etbl
-  let _ =
-    reportUnboundAuthorityNamesIn
-      env.teDyn.dcModule
-      (payloadAstTypes payload)
-      ctorEtbl
+  reportUnboundAuthorityNamesIn
+    env.teDyn.dcModule
+    (payloadAstTypes payload)
+    ctorEtbl
   -- a report from elaborating a field (a pattern slot a binder cannot fill)
   -- points at the constructor's fields
   let ctorType =
@@ -1900,7 +1887,7 @@ methodSchemeRows mctx scope iface typarams ((IfaceMethod mname mty _ _) :: rest)
   let (scheme, tvs) = sigToSchemeTvsIn mctx scope mty
   let slots =
     methodPredicateSlotsOfType mctx typarams mty tvs (schemeIds scheme)
-  let _ = installMethodPredicateSlots mctx (methodSlotKey iface mname) slots
+  installMethodPredicateSlots mctx (methodSlotKey iface mname) slots
   MethodSchemeRow {
       msrIface = iface,
       msrName = mname,
@@ -2092,7 +2079,7 @@ registerAllData env ds = registerAllDataScoped env ds ds
 export
 registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
 registerAllDataScoped env ds allDs =
-  let _ = seedParamPolarityFixpointScoped env.teDyn.dcModule ds allDs
+  seedParamPolarityFixpointScoped env.teDyn.dcModule ds allDs
   registerAllDataGo env ds
 
 -- Every head's declared kinds are recorded before any declaration's fields
@@ -2113,7 +2100,7 @@ registerAllDataGo env ds =
 registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
 registerDeclsAliasesFirst env ds =
   let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
-  let _ = rejectCyclicAliases env.teDyn.dcModule ds
+  rejectCyclicAliases env.teDyn.dcModule ds
   fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
 
 -- Only `type` declares an alias, so the wildcard is right for every other Decl.
@@ -2127,12 +2114,11 @@ export
 recordDeclKinds : ModuleCtx -> Decl -> Unit
 recordDeclKinds mctx (DAttrib _ d) = recordDeclKinds mctx d
 recordDeclKinds mctx (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) =
-  let _ = recordCtors mctx.mcGraph o name vis params variants
+  recordCtors mctx.mcGraph o name vis params variants
   recordParamKinds mctx o name (declParamKinds mctx.mcGraph params anns)
 recordDeclKinds mctx (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
   let vis = if pub then VisPublic else VisAbstract
-  let _ =
-    recordCtors mctx.mcGraph o name vis params [Variant con (ConPos [fty])]
+  recordCtors mctx.mcGraph o name vis params [Variant con (ConPos [fty])]
   recordParamKinds mctx o name (declParamKinds mctx.mcGraph params anns)
 recordDeclKinds mctx d = recordDeclParamKinds mctx d
 
@@ -3187,7 +3173,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
   let mctx = carryModuleCtx gctx saved
   gctx.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
   let rows = ifaceMethodSchemeRows mctx decls
-  let _ = seedNumLitFromIntAnchor mctx rows
+  seedNumLitFromIntAnchor mctx rows
   let observation = match mctx.mcCells.numLitFromIntAnchorRef.value
     None => NumAnchorTestObservation {
       natoCase = caseName,

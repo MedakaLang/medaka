@@ -563,7 +563,7 @@ test "reading an owning basis copies constructor cells and teardown drops retain
       let warmBytes = allocBytes () - warmStart
       let afterRead = renderSExp (invocationViewSExp mi.miInvocationView)
       let _ = bareDrive 4683 "basis-unrelated" [("unrelated", "main = ()")]
-      let _ = retainModuleInterfaces []
+      retainModuleInterfaces []
       let remaining = map (i => i.miKey.mkModule) (currentModuleInterfaces ())
       println
         "owner basis receipt: schemes=\{length frozen} bytes=\{S.length encoded} coldAlloc=\{coldBytes} warmAlloc=\{warmBytes} retainedAfterTeardown=\{length remaining}"

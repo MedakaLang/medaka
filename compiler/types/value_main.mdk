@@ -57,7 +57,7 @@ walkLocated visit at e =
   let here = match e
     ELoc l _ => Some l
     _ => at
-  let _ = visit here e
+  visit here e
   let _ = mapChildren (c => keep c (walkLocated visit here c)) e
   ()
 
@@ -84,7 +84,7 @@ mainBinding (_ :: rest) = mainBinding rest
 bodyEnd : (Int, Int) -> Expr -> (Int, Int)
 bodyEnd start body =
   let last = Ref start
-  let _ = walkLocated (visitEnd last) None body
+  walkLocated (visitEnd last) None body
   !last
 
 visitEnd : Ref (Int, Int) -> Option Loc -> Expr -> Unit

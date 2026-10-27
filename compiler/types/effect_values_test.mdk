@@ -44,7 +44,7 @@ recordRowMismatch harness context left right =
 -- lets the unknown-shaping tests observe the production occurs boundary.
 testEqual : Harness -> String -> Mono -> Mono -> Unit
 testEqual harness context left right =
-  let _ = opBump ()
+  opBump ()
   harness.equalCalls := !harness.equalCalls + 1
   equalGo harness context (normalize left) (normalize right)
 
@@ -63,11 +63,11 @@ equalGo harness context left (TVar cell) = match !cell
 equalGo harness context (TRigid left) (TRigid right) =
   if left == right then () else recordMismatch harness context
 equalGo harness context (TFun leftDomain leftRow leftResult) (TFun rightDomain rightRow rightResult) =
-  let _ = equalGo harness context leftDomain rightDomain
-  let _ = recordRowMismatch harness context leftRow rightRow
+  equalGo harness context leftDomain rightDomain
+  recordRowMismatch harness context leftRow rightRow
   equalGo harness context leftResult rightResult
 equalGo harness context (TApp leftHead leftArg) (TApp rightHead rightArg) =
-  let _ = equalGo harness context leftHead rightHead
+  equalGo harness context leftHead rightHead
   equalGo harness context leftArg rightArg
 equalGo harness context (TEff left) (TEff right) =
   recordRowMismatch harness context left right
@@ -215,13 +215,13 @@ measure alternatives arity =
   let harness = newHarness ()
   let values =
     map (index => (intToString index, applied arity)) (range 0 alternatives)
-  let _ = setOpCounting True
+  setOpCounting True
   let beforeOps = opSnap ()
   let beforeAlloc = allocBytes ()
   let _ = joinProduced (ops harness (replicate arity False) collectPure) values
   let allocation = allocBytes () - beforeAlloc
   let operations = opSnap () - beforeOps
-  let _ = setOpCounting False
+  setOpCounting False
   (operations, allocation)
 
 -- The callback counter is intentionally only a service-call census: it proves

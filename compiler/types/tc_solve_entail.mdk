@@ -253,7 +253,7 @@ routeWalkMemoized sx encl useScope goals row walk follow =
   let entries = optionOr [] (omLookup key memo.wmRoutes.value)
   match routeWalkRecorded iface goals row encl useScope entries
     Some entry =>
-      let _ = noteInner sx entry.rweInner
+      noteInner sx entry.rweInner
       entry.rweRoutes
     None =>
       let cutsBefore = memo.wmCuts.value
@@ -261,25 +261,24 @@ routeWalkMemoized sx encl useScope goals row walk follow =
       let (erred, routes) =
         erredDuring sx.sxModule (_ => follow { sx | sxInner = Some acc })
       let inner = acc.value
-      let _ = noteInner sx inner
-      let _ =
-        if erred || memo.wmCuts.value /= cutsBefore then
-          ()
-        else
-          let entry = RouteWalkEntry {
-            rweIface = iface,
-            rweGoals = goals,
-            rweRow = row,
-            rweEncl = encl,
-            rweScope = useScope,
-            rweRoutes = routes,
-            rweInner = inner,
-          }
-          memo.wmRoutes :=
-            omInsert
-              key
-              (entry :: optionOr [] (omLookup key memo.wmRoutes.value))
-              memo.wmRoutes.value
+      noteInner sx inner
+      if erred || memo.wmCuts.value /= cutsBefore then
+        ()
+      else
+        let entry = RouteWalkEntry {
+          rweIface = iface,
+          rweGoals = goals,
+          rweRow = row,
+          rweEncl = encl,
+          rweScope = useScope,
+          rweRoutes = routes,
+          rweInner = inner,
+        }
+        memo.wmRoutes :=
+          omInsert
+            key
+            (entry :: optionOr [] (omLookup key memo.wmRoutes.value))
+            memo.wmRoutes.value
       routes
 
 routeWalkRecorded : IfaceRef ->
@@ -312,7 +311,7 @@ noteInner sx inner = match sx.sxInner
 -- [r], noted as a route inside a dictionary.
 noteInnerRoute : SiteCtx -> Route -> Route
 noteInnerRoute sx r =
-  let _ = noteInner sx (innerOfRoute r)
+  noteInner sx (innerOfRoute r)
   r
 
 -- A route walk's cut, counted so no subtree containing one is recorded.
@@ -810,7 +809,7 @@ pickMostSpecificEntry sx goals (e :: rest) =
   match findMostSpecificEntry (e :: rest) (e :: rest)
     Some best => Some best
     None =>
-      let _ = reportAmbiguousOverlap sx goals (e :: rest)
+      reportAmbiguousOverlap sx goals (e :: rest)
       Some e
 
 -- #1155: the goal-site `T-AMBIGUOUS-INSTANCE`, with the two gates that keep it from
@@ -1246,7 +1245,7 @@ entail : SiteCtx ->
 entail sx name m encl useScope kind =
   match entailAssum sx.sxModule m encl name useScope kind
     Some answer =>
-      let _ = noteAssumption sx.sxModule.mcGraph useScope answer
+      noteAssumption sx.sxModule.mcGraph useScope answer
       let result = (
         assumAnswerRoute sx.sxModule.mcGraph answer (goalIfaceOfKind
           sx.sxModule
@@ -1255,8 +1254,7 @@ entail sx name m encl useScope kind =
           entailAssumRoute dname kind),
         [],
       )
-      let _ =
-        noteNumericEntailment sx kind useScope None (fst result) (snd result)
+      noteNumericEntailment sx kind useScope None (fst result) (snd result)
       result
     None => match headTyconMono m
       Some hk => entailInst sx name m encl useScope (headKeyTag hk) kind
@@ -1266,14 +1264,13 @@ entail sx name m encl useScope kind =
           Some result => result
           None =>
             let result = (entailFallback sx encl useScope m kind, [])
-            let _ =
-              noteNumericEntailment
-                sx
-                kind
-                useScope
-                None
-                (fst result)
-                (snd result)
+            noteNumericEntailment
+              sx
+              kind
+              useScope
+              None
+              (fst result)
+              (snd result)
             result
 
 -- An argument-position occurrence whose goal a boundary determined by its one
@@ -1569,11 +1566,10 @@ entailInst sx name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
       let sups = selectedCallSupers sx name (Some row) encl useScope goals
       let route = RKey (rowRouteKey row) [] sups
       let routes = implDictRoutesForRow sx encl useScope goals row
-      let _ =
-        noteNumericEntailment sx kind useScope (Some selectedIface) route routes
+      noteNumericEntailment sx kind useScope (Some selectedIface) route routes
       (route, routes)
     None =>
-      let _ = noteNumericEntailment sx kind useScope None RNone []
+      noteNumericEntailment sx kind useScope None RNone []
       (RNone, [])
 -- The primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed),
 -- and every nested-`requires`/super-projection goal funnels through here, with
@@ -1886,7 +1882,7 @@ argImplRequiresRoutesForRow sx encl useScope m goals walk row =
             None => []
         None => [])
     cut =>
-      let _ = noteRouteWalkCut walk
+      noteRouteWalkCut walk
       requiresRouteWalkCut sx.sxModule.mcGraph cut
 
 -- A route walk that met a cycle or ran out of fuel.  The solving walks share its

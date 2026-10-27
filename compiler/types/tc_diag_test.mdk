@@ -112,8 +112,7 @@ test "erredDuring is False over a region that pushes nothing and True over one t
 test "a warning in the warning channel never arms the sticky flag or counts as an error" =
   let g = probeGraphCtx ()
   let m = blankModuleCtx g "probe"
-  let _ =
-    m.mcCells.matchWarnings := [TcDiag "W-PROBE" 2 None "warned" None None]
+  m.mcCells.matchWarnings := [TcDiag "W-PROBE" 2 None "warned" None None]
   let (erred, _) = erredDuring m (_ => 0)
   let armedByWarning = typeErrorsArmed g ()
   recordTypeError m (TcDiag "W-PROBE" 2 None "demoted" None None)
@@ -137,8 +136,7 @@ test "an error arms the sticky flag of its graph record, and a fresh record is u
 
 test "recordTypeError stores the written form" =
   let m = freshCtx ()
-  let _ =
-    recordTypeError m (TcDiag "T-PROBE" 1 None "z$m$1$lb unbound" None None)
+  recordTypeError m (TcDiag "T-PROBE" 1 None "z$m$1$lb unbound" None None)
   expectEqual [("T-PROBE", "z unbound")] (stored m)
 
 test "an ambiguity is one diagnostic per span, and the goal-naming message wins" =

@@ -1443,7 +1443,7 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
+numeric_operator_required='  recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
@@ -1492,15 +1492,15 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'nbMembers ='
   require_typecheck_arm "$reader" "$next" 'nbSurvivingIds ='
   if [ "$reader" = settleClosedBody ]; then
-    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = exitLevel env.teDyn.dcModule ()'
-    require_typecheck_arm_flat inferPropBodiesGo inferTestBodies 'let _ = settleClosedBody env.teDyn.dcModule (tconBuiltin "Bool")'
-    require_typecheck_arm inferTestBodies settleClosedBody 'let _ = exitLevel env.teDyn.dcModule ()'
+    require_typecheck_arm inferPropBodiesGo inferTestBodies 'exitLevel env.teDyn.dcModule ()'
+    require_typecheck_arm_flat inferPropBodiesGo inferTestBodies 'settleClosedBody env.teDyn.dcModule (tconBuiltin "Bool")'
+    require_typecheck_arm inferTestBodies settleClosedBody 'exitLevel env.teDyn.dcModule ()'
     require_typecheck_arm_flat inferTestBodies settleClosedBody 'settleClosedBody env.teDyn.dcModule (tconUnresolved "Expectation")'
     require_typecheck_arm "$reader" "$next" 'let level = mctx.mcCells.currentLevel.value + 1'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody level'
     continue
   fi
-  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel env.teDyn.dcModule ()'
+  require_typecheck_arm "$reader" "$next" 'exitLevel env.teDyn.dcModule ()'
   if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
     require_typecheck_arm "$reader" "$next" 'let bodyLevel = env.teDyn.dcModule.mcCells.currentLevel.value'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody bodyLevel'

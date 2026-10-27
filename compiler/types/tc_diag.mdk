@@ -83,7 +83,7 @@ recordTypeError mctx raw =
   mctx.mcGraph.typeErrorsStickyDiags :=
     (mctx.mcCells.currentModuleRef.value, d)
       :: mctx.mcGraph.typeErrorsStickyDiags.value
-  let _ = noteTypeErrorDetected mctx ()
+  noteTypeErrorDetected mctx ()
   mctx.mcCells.typeErrorMsgSetRef :=
     omInsert
       (msgAtKey (tcMsg d) (tcLoc d))
@@ -254,7 +254,7 @@ replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
 replaceAmbiguityAt mctx site d =
   let same e = tcCode e == tcCode d && locKey (tcLoc e) == site
   let swap e = if same e then d else e
-  let _ = noteTypeErrorDetected mctx ()
+  noteTypeErrorDetected mctx ()
   mctx.mcCells.typeErrorMsgSetRef :=
     omInsert
       (msgAtKey (tcMsg d) (tcLoc d))
