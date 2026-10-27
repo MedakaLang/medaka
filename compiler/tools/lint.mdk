@@ -134,6 +134,7 @@ import regex.{
 import ir.sexp.{exprSexp, patSexp}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
+import support.stage_count.{stageBump}
 import frontend.lexer.{
   Comment,
   collectComments,
@@ -975,8 +976,14 @@ buildStdlibIndex = match buildStdlibIndexResult
   Ok idx => idx
   Err _ => emptyStdlibIndex
 
+public export data StdlibIndexError = StdlibIndexError {
+  path : String,
+  source : String,
+  diagnostic : Diag,
+}
+
 export
-buildStdlibIndexResult : <IO> Result (String, String, Diag) StdlibIndex
+buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
   map
     (triples => StdlibIndex (groupStdlibSigs triples))
@@ -1034,7 +1041,7 @@ stdlibFingerprintGo dir (n :: rest) =
 -- stdout would break every caller that diffs its output, exactly as
 -- `lintCacheCtx` argues for `--cache`).
 stdlibSigTriplesResult : String ->
-  <IO> Result (String, String, Diag) (List (String, String, Ty))
+  <IO> Result StdlibIndexError (List (String, String, Ty))
 stdlibSigTriplesResult dir = match stdlibMemberPaths dir
   None => Ok []
   Some paths => stdlibSigsGo dir paths
@@ -1045,20 +1052,28 @@ lintParseSource src =
   let (tokens, offsets) = tokenizeWithOffsetPairs src
   match prescanErrorPairs src tokens offsets
     Some e => Err e
-    None => match parseWithPositionsOptPairs src tokens offsets
-      Some parsed => Ok parsed
-      None =>
-        map (_ => parseWithPositions src) (parseResultPairs src tokens offsets)
+    None =>
+      let _ = stageBump "parse.positions"
+      match parseWithPositionsOptPairs src tokens offsets
+        Some parsed => Ok parsed
+        None =>
+          map
+            (_ => parseWithPositions src)
+            (parseResultPairs src tokens offsets)
 
 stdlibSigsGo : String ->
   List String ->
-  <IO> Result (String, String, Diag) (List (String, String, Ty))
+  <IO> Result StdlibIndexError (List (String, String, Ty))
 stdlibSigsGo _ [] = Ok []
 stdlibSigsGo dir (relPath :: rest) =
   let path = "\{dir}/\{relPath}"
   let src = readFileSafe path
   match lintParseSource src
-    Err e => Err (path, src, parseErrDiag path e)
+    Err e => Err StdlibIndexError {
+      path = path,
+      source = src,
+      diagnostic = parseErrDiag path e,
+    }
     Ok (decls, _) =>
       let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
       let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
@@ -1506,8 +1521,8 @@ findingToDiag f =
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
--- target.  The positions parse gives a `Finding` at a nested
--- sub-expression (`exprRuleFindings`) carries THAT expression's own location,
+-- target. A `Finding` at a nested sub-expression (`exprRuleFindings`)
+-- carries THAT expression's own location,
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s

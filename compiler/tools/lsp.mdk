@@ -128,7 +128,7 @@ import frontend.ast.{
 -- hover, completion and inlay to answer from (`Kept`).
 
 public export data Docs =
-  Docs (List (String, String)) (List String) (List (String, Kept)) (List (String, Option Int))
+  Docs (List (String, String)) (List String) (List (String, Kept)) (List (String, Option Int)) (List (String, Int)) Int
 
 -- What the last publish of a buffer kept, with the buffer source it analyzed.
 -- A single-document publish keeps the env its drive gave.  A project publish
@@ -144,24 +144,30 @@ export data Kept =
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
 emptyDocs : Docs
-emptyDocs = Docs [] [] [] []
+emptyDocs = Docs [] [] [] [] [] 0
 
 export
 docsPut : String -> String -> Docs -> Docs
-docsPut uri src (Docs xs flagged kept versions) =
-  Docs ((uri, src) :: docsRemove uri xs) flagged kept versions
+docsPut uri src (Docs xs flagged kept versions generations next) =
+  Docs
+    ((uri, src) :: docsRemove uri xs)
+    flagged
+    kept
+    versions
+    ((uri, next) :: docsRemove uri generations)
+    (next + 1)
 
 -- Replace what `uri`'s publish kept; `None` drops the previous entry.
 docsKeep : String -> Option Kept -> Docs -> Docs
-docsKeep uri k (Docs xs flagged kept versions) =
+docsKeep uri k (Docs xs flagged kept versions generations next) =
   let rest = docsRemove uri kept
   let kept2 = match k
     Some v => (uri, v) :: rest
     None => rest
-  Docs xs flagged kept2 versions
+  Docs xs flagged kept2 versions generations next
 
 docsKept : String -> Docs -> Option Kept
-docsKept uri (Docs _ _ kept _) = docsLookup uri kept
+docsKept uri (Docs _ _ kept _ _ _) = docsLookup uri kept
 
 docsRemove : String -> List (String, a) -> List (String, a)
 docsRemove _ [] = []
@@ -170,15 +176,27 @@ docsRemove uri ((k, v) :: rest)
   | otherwise = (k, v) :: docsRemove uri rest
 
 docsVersion : String -> Docs -> Option Int
-docsVersion uri (Docs _ _ _ versions) = optionOr None (docsLookup uri versions)
+docsVersion uri (Docs _ _ _ versions _ _) =
+  optionOr None (docsLookup uri versions)
 
 docsSetVersion : String -> Option Int -> Docs -> Docs
-docsSetVersion uri version (Docs xs flagged kept versions) =
-  Docs xs flagged kept ((uri, version) :: docsRemove uri versions)
+docsSetVersion uri version (Docs xs flagged kept versions generations next) =
+  Docs
+    xs
+    flagged
+    kept
+    ((uri, version) :: docsRemove uri versions)
+    generations
+    next
 
 docsSnapshot : String -> Docs -> Option SourceSnapshot
-docsSnapshot uri docs =
-  map (makeSnapshot uri (docsVersion uri docs)) (docsGet uri docs)
+docsSnapshot uri docs = match docs
+  Docs _ _ _ _ generations _ => match docsLookup uri generations
+    Some generation =>
+      map
+        (makeSnapshot uri (docsVersion uri docs) generation)
+        (docsGet uri docs)
+    None => None
 
 -- ── JSON helpers ────────────────────────────────────────────────────────────
 
@@ -198,10 +216,6 @@ wholeDocRange src =
     Some (line, _) => jRange 0 0 line 0
     None => JNull
 
--- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
--- `rangeOfLoc`'s `Some` arm, factored out for the #331 decl-NAME-span callers
--- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
--- `wholeDocRange`) when there is no name `Loc`.
 jRangeOfLoc : SourceIndex -> Loc -> Json
 jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
@@ -214,7 +228,7 @@ diagsToJson src diags =
 -- Look up an open document's source by uri.  Request handlers (formatting/
 -- documentSymbol/definition/highlight) read the buffer the client last sent.
 docsGet : String -> Docs -> Option String
-docsGet uri (Docs xs _ _ _) = docsLookup uri xs
+docsGet uri (Docs xs _ _ _ _ _) = docsLookup uri xs
 
 docsLookup : String -> List (String, a) -> Option a
 docsLookup _ [] = None
@@ -1875,6 +1889,10 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
+hasDiagnosticFix : Diag -> Bool
+hasDiagnosticFix (Diag _ _ _ _ _ (Some _)) = True
+hasDiagnosticFix _ = False
+
 publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
 publishEach _ _ [] = ()
 publishEach docs sources ((file, ds) :: rest) =
@@ -1891,19 +1909,22 @@ publishEach docs sources ((file, ds) :: rest) =
     (
       "diagnostics",
       jArray (match src
-        Some text => match docsSnapshot uri docs
-          Some snapshot => match parseLocatedResult text
-            Err e =>
-              map
-                (d =>
-                  parseDiagnosticJson
-                    snapshot
-                    (wholeDocRange text)
-                    d
-                    (parseErrorDiagnostic e))
-                ds
-            Ok _ => diagsToJson text ds
-          None => diagsToJson text ds
+        Some text =>
+          if not (any hasDiagnosticFix ds) then
+            diagsToJson text ds
+          else match docsSnapshot uri docs
+            Some snapshot => match parseLocatedResult text
+              Err e =>
+                map
+                  (d =>
+                    parseDiagnosticJson
+                      snapshot
+                      (wholeDocRange text)
+                      d
+                      (parseErrorDiagnostic e))
+                  ds
+              Ok _ => diagsToJson text ds
+            None => diagsToJson text ds
         None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
     ),
   ]
@@ -1947,18 +1968,18 @@ clearFlaggedManifest file docs = match manifestPathOf file
       docs
 
 docsFlagged : String -> Docs -> Bool
-docsFlagged path (Docs _ flagged _ _) = contains path flagged
+docsFlagged path (Docs _ flagged _ _ _ _) = contains path flagged
 
 docsFlag : String -> Docs -> Docs
-docsFlag path (Docs xs flagged kept versions) =
+docsFlag path (Docs xs flagged kept versions generations next) =
   if contains path flagged then
-    Docs xs flagged kept versions
+    Docs xs flagged kept versions generations next
   else
-    Docs xs (path :: flagged) kept versions
+    Docs xs (path :: flagged) kept versions generations next
 
 docsUnflag : String -> Docs -> Docs
-docsUnflag path (Docs xs flagged kept versions) =
-  Docs xs (filter (/= path) flagged) kept versions
+docsUnflag path (Docs xs flagged kept versions generations next) =
+  Docs xs (filter (/= path) flagged) kept versions generations next
 
 publishForSelected : String ->
   String ->
@@ -2014,11 +2035,27 @@ handleDidChange runtimeSrc coreSrc params docs =
         let docs2 = docsSetVersion uri version (docsPut uri text docs)
         publishFor runtimeSrc coreSrc uri text docs2
 
+samePosition : Json -> Json -> Bool
+samePosition a b =
+  asInt (fieldOr "line" a) == asInt (fieldOr "line" b)
+    && asInt (fieldOr "character" a) == asInt (fieldOr "character" b)
+    && asInt (fieldOr "line" a) /= None
+    && asInt (fieldOr "character" a) /= None
+
+sameRange : Json -> Json -> Bool
+sameRange a b =
+  samePosition (fieldOr "start" a) (fieldOr "start" b)
+    && samePosition (fieldOr "end" a) (fieldOr "end" b)
+
 actionDiagnosticMatches : SourceSnapshot -> String -> Json -> Json -> Bool
 actionDiagnosticMatches snapshot code range diagnostic =
-  fieldOr "data" diagnostic == snapshotJson snapshot
+  let expected = snapshotJson snapshot
+  let actual = fieldOr "data" diagnostic
+  fieldStr "uri" actual == fieldStr "uri" expected
+    && asInt (fieldOr "generation" actual)
+      == asInt (fieldOr "generation" expected)
     && fieldOr "code" diagnostic == JString code
-    && fieldOr "range" diagnostic == range
+    && sameRange (fieldOr "range" diagnostic) range
 
 handleCodeAction : Json -> Json -> Docs -> <IO> Unit
 handleCodeAction id params docs =
@@ -2399,6 +2436,19 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
       Step docs2 True
     else if meth == "textDocument/didChange" then
       let docs2 = handleDidChange runtimeSrc coreSrc (fieldOr "params" msg) docs
+      Step docs2 True
+    else if meth == "textDocument/didClose" then
+      let uri = fieldStr "uri" (fieldOr "textDocument" (fieldOr "params" msg))
+      let docs2 = match (uri, docs)
+        (Some u, Docs xs flagged kept versions generations next) =>
+          Docs
+            (docsRemove u xs)
+            flagged
+            (docsRemove u kept)
+            (docsRemove u versions)
+            (docsRemove u generations)
+            next
+        _ => docs
       Step docs2 True
     else if meth == "textDocument/codeAction" then
       let _ = handleCodeAction (requestId msg) (fieldOr "params" msg) docs

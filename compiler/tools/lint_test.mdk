@@ -30,7 +30,9 @@
 -- `medaka test --native compiler/tools/lint_test.mdk` (the Makefile `test:`
 -- target line does this).
 
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectTrue, expectEach}
+import tools.lint_cache.{decodeEntry, LintEntry}
+import string.{replace}
 import support.util.{anyList, sortUniqS}
 import driver.diagnostics.{Diag(..)}
 import tools.lint.{StdlibIndex, buildStdlibIndex, mergeCrossFileIntoTriples}
@@ -106,3 +108,31 @@ test "the MCP path's own internals produce the SAME finding set as JSON" =
   let mcpCross = crossFileMcpFindings [] [] [] mcpQuads
   let mcpMerged = mergeCrossFileIntoTriples mcpCross mcpTriples
   expectEqual (tripleKeys jsonMerged) (tripleKeys mcpMerged)
+
+cachePath : Option LintEntry -> Option String
+cachePath (Some entry) = Some entry.path
+cachePath None = None
+
+test "lint cache rejects pre-strict format and mismatched identity" =
+  let entry =
+    "{\"version\":2,\"stamp\":\"s\",\"path\":\"p\",\"hash\":\"h\",\"findings\":[],\"dupOccs\":[],\"directives\":[]}"
+  let old = replace "\"version\":2" "\"version\":1" entry
+  expectEach [
+    (
+      "new format",
+      expectEqual (Some "p") (cachePath (decodeEntry "s" "p" "h" entry)),
+    ),
+    ("old format", expectEqual None (cachePath (decodeEntry "s" "p" "h" old))),
+    (
+      "other content",
+      expectEqual None (cachePath (decodeEntry "s" "p" "other" entry)),
+    ),
+    (
+      "other stamp",
+      expectEqual None (cachePath (decodeEntry "other" "p" "h" entry)),
+    ),
+    (
+      "other path",
+      expectEqual None (cachePath (decodeEntry "s" "other" "h" entry)),
+    ),
+  ]

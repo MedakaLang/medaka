@@ -26,7 +26,7 @@ stages=DESUGAR,MARK
 --      Eval: can panic on runtime errors (same as OCaml REPL).
 --
 -- Known limitations:
---   * No source-location info on errors (compiler AST is location-stripped).
+--   * Non-parse errors lack source locations (compiler AST is location-stripped).
 --   * No :load / :reload commands.
 
 import frontend.ast.{Decl(..), DataVis(..), IfaceMethod(..)}

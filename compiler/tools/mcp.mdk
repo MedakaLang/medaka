@@ -86,6 +86,7 @@ import tools.lint.{
   splitLintNames,
   buildStdlibIndex,
   buildStdlibIndexResult,
+  StdlibIndexError(..),
   emptyStdlibIndex,
   stdlibIndexNeeded,
   StdlibIndex,
@@ -1430,8 +1431,8 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
       else
         Ok emptyStdlibIndex
     match indexResult
-      Err (path, src, diag) =>
-        toolTextResult (cjAllToJson [(path, src, [diag])]) True
+      Err (StdlibIndexError { path, source, diagnostic }) =>
+        toolTextResult (cjAllToJson [(path, source, [diagnostic])]) True
       Ok idx =>
         let quads = lintPathsToDiagQuads idx disable only deny paths
         let triples = map dropQuadParse quads

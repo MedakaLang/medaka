@@ -276,6 +276,7 @@ import tools.lint.{
   StdlibIndex,
   buildStdlibIndex,
   buildStdlibIndexResult,
+  StdlibIndexError(..),
   emptyStdlibIndex,
   stdlibIndexNeeded,
   applySuppressions,
@@ -3957,12 +3958,12 @@ runLintCmd argv0 =
     else
       Ok emptyStdlibIndex
   match indexResult
-    Err (path, src, diag) =>
+    Err (StdlibIndexError { path, source, diagnostic }) =>
       let _ =
         if jsonMode then
-          putStr (cjAllToJson [(path, src, [diag])])
+          putStr (cjAllToJson [(path, source, [diagnostic])])
         else
-          ePutStrLn (ppDiagCliSrc src path diag)
+          ePutStrLn (ppDiagCliSrc source path diagnostic)
       stageExit 1
     Ok stdlibIdx =>
       runLintWithIndex

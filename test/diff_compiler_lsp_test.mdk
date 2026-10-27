@@ -1871,7 +1871,7 @@ test "parse quick fix uses the published snapshot and UTF-16 range" =
     ("range", range),
     (
       "data",
-      jObject [("uri", JString uri), ("version", JInt 1), ("text", JString src)],
+      jObject [("uri", JString uri), ("generation", JInt 0)],
     ),
   ]
   let (errors, out) = drive [
@@ -1937,8 +1937,7 @@ test "project publication binds the open buffer snapshot" = withScratchDir
         let main = "file://" ++ dir ++ "/main.mdk"
         let snapshotData = jObject [
           ("uri", JString uri),
-          ("version", JInt 1),
-          ("text", JString src),
+          ("generation", JInt 0),
         ]
         let diagnostic = jObject [
           ("code", JString "P-BAD-NEQ"),
@@ -1971,7 +1970,7 @@ test "project publication binds the open buffer snapshot" = withScratchDir
               ]
               _ => fail "expected direct and project publications")
 
-test "unversioned diagnostics bind exact content" =
+test "unversioned diagnostics bind the document generation" =
   let uri = "file:///no-version.mdk"
   let src = "main = 1 != 2\n"
   let open =
@@ -1985,7 +1984,7 @@ test "unversioned diagnostics bind exact content" =
     ("range", coordRange 0 9 11),
     (
       "data",
-      jObject [("uri", JString uri), ("version", JNull), ("text", JString src)],
+      jObject [("uri", JString uri), ("generation", JInt 0)],
     ),
   ]
   let change =
@@ -2034,3 +2033,96 @@ test "non-parse suggestion keeps its code help and fix on wire" =
         ]
         _ => fail "expected one resolve diagnostic"
       _ => fail "expected one publish"
+
+test "published diagnostic survives reordered fields and generation changes" =
+  let uri = "file:///roundtrip.mdk"
+  let src = "main = 1 != 2\n"
+  let (_, first) = drive [didOpenMsg uri src, bye]
+  match decodeFrames first
+    Err e => fail e
+    Ok firstObjs => match publishes firstObjs
+      pub :: _ => match diagsOf pub
+        d :: _ =>
+          let identity = optionOr JNull (get "data" d)
+          let range = optionOr JNull (get "range" d)
+          let start = optionOr JNull (get "start" range)
+          let end = optionOr JNull (get "end" range)
+          let reversePos p = jObject [
+            ("character", optionOr JNull (get "character" p)),
+            ("line", optionOr JNull (get "line" p)),
+          ]
+          let reordered = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            (
+              "range",
+              jObject [("end", reversePos end), ("start", reversePos start)],
+            ),
+            (
+              "data",
+              jObject [
+                ("generation", optionOr JNull (get "generation" identity)),
+                ("uri", optionOr JNull (get "uri" identity)),
+              ],
+            ),
+          ]
+          let makeVariant r i = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            ("range", r),
+            ("data", i),
+          ]
+          let reverseData = jObject [
+            ("generation", optionOr JNull (get "generation" identity)),
+            ("uri", optionOr JNull (get "uri" identity)),
+          ]
+          let reverseRange = jObject [("end", end), ("start", start)]
+          let reversePositions = jObject [
+            ("start", reversePos start),
+            ("end", reversePos end),
+          ]
+          let close =
+            notify
+              "textDocument/didClose"
+              (jObject [("textDocument", jObject [("uri", JString uri)])])
+          let (errors, out) = drive [
+            didOpenMsg uri src,
+            codeActionMsg 2 uri d,
+            codeActionMsg 3 uri reordered,
+            codeActionMsg 7 uri (makeVariant range reverseData),
+            codeActionMsg 8 uri (makeVariant reverseRange identity),
+            codeActionMsg 9 uri (makeVariant reversePositions identity),
+            didChangeMsg uri src,
+            codeActionMsg 4 uri d,
+            close,
+            codeActionMsg 5 uri reordered,
+            didOpenMsg uri src,
+            codeActionMsg 6 uri d,
+            bye,
+          ]
+          match decodeFrames out
+            Err e => fail e
+            Ok objs => expectEach [
+              ("process", expectEqual [] errors),
+              ("published", expectEqual 1 (length (elems (resultTo 2 objs)))),
+              ("reordered", expectEqual 1 (length (elems (resultTo 3 objs)))),
+              ("data order", expectEqual 1 (length (elems (resultTo 7 objs)))),
+              ("range order", expectEqual 1 (length (elems (resultTo 8 objs)))),
+              (
+                "position order",
+                expectEqual 1 (length (elems (resultTo 9 objs))),
+              ),
+              ("reused version", expectEqual [] (elems (resultTo 4 objs))),
+              ("closed", expectEqual [] (elems (resultTo 5 objs))),
+              ("reopened", expectEqual [] (elems (resultTo 6 objs))),
+            ]
+        [] => fail "expected published diagnostic"
+      [] => fail "expected publication"
+
+test "unfixable parse diagnostic has no snapshot identity" =
+  let (_, out) = drive [didOpenMsg "file:///invalid.mdk" "main = = 1\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      pub :: _ => match diagsOf pub
+        d :: _ => expectEqual None (get "data" d)
+        [] => fail "expected diagnostic"
+      [] => fail "expected publication"

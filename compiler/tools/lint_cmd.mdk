@@ -493,22 +493,39 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
     Err msg =>
       let _ = ePutStrLn msg
       (True, [], [])
-    Ok src => match lintParseSource src
-      Err e =>
-        let _ = ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-        (True, [], [])
-      Ok parsedSource =>
-        lintOneFileParsed
-          idx
-          multiFile
-          disableNames
-          onlyNames
-          denyNames
-          baseCtx
-          cacheCtx
-          target
-          src
-          parsedSource
+    Ok src =>
+      let cached = match cacheCtx
+        Some (cacheDir, stamp) =>
+          loadEntry cacheDir stamp target (contentHashOf src)
+        None => None
+      match cached
+        Some hit =>
+          lintOneFileRender
+            multiFile
+            disableNames
+            onlyNames
+            denyNames
+            baseCtx
+            target
+            src
+            hit
+            []
+        None => match lintParseSource src
+          Err e =>
+            let _ = ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+            (True, [], [])
+          Ok parsedSource =>
+            lintOneFileParsed
+              idx
+              multiFile
+              disableNames
+              onlyNames
+              denyNames
+              baseCtx
+              cacheCtx
+              target
+              src
+              parsedSource
 
 lintOneFileParsed : StdlibIndex ->
   Bool ->
@@ -532,6 +549,28 @@ lintOneFileParsed idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
     multiFile && crossFileCacheSound && crossFileSelected onlyNames disableNames
   let (entry, parsed) =
     lintEntryOf idx cacheCtx rules wantOccs target src parsedSource
+  lintOneFileRender
+    multiFile
+    disableNames
+    onlyNames
+    denyNames
+    baseCtx
+    target
+    src
+    entry
+    parsed
+
+lintOneFileRender : Bool ->
+  List String ->
+  List String ->
+  List String ->
+  Option (String, LintBaseline) ->
+  String ->
+  String ->
+  LintEntry ->
+  List (String, String, Positions, List Decl) ->
+  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry parsed =
   -- Suppress findings silenced by inline `-- lint-disable-*` directives before
   -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
   -- and uncached paths render from THIS one expression over the entry, so a

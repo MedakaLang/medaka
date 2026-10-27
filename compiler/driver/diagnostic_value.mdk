@@ -15,8 +15,8 @@ public export data Severity = SevError | SevWarning
 -- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
 -- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
 -- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
--- today only did-you-mean (a resolve error carrying a suggestion) populates
--- them.  A `Fix` replaces its `Loc` span with the replacement string.
+-- parse and resolve diagnostics may populate them. A `Fix` replaces its
+-- `Loc` span with the replacement string.
 public export data Fix = Fix Loc String
 
 public export data Diag =
