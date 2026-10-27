@@ -620,6 +620,16 @@ class = "history"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_effects.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_effects.mdk"
+class = "ruling"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_env.mdk"
 class = "history"
 count = 11
@@ -692,12 +702,12 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 41
+count = 40
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "ruling"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -707,7 +717,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 161
+count = 150
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -722,7 +732,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 155
+count = 150
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"
