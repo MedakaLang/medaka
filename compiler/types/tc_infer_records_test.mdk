@@ -7,17 +7,17 @@
 -- `unknownRecordFresh`, `inferFieldOfRecord` and its nearest-field suggestion,
 -- `fieldSelectionWellTyped`, `recordUpdateWellTyped`, the three constructor disagreements and
 -- the existential-authority update) and the field assignment readers (`fieldAssignNamePair`,
--- `assignedFieldNames`, `firstFieldName`).  The record arms of the inference recursion are
--- driven through `infer` over a module record that declares the records the programs name.  One
--- property: a field read after an update has the type its record was built at.  Not driven here:
--- the owner rungs that need a sibling constructor declared in another module
--- (`ctorRecordFromCompanion`).  `typecheck_test` drives whole checks.
+-- `assignedFieldNames`, `firstFieldName`).  Each test calls these functions directly over a
+-- module record that declares the records it names; the record arms of the inference recursion
+-- (`inferRecordCreate*`, `inferFieldAccess`, `inferValueField`, `inferRecordUpdate*`) belong to
+-- `tc_infer` and are driven in `tc_infer_test`.  Not driven here: the owner rungs that need a
+-- sibling constructor declared in another module (`ctorRecordFromCompanion`).
+-- `typecheck_test` drives whole checks.
 
 import test.{Expectation, expectAll, expectEqual}
 import frontend.ast.{Expr(..), FieldAssign(..), Lit(..), TyConOrigin(..)}
 import types.repr.{Mono(..), ppMono}
 import types.tc_env.{envFor, lookupRecordByName}
-import types.tc_infer.{infer}
 import types.tc_infer_records.{
   assignedFieldNames,
   checkMissingFields,
@@ -43,86 +43,25 @@ import types.tc_test_support.{
   declareData,
   envWithData,
   intM,
-  genKinds,
-  kindLit,
-  kindName,
-  nthInt,
-  mainOf,
   messagesOf,
+  recordShapes,
   scoped,
   scopedWith,
   varM,
-  withMain,
 }
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.effect_domain.{Param(..)}
 import types.tc_types.{ModuleCtx(..), RecordInfo(..), RecordSubst(..), dynFor}
 import map as IdMap
 import types.tc_unify.{unifyIn}
-import support.util.{isNonEmptyL, joinWith}
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omInsert, omKeys, omLookup}
 import list.{sort}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
-shapes : String
-shapes =
-  """
-data P = P { a : Int, b : Bool }
-data Box t = Box { v : t }
-data Pair x y = Pair { first : x, second : y }
-data Cfg = Cfg { name : String, count : Int }
-"""
-
--- The type `main` of [src] infers to and the codes pushed, over the records of `shapes`
--- and [extra].
-shows : String -> String -> String -> List String -> Expectation
-shows extra src ty codes =
-  let m = scopedWith (shapes ++ extra)
-  let env = envWithData m (shapes ++ extra)
-  withMain m src (e =>
-    let t = infer env e
-    expectEqual (ty, codes) (ppMono t, codesOf m))
-
--- The same, with the messages.
-says : String -> String -> String -> List String -> Expectation
-says extra src ty messages =
-  let m = scopedWith (shapes ++ extra)
-  let env = envWithData m (shapes ++ extra)
-  withMain m src (e =>
-    let t = infer env e
-    expectEqual (ty, messages) (ppMono t, messagesOf m))
-
--- Two records that both declare `shared`.
-twoShared : String
-twoShared = """
-data L = L { shared : Int }
-data R = R { shared : Bool }
-"""
-
--- A record with a constructor that withholds `x`, beside another record that declares it.
-splitOwners : String
-splitOwners =
-  """
-data A = A1 { x : Int } | A2 { z : Int }
-data B = B1 { x : Bool }
-"""
-
--- Two records that each declare `x`, one constructor apiece.
-plainOwners : String
-plainOwners = """
-data A = A1 { x : Int }
-data B = B1 { x : Bool }
-"""
-
--- [k] applied to the record row [name] of `shapes` in a fresh module; a missing row fails.
+-- [k] applied to the record row [name] of `recordShapes` in a fresh module; a missing row fails.
 withRecord : String -> (ModuleCtx -> RecordInfo -> Expectation) -> Expectation
-withRecord name k =
-  let m = scopedWith shapes
-  let _ = envWithData m shapes
-  match lookupRecordByName m name
-    Some ri => k m ri
-    None => expectEqual ("a record row for " ++ name) "none"
+withRecord name k = withData recordShapes name k
 
 -- ── the rows a module declares ────────────────────────────────────────────
 
@@ -161,27 +100,6 @@ test "the readers of a field assignment name the field and the first one assigne
     )
 
 -- ── construction ──────────────────────────────────────────────────────────
-
-test "a record construction has the record's type" = expectAll [
-  shows "" "main = P { a = 1, b = True }" "P" [],
-  shows "" "main = Box { v = 'c' }" "Box Char" [],
-  shows "" "main = Pair { first = 'c', second = True }" "Pair Char Bool" [],
-]
-
-test "a field left out of a construction is rejected by code, naming the field" = expectAll
-  [
-    says "" "main = P { a = 1 }" "P" ["missing field `b` in `P`"],
-    shows "" "main = P { b = True }" "P" ["T-MISSING-FIELD"],
-  ]
-
-test "a field the record does not declare is rejected by code" =
-  says "" "main = P { a = 1, b = True, c = 2 }" "P" ["no field `c` in `P`"]
-
-test "a field value of the wrong type is a type mismatch" =
-  says "" "main = P { a = True, b = True }" "P" ["type mismatch: Bool vs Int"]
-
-test "a construction of a record that does not exist is rejected by code" =
-  says "" "main = Nope { a = 1 }" "a" ["unknown record type `Nope`"]
 
 test "checkMissingFields names every missing field in declaration order" =
   let m = scoped ()
@@ -230,173 +148,6 @@ test "a field's type is restated over the parameters of the instantiation" = wit
             (substRecordField m.mcGraph subst >> ppMono)
             (omLookup f (recordFieldMap ri)))
         (recordFieldNames ri)))
-
--- ── field access ──────────────────────────────────────────────────────────
-
-test "a field access has the field's type at the receiver's instantiation" = expectAll
-  [
-    shows "" "main = (P { a = 1, b = True }).a" "Int" [],
-    shows "" "main = (P { a = 1, b = True }).b" "Bool" [],
-    shows "" "main = (Box { v = 'c' }).v" "Char" [],
-    shows "" "main = (Pair { first = 'c', second = True }).second" "Bool" [],
-  ]
-
-test "two accesses of one generic record take the field at their own receiver's type" =
-  shows
-    ""
-    "main = ((Box { v = 'c' }).v, (Box { v = True }).v)"
-    "(Char, Bool)"
-    []
-
-test "a field the receiver's record does not declare is rejected by code" = expectAll
-  [
-    says "" "main = (P { a = 1, b = True }).z" "a" ["no field `z` in `P`"],
-    shows "" "main = (P { a = 1, b = True }).z" "a" ["T-UNKNOWN-FIELD"],
-  ]
-
-test "a near miss of a declared field is offered as the fix" = says
-  ""
-  "main = (Cfg { name = \"n\", count = 1 }).nmae"
-  "a"
-  ["no field `nmae` in `Cfg`; did you mean `name`?"]
-
-test "a field that no record declares is unknown at an unknown receiver" =
-  says "" "main = r => r.zzz" "a -> b" ["no field `zzz` in `<unknown>`"]
-
-test "a field only one record declares selects that record at an unknown receiver" =
-  shows "" "main = r => r.count" "Cfg -> Int" []
-
-test "a field that two records declare is ambiguous at an unknown receiver" =
-  shows twoShared "main = r => r.shared" "a -> b" ["T-AMBIGUOUS-FIELD"]
-
-test "a field that two records declare is not ambiguous at a known receiver" = expectAll
-  [
-    shows twoShared "main = (L { shared = 1 }).shared" "Int" [],
-    shows twoShared "main = (R { shared = True }).shared" "Bool" [],
-  ]
-
-test "the value field of a reference reads the stored type" =
-  shows "" "main = r => r.value" "Ref a -> a" []
-
--- ── record update ─────────────────────────────────────────────────────────
-
-test "an update has the type of the record it updates" = expectAll [
-  shows "" """
-main =
-  let p = P { a = 1, b = True }
-  { p | a = 2 }
-""" "P" [],
-  shows
-    ""
-    """
-main =
-  let p = Pair { first = 'c', second = True }
-  { p | first = 'd' }
-"""
-    "Pair Char Bool"
-    [],
-]
-
-test "an update keeps the type of the fields it does not assign" =
-  shows
-    ""
-    """
-main =
-  let p = Pair { first = 'c', second = True }
-  ({ p | first = 'd' }).second
-"""
-    "Bool"
-    []
-
-test "an update cannot change the type of the record" = says
-  ""
-  """
-main =
-  let p = Pair { first = 'c', second = True }
-  { p | first = True }
-"""
-  "Pair Char Bool"
-  ["type mismatch: Bool vs Char"]
-
-test "an update of a field the record does not declare is rejected by code" = says
-  ""
-  """
-main =
-  let p = P { a = 1, b = True }
-  { p | zz = 2 }
-"""
-  "P"
-  ["no field `zz` in `P`"]
-
-test "an update of a constructor names the record by that constructor" = expectAll
-  [
-    shows
-      ""
-      """
-main =
-  let p = P { a = 1, b = True }
-  P { p | a = 2 }
-"""
-      "P"
-      [],
-    says
-      ""
-      """
-main =
-  let p = P { a = 1, b = True }
-  Nope { p | a = 2 }
-"""
-      "a"
-      ["unknown record type `Nope`"],
-  ]
-
--- ── constructors that disagree about a field ──────────────────────────────
-
-test "a field a sibling constructor withholds is rejected by code" = shows
-  "data W = Wa { x : Int } | Wb { z : Int }"
-  "main = (Wa { x = 1 }).x"
-  "a"
-  ["T-FIELD-NOT-IN-ALL-CTORS"]
-
-test "a field the constructors place at different positions is rejected by code" = shows
-  "data W = Wa { x : Int, y : Int } | Wb { y : Int, x : Int }"
-  "main = (Wa { x = 1, y = 2 }).x"
-  "a"
-  ["T-FIELD-POSITION-DIFFERS"]
-
-test "a field the constructors declare at different types is rejected by code" = shows
-  "data W = Wa { x : Int } | Wb { x : Bool }"
-  "main = (Wa { x = 1 }).x"
-  "a"
-  ["T-FIELD-TYPE-DIFFERS"]
-
-test "a field every constructor declares at one position and one type is accepted" =
-  shows
-    "data W t = Wa { x : t } | Wb { x : t, y : Int }"
-    "main = (Wa { x = 'c' }).x"
-    "Char"
-    []
-
-test "an update of a type with several constructors is rejected by code" = shows
-  "data W = Wa { x : Int } | Wb { x : Int }"
-  """
-main =
-  let w = Wa { x = 1 }
-  { w | x = 2 }
-"""
-  "W"
-  ["T-UPDATE-MULTI-CTOR"]
-
-test "an update of a type with one constructor is accepted" =
-  shows
-    "data W = Wa { x : Int }"
-    """
-main =
-  let w = Wa { x = 1 }
-  { w | x = 2 }
-"""
-    "W"
-    []
 
 -- ── the checks on their own ───────────────────────────────────────────────
 
@@ -447,15 +198,15 @@ test "recordUpdateWellTyped rejects an update of a type with several constructor
   wideSource
   "Wa"
   (m ri =>
-    let _ = recordUpdateWellTyped m tyW "Wa" ri "x"
+    recordUpdateWellTyped m tyW "Wa" ri "x"
     expectEqual ["T-UPDATE-MULTI-CTOR"] (codesOf m))
 
 test "recordUpdateWellTyped leaves a receiver of another type or an unknown one alone" = withData
   wideSource
   "Wa"
   (m ri =>
-    let _ = recordUpdateWellTyped m boolM "Wa" ri "x"
-    let _ = recordUpdateWellTyped m (varM 3) "Wa" ri "x"
+    recordUpdateWellTyped m boolM "Wa" ri "x"
+    recordUpdateWellTyped m (varM 3) "Wa" ri "x"
     expectEqual [] (codesOf m))
 
 test "inferFieldOfRecord unifies the receiver with the record and reads the field's type" = withRecord
@@ -496,7 +247,7 @@ test "a receiver of a known record picks that record" = withRecord "P" (m ri =>
     (Some "P", [])
     (pickedName m (tconFrom (OriginModule "m") "P") "a", codesOf m))
 
--- A receiver of the record `P` declared by another module than the one that declares `shapes`.
+-- A receiver of the record `P` declared by another module than the one that declares `recordShapes`.
 foreignP : Mono
 foreignP = tconFrom (OriginModule "n") "P"
 
@@ -566,30 +317,35 @@ isFresh (RecordSubst _ asub) = match filter (p => fst p == 5) asub
   (_, AVar _) :: _ => True
   _ => False
 
+-- Whether the module holds authority 5 as an existential.
+data Binder = Existential | Plain deriving (Eq)
+
 -- The codes pushed and whether authority 5 was freshened, updating [assigned] of an
 -- authority record in a module that does or does not hold 5 as an existential.
-updateAuth : Bool -> List String -> (List String, Bool)
-updateAuth existential assigned =
+updateAuth : Binder -> List String -> (List String, Bool)
+updateAuth binder assigned =
   let m = scoped ()
   let cell = Ref (AUnbound 5 0 PUnit False None)
-  if existential then
+  if binder == Existential then
     m.mcGraph.graphRun.ctorExistentialsRef := IdMap.set 5 () IdMap.Tip
   let sr = instantiateRecordUpdate m "S" (authRecord cell) assigned
   (codesOf m, isFresh (fst sr))
 
 test "an update that assigns none of the fields an existential authority sits in keeps it opaque" =
-  expectEqual ([], False) (updateAuth True [])
+  expectEqual ([], False) (updateAuth Existential [])
 
 test "an update that assigns every field an existential authority sits in gives it a fresh variable" =
-  expectEqual ([], True) (updateAuth True ["f", "g"])
+  expectEqual ([], True) (updateAuth Existential ["f", "g"])
 
 test "an update that assigns only some of those fields is rejected by code" =
-  expectEqual (["T-AUTHORITY-EXISTENTIAL-SCOPE"], True) (updateAuth True ["f"])
+  expectEqual
+    (["T-AUTHORITY-EXISTENTIAL-SCOPE"], True)
+    (updateAuth Existential ["f"])
 
 test "an authority that is not an existential is freshened whatever is assigned" = expectAll
   [
-    expectEqual ([], True) (updateAuth False []),
-    expectEqual ([], True) (updateAuth False ["f"]),
+    expectEqual ([], True) (updateAuth Plain []),
+    expectEqual ([], True) (updateAuth Plain ["f"]),
   ]
 
 test "the shared instantiation keeps an existential authority opaque and freshens any other" =
@@ -625,7 +381,7 @@ test "recordUpdateWellTyped asks only about a receiver of the selected record's 
   otherSource
   "Wa"
   (m ri =>
-    let _ = recordUpdateWellTyped m tyV "Wa" ri "x"
+    recordUpdateWellTyped m tyV "Wa" ri "x"
     expectEqual [] (codesOf m))
 
 test "a reserved constructor name is never qualified with its owner" = withData
@@ -660,38 +416,6 @@ test "a field name nothing in the record is near is rejected without a suggestio
   expectEqual
     ["no field `zzzz` in `S`"]
     (suggestionFor "name : Int, count : Int" "zzzz")
-
--- ── constructors that disagree about a field, by what the field holds ─────
-
-test "function and application fields that agree are accepted, and ones that differ are rejected" = expectAll
-  [
-    shows
-      "data W = Wa { f : Int -> Int } | Wb { f : Int -> Int }"
-      "main = (Wa { f = n => n }).f"
-      "Int -> Int"
-      [],
-    shows
-      "data W = Wa { f : Int -> Int } | Wb { f : Bool -> Int }"
-      "main = (Wa { f = n => n }).f"
-      "a"
-      ["T-FIELD-TYPE-DIFFERS"],
-    shows
-      "data W = Wa { f : Int -> Int } | Wb { f : Int -> Bool }"
-      "main = (Wa { f = n => n }).f"
-      "a"
-      ["T-FIELD-TYPE-DIFFERS"],
-    shows
-      "data W = Wa { f : Box Int } | Wb { f : Box Bool }"
-      "main = (Wa { f = Box { v = 1 } }).f"
-      "a"
-      ["T-FIELD-TYPE-DIFFERS"],
-  ]
-
-test "a narrowed owner whose sibling constructor withholds the field is still rejected" =
-  shows splitOwners "main = (A1 { x = 1 }).x" "a" ["T-FIELD-NOT-IN-ALL-CTORS"]
-
-test "a field two records declare is narrowed to the record of a known receiver" =
-  shows plainOwners "main = (A1 { x = 1 }).x" "Int" []
 
 -- ── the same record name declared by two modules ──────────────────────────
 
@@ -748,35 +472,22 @@ test "an update that assigns only some fields under an existential authority nam
     ]
     (messagesOf m)
 
-test "an ambiguous field names the records that declare it, and the module of each when they share a name" = expectAll
-  [
-    says twoShared "main = r => r.shared" "a -> b" [
-      "ambiguous field `.shared`: it is declared by `L` and `R` and the record type is undetermined; annotate the record, as in `(r : L).shared`",
-    ],
-    expectEqual
+test "an ambiguous field names the module of each record when they share a name" =
+  let m = twoModules ()
+  let found = sharedAt m (varM 4)
+  expectEqual
+    (
+      None,
       [
         "ambiguous field `.shared`: it is declared by `L` from module `m1` and by `L` from module `m2` and the record type is undetermined; annotate the record, as in `(r : L).shared`",
-      ]
-      sameNameMessages,
-  ]
-
--- The messages of an access of `shared` at an unknown receiver in the two-module fixture.
-sameNameMessages : List String
-sameNameMessages =
-  let m = twoModules ()
-  let _ = sharedAt m (varM 4)
-  messagesOf m
+      ],
+    )
+    (found, messagesOf m)
 
 test "owners whose records are not visible are named by their keys" =
   let m = scoped ()
   m.mcCells.fieldOwnersRef := omInsert "shared" ["B", "A"] omEmpty
   expectEqual (None, ["T-AMBIGUOUS-FIELD"]) (sharedAt m (varM 4), codesOf m)
-
-test "a field type that differs only in its effect row is rejected by code" = shows
-  "data W = Wa { f : Int -> <IO> Int } | Wb { f : Int -> Int }"
-  "main = (Wa { f = n => n }).f"
-  "a"
-  ["T-FIELD-TYPE-DIFFERS"]
 
 test "an owner the module cannot reach is dropped before its record is looked at" =
   let m = scoped ()
@@ -786,78 +497,3 @@ test "an owner the module cannot reach is dropped before its record is looked at
     omInsert "R" ["m3"] (omInsert "L" ["m1"] omEmpty)
   m.mcCells.fieldOwnerReachRef := omFromNames ["m1"] omEmpty
   expectEqual (Some (Some "Int"), []) (sharedAt m (varM 4), codesOf m)
-
--- ── properties ────────────────────────────────────────────────────────────
-
--- A record of three fields of generated kinds, the fields an update assigns, and the field a
--- read goes through afterwards.
-data UpdateCase = UpdateCase (List Int) (List Int) Int
-
-impl Arbitrary UpdateCase where
-  arbitrary () =
-    let assigned = genAssigned 3
-    UpdateCase (genKinds 3) (ensureOne assigned) (randomInt 0 2)
-  shrink (UpdateCase kinds assigned read) = match assigned
-    _ :: rest if isNonEmptyL rest => [UpdateCase kinds rest read]
-    _ => []
-
--- The fields (by index) an update assigns, each kept or left out by a draw.
-genAssigned : Int -> <Rand> List Int
-genAssigned n
-  | n <= 0 = []
-  | otherwise =
-    let rest = genAssigned (n - 1)
-    if randomInt 0 1 == 1 then n - 1 :: rest else rest
-
--- An update assigns at least one field.
-ensureOne : List Int -> List Int
-ensureOne [] = [0]
-ensureOne fields = fields
-
--- The program of a case: the record declared over three type parameters, built from one
--- literal per field, updated at the assigned fields with a value of the field's own kind, and
--- read at one field.
-updateSource : UpdateCase -> String
-updateSource (UpdateCase kinds assigned read) =
-  let built =
-    joinWith
-      ", "
-      (map (i => "f\{intToString i} = \{kindLit (nthInt i kinds)}") [0, 1, 2])
-  let updated =
-    joinWith
-      ", "
-      (map (i => "f\{intToString i} = \{kindLit (nthInt i kinds)}") assigned)
-
-  """
-data G x y z = G { f0 : x, f1 : y, f2 : z }
-main =
-  let r = G { \{built} }
-  ({ r | \{updated} }).f\{intToString read}
-"""
-
--- Law: reading a field of an updated record has the type that field was built at, whether the
--- update assigned it or not.  Precondition (`readsUntouched`): the read field is not one the
--- update assigns, so its type can only come from the record being updated.
-prop "a field read after an update has the type its record was built at" (c : UpdateCase) =
-  let (UpdateCase kinds _ read) = c
-  let m = scopedWith (updateSource c)
-  let env = envWithData m (updateSource c)
-  match mainOf m (updateSource c)
-    Some e => ppMono (infer env e) == kindName (nthInt read kinds)
-    None => False
-
--- Whether the read field of a case is one its update leaves alone.
-readsUntouched : UpdateCase -> Bool
-readsUntouched (UpdateCase _ assigned read) = not (any (== read) assigned)
-
-test "a read of a field the update leaves alone is its record's, one it assigns is the assigned value's" =
-  let untouched = UpdateCase [0, 1, 2] [1] 0
-  let assigned = UpdateCase [0, 1, 2] [1] 1
-  let m = scopedWith (updateSource untouched)
-  let env = envWithData m (updateSource untouched)
-  expectEqual
-    ((True, False), Some "Char")
-    (
-      (readsUntouched untouched, readsUntouched assigned),
-      map (e => ppMono (infer env e)) (mainOf m (updateSource untouched)),
-    )

@@ -3,12 +3,15 @@
 -- been given, the signatures of a parsed source, the alias table and declared parameter kinds
 -- a source's declarations register, the interface reference and the monos of the probe module
 -- (`ifaceOf`, `intM`, `boolM`, `varM`), a hand-built pattern (`at`, `pvar`), the literal and
--- type name of a generated kind (`kindLit`, `kindName`, `genKinds`, `nthInt`), the triple
--- projections (`fst3`, `snd3`), the reader of a module that declares an interface with a live
--- impl (`readerOfLib`), the environment of an importer shadow over it (`shadowEnvOf`), a method occurrence of it (`methodOccurrence`), the
--- marked body of a source's `main` (`withMain`, `mainOf`) and the environment over the data
--- and record types a source declares (`scopedWith`, `envWithData`, `declareData`).  Test siblings import it
--- and no production module does.
+-- type name of a generated kind (`kindLit`, `kindName`, `genKinds`, `nthInt`, `unitKind`), the
+-- triple projections (`fst3`, `snd3`), the reader of a module that declares an interface with
+-- a live impl (`readerOfLib`), the environment of an importer shadow over it (`shadowEnvOf`),
+-- a method occurrence of it (`methodOccurrence`), and the environment over the data and
+-- record types a source declares (`scopedWith`, `envWithData`, `declareData`,
+-- `recordShapes`).  Test siblings import it and no production module does.
+-- It imports no module above `tc_decls`, so a sibling of a lower module cannot reach a higher
+-- one through it; the fixtures that run a source through the mark pass and `infer`
+-- (`mainOf`, `withMain`) live in `tc_infer_test`.
 -- `aliasTableOf` and `recordKindsOf` are the fixture-side twins of `tc_decls`'
 -- `graphAliasRow` and `withDeclParamKinds`: a test of a module below `tc_decls` cannot
 -- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
@@ -17,7 +20,6 @@
 import list.{drop, reverse}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
-import frontend.desugar.{desugar}
 import frontend.exhaust.{buildOracle}
 import frontend.ast.{
   Decl(..),
@@ -38,8 +40,6 @@ import support.ordmap.{omEmpty, omInsert, omLookup}
 import types.publish.{tcCode, tcMsg}
 import types.tc_decls.{kindIsDeclared, registerData}
 import types.tc_scope.{insertRecordPop}
-import types.tc_occurrence.{markGroupClauses}
-import types.tc_effects.{clausesOf}
 import types.tc_env.{
   buildImplEnvGo,
   declEnvModule,
@@ -245,45 +245,6 @@ readerOfLib _ =
     implAccFinish (buildImplEnvGo [lib, user] emptyDeclEnvAcc.daImpls)
   m
 
--- A marking that sends no name to a method, dictionary or shadow occurrence: the mark pass
--- over it only mints the evidence sites of the operators, literals and field accesses.
-plainMarking : ModuleMarking
-plainMarking = ModuleMarking {
-  mmCtx = MarkCtx { mcRp = omEmpty, mcAn = omEmpty, mcSm = [] },
-  mmTop = omEmpty,
-  mmDictSet = Ref omEmpty,
-  mmUserNames = omEmpty,
-  mmExterns = omEmpty,
-}
-
--- The right-hand side of `main = ...` in [src], parsed, desugared and run through the mark
--- pass in [m] so every site it names is minted, as the inference recursion reads it; `None`
--- when [src] defines no `main`.
-export
-mainOf : ModuleCtx -> String -> Option Expr
-mainOf m src =
-  let grouped =
-    fold
-      (acc (name, clause) =>
-        omInsert name (clause :: optionOr [] (omLookup name acc)) acc)
-      omEmpty
-      (flatMap
-        (d => match d
-          DFunDef _ name pats body _ _ => [(name, (pats, body))]
-          _ => [])
-        (desugar (parse src)))
-  let marked = markGroupClauses plainMarking (envFor m) ["main"] grouped
-  match clausesOf "main" marked
-    (_, body) :: _ => Some body
-    [] => None
-
--- [k] applied to `mainOf m src`; a source with no `main` fails the test.
-export
-withMain : ModuleCtx -> String -> (Expr -> Expectation) -> Expectation
-withMain m src k = match mainOf m src
-  Some body => k body
-  None => expectEqual "a source defining main" src
-
 -- A module record named "probe" in a fresh graph, in its root scope, whose constructor oracle
 -- knows the data [src] declares; `envWithData` registers the same source's types.
 export
@@ -319,6 +280,17 @@ declaredAsData mid (d@(DData { dataOrigin = _ })) =
   DData { d | dataOrigin = OriginModule mid }
 declaredAsData _ d = d
 
+-- The record declarations the record tests of `tc_infer_records` and `tc_infer` name.
+export
+recordShapes : String
+recordShapes =
+  """
+data P = P { a : Int, b : Bool }
+data Box t = Box { v : t }
+data Pair x y = Pair { first : x, second : y }
+data Cfg = Cfg { name : String, count : Int }
+"""
+
 -- The name of the type of a generated value of kind [k]: a Char, a Bool, a String or a Unit.
 export
 kindName : Int -> String
@@ -340,14 +312,19 @@ export
 genKinds : Int -> <Rand> List Int
 genKinds n
   | n <= 0 = []
-  | otherwise = randomInt 0 3 :: genKinds (n - 1)
+  | otherwise = randomInt 0 unitKind :: genKinds (n - 1)
 
--- The element of [xs] at index [i]; the Unit kind, 3, beyond the end.
+-- The generated kind whose literal is `()` and whose type is Unit.
+export
+unitKind : Int
+unitKind = 3
+
+-- The element of [xs] at index [i]; the Unit kind beyond the end.
 export
 nthInt : Int -> List Int -> Int
 nthInt i xs = match drop i xs
   x :: _ => x
-  [] => 3
+  [] => unitKind
 
 -- [m]'s environment with `size` bound as the interface method, of scheme [method], and also
 -- as a standalone value of scheme [standalone] imported from another module, which is what
