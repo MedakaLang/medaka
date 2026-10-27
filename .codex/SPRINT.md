@@ -22,13 +22,28 @@ seats, per-slice reviewer pairs, or continuation/verification ledgers.
 
 ## Dispatch and models
 
+Start a dedicated sprint orchestration session on **`gpt-6.1-terra`, `high`**.
+Terra owns packet preparation, serial dispatch, integration, status and the
+merge queue; use it for mechanical and routine implementation too. The root
+model is selected when starting the session: changing a subagent default does
+not switch an already-running orchestrator. Keep the selected planning model
+and the independently configured Sol end reviewer.
+
+Record exact model IDs in contracts and packets. Where the host exposes
+per-dispatch overrides, explicitly pass `gpt-6.1-terra`/`high` for Terra work
+with fresh context (`fork_turns: none`), particularly when an existing session
+still has older role definitions loaded. Do not silently fall back to another
+model if the requested one is unavailable. The Sol implementation override
+below uses the current host selector; the separate reviewer keeps its own
+configured model.
+
 The agent definitions in `.codex/agents/` load the corresponding Claude role
 body. Ignore that body's Claude-specific frontmatter and apply these mappings:
 
 | Claude role or tier | Codex dispatch |
 |---|---|
-| `sprint-implementer`, routine `sonnet` slice | `sprint_implementer` with `gpt-5.6-terra`, `high` (the repository defaults in `.codex/config.toml`) |
-| `sprint-implementer`, tricky `opus` slice or justified upgrade | `sprint_implementer` with explicit `gpt-5.6-sol`, `high` |
+| `sprint-implementer`, routine `sonnet` slice | `sprint_implementer` with `gpt-6.1-terra`, `high` (the repository defaults in `.codex/config.toml`) |
+| `sprint-implementer`, tricky `opus` slice or justified upgrade | `sprint_implementer` with explicit `gpt-6.1-sol`, `high` |
 | `sprint-reviewer` | `sprint_reviewer` (Sol, high) |
 | `sprint-retro` | `sprint_retro` (Terra, high) |
 | End-round style pass | General agent with Terra/high, loading `.claude/skills/style-review/SKILL.md`; read-only work, no build. The parent first runs the `review-diff` pass (`scripts/review_bench/review.py --rev <merge-base>..<SHA> --json`; it needs the `claude` CLI) and hands the agent the findings file. |
