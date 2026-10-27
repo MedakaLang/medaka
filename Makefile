@@ -451,6 +451,9 @@ inlang-frontend-resolve:
 inlang-frontend-resolve-test:
 	./medaka test --native compiler/frontend/resolve_test.mdk
 
+inlang-frontend-lexer-test:
+	./medaka test compiler/frontend/lexer_test.mdk
+
 ## compiler/frontend/parser_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): the unrendered-failure text and
 ## the furthest-failure choice would otherwise never run.

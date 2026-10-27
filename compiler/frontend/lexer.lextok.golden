@@ -1498,6 +1498,12 @@ UPPER "Int"
 UPPER "Int"
 NEWLINE
 PIPE
+UPPER "RTripleInterpOpen"
+UPPER "String"
+UPPER "Int"
+UPPER "Int"
+NEWLINE
+PIPE
 UPPER "RNewline"
 UPPER "Int"
 UPPER "Int"
@@ -6356,15 +6362,8 @@ EQ_EQ
 CHAR "{"
 EQUAL
 INDENT
-UPPER "RTok"
-LPAREN
-UPPER "TInterpOpen"
-LPAREN
-IDENT "tripleInterpMark"
-PLUSPLUS
+UPPER "RTripleInterpOpen"
 IDENT "acc"
-RPAREN
-RPAREN
 IDENT "p"
 LPAREN
 IDENT "p"
@@ -7813,82 +7812,6 @@ IDENT "joinWith"
 STRING "\n"
 IDENT "xs"
 NEWLINE
-IDENT "tripleInterpMark"
-COLON
-UPPER "String"
-NEWLINE
-IDENT "tripleInterpMark"
-EQUAL
-IDENT "charToStr"
-LPAREN
-IDENT "optionOr"
-CHAR " "
-LPAREN
-IDENT "charFromCode"
-INT 1
-RPAREN
-RPAREN
-NEWLINE
-IDENT "hasTripleInterpMark"
-COLON
-UPPER "String"
-ARROW
-UPPER "Bool"
-NEWLINE
-IDENT "hasTripleInterpMark"
-IDENT "s"
-EQUAL
-INDENT
-LET
-IDENT "cs"
-EQUAL
-IDENT "stringToChars"
-IDENT "s"
-NEWLINE
-IDENT "arrayLength"
-IDENT "cs"
-GT
-INT 0
-AND
-IDENT "at"
-IDENT "cs"
-INT 0
-EQ_EQ
-IDENT "optionOr"
-CHAR " "
-LPAREN
-IDENT "charFromCode"
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "dropTripleInterpMark"
-COLON
-UPPER "String"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "dropTripleInterpMark"
-IDENT "s"
-EQUAL
-INDENT
-LET
-IDENT "cs"
-EQUAL
-IDENT "stringToChars"
-IDENT "s"
-NEWLINE
-IDENT "dropCharsToStr"
-IDENT "cs"
-INT 1
-LPAREN
-IDENT "arrayLength"
-IDENT "cs"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
 IDENT "startsWithNl"
 COLON
 UPPER "String"
@@ -8495,31 +8418,16 @@ NEWLINE
 IDENT "hasTripleInterpOpen"
 LPAREN
 LPAREN
-UPPER "RTok"
-LPAREN
-UPPER "TInterpOpen"
-IDENT "s"
-RPAREN
+UPPER "RTripleInterpOpen"
+UNDERSCORE
 UNDERSCORE
 UNDERSCORE
 RPAREN
 CONS
-IDENT "rest"
+UNDERSCORE
 RPAREN
-INDENT
-PIPE
-IDENT "hasTripleInterpMark"
-IDENT "s"
 EQUAL
 UPPER "True"
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-IDENT "hasTripleInterpOpen"
-IDENT "rest"
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "hasTripleInterpOpen"
 LPAREN
@@ -8549,29 +8457,16 @@ NEWLINE
 IDENT "dedentTripleGo"
 LPAREN
 LPAREN
-UPPER "RTok"
-LPAREN
-UPPER "TInterpOpen"
+UPPER "RTripleInterpOpen"
 IDENT "s"
-RPAREN
 IDENT "so"
 IDENT "eo"
 RPAREN
 CONS
 IDENT "rest"
 RPAREN
-INDENT
-PIPE
-IDENT "hasTripleInterpMark"
-IDENT "s"
 EQUAL
 INDENT
-LET
-IDENT "sReal"
-EQUAL
-IDENT "dropTripleInterpMark"
-IDENT "s"
-NEWLINE
 LET
 LPAREN
 IDENT "rawSegs"
@@ -8585,14 +8480,12 @@ IDENT "splitInterpGroup"
 IDENT "rest"
 NEWLINE
 IDENT "dedentTripleGroup"
-IDENT "sReal"
+IDENT "s"
 IDENT "so"
 IDENT "eo"
 IDENT "rawSegs"
 IDENT "midToks"
 IDENT "afterEnd"
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 NEWLINE
