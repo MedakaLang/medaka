@@ -1,0 +1,1422 @@
+-- Tests of `types.tc_infer`'s own API: the type and the diagnostics `infer` gives each arm of
+-- the recursion (variable, lambda, application, let and let-group, if, match with its guards,
+-- tuple, list, array, range, annotation, block statement, operator), the exhaustiveness and
+-- redundancy checks a match schedules (`checkMatchChecks`, and the check deferred while the
+-- scrutinee type is unknown), the wide-literal check (`checkWideLiterals`), the clause inference
+-- of a binding group (`inferMemberClauses`, `inferBindingChecked`), the signature
+-- pre-unification (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the span readers
+-- (`appArgLoc`, `valueSpanLoc`) and the applications of an importer shadow and of a definer
+-- shadow (a bare head, a marked head, and a spine whose receiver is not its first argument).
+-- Each test builds the module record and the environment it reads and drives the recursion below
+-- the entry module.  Two properties run over generated programs: a name in a chain of lambdas
+-- means its innermost binder, and an argument flows into the parameter at its position.  Not
+-- driven here: the occurrences of an ordinary method or dictionary (`EMethodAt`, `EDictAt`),
+-- which read method scheme rows only a drive builds; the shadow verdicts that reject or defer to
+-- the standalone when two interfaces declare one method name (`AdReject`, `AdStandalone`); and
+-- the effect a standalone's arrow performs at its call; `typecheck_test` drives whole checks and
+-- `drive_independence_test` the match-warning flag.
+
+import test.{Expectation, expectAll, expectEqual, expectTrue}
+import frontend.ast.{
+  EvId(..),
+  Route(..),
+  Arm(..),
+  DoStmt(..),
+  Expr(..),
+  Guard(..),
+  Lit(..),
+  Loc(..),
+  Pat(..),
+  Ty,
+  TyConOrigin(..),
+}
+import list.{drop, nub, range, reverse, sort, zip}
+import types.publish.{TcDiag(..), tcCode, tcMsg}
+import types.repr.{IfaceRef(..), Mono(..), Scheme(..), ppMono}
+import types.tc_env.{envFor, extendVars}
+import types.tc_infer.{
+  appArgLoc,
+  checkMatchChecks,
+  checkWideLiterals,
+  closeScope,
+  declareRigidVars,
+  infer,
+  inferBindingChecked,
+  inferMemberClauses,
+  preunifySigsEx,
+  valueSpanLoc,
+}
+import types.tc_diag_text.{locKey}
+import types.effect_bindings.{BindingSummary(..), newBindingSummary}
+import types.effect_rows.{pureRow}
+import types.tc_effects.{beginEffectSummaryScope, freshEffectSummary}
+import types.tc_mono.{monoScheme, tconBuiltin, tconFrom}
+import types.tc_shadow.{methodCellOf}
+import types.tc_state.{wAll}
+import types.tc_unify.{captureScope, freshVar}
+import types.tc_test_support.{
+  at,
+  boolM,
+  codesOf,
+  envWithData,
+  fst3,
+  inRootScope,
+  intM,
+  genKinds,
+  kindLit,
+  kindName,
+  nthInt,
+  messagesOf,
+  methodOccurrence,
+  pvar,
+  readerOfLib,
+  scoped,
+  scopedWith,
+  shadowEnvOf,
+  sizeScheme,
+  varM,
+  mainOf,
+  withFirstSig,
+  withMain,
+}
+
+import types.evidence.{ScopeId(..)}
+import types.tc_types.{ModuleCtx(..), ScopedMember(..), TcEnv}
+import support.ordmap.{omEmpty, omInsert}
+import map as IdMap
+import support.ordmap.{omKeys}
+import types.scopes.{ScopeOwner(..), freshScope}
+import types.tc_solve.{openScope}
+import types.tc_state.{currentScopeStore}
+
+import string.{contains}
+import support.util.{isEmptyL, joinWith, listLen}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- Data the programs below match on.
+shapes : String
+shapes = """
+data T = Ta | Tb
+"""
+
+-- The type `main` of [src] infers to, and the codes pushed on the way.
+checks : String -> String -> List String -> Expectation
+checks src ty codes =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m src (e =>
+    let t = infer env e
+    expectEqual (ty, codes) (ppMono t, codesOf m))
+
+-- The same, with the messages in place of the codes.
+says : String -> String -> List String -> Expectation
+says src ty messages =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m src (e =>
+    let t = infer env e
+    expectEqual (ty, messages) (ppMono t, messagesOf m))
+
+-- The codes of the match warnings [m] holds.
+warningCodes : ModuleCtx -> List String
+warningCodes m = reverse (map tcCode m.mcCells.matchWarnings.value)
+
+-- The messages of the match warnings [m] holds.
+warningMessages : ModuleCtx -> List String
+warningMessages m = reverse (map tcMsg m.mcCells.matchWarnings.value)
+
+-- The type `T` of `shapes`, and the arm `c` with an empty body.
+tyT : Mono
+tyT = tconFrom (OriginModule "m") "T"
+
+armOf : String -> Arm
+armOf c = Arm (PCon c []) [] (ELit LUnit)
+
+-- ── variables and lambdas ─────────────────────────────────────────────────
+
+test "a lambda is an arrow from its parameter's type to its body's" =
+  checks "main = x => x" "a -> a" []
+
+test "a lambda of two parameters is a curried arrow" =
+  checks "main = x y => x" "a -> b -> a" []
+
+test "an inner parameter shadows the outer one of the same name" = expectAll [
+  checks "main = x => x => x" "a -> b -> b" [],
+  checks "main = x => (y => (x, y))" "a -> b -> (a, b)" [],
+]
+
+test "an unbound variable is rejected by code and reads as a fresh type" =
+  let m = scoped ()
+  withMain m "main = y" (e =>
+    expectEqual
+      ("a", ["T-UNBOUND"], ["unbound variable `y`"])
+      (ppMono (infer (envFor m) e), codesOf m, messagesOf m))
+
+-- ── application ───────────────────────────────────────────────────────────
+
+test "an application is the function's result at the argument's type" = expectAll
+  [
+    checks "main = (x => (x, x)) 'c'" "(Char, Char)" [],
+    checks "main = 'c' |> (x => (x, x))" "(Char, Char)" [],
+    checks "main = (x => (x, x)) >> (p => p)" "a -> (a, a)" [],
+  ]
+
+test "arguments flow into the parameters in order" = expectAll [
+  checks "main = (x y => (y, x)) 'c' True" "(Bool, Char)" [],
+  checks "main = (x y z => (z, y, x)) 'c' True \"s\"" "(String, Bool, Char)" [],
+]
+
+test "applying a value that is not a function is rejected by code" = expectAll [
+  says "main = 'c' 'd'" "a" [
+    "this expression has type Char and is not a function; it cannot be applied to an argument",
+  ],
+  checks "main = 'c' 'd'" "a" ["T-NOT-A-FUNCTION"],
+]
+
+test "an argument beyond the function's arity is rejected as an application of a non-function" =
+  checks "main = (x => x) 'a' 'b'" "a" ["T-NOT-A-FUNCTION"]
+
+test "an argument of the wrong type is a type mismatch naming both types" = says
+  "main = (x => if x then 'a' else 'b') \"s\""
+  "Char"
+  ["type mismatch: Bool vs String"]
+
+-- ── let and let-groups ────────────────────────────────────────────────────
+
+test "a let binds its name for its body" = expectAll [
+  checks """
+main =
+  let c = 'c'
+  c
+""" "Char" [],
+  checks """
+main =
+  let a = 'c'
+  let b = (a, a)
+  b
+""" "(Char, Char)" [],
+]
+
+test "a let-bound function is generalized, so each use takes its own type" =
+  checks """
+main =
+  let id = x => x
+  (id 'c', id True)
+""" "(Char, Bool)" []
+
+test "a lambda-bound function is monomorphic, so two uses at different types are rejected" = checks
+  "main = f => (f 'c', f True)"
+  "(Char -> <a> b) -> <a> (b, b)"
+  ["T-TYPE-MISMATCH"]
+
+test "a local function may call itself" =
+  checks """
+main =
+  let f n = if n then f n else 'c'
+  f True
+""" "Char" []
+
+test "where-bound functions that call each other form one group" =
+  checks
+    """
+main = f True
+  where
+    f n = if n then g n else 'c'
+    g n = f n
+"""
+    "Char"
+    []
+
+test "a rec let of a value that is not a function is rejected by code" = checks
+  """
+main =
+  let rec f = n => if n then f n else 'c'
+  f True
+"""
+  "Char"
+  ["T-NONREC-VALUE-LET"]
+
+-- ── if, match and their checks ────────────────────────────────────────────
+
+test "the branches of an if join to one type" =
+  checks "main = if True then 'a' else 'b'" "Char" []
+
+test "branches of different types are a type mismatch" = says
+  "main = if True then 'a' else True"
+  "Char"
+  ["type mismatch: Char vs Bool"]
+
+test "the condition of an if must be a Bool" =
+  says "main = if 'c' then 'a' else 'b'" "Char" ["type mismatch: Char vs Bool"]
+
+test "an if without else is a Unit and names the missing branch" = expectAll [
+  checks "main = if True then ()" "Unit" [],
+  says "main = if True then 'a'" "Char" [
+    "type mismatch: Char vs Unit; an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit",
+  ],
+]
+
+test "the arms of a match join to one type" = expectAll [
+  checks """
+main = match 'c'
+  'a' => True
+  _ => False
+""" "Bool" [],
+  says """
+main = match 'c'
+  'a' => True
+  _ => 'b'
+""" "Bool" [
+    "type mismatch: Bool vs Char",
+  ],
+]
+
+test "a match binds the variables of its patterns in the arm" =
+  checks """
+main = match (Ta, 'c')
+  (Ta, y) => y
+  _ => 'd'
+""" "Char" []
+
+test "a match missing a constructor warns W-NONEXHAUSTIVE" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main = match Ta
+  Ta => 'c'
+""" (e =>
+    let t = infer env e
+    expectEqual ("Char", ["W-NONEXHAUSTIVE"]) (ppMono t, warningCodes m))
+
+test "an exhaustive match warns nothing" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main = match Ta
+  Ta => 'c'
+  Tb => 'd'
+""" (e =>
+    let t = infer env e
+    expectEqual ("Char", []) (ppMono t, warningCodes m))
+
+test "an arm after a covering arm warns it is unreachable" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main = match Ta
+  Ta => 'c'
+  Tb => 'd'
+  Ta => 'e'
+""" (e =>
+    let t = infer env e
+    expectEqual ("Char", ["W-UNREACHABLE-ARM"]) (ppMono t, warningCodes m))
+
+test "a match whose scrutinee is still unknown after its arms is left to the deferred check" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main = x => match x
+  y => 'c'
+""" (e =>
+    let t = infer env e
+    expectEqual
+      ("a -> Char", [], ["a"])
+      (
+        ppMono t,
+        warningCodes m,
+        map (d => ppMono (fst3 d)) m.mcCells.matchChecksDeferred.value,
+      ))
+
+test "a match on a scrutinee known from its patterns is checked at once" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main = x => match x
+  Ta => 'c'
+""" (e =>
+    let t = infer env e
+    expectEqual
+      ("T -> Char", ["W-NONEXHAUSTIVE"], [])
+      (
+        ppMono t,
+        warningCodes m,
+        map (d => ppMono (fst3 d)) m.mcCells.matchChecksDeferred.value,
+      ))
+
+test "checkMatchChecks warns of a missing constructor and of an arm that covers nothing new" = expectAll
+  [
+    checksOf [armOf "Ta"] ["W-NONEXHAUSTIVE"],
+    checksOf [armOf "Ta", armOf "Tb"] [],
+    checksOf [armOf "Ta", armOf "Tb", armOf "Ta"] ["W-UNREACHABLE-ARM"],
+    checksOf
+      [armOf "Ta", armOf "Tb", Arm PWild [] (ELit LUnit)]
+      ["W-UNREACHABLE-ARM"],
+  ]
+
+-- The codes of the warnings the checks over [arms] push for a scrutinee of type `T`.
+checksOf : List Arm -> List String -> Expectation
+checksOf arms codes =
+  let m = scopedWith shapes
+  let _ = envWithData m shapes
+  checkMatchChecks m tyT arms
+  expectEqual codes (warningCodes m)
+
+test "an arm with a guard does not cover its constructor" = expectAll [
+  checksOf
+    [Arm (PCon "Ta" []) [GBool (ELit (LBool True))] (ELit LUnit), armOf "Tb"]
+    ["W-NONEXHAUSTIVE"],
+  checksOf
+    [
+      Arm (PCon "Ta" []) [GBool (ELit (LBool True))] (ELit LUnit),
+      armOf "Ta",
+      armOf "Tb",
+    ]
+    [],
+]
+
+test "a refutable binding pattern warns in the words of a binding, not of a match" =
+  let m = scopedWith shapes
+  let _ = envWithData m shapes
+  checkMatchChecks m tyT [Arm (PCon "Ta" []) [] (EVar "<binder>")]
+  expectAll [
+    expectEqual ["W-NONEXHAUSTIVE"] (warningCodes m),
+    expectEqual
+      [
+        "Warning: refutable binding pattern on `T`: missing `Tb`; handle `Tb` with a `match` or an `if let` instead of binding the pattern directly",
+      ]
+      (warningMessages m),
+  ]
+
+-- ── lists, tuples, ranges, annotations and blocks ─────────────────────────
+
+test "the elements of a list literal join to one element type" = expectAll [
+  checks "main = ['a', 'b']" "List Char" [],
+  says "main = ['a', True]" "List Char" ["type mismatch: Char vs Bool"],
+]
+
+test "an array literal is an array of its elements' type" =
+  checks "main = [|'a', 'b'|]" "Array Char" []
+
+test "a tuple is the tuple of its components' types in order" = expectAll [
+  checks "main = ('c', True)" "(Char, Bool)" [],
+  checks "main = ('c', True, \"s\")" "(Char, Bool, String)" [],
+]
+
+test "an integer range is a list of Int and its bounds must be Int" = expectAll
+  [
+    checks "main = [1..3]" "List Int" [],
+    says "main = [1..'c']" "List Int" ["type mismatch: Char vs Int"],
+  ]
+
+test "a constructor has its data type" = checks "main = (Ta, Tb)" "(T, T)" []
+
+test "a lambda argument is checked against the parameter type the function expects" =
+  checks "main = (f => f 'c') (x => x)" "Char" []
+
+test "the lambdas of a list literal join to one function type" =
+  checks "main = [x => x, y => 'c']" "List (Char -> Char)" []
+
+test "an annotation fixes the type of its expression and rejects another" = expectAll
+  [
+    checks "main = ('c' : Char)" "Char" [],
+    checks "main = ((x => x) : Char -> Char)" "Char -> Char" [],
+    says "main = ('c' : Bool)" "Bool" ["type mismatch: Char vs Bool"],
+  ]
+
+test "an annotation more general than its expression is rejected by code" = says
+  "main = ('c' : a)"
+  "Char"
+  [
+    "type annotation `a` is more polymorphic than the expression: a type variable in it is a specific type, or two of its variables are the same type",
+  ]
+
+test "a statement whose value is not Unit is rejected as discarded" = says
+  """
+main =
+  'c'
+  True
+"""
+  "Bool"
+  [
+    "this statement's value (`Char`) is discarded; only a `Unit` expression may stand alone as a statement",
+  ]
+
+test "a record-free block of lets and a final expression has the final expression's type" =
+  checks """
+main =
+  let a = 'c'
+  let b = True
+  (b, a)
+""" "(Bool, Char)" []
+
+-- ── statements of a block ─────────────────────────────────────────────────
+
+test "a let statement binds its name for the statements after it" = expectAll [
+  checks """
+main =
+  let a = 'c'
+  ()
+  a
+""" "Char" [],
+  checks """
+main =
+  let (a, b) = ('c', True)
+  (b, a)
+""" "(Bool, Char)" [],
+]
+
+test "a later let statement shadows an earlier one of the same name" =
+  checks """
+main =
+  let x = 'c'
+  ()
+  let x = True
+  x
+""" "Bool" []
+
+test "a let statement of a function may call itself" =
+  checks
+    """
+main =
+  let f n = if n then f n else 'c'
+  ()
+  f True
+"""
+    "Char"
+    []
+
+test "a let statement of a refutable pattern warns of the case it misses" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m """
+main =
+  let Ta = Ta
+  'c'
+""" (e =>
+    let t = infer env e
+    expectEqual ("Char", ["W-NONEXHAUSTIVE"]) (ppMono t, warningCodes m))
+
+test "a bind statement outside a do block is rejected by code" = says
+  """
+main =
+  x <- 'c'
+  x
+"""
+  "Char"
+  [
+    "`<-` is only valid inside a `do` block; outside one, bind the value with `let x = ...`",
+  ]
+
+-- ── calls, guards and groups ──────────────────────────────────────────────
+
+-- The tuple-call hints [src] leaves behind as candidates for the call's mismatch.
+tupleCallHints : String -> List String
+tupleCallHints src =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  match mainOf m src
+    Some e =>
+      let _ = infer env e
+      map helpOf m.mcCells.tupleCallCandidates.value
+    None => ["no main"]
+
+helpOf : (Mono, String, a) -> String
+helpOf (_, h, _) = h
+
+test "a call that passes a tuple to a function of that many parameters leaves a hint to use spaces" = expectAll
+  [
+    expectTrue
+      (any
+        (contains "passes the single tuple `('a', 'b')`; did you mean")
+        (tupleCallHints """
+main =
+  let f x y = x
+  f ('a', 'b')
+""")),
+    expectEqual
+      []
+      (tupleCallHints """
+main =
+  let f x y = x
+  f ('a', 'b', 'c')
+"""),
+    expectEqual [] (tupleCallHints """
+main =
+  let g p = p
+  g ('a', 'b')
+"""),
+  ]
+
+test "a call with too many arguments names the function and how many it takes" = says
+  """
+main =
+  let f x = x
+  f 'a' 'b'
+"""
+  "a"
+  ["`f` takes 1 argument but is applied to 2"]
+
+test "applying a named value that is not a function names it and its type" = says
+  """
+main =
+  let c = 'c'
+  c 'd'
+"""
+  "a"
+  [
+    "`c` has type Char and is not a function; it cannot be applied to an argument",
+  ]
+
+test "an argument whose type is a container of the parameter's is a type mismatch" = says
+  "main = (xs => 'c' :: xs) 'd'"
+  "List Char"
+  ["type mismatch: List Char vs Char"]
+
+test "a where-bound function is generalized, so each use takes its own type" =
+  checks """
+main = (f 'c', f True)
+  where
+    f x = x
+""" "(Char, Bool)" []
+
+test "a guard of a match arm must be a Bool" = expectAll [
+  checks """
+main = match 'c'
+  x if x == 'a' => True
+  _ => False
+""" "Bool" [],
+  says """
+main = match 'c'
+  x if 'd' => 'e'
+  _ => 'f'
+""" "Char" [
+    "type mismatch: Char vs Bool",
+  ],
+]
+
+test "a pattern guard binds its variables for the arm's body and matches the type of its scrutinee" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  let bound = Arm (pvar "t") [GBind (pvar "u") (EVar "t")] (EVar "u")
+  let t = infer env (EMatch (EVar "Ta") [bound, Arm PWild [] (EVar "Tb")])
+  expectEqual ("T", []) (ppMono t, codesOf m)
+
+test "a pattern guard whose pattern has another type than its scrutinee is a type mismatch" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  let bad = Arm (pvar "t") [GBind (PLit (LBool True)) (EVar "t")] (EVar "t")
+  let t = infer env (EMatch (EVar "Ta") [bad, Arm PWild [] (EVar "Tb")])
+  expectEqual ("T", ["T-TYPE-MISMATCH"]) (ppMono t, codesOf m)
+
+test "operators relate their operands: comparison and boolean give Bool, append keeps the operand type" = expectAll
+  [
+    checks "main = 'a' < 'b'" "Bool" [],
+    checks "main = True || False" "Bool" [],
+    says "main = \"a\" ++ 'b'" "String" ["type mismatch: String vs Char"],
+  ]
+
+test "a pipe into a value that is not a function is a type mismatch" =
+  says "main = 'c' |> 'd'" "a" ["type mismatch: Char vs Char -> <a> b"]
+
+test "a list literal of three elements is rejected at the element that differs" =
+  says "main = ['a', 'b', True]" "List Char" ["type mismatch: Char vs Bool"]
+
+-- ── operators ─────────────────────────────────────────────────────────────
+
+test "the operands of && are Bool" = expectAll [
+  checks "main = True && False" "Bool" [],
+  says "main = True && 'c'" "Bool" ["type mismatch: Char vs Bool"],
+]
+
+test "a cons joins an element to a list of its type" =
+  checks "main = 'a' :: ['b']" "List Char" []
+
+test "equality compares two operands of one type" =
+  checks "main = 'a' == 'b'" "Bool" []
+
+test "an append of two strings is a string" =
+  checks "main = \"a\" ++ \"b\"" "String" []
+
+-- ── wide literals ─────────────────────────────────────────────────────────
+
+-- The messages checkWideLiterals pushes for one literal of type [t] with halves [hi] and [lo].
+wideMessages : Mono -> String -> Int -> Int -> Bool -> List String
+wideMessages t lx hi lo negated =
+  let m = scoped ()
+  checkWideLiterals m [(t, lx, hi, lo, negated, None)]
+  messagesOf m
+
+test "a literal of 2^62 does not fit Int and says so" =
+  expectEqual
+    ["integer literal too large for Int (max 4611686018427387903)"]
+    (wideMessages intM "4611686018427387904" 1073741824 0 False)
+
+test "a literal of 2^63 fits U64, and I64 only when negated" =
+  expectEqual
+    [
+      [],
+      [
+        "integer literal -9223372036854775808 does not fit U64 (0..18446744073709551615)",
+      ],
+      [
+        "integer literal 9223372036854775808 does not fit I64 (-9223372036854775808..9223372036854775807)",
+      ],
+      [],
+    ]
+    [
+      wideMessages (tconBuiltin "U64") "9223372036854775808" 2147483648 0 False,
+      wideMessages (tconBuiltin "U64") "9223372036854775808" 2147483648 0 True,
+      wideMessages (tconBuiltin "I64") "9223372036854775808" 2147483648 0 False,
+      wideMessages (tconBuiltin "I64") "9223372036854775808" 2147483648 0 True,
+    ]
+
+test "a wide literal at any other type or an undetermined one is rejected" =
+  expectEqual
+    [
+      ["integer literal 9223372036854775808 does not fit Float"],
+      [
+        "integer literal 9223372036854775808 fits only `U64` or `I64`, and its type here is undetermined",
+      ],
+    ]
+    [
+      wideMessages
+        (tconBuiltin "Float")
+        "9223372036854775808"
+        2147483648
+        0
+        False,
+      wideMessages (varM 7) "9223372036854775808" 2147483648 0 False,
+    ]
+
+test "an expression holding a wide literal parks it for the range check" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  withMain m "main = 9223372036854775808" (e =>
+    let t = infer env e
+    expectEqual
+      ("a", ["9223372036854775808"])
+      (
+        ppMono t,
+        map (w => lexemeOf w) m.mcCells.wideLitRanges.value,
+      ))
+
+-- The lexeme of a parked wide literal.
+lexemeOf : (Mono, String, Int, Int, Bool, Option Loc) -> String
+lexemeOf (_, lx, _, _, _, _) = lx
+
+-- ── spans ─────────────────────────────────────────────────────────────────
+
+arg : Loc
+arg = Loc "t.mdk" 2 3 2 9
+
+-- The span [actual] reads as [expected], by its rendered key (a `Loc` has no `Eq`).
+spanIs : Option Loc -> Option Loc -> Expectation
+spanIs expected actual = expectEqual (locKey expected) (locKey actual)
+
+test "appArgLoc reads the span of the outermost argument through a located head" = expectAll
+  [
+    spanIs (Some arg) (appArgLoc (EApp (EVar "f") (ELoc arg (EVar "x")))),
+    spanIs
+      (Some arg)
+      (appArgLoc (ELoc at (EApp (EVar "f") (ELoc arg (EVar "x"))))),
+    spanIs
+      (Some arg)
+      (appArgLoc
+        (EApp (EApp (EVar "f") (ELoc at (EVar "y"))) (ELoc arg (EVar "x")))),
+    spanIs None (appArgLoc (EVar "f")),
+  ]
+
+test "valueSpanLoc reads the span of the value a binding body ends in" = expectAll
+  [
+    spanIs (Some arg) (valueSpanLoc (ELoc arg (EVar "x"))),
+    spanIs
+      (Some arg)
+      (valueSpanLoc
+        (ELet at False (pvar "a") (EVar "b") (ELoc arg (EVar "x")))),
+    spanIs
+      (Some arg)
+      (valueSpanLoc (EBlock [DoExpr (EVar "y"), DoExpr (ELoc arg (EVar "x"))])),
+  ]
+
+-- ── scopes and rigid variables ────────────────────────────────────────────
+
+test "closeScope returns to the scope that was open before" =
+  let m = scoped ()
+  let outer = captureScope m ()
+  let inner =
+    freshScope
+      (currentScopeStore m.mcGraph ())
+      (Some outer)
+      0
+      "probe"
+      ModuleOwner
+  openScope m inner
+  let during = captureScope m ()
+  closeScope m ()
+  expectEqual (inner, outer) (during, captureScope m ())
+
+test "declareRigidVars records each key once and keeps the earlier ones" =
+  let m = scoped ()
+  declareRigidVars m []
+  let none = omKeys m.mcCells.declaredSigVarIds.value
+  declareRigidVars m ["a", "b"]
+  declareRigidVars m ["b", "c"]
+  expectEqual
+    ([], ["a", "b", "c"])
+    (none, sort (omKeys m.mcCells.declaredSigVarIds.value))
+
+-- ── the clauses of a binding ──────────────────────────────────────────────
+
+-- A module record in a root scope with an effect summary scope open, as a binding body is inferred.
+summarized : Unit -> ModuleCtx
+summarized _ =
+  let m = scoped ()
+  beginEffectSummaryScope m ()
+  m
+
+-- The binding summary of a binding of [arity] parameters, in [m].
+summaryOf : ModuleCtx -> Int -> BindingSummary
+summaryOf m arity = newBindingSummary arity (freshVar m) (freshEffectSummary m)
+
+charPat : Pat
+charPat = PLit (LChar "c")
+
+charE : Expr
+charE = ELit (LChar "c")
+
+trueE : Expr
+trueE = ELit (LBool True)
+
+-- The type and diagnostics inferring [clauses] as one binding of [arity] parameters gives.
+clausesGive : Int -> List (List Pat, Expr) -> (String, List String)
+clausesGive arity clauses =
+  let m = summarized ()
+  let owned = summaryOf m arity
+  let _ = inferMemberClauses (envFor m) None owned clauses
+  (ppMono owned.bsValue, codesOf m)
+
+test "the clauses of a function publish the arrow of their patterns to their result" = expectAll
+  [
+    expectEqual ("a -> <b> a", []) (clausesGive 1 [([pvar "x"], EVar "x")]),
+    expectEqual
+      ("Char -> <a> Bool", [])
+      (clausesGive 1 [([charPat], trueE), ([PWild], ELit (LBool False))]),
+    expectEqual
+      ("a -> b -> <c> (a, b)", [])
+      (clausesGive 2 [([pvar "x", pvar "y"], ETuple [EVar "x", EVar "y"])]),
+  ]
+
+test "a value binding without parameters publishes its body's type" =
+  expectEqual ("Char", []) (clausesGive 0 [([], charE)])
+
+test "clauses that return different types are a type mismatch" =
+  expectEqual
+    ("a -> <b> Char", ["T-TYPE-MISMATCH"])
+    (clausesGive 1 [([PWild], charE), ([pvar "y"], trueE)])
+
+test "clauses whose patterns have different types are a type mismatch" =
+  expectEqual
+    ("Char -> <a> Char", ["T-TYPE-MISMATCH"])
+    (clausesGive 1 [([charPat], charE), ([PLit (LBool True)], charE)])
+
+test "a binding with no clauses infers nothing" =
+  let m = summarized ()
+  let owned = summaryOf m 1
+  expectAll [
+    expectTrue (isEmptyL (inferMemberClauses (envFor m) None owned [])),
+    expectEqual [] (codesOf m),
+  ]
+
+test "a peeled signature type fixes the parameters" =
+  let m = summarized ()
+  let owned = summaryOf m 1
+  let want = TFun intM pureRow boolM
+  let _ = inferMemberClauses (envFor m) (Some want) owned [([charPat], trueE)]
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "a lambda checked against an expected arrow takes the expected parameter type" =
+  let m = summarized ()
+  let want = TFun intM pureRow boolM
+  let (t, _) = inferBindingChecked True (envFor m) (Some want) [pvar "x"] trueE
+  expectEqual ("Int -> Bool", []) (ppMono t, codesOf m)
+
+test "a checked lambda's result is its body's own type, left to its caller to unify" =
+  let m = summarized ()
+  let want = TFun intM pureRow boolM
+  let (t, _) = inferBindingChecked True (envFor m) (Some want) [pvar "x"] charE
+  expectEqual ("Int -> Char", []) (ppMono t, codesOf m)
+
+-- ── signature pre-unification ─────────────────────────────────────────────
+
+-- A scoped member named [name] over a fresh type and a one-parameter binding summary.
+memberOf : ModuleCtx -> String -> ScopedMember
+memberOf m name = ScopedMember {
+  smName = name,
+  smMono = freshVar m (),
+  smOwned = summaryOf m 1,
+  smDeclaredRoots = Ref IdMap.Tip,
+  smDeclaredAuths = Ref IdMap.Tip,
+  smSigned = Ref False,
+  smRecursive = Ref None,
+  smForce = None,
+  smForceBound = Ref None,
+  smScope = ScopeId 0,
+}
+
+-- The variable names the third component of a pre-unified signature binds.
+boundNames : (String, Ty, List (String, Mono)) -> (String, List String)
+boundNames (name, _, tvs) = (name, map fst tvs)
+
+test "a member with a signature is unified with the signature's type and registered by name" =
+  let m = summarized ()
+  withFirstSig "f : a -> Int" (ty =>
+    m.mcCells.sigTyMapRef := omInsert "f" ty m.mcCells.sigTyMapRef.value
+    let member = memberOf m "f"
+    let (regs, tvs) = preunifySigsEx m [("f", ty)] [member]
+    expectEqual
+      (["f"], [("f", ["a"])], True, "a -> Int")
+      (
+        map (r => r.crName) regs,
+        map boundNames tvs,
+        member.smSigned.value,
+        ppMono member.smMono,
+      ))
+
+test "a member without a signature is unified with the type its clauses own" =
+  let m = summarized ()
+  let member = memberOf m "g"
+  let (regs, tvs) = preunifySigsEx m [] [member]
+  expectEqual
+    (True, True, False, ppMono member.smOwned.bsValue)
+    (isEmptyL regs, isEmptyL tvs, member.smSigned.value, ppMono member.smMono)
+
+test "pre-unification takes each member in order and collects their registrations" =
+  let m = summarized ()
+  withFirstSig "f : Int -> Int" (ty =>
+    m.mcCells.sigTyMapRef := omInsert "f" ty m.mcCells.sigTyMapRef.value
+    let (regs, tvs) =
+      preunifySigsEx
+        m
+        [("f", ty)]
+        [memberOf m "f", memberOf m "g", memberOf m "f"]
+    expectEqual
+      (["f", "f"], ["f", "f"])
+      (map (r => r.crName) regs, map fst3 tvs))
+
+-- ── let, written out ──────────────────────────────────────────────────────
+
+-- The type of [e] in a module that declares `shapes`, and the codes pushed.
+givesAt : Expr -> (String, List String)
+givesAt e =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  let t = infer env e
+  (ppMono t, codesOf m)
+
+idLam : Expr
+idLam = ELam [pvar "x"] (EVar "x")
+
+test "an expression let binds its name for the body" =
+  expectEqual ("Char", []) (givesAt (ELet at False (pvar "x") charE (EVar "x")))
+
+test "an expression let generalizes a function, so each use takes its own type" =
+  expectEqual
+    ("(Char, Bool)", [])
+    (givesAt
+      (ELet
+        at
+        False
+        (pvar "i")
+        idLam
+        (ETuple [EApp (EVar "i") charE, EApp (EVar "i") trueE])))
+
+test "an expression let of a tuple pattern binds each component" =
+  expectEqual
+    ("(Bool, Char)", [])
+    (givesAt
+      (ELet
+        at
+        False
+        (PTuple [pvar "a", pvar "b"])
+        (ETuple [charE, trueE])
+        (ETuple [EVar "b", EVar "a"])))
+
+test "an expression let whose pattern has another type than its value is a type mismatch" =
+  expectEqual
+    ("Char", ["T-TYPE-MISMATCH"])
+    (givesAt (ELet at False (PLit (LBool True)) charE charE))
+
+test "an expression let of a refutable pattern warns of the case it misses" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  let t = infer env (ELet at False (PCon "Ta" []) (EVar "Ta") charE)
+  expectEqual ("Char", ["W-NONEXHAUSTIVE"]) (ppMono t, warningCodes m)
+
+test "a recursive expression let binds its function for its own body and for the let's" =
+  expectEqual
+    ("Char", [])
+    (givesAt
+      (ELet
+        at
+        True
+        (pvar "f")
+        (ELam [pvar "n"] (EIf (EVar "n") (EApp (EVar "f") (EVar "n")) charE))
+        (EApp (EVar "f") trueE)))
+
+test "a one-element tuple passed to a one-parameter function leaves no tuple-call hint" =
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  let _ =
+    infer
+      env
+      (ELet at False (pvar "f") idLam (EApp (EVar "f") (ETuple [charE])))
+  expectEqual [] (map helpOf m.mcCells.tupleCallCandidates.value)
+
+test "a tuple passed to a function whose first parameter is a tuple of that size leaves no hint" =
+  expectEqual
+    []
+    (tupleCallHints """
+main =
+  let f (a, b) y = a
+  f ('a', 'b')
+""")
+
+test "the elements of an array literal and the bounds of a range are checked" = expectAll
+  [
+    says "main = [|'a', True|]" "Array Char" ["type mismatch: Char vs Bool"],
+    says "main = ['c'..3]" "List Int" ["type mismatch: Char vs Int"],
+  ]
+
+-- ── what the wide-literal check says ──────────────────────────────────────
+
+-- The help of a diagnostic.
+tcHelp : TcDiag -> Option String
+tcHelp (TcDiag _ _ _ _ h _) = h
+
+-- The diagnostics checkWideLiterals pushes for one literal, as (message, help).
+wideDiags : Mono -> String -> Int -> Int -> Bool -> List (String, Option String)
+wideDiags t lx hi lo negated =
+  let m = scoped ()
+  checkWideLiterals m [(t, lx, hi, lo, negated, None)]
+  map (d => (tcMsg d, tcHelp d)) (reverse (wAll m.mcCells.typeErrors))
+
+test "a literal just above 2^62 and one just above the I64 negative bound are named with their type" =
+  expectEqual
+    [
+      [
+        (
+          "integer literal 4611686018427387905 does not fit Int",
+          Some "only a `U64` or an `I64` holds a literal above 2^62",
+        ),
+      ],
+      [
+        (
+          "integer literal -9223372036854775809 does not fit I64 (-9223372036854775808..9223372036854775807)",
+          None,
+        ),
+      ],
+    ]
+    [
+      wideDiags intM "4611686018427387905" 1073741824 1 False,
+      wideDiags (tconBuiltin "I64") "9223372036854775809" 2147483648 1 True,
+    ]
+
+test "a wide literal at an undetermined type is told how to annotate it" =
+  expectEqual
+    [
+      (
+        "integer literal 9223372036854775808 fits only `U64` or `I64`, and its type here is undetermined",
+        Some
+          "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(9223372036854775808 : U64)`",
+      ),
+    ]
+    (wideDiags (varM 7) "9223372036854775808" 2147483648 0 False)
+
+-- ── binders that share a location ─────────────────────────────────────────
+
+-- A module record whose current location is [loc].
+atLoc : ModuleCtx -> Loc -> ModuleCtx
+atLoc m loc = { m | mcLoc = Some loc }
+
+binderArm : String -> Arm
+binderArm c = Arm (PCon c []) [] (EVar "<binder>")
+
+test "refutable binders at one location warn once, and at two locations warn twice" =
+  let one = scopedWith shapes
+  let _ = envWithData one shapes
+  checkMatchChecks (atLoc one at) tyT [binderArm "Ta"]
+  checkMatchChecks (atLoc one at) tyT [binderArm "Tb"]
+  let two = scopedWith shapes
+  let _ = envWithData two shapes
+  checkMatchChecks (atLoc two at) tyT [binderArm "Ta"]
+  checkMatchChecks (atLoc two arg) tyT [binderArm "Tb"]
+  expectEqual
+    (["W-NONEXHAUSTIVE"], ["W-NONEXHAUSTIVE", "W-NONEXHAUSTIVE"])
+    (warningCodes one, warningCodes two)
+
+-- ── pre-unification of several members ────────────────────────────────────
+
+test "pre-unification keeps the members in order, one registration per signed member" =
+  let m = summarized ()
+  withFirstSig "f : Int -> Int" (fty => withFirstSig "h : Bool -> Bool" (hty =>
+    let sigs = omInsert "h" hty (omInsert "f" fty omEmpty)
+    m.mcCells.sigTyMapRef := sigs
+    let (regs, tvs) =
+      preunifySigsEx
+        m
+        [("f", fty), ("h", hty)]
+        [memberOf m "f", memberOf m "g", memberOf m "h"]
+    expectEqual
+      (["f", "h"], ["f", "h"])
+      (map (r => r.crName) regs, map fst3 tvs)))
+
+-- ── applications of an importer shadow ────────────────────────────────────
+
+-- The type [e] infers to and the codes pushed, in a reader of a module whose `Sizeable`
+-- method `size : a -> Int` has an impl at Int, and which also imports a standalone
+-- `size : Bool -> Bool`.
+shadowedAt : Expr -> (String, List String)
+shadowedAt e =
+  let m = inRootScope (readerOfLib ())
+  let env = shadowEnvOf sizeScheme (monoScheme (TFun boolM pureRow boolM)) m
+  let t = infer env e
+  (ppMono t, codesOf m)
+
+test "an application of a shadowed name at a receiver a live impl answers is the method's" =
+  expectEqual ("Int", []) (shadowedAt (EApp (EVar "size") (ELit (LInt 3))))
+
+test "an application of a shadowed name at a receiver no impl answers is the standalone's" =
+  expectEqual ("Bool", []) (shadowedAt (EApp (EVar "size") trueE))
+
+test "an application of a shadowed name at a receiver no impl answers is checked against the standalone's parameter" =
+  expectEqual
+    ("Bool", ["T-TYPE-MISMATCH"])
+    (shadowedAt (EApp (EVar "size") charE))
+
+test "an application of a shadowed name at an unknown receiver grounds it at the standalone's parameter" =
+  expectEqual
+    ("Bool -> Bool", [])
+    (shadowedAt (ELam [pvar "x"] (EApp (EVar "size") (EVar "x"))))
+
+-- ── marked heads ──────────────────────────────────────────────────────────
+
+-- What applying the marked occurrence of `size` to an argument gave: the type, the codes,
+-- the arity stamped on the occurrence's cell and whether a route was stamped on it.
+data Stamped =
+  Stamped String (List String) (Option Int) Bool
+  deriving (Eq, Debug)
+
+isRouted : Route -> Bool
+isRouted RNone = False
+isRouted _ = True
+
+-- [e], applied in [env] over [m], read back with the cell of the occurrence `methodOccurrence`
+-- minted.
+stampedBy : ModuleCtx -> TcEnv -> Expr -> Stamped
+stampedBy m env e =
+  let t = infer env e
+  let cell = methodCellOf m.mcGraph (EvId "probe" 0)
+  Stamped (ppMono t) (codesOf m) cell.ecArity.value (isRouted cell.ecTag.value)
+
+-- The marked occurrence of an importer shadow `size` (method `a -> Int`, standalone
+-- [standalone]) applied to [arg].
+importerMarked : Mono -> Expr -> Stamped
+importerMarked standalone arg =
+  let m = inRootScope (readerOfLib ())
+  let env = shadowEnvOf sizeScheme (monoScheme standalone) m
+  stampedBy m env (EApp (methodOccurrence m "size") arg)
+
+-- The marked occurrence of a definer shadow `size`, the module's own `m__size` of type
+-- [standalone] beside the method, applied to [arg].
+definerMarked : Mono -> Expr -> Stamped
+definerMarked standalone arg =
+  let m = inRootScope (readerOfLib ())
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  let env = extendVars (envFor m) [
+    ("size", sizeScheme),
+    ("m__size", monoScheme standalone),
+  ]
+  let head = methodOccurrence m "size"
+  let cell = methodCellOf m.mcGraph (EvId "probe" 0)
+  cell.ecTag := RLocal "m__size" []
+  stampedBy m env (EApp head arg)
+
+boolToBool : Mono
+boolToBool = TFun boolM pureRow boolM
+
+boolToBoolToBool : Mono
+boolToBoolToBool = TFun boolM pureRow (TFun boolM pureRow boolM)
+
+test "a marked importer shadow at a receiver no impl answers is typed and stamped as the standalone" = expectAll
+  [
+    expectEqual
+      (Stamped "Bool" [] (Some 1) True)
+      (importerMarked boolToBool trueE),
+    expectEqual
+      (Stamped "Bool -> Bool" [] (Some 2) True)
+      (importerMarked boolToBoolToBool trueE),
+  ]
+
+test "a marked importer shadow at a receiver a live impl answers keeps the method's type and route" =
+  expectEqual
+    (Stamped "Int" [] (Some 1) False)
+    (importerMarked boolToBool (ELit (LInt 3)))
+
+test "a definer shadow is the standalone even at a receiver a live impl answers" = expectAll
+  [
+    expectEqual
+      (Stamped "Bool" [] (Some 1) True)
+      (definerMarked boolToBool trueE),
+    expectEqual
+      (Stamped "Bool" ["T-TYPE-MISMATCH"] (Some 1) True)
+      (definerMarked boolToBool (ELit (LInt 3))),
+    expectEqual
+      (Stamped "Bool -> Bool" [] (Some 2) True)
+      (definerMarked boolToBoolToBool trueE),
+  ]
+
+test "a definer shadow at an unknown receiver grounds it at the standalone's parameter" =
+  let m = inRootScope (readerOfLib ())
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  let env = extendVars (envFor m) [
+    ("size", sizeScheme),
+    ("m__size", monoScheme boolToBool),
+  ]
+  let head = methodOccurrence m "size"
+  let cell = methodCellOf m.mcGraph (EvId "probe" 0)
+  cell.ecTag := RLocal "m__size" []
+  let t = infer env (ELam [pvar "x"] (EApp head (EVar "x")))
+  expectEqual ("Bool -> Bool", []) (ppMono t, codesOf m)
+
+test "an application of a shadowed name at an unknown receiver the standalone cannot ground keeps the method's type" =
+  let m = inRootScope (readerOfLib ())
+  let env =
+    shadowEnvOf
+      sizeScheme
+      (Forall [2] [] [] [] pureRow (TFun (varM 2) pureRow boolM))
+      m
+  let t = infer env (ELam [pvar "x"] (EApp (EVar "size") (EVar "x")))
+  expectEqual ("a -> Int", []) (ppMono t, codesOf m)
+
+-- ── spines of an importer shadow ──────────────────────────────────────────
+
+-- A method `size : Int -> a -> Int` whose receiver is its second parameter, and an imported
+-- standalone `size : Int -> Bool -> Bool`.
+spineMethod : Scheme
+spineMethod =
+  Forall [1] [] [] [] pureRow (TFun intM pureRow (TFun (varM 1) pureRow intM))
+
+spineStandalone : Mono
+spineStandalone = TFun intM pureRow (TFun boolM pureRow boolM)
+
+spinedWith : Scheme -> Expr -> (String, List String)
+spinedWith standalone e =
+  let m = inRootScope (readerOfLib ())
+  m.mcCells.methodDispatchIdxByIdRef := [
+    (
+      (IfaceRef { irName = "Sizeable", irOrigin = OriginModule "lib" }, "size"),
+      1,
+    ),
+  ]
+  let env = shadowEnvOf spineMethod standalone m
+  let t = infer env e
+  (ppMono t, codesOf m)
+
+spined : Expr -> (String, List String)
+spined e = spinedWith (monoScheme spineStandalone) e
+
+test "a shadowed name applied to the arguments before its receiver is typed as the standalone where no impl answers the receiver" = expectAll
+  [
+    expectEqual
+      ("Bool", [])
+      (spined (EApp (EApp (EVar "size") (ELit (LInt 1))) trueE)),
+    expectEqual
+      ("Bool", ["T-TYPE-MISMATCH"])
+      (spined (EApp (EApp (EVar "size") trueE) trueE)),
+  ]
+
+test "a shadowed name applied to the arguments before its receiver keeps the method where a live impl answers the receiver" = expectAll
+  [
+    expectEqual
+      ("Int", [])
+      (spined (EApp (EApp (EVar "size") (ELit (LInt 1))) (ELit (LInt 2)))),
+    expectEqual
+      ("Int", ["T-TYPE-MISMATCH"])
+      (spined (EApp (EApp (EVar "size") trueE) (ELit (LInt 2)))),
+  ]
+
+test "a shadowed name whose receiver is an unknown after its other arguments grounds it at the standalone's parameter" =
+  expectEqual
+    ("Bool -> Bool", [])
+    (spined
+      (ELam [pvar "y"] (EApp (EApp (EVar "size") (ELit (LInt 1))) (EVar "y"))))
+
+-- ── properties ────────────────────────────────────────────────────────────
+
+-- A chain of one-parameter lambdas applied to one literal each: the name and kind of each
+-- binder, and the names its body's tuple uses.  A name may repeat, so a later binder shadows an
+-- earlier one.
+data ChainCase = ChainCase (List (Int, Int)) (List Int)
+
+impl Arbitrary ChainCase where
+  arbitrary () =
+    let binders = genBinders (randomInt 2 4)
+    ChainCase binders (genUses (nameSet binders) (randomInt 2 3))
+  shrink (ChainCase binders uses) = match binders
+    _ :: rest if listLen rest >= 2 => [ChainCase rest (filterUses rest uses)]
+    _ => []
+
+genBinders : Int -> <Rand> List (Int, Int)
+genBinders n
+  | n <= 0 = []
+  | otherwise = (randomInt 0 1, randomInt 0 3) :: genBinders (n - 1)
+
+-- The distinct names the binders use.
+nameSet : List (Int, Int) -> List Int
+nameSet binders = sort (nub (map fst binders))
+
+genUses : List Int -> Int -> <Rand> List Int
+genUses names n
+  | n <= 0 = []
+  | otherwise =
+    nthInt (randomInt 0 (listLen names - 1)) names :: genUses names (n - 1)
+
+filterUses : List (Int, Int) -> List Int -> List Int
+filterUses binders uses = filter (u => any (== u) (nameSet binders)) uses
+
+nameOf : Int -> String
+nameOf 0 = "a"
+nameOf _ = "b"
+
+-- The program of a case: the lambdas, their tuple of uses, the literals applied.
+chainSource : ChainCase -> String
+chainSource (ChainCase binders uses) =
+  let names = joinWith " => " (map (b => nameOf (fst b)) binders)
+  let tuple = joinWith ", " (map nameOf uses)
+  let args = joinWith " " (map (b => kindLit (snd b)) binders)
+  "main = (\{names} => (\{tuple})) \{args}"
+
+-- The kind a use of name [n] has: that of the LAST binder of the name, as its innermost.
+innermostKind : List (Int, Int) -> Int -> Int
+innermostKind binders n = match filter (b => fst b == n) (reverse binders)
+  (_, k) :: _ => k
+  [] => 3
+
+-- Law: every use in the body of a chain of lambdas has the type of the literal its innermost
+-- binder of that name was applied to.  Precondition (`shadowedUse`): some used name is bound
+-- twice, with different kinds, so the innermost binder differs from an outer one.
+prop "a name in a lambda chain means its innermost binder" (c : ChainCase) =
+  let (ChainCase binders uses) = c
+  let expected =
+    "("
+      ++ joinWith ", " (map (u => kindName (innermostKind binders u)) uses)
+      ++ ")"
+  let m = scopedWith shapes
+  let env = envWithData m shapes
+  match typeOfMain m env (chainSource c)
+    Some t => t == expected
+    None => False
+
+-- Whether a case has a used name bound twice at different kinds.
+shadowedUse : ChainCase -> Bool
+shadowedUse (ChainCase binders uses) =
+  any
+    (u =>
+      let ks = map snd (filter (b => fst b == u) binders)
+      listLen (nub ks) >= 2)
+    uses
+
+-- The type of `main` in [src], rendered, or `None` when the source has no `main`.
+typeOfMain : ModuleCtx -> TcEnv -> String -> Option String
+typeOfMain m env src = map (e => ppMono (infer env e)) (mainOf m src)
+
+-- A lambda of several parameters applied to one literal each: the kind of each argument, and
+-- the parameters its body's tuple reads, by position.
+data SpineCase = SpineCase (List Int) (List Int)
+
+impl Arbitrary SpineCase where
+  arbitrary () =
+    let n = randomInt 2 4
+    SpineCase (genKinds n) (genIndices n (randomInt 2 3))
+  shrink (SpineCase kinds reads) = match kinds
+    _ :: rest if listLen rest >= 2 =>
+      [SpineCase rest (map (i => i % listLen rest) reads)]
+    _ => []
+
+genIndices : Int -> Int -> <Rand> List Int
+genIndices n k
+  | k <= 0 = []
+  | otherwise = randomInt 0 (n - 1) :: genIndices n (k - 1)
+
+paramName : Int -> String
+paramName i = "p" ++ intToString i
+
+spineSource : SpineCase -> String
+spineSource (SpineCase kinds reads) =
+  let params = joinWith " " (map paramName (range 0 (listLen kinds)))
+  let tuple = joinWith ", " (map paramName reads)
+  let args = joinWith " " (map kindLit kinds)
+  "main = (\{params} => (\{tuple})) \{args}"
+
+-- Law: the type of a lambda applied to arguments is the tuple of the kinds of the arguments
+-- its body reads, whatever order it reads them in.  Precondition (`readsOutOfOrder`): the
+-- body reads parameters of two different kinds, and not in parameter order, so an argument
+-- flowing into the wrong parameter changes the type.
+prop "an argument flows into the parameter at its position" (c : SpineCase) =
+  let (SpineCase kinds reads) = c
+  let expected =
+    "(" ++ joinWith ", " (map (i => kindName (nthInt i kinds)) reads) ++ ")"
+  let m = scoped ()
+  match typeOfMain m (envWithData m shapes) (spineSource c)
+    Some t => t == expected
+    None => False
+
+-- Whether a case reads two parameters of different kinds, the later one first.
+readsOutOfOrder : SpineCase -> Bool
+readsOutOfOrder (SpineCase kinds reads) =
+  any
+    (pair =>
+      fst pair > snd pair && nthInt (fst pair) kinds /= nthInt (snd pair) kinds)
+    (zip reads (drop 1 reads))
+
+test "a chain that rebinds a used name at another kind is a shadowed use, and means the rebinding" =
+  let rebinding = ChainCase [(0, 0), (0, 1)] [0, 0]
+  let distinct = ChainCase [(0, 0), (1, 1)] [0, 1]
+  let sameKind = ChainCase [(0, 0), (0, 0)] [0, 0]
+  let m = scoped ()
+  expectEqual
+    ((True, False, False), Some "(Bool, Bool)")
+    (
+      (shadowedUse rebinding, shadowedUse distinct, shadowedUse sameKind),
+      typeOfMain m (envWithData m shapes) (chainSource rebinding),
+    )
+
+test "a body that reads a later parameter before an earlier one of another kind reads out of order" =
+  let swapped = SpineCase [0, 1, 2] [1, 0]
+  let inOrder = SpineCase [0, 1, 2] [0, 1]
+  let sameKind = SpineCase [0, 0, 2] [1, 0]
+  let m = scoped ()
+  expectEqual
+    ((True, False, False), Some "(Bool, Char)")
+    (
+      (
+        readsOutOfOrder swapped,
+        readsOutOfOrder inOrder,
+        readsOutOfOrder sameKind,
+      ),
+      typeOfMain m (envWithData m shapes) (spineSource swapped),
+    )
+
+test "a shadowed name whose receiver the standalone cannot ground keeps the method's type" =
+  expectEqual
+    ("a -> Int", [])
+    (spinedWith
+      (Forall
+        [2]
+        []
+        []
+        []
+        pureRow
+        (TFun intM pureRow (TFun (varM 2) pureRow boolM)))
+      (ELam [pvar "y"] (EApp (EApp (EVar "size") (ELit (LInt 1))) (EVar "y"))))

@@ -83,6 +83,7 @@ import types.tc_solve.{goalKindName}
 import types.tc_state.{probeGraphCtx, wAll}
 import types.tc_test_support.{
   at,
+  sizeScheme,
   boolM,
   fst3,
   ifaceOf,
@@ -658,10 +659,6 @@ test "a name with no standalone and no routed symbol has no standalone scheme" =
       (standaloneSchemeFor (envFor m) "size" ""))
 
 -- ── the obligations of a standalone shadow ────────────────────────────────
-
--- The scheme of the standalone `size : a -> Int`, quantified over scheme id 1.
-sizeScheme : Scheme
-sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
 
 -- A reader of `lib` whose scheme-obligation table holds one entry for `size`, the
 -- obligation `Sizeable a` over scheme id 1.
