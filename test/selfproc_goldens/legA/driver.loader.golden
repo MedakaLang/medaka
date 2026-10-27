@@ -43,6 +43,7 @@ loadProgramE : String -> List String -> <IO> Result LoadError (List (String, Lis
 loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCached : Ref (Map String (List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE : Ref (Map String (List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+loadProgramFilesLocatedCachedSourcesE : Ref (Map String (List Decl)) -> (String -> Option String) -> String -> List String -> <IO> (Result LoadError (List (String, String, List Decl)), Map String String)
 loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadedPairs : List (String, String, List Decl) -> List (String, String)
 loadedSourceOf : String -> Option String
@@ -57,13 +58,13 @@ noteLoadedSource : String -> String -> Unit
 parentDir : String -> String
 parentGo : String -> Int -> String
 parseCachedLocated : Ref (Map String (List Decl)) -> String -> Result ParseError (List Decl)
-parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
+parsedModule : (String -> String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
 projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 rawValAfterEq : String -> String
 readDeps : String -> <IO> List (String, String)
 readFileNotUtf8Suffix : String
 readForeignLibs : String -> <IO> List (String, String)
-readModuleProgF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> String -> <IO> Result LoadError (String, String, List Decl)
+readModuleProgF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> String -> <IO> Result LoadError (String, String, List Decl)
 readSource : String -> <FileRead> Result String String
 readSourceE : String -> <FileRead> Result (Option String) String
 relUnderRoots : List String -> String -> String
@@ -92,5 +93,5 @@ unknownModuleIdOf : String -> Option String
 unquote : String -> String
 valAfterEq : String -> String
 valEqGo : String -> Int -> Int -> String
-visitModF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> String -> String -> <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> List String -> <IO> Result LoadError (List String, List (String, String, List Decl))
+visitModF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> String -> String -> <IO> Result LoadError (List String, List (String, String, List Decl))
+visitModsF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> List String -> <IO> Result LoadError (List String, List (String, String, List Decl))

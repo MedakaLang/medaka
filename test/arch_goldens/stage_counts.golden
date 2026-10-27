@@ -58,7 +58,8 @@ test_probe.exhaust.oracle	21
 test_probe.lex.pairs	14
 test_probe.lex.tokenize	2
 test_probe.lint.comments	1
-test_probe.load.located	2
+test_probe.load.cached	1
+test_probe.load.located	1
 test_probe.parse.prescan	13
 test_probe.read.source	13
 test_probe.typecheck.drive	2
@@ -254,7 +255,7 @@ test_docimp_eval.exhaust.guards	2
 test_docimp_eval.exhaust.oracle	6
 test_docimp_eval.lex.pairs	4
 test_docimp_eval.lint.comments	1
-test_docimp_eval.load.located	1
+test_docimp_eval.load.cached	1
 test_docimp_eval.parse.prescan	4
 test_docimp_eval.read.source	3
 test_docimp_eval.resolve	2
@@ -287,7 +288,8 @@ test_tonly_native.exhaust.oracle	13
 test_tonly_native.lex.pairs	13
 test_tonly_native.lex.tokenize	2
 test_tonly_native.lint.comments	1
-test_tonly_native.load.located	2
+test_tonly_native.load.cached	1
+test_tonly_native.load.located	1
 test_tonly_native.parse.prescan	12
 test_tonly_native.read.source	12
 test_tonly_native.typecheck.drive	1
@@ -311,7 +313,8 @@ test_bytebuilder.exhaust.oracle	51
 test_bytebuilder.lex.pairs	100
 test_bytebuilder.lex.tokenize	2
 test_bytebuilder.lint.comments	1
-test_bytebuilder.load.located	2
+test_bytebuilder.load.cached	1
+test_bytebuilder.load.located	1
 test_bytebuilder.parse.prescan	99
 test_bytebuilder.read.source	25
 test_bytebuilder.resolve	11

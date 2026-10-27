@@ -622,7 +622,7 @@ scanAt src len pos depth id c
 skipLineComment : Array Char -> Int -> Int -> Int
 skipLineComment src len p
   | p >= len = p
-  | isNL (at src p) = p
+  | isNL (at src p) || isCR (at src p) = p
   | otherwise = skipLineComment src len (p + 1)
 
 -- Emit a terminal lexer-error token instead of panicking.  The error carries the
@@ -3130,7 +3130,7 @@ offsetToLineCol : String -> Int -> (Int, Int)
 offsetToLineCol s off = posLineColFrom (stringToChars s) off 0 1 0
 
 -- Precompute the sorted array of line-start char offsets for a source string:
--- offset 0, plus the offset just after every '\n'.  One O(N) scan.  Fed to
+-- offset 0, plus the offset after each LF, CRLF, or lone CR. One O(N) scan. Fed to
 -- `offsetToLineColFast` so the located-parse pass can resolve each offset in
 -- O(log N) instead of re-walking from 0 (which made `locOfSpan` O(N²)).
 export
@@ -3143,14 +3143,18 @@ lineStartsOf s =
 lineStartsGo : Array Char -> Int -> Int -> List Int
 lineStartsGo src len i
   | i >= len = []
+  | arrayGetUnsafe i src == '\r'
+    && i + 1 < len
+    && arrayGetUnsafe (i + 1) src == '\n' =
+    i + 2 :: lineStartsGo src len (i + 2)
+  | arrayGetUnsafe i src == '\r' = i + 1 :: lineStartsGo src len (i + 1)
   | arrayGetUnsafe i src == '\n' = i + 1 :: lineStartsGo src len (i + 1)
   | otherwise = lineStartsGo src len (i + 1)
 
 -- Resolve a 0-based char offset to a (1-based line, 0-based column) pair using a
 -- precomputed line-starts array (`lineStartsOf`), by binary search.  This is
--- byte-identical to `offsetToLineCol` for every offset: line = 1 + (# newlines
--- strictly before `off`); col = off - (start of that line).  The '\n' AT `off`
--- is NOT counted (mirrors `posLineColFrom`'s `p >= target` guard checked first).
+-- The line is one plus the index of the last start at or before `off`;
+-- the column is `off` minus that start.
 export
 offsetToLineColFast : Array Int -> Int -> (Int, Int)
 offsetToLineColFast lineStarts off =
@@ -3182,13 +3186,20 @@ offsetsToLinesGo src [] p line = []
 offsetsToLinesGo src (off :: rest) p line = match advanceLine src off p line
   (line2, p2) => line2 :: offsetsToLinesGo src rest p2 line2
 
+isLineBreakAt : Array Char -> Int -> Bool
+isLineBreakAt src p =
+  p < arrayLength src
+    && (arrayGetUnsafe p src == '\n'
+      || arrayGetUnsafe p src == '\r'
+        && (p + 1 >= arrayLength src || arrayGetUnsafe (p + 1) src /= '\n'))
+
 -- Walk forward from char `p` (1-based `line`) to `target`, counting newlines.
 -- Offsets arrive in non-decreasing order so each call resumes from the last.
 advanceLine : Array Char -> Int -> Int -> Int -> (Int, Int)
 advanceLine src target p line
   | p >= target = (line, p)
   | p >= arrayLength src = (line, p)
-  | arrayGetUnsafe p src == '\n' = advanceLine src target (p + 1) (line + 1)
+  | isLineBreakAt src p = advanceLine src target (p + 1) (line + 1)
   | otherwise = advanceLine src target (p + 1) line
 
 -- ── Comment side channel ─────────────────────────────────────────────────
@@ -3220,7 +3231,7 @@ commentText (Comment _ _ t) = t
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
 posLineColFrom src target p line lineStart
   | p >= target = (line, target - lineStart)
-  | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
+  | isLineBreakAt src p = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
 -- Turn each `RComment startPos endPos` into a `Comment line col text`.

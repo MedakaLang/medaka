@@ -1,0 +1,80 @@
+import tools.lsp_positions.{locToLspRange, lspPositionToOffset}
+import support.source_index.{indexSource}
+import frontend.ast.{Loc(..)}
+import frontend.lexer.{
+  lineStartsOf, offsetToLineCol, offsetToLineColFast, collectComments,
+  commentLine, commentCol
+}
+import frontend.parser.{parseWithPositions, positionsDecls, declPosLine}
+import json.{Json(..), jObject}
+import test.{expectEach, expectEqual, expectNone}
+
+test "LSP position boundaries" =
+  let index = indexSource "a😀\r\nb\rc"
+  let positions =
+    map
+      ((label, line, col, expected) => (
+        label,
+        expectEqual
+          expected
+          (lspPositionToOffset
+            index
+            (jObject [
+              ("line", JInt line),
+              ("character", JInt col),
+            ])),
+      ))
+      [
+        ("astral", 0, 3, Some 2),
+        ("surrogate midpoint", 0, 2, None),
+        ("CRLF", 1, 0, Some 4),
+        ("lone CR", 2, 0, Some 6),
+        ("EOF", 2, 1, Some 7),
+        ("invalid line", 3, 0, None),
+        ("invalid column", 0, 4, None),
+      ]
+  expectEach
+    (positions
+      ++ [
+        ("missing field", expectNone (lspPositionToOffset index (jObject []))),
+        (
+          "range",
+          expectEqual
+            (Some
+              (jObject [
+                ("start", jObject [("line", JInt 0), ("character", JInt 1)]),
+                ("end", jObject [("line", JInt 0), ("character", JInt 3)]),
+              ]))
+            (locToLspRange index (Loc "" 1 1 1 2)),
+        ),
+        ("invalid range", expectNone (locToLspRange index (Loc "" 1 0 1 4))),
+      ])
+
+test "parsed locations follow CRLF and lone CR" =
+  let src = "x = 1\r\n-- c\rmain = x\n"
+  let (_, positions) = parseWithPositions src
+  let comments = collectComments src
+  expectEach [
+    ("slow projection", expectEqual (3, 0) (offsetToLineCol src 12)),
+    (
+      "indexed projection",
+      expectEqual (3, 0) (offsetToLineColFast (lineStartsOf src) 12),
+    ),
+    (
+      "declaration lines",
+      expectEqual [1, 3] (map declPosLine (positionsDecls positions)),
+    ),
+    ("comment line", expectEqual [2] (map commentLine comments)),
+    ("comment column", expectEqual [0] (map commentCol comments)),
+    ("LF comment", expectEqual [1, 3] (declLines """x = 1
+-- c
+main = x
+""")),
+    (
+      "CRLF comment",
+      expectEqual [1, 3] (declLines "x = 1\r\n-- c\r\nmain = x\n"),
+    ),
+  ]
+
+declLines : String -> List Int
+declLines src = map declPosLine (positionsDecls (snd (parseWithPositions src)))

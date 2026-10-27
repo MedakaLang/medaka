@@ -19,6 +19,31 @@ the claims below still holds; **their symbol names, file paths and line numbers 
 not**, and are left as written rather than retro-edited. Re-derive with
 `grep -rn 'firstTyLoc\|orElseLoc' compiler/frontend/ast.mdk`.
 
+## Editor coordinate contract
+
+The internal `SourceIndex` indexes codepoint offsets and uses one-based lines
+and zero-based codepoint columns for `Loc` conversion. LSP and MCP positions
+use zero-based lines and UTF-16 code-unit columns. Astral characters occupy two
+units; combining characters and tabs are not display-width expanded. LF,
+CRLF, and lone CR end lines. Conversion accepts valid boundaries through EOF,
+rejects positions inside a surrogate pair and outside a line, and treats the
+interior of CRLF as invalid. Output ranges use valid source boundaries.
+Incoming positions use strict validation. When an existing diagnostic producer
+supplies an out-of-bounds endpoint, `clampSourcePositionToOffset` clamps its
+one-based source line and zero-based codepoint column to a valid boundary before
+converting it to a protocol position; it reuses the same line arrays.
+
+The immutable index holds line starts, line ends and UTF-16 prefix widths.
+Construction scans the source once; endpoint lookup uses binary search. It is
+owned by the request and does not retain a parser context or session state.
+Project diagnostic publication resolves each destination against the open
+buffer, then the exact source captured by that analysis, then disk. The loader
+returns an invocation-owned immutable map of sources it actually parsed, even
+when loading fails; its long-lived last-good source cache is not provenance.
+If no source is available, a nonempty diagnostic retains its message and uses
+an explicitly imprecise zero-width range at 0:0. Only an empty diagnostic
+bucket clears a client's prior diagnostics.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;

@@ -102,6 +102,7 @@ isElseTok : Token -> Bool
 isExpMarker : Char -> Bool
 isExprEnd : Char -> Bool
 isFloatAt : Array Char -> Int -> Int -> Bool
+isLineBreakAt : Array Char -> Int -> Bool
 isMalformedExpDot : Array Char -> Int -> Int -> Bool
 isMalformedLeadingDot : Array Char -> Int -> Int -> Bool
 isMalformedRadixPrefix : Array Char -> Int -> Int -> Bool
