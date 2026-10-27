@@ -571,8 +571,8 @@ A refutable pattern in a `let`, a lambda parameter, or a `do`/`defer` bind gets
 `W-NONEXHAUSTIVE` from `check`, the same verdict a `match` gets, and traps at run
 time if the value misses it. `if let`, guard qualifiers (`pat <- e`) and match arms
 are where refutation is intended, so they never warn for being refutable.
-Irrefutable binders (a tuple, a single-constructor data, `_`, a variable, `()`)
-never warn.
+Irrefutable binders (a tuple of irrefutable patterns, a single-constructor data,
+`_`, a variable, `()`) never warn.
 
 ## Control flow
 

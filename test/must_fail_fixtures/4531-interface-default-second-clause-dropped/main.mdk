@@ -1,0 +1,12 @@
+interface Get a where
+  get : a -> Option Int -> Int
+  get _ (Some x) = x
+  get _ None = 100
+
+data T = T
+
+impl Get T where
+
+main =
+  println (get T (Some 1))
+  println (get T None)

@@ -183,6 +183,11 @@ trapSiteRows = [
   ("let_in_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
   ("do_let_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
   (
+    "do_bind_pattern_refuted",
+    "3:12",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
     "guard_falls_through",
     "2:0",
     "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
@@ -253,9 +258,11 @@ test "trap_site: `medaka run` names the start of the trapping expression" =
 -- The fixtures whose trap a built binary still prints unlocated.  Reading
 -- `c[i]` on a constrained parameter calls the `Index` impl through its
 -- dictionary, and the impl passes its out-of-range error no site; a native
--- build locates only an `xs[i]` whose impl is known where it is written.
+-- build locates only an `xs[i]` whose impl is known where it is written.  A
+-- `do` bind that misses its pattern traps in the match it lowers to, which a
+-- native build does not locate.
 nativeUnlocatedStems : List String
-nativeUnlocatedStems = ["index_through_dictionary"]
+nativeUnlocatedStems = ["index_through_dictionary", "do_bind_pattern_refuted"]
 
 -- `medaka build` of [entry], run once: (exit code, stdout, stderr), compared
 -- with `medaka run`'s exit code and stdout and [line] as the whole stderr.
@@ -314,7 +321,7 @@ test "trap_site: a built binary reports the trap where `medaka run` does" = inSc
 
 -- The unlocated rows print `medaka run`'s line without its location.  A
 -- change that locates one moves it out of `nativeUnlocatedStems`.
-test "trap_site: a read through a dictionary is unlocated in a built binary" =
+test "trap_site: a read through a dictionary or a missed do bind is unlocated in a built binary" =
   let rows = filter ((n, _, _) => elem n nativeUnlocatedStems) trapSiteRows
   inScratch "unlocated" (scratch =>
     expectEach

@@ -874,6 +874,18 @@ nonExhaustiveMatchWarning : String
 nonExhaustiveMatchWarning =
   "Warning: non-exhaustive match; not every case is covered"
 
+-- The warning for a `let` pattern, lambda parameter or `do` bind that can fail.  There is no
+-- match to add an arm to, so the help sends the user to a construct that can handle the case.
+export
+binderNonExhaustiveMsg : Option TabKey -> String -> (String, String)
+binderNonExhaustiveMsg ty witness =
+  let hint =
+    "handle `\{witness}` with a `match` or an `if let` instead of binding the pattern directly"
+  (
+    "Warning: refutable binding pattern\{tyOfMsg ty}: missing `\{witness}`; \{hint}",
+    hint,
+  )
+
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
 -- An arm is unreachable when an EARLIER *unguarded* arm already covers its pattern
 -- (the detection is `patUnreachable` in `frontend.exhaust`; this module holds the

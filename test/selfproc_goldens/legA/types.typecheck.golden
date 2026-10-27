@@ -79,6 +79,7 @@ beginsWithSpan : Option Loc -> Loc -> Bool
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
 bindTyName : List (String, String) -> String -> String -> Option (List (String, String))
+binderMarker : String
 bindingDeclaredAt : TcEnv -> String -> MethodTrackedInstantiation -> Option CDeclared
 bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
 bindsName : Option (Map String Unit) -> String -> Bool
@@ -770,6 +771,7 @@ instantiatedMethodPredicateArgs : GraphCtx -> PredicateSlotArgs -> List (Int, Mo
 interpEVars : InterpPart -> List String
 ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
 isAliasMarker : Route -> Bool
+isBinderArms : List Arm -> Bool
 isConPat : Pat -> Bool
 isCtorAppSpine : TcEnv -> Expr -> Bool
 isDeclaredCtorHead : TcEnv -> String -> Bool
@@ -942,7 +944,7 @@ nestedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> List UOb
 nestedRequireGoalsGo : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 nestedRequireGoalsOnce : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 noDictHook : String -> EvId -> Unit
-nonExhaustiveMsg : ModuleCtx -> Mono -> List (List Pat) -> (String, Option String)
+nonExhaustiveMsg : ModuleCtx -> Mono -> List (List Pat) -> Bool -> (String, Option String)
 nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
 notAnOpSite : EvId -> a
 noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
@@ -1376,6 +1378,7 @@ vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
 vecOblOfPred : ModuleCtx -> Bool -> List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 verdictFinding : String -> Bool -> TcDiag -> DrainFinding
 visibleFieldDecls : ModuleCtx -> String -> List String -> List (String, RecordInfo)
+warnedAt : Option Loc -> TcDiag -> Bool
 wholeDomainExpr : GrantState -> Expr -> Expr
 wideFitsI64 : Int -> Int -> Bool -> Bool
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl

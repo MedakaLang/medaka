@@ -3,7 +3,7 @@ source_lines=1356
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
--- sugar (guards, sections, string interpolation, list comprehensions, do-blocks,
+-- sugar (guards, sections, string interpolation, do-blocks,
 -- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
 -- after the parser, before resolve — purely syntactic, no type info.
 --
@@ -1201,7 +1201,7 @@ qualifiedAt _ _ e = e
 -- ── The pass pipeline ─────────────────────────────────────────────────────
 -- Pass order: qualifyAliasRefs → mergeIfaceDefaults → expandDecl →
 -- desugarRecordPuns → lowerContainerLiterals → rewriteDo → rewriteAssignIndex →
--- rewriteSugar. The last step mints every binder's id (`stampBinderIds`), with
+-- rewriteSugar → stampBinderIds. The last step mints every binder's id, with
 -- `""` as the module half; `desugarIn` is the same pipeline for a caller that
 -- knows the module.
 export
