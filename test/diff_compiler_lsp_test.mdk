@@ -1965,7 +1965,35 @@ test "project publication binds the open buffer snapshot" = withScratchDir
                     [Some snapshotData, Some snapshotData]
                     (map (get "data") (diagsOf project)),
                 ),
-                ("action", expectEqual 1 (length (elems (resultTo 2 objs)))),
+                (
+                  "action",
+                  match elems (resultTo 2 objs)
+                    [action] =>
+                      expectEqual
+                        (Some
+                          (jArray [
+                            jObject [
+                              (
+                                "textDocument",
+                                jObject [
+                                  ("uri", JString uri),
+                                  ("version", JInt 1),
+                                ],
+                              ),
+                              (
+                                "edits",
+                                jArray [
+                                  jObject [
+                                    ("range", coordRange 1 8 10),
+                                    ("newText", JString "/="),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ]))
+                        (dig ["edit", "documentChanges"] action)
+                    _ => fail "expected exactly one project action",
+                ),
                 ("stale", expectEqual [] (elems (resultTo 3 objs))),
               ]
               _ => fail "expected direct and project publications")

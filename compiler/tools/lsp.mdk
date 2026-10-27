@@ -1889,9 +1889,10 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
-hasDiagnosticFix : Diag -> Bool
-hasDiagnosticFix (Diag _ _ _ _ _ (Some _)) = True
-hasDiagnosticFix _ = False
+hasParseDiagnosticFix : Diag -> Bool
+hasParseDiagnosticFix (Diag _ code _ _ _ (Some _)) =
+  startsWith "P-" code || startsWith "L-" code
+hasParseDiagnosticFix _ = False
 
 publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
 publishEach _ _ [] = ()
@@ -1910,7 +1911,7 @@ publishEach docs sources ((file, ds) :: rest) =
       "diagnostics",
       jArray (match src
         Some text =>
-          if not (any hasDiagnosticFix ds) then
+          if not (any hasParseDiagnosticFix ds) then
             diagsToJson text ds
           else match docsSnapshot uri docs
             Some snapshot => match parseLocatedResult text

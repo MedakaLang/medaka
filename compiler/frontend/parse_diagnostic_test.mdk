@@ -8,7 +8,7 @@ import frontend.parser.{
   parseResult, parseLocatedResult, parseResultPairs, parseErrorDiagnostic
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import support.source_index.{indexSource, sourcePositionToOffset}
+import support.source_index.{indexSource}
 import test.{Expectation, expectEqual, expectEach, expectAll, fail}
 
 spanText : Loc -> (Int, Int, Int, Int)

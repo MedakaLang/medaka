@@ -592,3 +592,34 @@ test "stage_counts: a 30-module graph's second analyze parses only the edited en
           1
           (prescanOf "chain_edit" rowsTwo - prescanOf "chain_open" rowsOne),
       ])
+
+test "stage_counts: project type fixes do not reparse an open import" = withScratchDir
+  (dir =>
+    let project =
+      underRoot "test/check_json_fixtures/projects/imported_help_fix"
+    let lib = readText "\{project}/lib.mdk"
+    let main = readText "\{project}/main.mdk"
+    let libUri = "file://\{project}/lib.mdk"
+    let mainUri = "file://\{project}/main.mdk"
+    let transcript source = [
+      initializeMsg,
+      initializedMsg,
+      didOpenMsg libUri source,
+      didOpenMsg mainUri main,
+      shutdownMsg,
+      exitMsg,
+    ]
+    let (badRows, badOk) =
+      lspRows dir "type_fix" "T-UNKNOWN-FIELD" (transcript lib)
+    let (goodRows, goodOk) =
+      lspRows
+        dir
+        "type_fixed"
+        "publishDiagnostics"
+        (transcript (replace ".widht" ".width" lib))
+    expectAll [
+      badOk,
+      goodOk,
+      expectEqual 2 (prescanOf "type_fix" badRows),
+      expectEqual 2 (prescanOf "type_fixed" goodRows),
+    ])
