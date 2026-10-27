@@ -1,0 +1,5 @@
+pick : Result String (Option Int) -> Result String Int
+pick r = do
+  Some v <- r
+  Ok (v + 1)
+main = println (pick (Ok None))

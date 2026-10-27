@@ -1149,7 +1149,8 @@ declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
     ++ flatMap (implMethodBodyWarnings oracle) methods
 declBodyWarnings oracle (DInterface { methods, ... }) =
-  flatMap (ifaceMethodWarnings oracle) methods
+  flatMap (checkNamedGroup oracle) (groupByName (ifaceDefaultClauses methods))
+    ++ flatMap (ifaceMethodWarnings oracle) methods
 declBodyWarnings oracle (DProp _ _ _ body) = letGroupWarnings oracle body
 declBodyWarnings oracle (DTest _ _ body) = letGroupWarnings oracle body
 declBodyWarnings _ _ = []
@@ -1158,6 +1159,13 @@ implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implClauses [] = []
 implClauses ((ImplMethod n pats body) :: rest) =
   (n, (pats, body)) :: implClauses rest
+
+-- A default carries one clause's patterns; defaults sharing a name group as clauses.
+ifaceDefaultClauses : List IfaceMethod -> List (String, (List Pat, Expr))
+ifaceDefaultClauses [] = []
+ifaceDefaultClauses ((IfaceMethod n _ (Some (MethodDefault pats body)) _) :: rest) =
+  (n, (pats, body)) :: ifaceDefaultClauses rest
+ifaceDefaultClauses (_ :: rest) = ifaceDefaultClauses rest
 
 implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
 implMethodBodyWarnings oracle (ImplMethod _ _ body) =

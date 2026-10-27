@@ -1,5 +1,5 @@
 -- Self-hosted desugar stage.  Lowers surface
--- sugar (guards, sections, string interpolation, list comprehensions, do-blocks,
+-- sugar (guards, sections, string interpolation, do-blocks,
 -- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
 -- after the parser, before resolve — purely syntactic, no type info.
 --
@@ -451,31 +451,16 @@ callAndThen d e cont = locatedAt (exprSpanLoc e) (match exprLoc e
   Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
   None => callBin (bindMethodName d) e cont)
 
--- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
--- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
+-- bind continuation: a variable or wildcard binds directly; any other pattern
+-- goes through a one-arm match so the exhaustiveness check judges the user's
+-- pattern alone and a missed bind is a match miss at runtime.
 doCont : Pat -> Expr -> Expr
-doCont pat body
-  | isRefutable pat =
-    ELam
-      [PVar "__do_x" (Loc "" 0 0 0 0) noBinderId]
-      (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
-  | otherwise = ELam [pat] body
-
-isRefutable : Pat -> Bool
-isRefutable (PVar _ _ _) = False
-isRefutable PWild = False
-isRefutable (PLit _) = True
-isRefutable (PCon _ _) = True
-isRefutable (PCons _ _) = True
-isRefutable (PList _) = True
-isRefutable (PRng _ _ _) = True
-isRefutable (PRec _ _ _) = True
-isRefutable (PTuple ps) = anyRefutable ps
-isRefutable (PAs _ _ _ p) = isRefutable p
-
-anyRefutable : List Pat -> Bool
-anyRefutable [] = False
-anyRefutable (p :: ps) = isRefutable p || anyRefutable ps
+doCont (pat@(PVar _ _ _)) body = ELam [pat] body
+doCont PWild body = ELam [PWild] body
+doCont pat body =
+  ELam
+    [PVar "__do_x" (Loc "" 0 0 0 0) noBinderId]
+    (EMatch (EVar "__do_x") [Arm pat [] body])
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
 -- The Eq/Debug/Display/Ord/Generic
@@ -1210,11 +1195,11 @@ qualifiedAt (ELoc (Loc file sl sc el ec) _) member e =
 qualifiedAt _ _ e = e
 
 -- ── The pass pipeline ─────────────────────────────────────────────────────
--- Ported in the reference order (later passes run last): merge_iface_defaults →
--- expand_decl → desugar_record_puns → lower_container_literals →
--- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
--- The last step mints every binder's id (`stampBinderIds`), with `""` as the
--- module half; `desugarIn` is the same pipeline for a caller that knows the module.
+-- Pass order: qualifyAliasRefs → mergeIfaceDefaults → expandDecl →
+-- desugarRecordPuns → lowerContainerLiterals → rewriteDo → rewriteAssignIndex →
+-- rewriteSugar → stampBinderIds. The last step mints every binder's id, with
+-- `""` as the module half; `desugarIn` is the same pipeline for a caller that
+-- knows the module.
 export
 desugar : List Decl -> List Decl
 desugar prog = desugarIn "" prog

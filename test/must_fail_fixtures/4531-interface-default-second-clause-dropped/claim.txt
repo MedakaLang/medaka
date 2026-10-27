@@ -1,0 +1,15 @@
+issue: 4531
+what: an interface default written as two clauses keeps only the first: `get _ (Some x) = x`
+what: survives, `get _ None = 100` is dropped without a diagnostic. `check` is clean, and
+what: `run` prints `1` for `get T (Some 1)`, then traps E-NONEXHAUSTIVE-MATCH on `get T None`.
+cmd: run main.mdk
+exit: 1
+stdout-line: 1
+control: run control.mdk
+why-verb: `run`, because the trap is the observation; the fix either prints `100` at exit 0 or
+why-verb: rejects the program, and both move the exit code, which drains this row.
+why-stdout: `1` is the first clause working, so an unrelated break before the first call
+why-stdout: would not match. The E-NONEXHAUSTIVE-MATCH text is on stderr, which this harness
+why-stdout: does not grade.
+why-control: control.mdk writes the same default as one clause with a `match`; it must print
+why-control: `1` and `100` at exit 0. A red control means interface defaults broke generally.

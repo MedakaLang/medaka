@@ -33,6 +33,7 @@ bindOutsideDoMsg : String
 binderDomainMsg : String -> String
 binderDomainTypeMsg : String -> String -> String
 binderNoDomainMsg : String -> String
+binderNonExhaustiveMsg : Option TabKey -> String -> (String, String)
 binderTypeMsg : String -> String -> String
 closedRowMismatchMsg : List Atom -> List Atom -> String
 cohCrossModuleMsg : String -> String -> String -> String

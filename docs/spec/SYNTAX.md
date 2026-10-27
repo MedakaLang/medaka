@@ -567,6 +567,13 @@ classify n = match n
   _ => "other"
 ```
 
+A refutable pattern in a `let`, a lambda parameter, or a `do`/`defer` bind gets
+`W-NONEXHAUSTIVE` from `check`, the same verdict a `match` gets, and traps at run
+time if the value misses it. `if let`, guard qualifiers (`pat <- e`) and match arms
+are where refutation is intended, so they never warn for being refutable.
+Irrefutable binders (a tuple of irrefutable patterns, a single-constructor data,
+`_`, a variable, `()`) never warn.
+
 ## Control flow
 
 ```medaka
@@ -617,8 +624,8 @@ isOdd n = if n == 0 then False else isEven (n - 1)
 let rec isEven n = if n == 0 then True else isOdd (n - 1)
 ```
 
-Inside a bare (non-`do`) indented block, statements may be `let`,
-expression statements, and `let else`. **`<-` is forbidden in a bare block** — use `do`.
+Inside a bare (non-`do`) indented block, statements may be `let` or
+expression statements. **`<-` is forbidden in a bare block** — use `do`.
 
 **Bindings are immutable.** `=` (with `let`, or a top-level definition) is
 *declaration only*; there is no mutable binding. A bare reassignment `x = e` of

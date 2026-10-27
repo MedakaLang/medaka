@@ -745,7 +745,10 @@ batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
    the native backend locates: the built binary's stderr is the whole line
    `medaka run` printed, its `<file>:L:C: ` prefix included. `Prints out` is the control an aborting corpus needs:
    exit 0 on both engines with exactly `out` on stdout, so that a guard
-   "fixed" into rejecting everything cannot read as green.
+   "fixed" into rejecting everything cannot read as green. `PrintsWarned out
+   note` is `Prints` for a program that is accepted with a compile-time
+   warning: `medaka run` also carries `note` on stderr, while the built binary
+   still has an empty stderr.
 
    The three observables are graded together because each one alone admits a
    different wrong answer. "Nonzero" takes a SIGSEGV's 139 for the trap; an
@@ -767,6 +770,7 @@ public export data RuntimeOutcome =
   | Aborts String String
   | AbortsLocated String String
   | Prints String
+  | PrintsWarned String String
   | Dies EngineDeath EngineDeath String
 
 {- | What one engine owes for a `Dies` fixture.
@@ -820,14 +824,21 @@ lastLine s = match reverse (lines s)
   [] => ""
 
 printsFailure : String -> Agreement -> Option String
-printsFailure want a =
+printsFailure want a = printsWith want "" a
+
+-- `note` is "" for a program owed an empty stderr from `run`, else the text
+-- `run`'s stderr must contain.
+printsWith : String -> String -> Agreement -> Option String
+printsWith want note a =
   let runOut = chompNewlines a.runOut
   let runErr = chompNewlines a.runErr
   let binOut = chompNewlines a.binOut
   let binErr = chompNewlines a.binErr
-  if a.runCode /= 0 || runOut /= want || runErr /= "" then
+  let runErrOk = if note == "" then runErr == "" else contains note runErr
+  let owed = if note == "" then "empty stderr" else "stderr carrying \{debug note}"
+  if a.runCode /= 0 || runOut /= want || not runErrOk then
     Some
-      "\{observed "run" a.runCode runOut runErr}; want exit=0, stdout \{debug want}, empty stderr"
+      "\{observed "run" a.runCode runOut runErr}; want exit=0, stdout \{debug want}, \{owed}"
   else if a.binCode /= 0 || binOut /= want || binErr /= "" then
     Some
       "\{observed "build+exec" a.binCode binOut binErr}; want exit=0, stdout \{debug want}, empty stderr"
@@ -894,6 +905,7 @@ runtimeOutcomeFailure want a =
     Aborts code tail => abortFailure False (abortLine code tail) a
     AbortsLocated code tail => abortFailure True (abortLine code tail) a
     Prints out => printsFailure out a
+    PrintsWarned out note => printsWith out note a
     Dies wantRun wantBuilt out => diesFailure wantRun wantBuilt out a
 
 -- # Sweeping a rostered fatal-outcome corpus
