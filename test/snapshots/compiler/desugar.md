@@ -1199,11 +1199,11 @@ qualifiedAt (ELoc (Loc file sl sc el ec) _) member e =
 qualifiedAt _ _ e = e
 
 -- ── The pass pipeline ─────────────────────────────────────────────────────
--- Ported in the reference order (later passes run last): merge_iface_defaults →
--- expand_decl → desugar_record_puns → lower_container_literals →
--- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
--- The last step mints every binder's id (`stampBinderIds`), with `""` as the
--- module half; `desugarIn` is the same pipeline for a caller that knows the module.
+-- Pass order: qualifyAliasRefs → mergeIfaceDefaults → expandDecl →
+-- desugarRecordPuns → lowerContainerLiterals → rewriteDo → rewriteAssignIndex →
+-- rewriteSugar. The last step mints every binder's id (`stampBinderIds`), with
+-- `""` as the module half; `desugarIn` is the same pipeline for a caller that
+-- knows the module.
 export
 desugar : List Decl -> List Decl
 desugar prog = desugarIn "" prog
