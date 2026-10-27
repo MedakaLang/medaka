@@ -444,7 +444,7 @@ siteFileArmW (n, bytes) =
    `$mdk_int_<name>`, and `left`, `right` for `$mdk_shift_<name>`.  Operands and
    results are raw i64s; ref mode unboxes before and reboxes after.  Every helper
    traps through the stderr byte import and `trapIntRuntimeLines`, which the
-   emitter demands along with it (`noteIntRt`, wasm_emit.mdk).
+   plan selects along with it (`needInt`, wasm_demand.mdk).
 
    `Int` is 63-bit, and an operator whose exact result falls outside
    -2^62 .. 2^62 - 1 stops the program with
