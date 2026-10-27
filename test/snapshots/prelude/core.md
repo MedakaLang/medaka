@@ -1,5 +1,5 @@
 # META
-source_lines=2390
+source_lines=2476
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -468,6 +468,19 @@ arrToListGo : Array a -> Int -> List a -> List a
 arrToListGo arr i acc =
   if i < 0 then acc else arrToListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
 
+arrFoldUntilGo : (b -> a -> <e> ControlFlow b) ->
+  Array a ->
+  Int ->
+  Int ->
+  b ->
+  <e> b
+arrFoldUntilGo f arr i n acc =
+  if i >= n then
+    acc
+  else match f acc (arrayGetUnsafe i arr)
+    Continue acc' => arrFoldUntilGo f arr (i + 1) n acc'
+    Break r => r
+
 arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
 arrFoldGo f arr i n acc =
   if i >= n then
@@ -487,6 +500,7 @@ export impl Mappable Array where
 
 export impl Foldable Array where
   fold f z arr = arrFoldGo f arr 0 (arrayLength arr) z
+  foldUntil f z arr = arrFoldUntilGo f arr 0 (arrayLength arr) z
   foldRight f z arr = arrFoldRightGo f arr (arrayLength arr - 1) z
   toList arr = arrToListGo arr (arrayLength arr - 1) []
   isEmpty arr = arrayLength arr == 0
@@ -1249,17 +1263,14 @@ runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
-  andThen xs f = concatRev (revAcc xs []) []
+  andThen xs f = splice [] xs
     where
-      -- Tail-recursive reverse (core has no `reverse`; that lives in `list.mdk`).
-      revAcc [] acc = acc
-      revAcc (x :: rest) acc = revAcc rest (x :: acc)
-      -- `concatRev` folds `f x ++ acc` over the REVERSED input, rebuilding
-      -- `f a ++ f b ++ f c` by `++` associativity.  Its recursive call is the
-      -- whole body (tail ⇒ no stack growth — depth was previously the outer-list
-      -- length under the non-tail `f x ++ andThen xs f`); the `++` is iterative.
-      concatRev [] acc = acc
-      concatRev (x :: rest) acc = concatRev rest (f x ++ acc)
+      -- One self-recursive function so the `::` arm is tail-modulo-cons (stack
+      -- safe for long inputs and long inner lists); `f` runs once per element,
+      -- left to right, when the previous inner list is exhausted.
+      splice [] [] = []
+      splice [] (x :: rest) = splice (f x) rest
+      splice (y :: ys) rest = y :: splice ys rest
 
 export impl Thenable Option where
   andThen None _ = None
@@ -1276,22 +1287,33 @@ export impl Thenable (Result e) where
    concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
    associative.
 
+   `orElseWith a k` is `orElse a (k ())`, except that for `Option` the
+   fallback `k` runs only when `a` failed.
+
    > orElse None (Some 2)
    Some 2
    > orElse [1, 2] [3]
+   [1, 2, 3]
+   > orElseWith None (u => Some 2)
+   Some 2
+   > orElseWith [1, 2] (u => [3])
    [1, 2, 3] -}
 export interface Alternative f requires Applicative f where
   noMatch : f a
   orElse : f a -> f a -> f a
+  orElseWith : f a -> (Unit -> <e> f a) -> <e> f a
 
 export impl Alternative List where
   noMatch = []
   orElse xs ys = xs ++ ys
+  orElseWith xs k = xs ++ k ()
 
 export impl Alternative Option where
   noMatch = None
   orElse (Some x) _ = Some x
   orElse None b = b
+  orElseWith (Some x) _ = Some x
+  orElseWith None k = k ()
 
 -- > isSome (orElse (Some 1) (Some 2))
 -- True
@@ -1350,26 +1372,43 @@ export impl Bimappable (,) where
 
 -- # Containers
 
+{- | The step result of `foldUntil`: `Continue` carries the accumulator
+   onward, `Break` ends the fold with its payload as the final result.
+
+   > foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+   3 -}
+-- `Result` would read as failure: `Break` is a successful early exit, not an error.
+-- lint-disable-next-line rule-clone-type
+public export data ControlFlow b = Continue b | Break b
+
 {- | Containers whose elements can be reduced to a single value.
 
    `fold` is a strict left fold. `foldRight` is the right fold, which
    preserves element order in the result and is the one to use when the
    step builds a structure. An instance defines `fold`, `foldRight`, and
-   `toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
-   instance may override where a faster version exists.
+   `toList`; `foldMap`, `foldUntil`, `length`, and `isEmpty` have defaults,
+   which an instance may override where a faster version exists.
+
+   `foldUntil` is a left fold that can stop early: the step returns
+   `Continue acc` to go on or `Break r` to finish with `r`, leaving the
+   remaining elements unvisited.
 
    > fold (acc x => acc + x) 0 [1, 2, 3]
    6
    > length (Some 5)
-   1 -}
+   1
+   > foldUntil (acc x => if x > 2 then Break x else Continue acc) 0 [1, 2, 3, 4]
+   3 -}
 export interface Foldable t where
   fold : (b -> a -> <e> b) -> b -> t a -> <e> b
   foldRight : (a -> b -> <e> b) -> b -> t a -> <e> b
   foldMap : Monoid m => (a -> <e> m) -> t a -> <e> m
+  foldUntil : (b -> a -> <e> ControlFlow b) -> b -> t a -> <e> b
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
   foldMap f = fold (acc x => acc ++ f x) empty
+  foldUntil f z t = foldUntilList f z (toList t)
   length t = fold (acc _ => acc + 1) 0 t
   isEmpty t = match toList t
     [] => True
@@ -1567,11 +1606,18 @@ listFoldMapGo : Monoid m => m -> List m -> m
 listFoldMapGo acc [] = acc
 listFoldMapGo acc (y :: ys) = listFoldMapGo (append y acc) ys
 
+foldUntilList : (b -> a -> <e> ControlFlow b) -> b -> List a -> <e> b
+foldUntilList _ acc [] = acc
+foldUntilList f acc (x :: xs) = match f acc x
+  Continue acc' => foldUntilList f acc' xs
+  Break r => r
+
 -- `length` goes through the strict left fold; `1 + length xs` would
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
   fold _ acc [] = acc
   fold f acc (x :: xs) = fold f (f acc x) xs
+  foldUntil = foldUntilList
   foldRight _ acc [] = acc
   foldRight f acc (x :: xs) = f x (foldRight f acc xs)
   toList = identity
@@ -1661,9 +1707,17 @@ export impl Traversable (Result e) where
 
 -- # Folding
 
--- These are generic over any `Foldable` and do not short-circuit, because
--- `fold` itself doesn't.  Container-specific versions in `list.mdk`,
--- `array.mdk`, etc. can short-circuit where it matters.
+-- `any`, `all`, `elem` and `find` stop at the first decisive element via
+-- `foldUntil`.  The `Continue` results of a miss are shared constants so a
+-- miss allocates nothing per element.
+anyMiss : ControlFlow Bool
+anyMiss = Continue False
+
+allMiss : ControlFlow Bool
+allMiss = Continue True
+
+findMiss : ControlFlow (Option a)
+findMiss = Continue None
 
 {- | Whether at least one element satisfies `f`.
 
@@ -1671,7 +1725,7 @@ export impl Traversable (Result e) where
    True -}
 export
 any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-any f = fold (acc x => acc || f x) False
+any f = foldUntil (_ x => if f x then Break True else anyMiss) False
 
 -- > any (x => x > 10) [1, 2, 3]
 -- False
@@ -1686,22 +1740,15 @@ any f = fold (acc x => acc || f x) False
    True -}
 export
 all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-all f = fold (acc x => acc && f x) True
+all f = foldUntil (_ x => if f x then allMiss else Break False) True
 
--- Latches the first hit via an as-pattern so later elements don't overwrite
--- the answer.
 {- | The first element satisfying `f`, or `None`.
 
    > find (x => x > 1) [1, 2, 3]
    Some 2 -}
 export
 find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
-find f = fold g None
-  where
-    g (acc@(Some _)) _ = acc
-    g None x
-      | f x = Some x
-      | otherwise = None
+find f = foldUntil (_ x => if f x then Break (Some x) else findMiss) None
 
 {- | The number of elements satisfying `f`.
 
@@ -1737,7 +1784,7 @@ product xs = fold (*) (fromInt 1) xs
    True -}
 export
 elem : (Foldable t, Eq a) => a -> t a -> Bool
-elem a = fold (acc x => acc || x == a) False
+elem a = foldUntil (_ x => if x == a then Break True else anyMiss) False
 
 -- | Whether the value does not occur in the container.
 export
@@ -1844,6 +1891,20 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
+{- | The value inside a `Some`, or the result of calling `k ()` for `None`.
+
+   The fallback runs only when there is no value, so it can be expensive or
+   effectful.
+
+   > optionOrElse (u => 0) (Some 42)
+   42
+   > optionOrElse (u => 0) None
+   0 -}
+export
+optionOrElse : (Unit -> <e> a) -> Option a -> <e> a
+optionOrElse _ (Some a) = a
+optionOrElse k None = k ()
+
 {- | The value inside a `Some`, or a panic with `context` as its message
    for `None`.
 
@@ -1916,6 +1977,20 @@ resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
 
+{- | The value inside an `Ok`, or the result of applying `k` to the error of
+   an `Err`.
+
+   The fallback runs only for an `Err`.
+
+   > resultOrElse stringLength (Ok 42)
+   42
+   > resultOrElse stringLength (Err "boom")
+   4 -}
+export
+resultOrElse : (err -> <e> a) -> Result err a -> <e> a
+resultOrElse _ (Ok a) = a
+resultOrElse k (Err e) = k e
+
 {- | The value inside an `Ok`, or a panic for `Err` whose message is
    `context`, a colon, and the error.
 
@@ -1929,6 +2004,17 @@ export
 resultOrPanic : Display e => String -> Result e a -> a
 resultOrPanic _ (Ok a) = a
 resultOrPanic context (Err e) = panic "\{context}: \{e}"
+
+{- | Discards a `Result`, value and error alike, and returns `()`.
+
+   For a failure that is acceptable, where `reason` states at the call site
+   why. There is no form without `reason`, and no `Option` twin.
+
+   > bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
+   () -}
+export
+bestEffort : String -> Result e a -> Unit
+bestEffort _ _ = ()
 
 {- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
    `Ok`.
@@ -2428,12 +2514,14 @@ deferAp : a b (c -> d) -> a b c -> a b d
 deferThen : a b c -> (c -> <b> a b d) -> a b d
 noMatch : a b
 orElse : a b -> a b -> a b
+orElseWith : a b -> (Unit -> <c> a b) -> <c> a b
 bimap : (a -> <b> c) -> (d -> <b> e) -> f a d -> <b> f c e
 mapFirst : (a -> <b> c) -> d a e -> <b> d c e
 mapSecond : (a -> <b> c) -> d e a -> <b> d e c
 fold : (a -> b -> <c> a) -> a -> d b -> <c> a
 foldRight : (a -> b -> <c> b) -> b -> d a -> <c> b
 foldMap : (a -> <b> c) -> d a -> <b> c
+foldUntil : (a -> b -> <c> ControlFlow a) -> a -> d b -> <c> a
 toList : a b -> List b
 isEmpty : a b -> Bool
 length : a b -> Int
@@ -2460,6 +2548,7 @@ debugListItems : Debug a => List a -> List String
 debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
 arrToListGo : Array a -> Int -> List a -> List a
+arrFoldUntilGo : (a -> b -> <c> ControlFlow a) -> Array b -> Int -> Int -> a -> <c> a
 arrFoldGo : (a -> b -> <c> a) -> Array b -> Int -> Int -> a -> <c> a
 arrFoldRightGo : (a -> b -> <c> b) -> Array a -> Int -> b -> <c> b
 displayListItems : Display a => List a -> List String
@@ -2505,6 +2594,10 @@ sliceInclusiveEnd : Int -> Int
 sliceListGo : List a -> Int -> Int -> Int -> List a
 listRevMap : (a -> <b> c) -> List a -> List c -> <b> List c
 listFoldMapGo : Monoid a => a -> List a -> a
+foldUntilList : (a -> b -> <c> ControlFlow a) -> a -> List b -> <c> a
+anyMiss : ControlFlow Bool
+allMiss : ControlFlow Bool
+findMiss : ControlFlow (Option a)
 any : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
 all : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
 find : Foldable c => (a -> <b> Bool) -> c a -> <b> Option a
@@ -2521,6 +2614,7 @@ xor : Bool -> Bool -> Bool
 isSome : Option a -> Bool
 isNone : Option a -> Bool
 optionOr : a -> Option a -> a
+optionOrElse : (Unit -> <a> b) -> Option b -> <a> b
 optionOrPanic : String -> Option a -> a
 option : a -> (b -> <c> a) -> Option b -> <c> a
 toResult : a -> Option b -> Result a b
@@ -2528,7 +2622,9 @@ fromResult : Result a b -> Option b
 isOk : Result a b -> Bool
 isErr : Result a b -> Bool
 resultOr : a -> Result b a -> a
+resultOrElse : (a -> <b> c) -> Result a c -> <b> c
 resultOrPanic : Display a => String -> Result a b -> b
+bestEffort : String -> Result a b -> Unit
 result : (a -> <b> c) -> (d -> <b> c) -> Result a d -> <b> c
 mapErr : (a -> b) -> Result a c -> Result b c
 fst : (a, b) -> a

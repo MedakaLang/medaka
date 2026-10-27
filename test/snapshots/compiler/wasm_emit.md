@@ -1,5 +1,5 @@
 # META
-source_lines=10938
+source_lines=10959
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_repr.{
@@ -5742,6 +5742,27 @@ emitStrExternRef prog env d "stringSlice" [lo, hi, s] =
     ++ ["ref.cast (ref $str)", "call $mdk_str_slice"]
 emitStrExternRef prog env d "stringSlice" _ =
   gapLP prog "wasm W8: stringSlice takes exactly three arguments"
+-- stringCodepointAtByte s b : s a $str, b an i31 Int byte offset; the packed
+-- codepoint * 8 + width comes back as an i31 Int.
+emitStrExternRef prog env d "stringCodepointAtByte" [s, b] =
+  emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d b
+    ++ [
+      "ref.cast (ref i31)", "i31.get_s", "call $mdk_str_cp_at_byte", "ref.i31"
+    ]
+emitStrExternRef prog env d "stringCodepointAtByte" _ =
+  gapLP prog "wasm: stringCodepointAtByte takes exactly two arguments"
+-- stringSliceBytes lo hi s : lo/hi are i31 Int byte offsets, s a $str.
+emitStrExternRef prog env d "stringSliceBytes" [lo, hi, s] =
+  emitRefExpr prog env d lo
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d hi
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", "call $mdk_str_slice_bytes"]
+emitStrExternRef prog env d "stringSliceBytes" _ =
+  gapLP prog "wasm: stringSliceBytes takes exactly three arguments"
 emitStrExternRef prog env d "stringToUpper" [s] =
   emitRefExpr prog env d s ++ ["ref.cast (ref $str)", "call $mdk_str_upper"]
 emitStrExternRef prog env d "stringToUpper" _ =
@@ -11980,6 +12001,10 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringConcat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringConcat takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSlice")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_slice")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSlice")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringSlice takes exactly three arguments"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringCodepointAtByte")) (PList (PVar "s") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (ELit (LString "call $mdk_str_cp_at_byte")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringCodepointAtByte")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: stringCodepointAtByte takes exactly two arguments"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSliceBytes")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_slice_bytes")))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSliceBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: stringSliceBytes takes exactly three arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToUpper")) (PList (PVar "s"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_upper")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringToUpper takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToLower")) (PList (PVar "s"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_lower")))))
@@ -14045,6 +14070,10 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringConcat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringConcat takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSlice")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_slice")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSlice")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringSlice takes exactly three arguments"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringCodepointAtByte")) (PList (PVar "s") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (ELit (LString "call $mdk_str_cp_at_byte")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringCodepointAtByte")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: stringCodepointAtByte takes exactly two arguments"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSliceBytes")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_slice_bytes")))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringSliceBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: stringSliceBytes takes exactly three arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToUpper")) (PList (PVar "s"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_upper")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: stringToUpper takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringToLower")) (PList (PVar "s"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_str_lower")))))

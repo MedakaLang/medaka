@@ -1,5 +1,5 @@
 # META
-source_lines=259
+source_lines=432
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the list and array rendering and string indexing in
@@ -10,6 +10,7 @@ stages=DESUGAR,MARK
 -- counts codepoints, not bytes.
 
 import test.{expectEqual, expectTrue, expectFalse}
+import map.{Map}
 
 -- # Debug and Display of lists
 
@@ -261,8 +262,181 @@ test "floatToString renders the canonical lexeme" =
       floatToString 1e-07,
       floatToString 1e+20,
     ]
+
+-- # Lazy fallbacks
+--
+-- The fallback panics if it runs on the hit path, and bumps a counter on the
+-- miss path so "exactly once" is observable.
+
+test "optionOrElse does not call the fallback for Some" =
+  expectEqual 1 (optionOrElse (u => panic "fallback ran") (Some 1))
+
+test "optionOrElse calls the fallback once for None" =
+  let calls = Ref 0
+  let v = optionOrElse (u => setRef calls (!calls + 1) |> (x => 7)) None
+  expectEqual (7, 1) (v, !calls)
+
+test "resultOrElse does not call the fallback for Ok" =
+  expectEqual
+    1
+    (resultOrElse (e => panic "fallback ran") (Ok 1 : Result String Int))
+
+test "resultOrElse calls the fallback once with the error for Err" =
+  let calls = Ref 0
+  let v =
+    resultOrElse
+      (e => setRef calls (!calls + 1) |> (x => stringLength e))
+      (Err "boom")
+  expectEqual (4, 1) (v, !calls)
+
+test "orElseWith on Some does not call the fallback" =
+  expectEqual (Some 1) (orElseWith (Some 1) (u => panic "fallback ran"))
+
+test "orElseWith on None calls the fallback once" =
+  let calls = Ref 0
+  let v = orElseWith (None : Option Int) (u =>
+    setRef calls (!calls + 1) |> (x => Some 7))
+  expectEqual (Some 7, 1) (v, !calls)
+
+test "orElseWith on List appends the fallback" =
+  expectEqual [1, 2, 3] (orElseWith [1, 2] (u => [3]))
+
+-- # Short-circuiting folds
+
+-- Each probe returns the answer and how many times the predicate ran.
+countedAny : Foldable t => Int -> t Int -> (Bool, Int)
+countedAny target xs =
+  let calls = Ref 0
+  let r = any (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+countedAll : Foldable t => Int -> t Int -> (Bool, Int)
+countedAll limit xs =
+  let calls = Ref 0
+  let r = all (x => (calls := !calls + 1) |> (u => x < limit)) xs
+  (r, !calls)
+
+countedFind : Foldable t => Int -> t Int -> (Option Int, Int)
+countedFind target xs =
+  let calls = Ref 0
+  let r = find (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+test "any on a list stops at the hit and runs n times on a miss" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(True, 1), (True, 5), (True, 10), (False, 10)]
+    [countedAny 1 xs, countedAny 5 xs, countedAny 10 xs, countedAny 99 xs]
+
+test "any on an array stops at the hit and runs n times on a miss" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(True, 1), (True, 5), (True, 10), (False, 10)]
+    [countedAny 1 xs, countedAny 5 xs, countedAny 10 xs, countedAny 99 xs]
+
+test "all on a list stops at the first failure and runs n times on success" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(False, 1), (False, 5), (False, 10), (True, 10)]
+    [countedAll 1 xs, countedAll 5 xs, countedAll 10 xs, countedAll 99 xs]
+
+test "all on an array stops at the first failure and runs n times on success" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(False, 1), (False, 5), (False, 10), (True, 10)]
+    [countedAll 1 xs, countedAll 5 xs, countedAll 10 xs, countedAll 99 xs]
+
+test "find on a list returns the first hit and stops there" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(Some 1, 1), (Some 5, 5), (Some 10, 10), (None, 10)]
+    [countedFind 1 xs, countedFind 5 xs, countedFind 10 xs, countedFind 99 xs]
+
+test "find on an array returns the first hit and stops there" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(Some 1, 1), (Some 5, 5), (Some 10, 10), (None, 10)]
+    [countedFind 1 xs, countedFind 5 xs, countedFind 10 xs, countedFind 99 xs]
+
+test "find returns the first of several matches" =
+  expectEqual (Some 4) (find (x => x > 3) [1, 4, 9])
+
+test "elem on a list finds early, middle, late and misses" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "elem on an array finds early, middle, late and misses" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "any, all, elem and find on empty containers" =
+  expectEqual
+    (False, True, False, None)
+    (
+      any (x => x > 0) ([] : List Int),
+      all (x => x > 0) ([||] : Array Int),
+      elem 1 ([] : List Int),
+      find (x => x > 0) ([||] : Array Int),
+    )
+
+test "foldUntil on a list breaks with the payload and skips the rest" =
+  let calls = Ref 0
+  let step =
+    acc x =>
+      (calls := !calls + 1)
+        |> (u => if x > 2 then Break (acc * 100) else Continue (acc + x))
+  expectEqual (300, 3) (foldUntil step 0 [1, 2, 3, 4, 5], !calls)
+
+test "foldUntil on an array that never breaks folds everything" =
+  expectEqual 10 (foldUntil (acc x => Continue (acc + x)) 0 [|1, 2, 3, 4|])
+
+test "foldUntil default on Option and Result" =
+  expectEqual
+    (7, 3, 0)
+    (
+      foldUntil (acc x => Continue (acc + x)) 0 (Some 7),
+      foldUntil (acc x => Break (acc + x)) 0 (Ok 3 : Result String Int),
+      foldUntil (acc x => Continue (acc + x)) 0 (Err "e" : Result String Int),
+    )
+
+test "foldUntil default on a Map stops early" =
+  let m : Map Int Int = Map { 1 => 10, 2 => 20, 3 => 30 }
+  expectEqual
+    30
+    (foldUntil
+      (acc x => if acc + x >= 30 then Break (acc + x) else Continue (acc + x))
+      0
+      m)
+
+-- # List andThen
+
+test "List andThen concatenates in order" =
+  expectEqual
+    ([1, 10, 2, 20, 3, 30], [] : List Int, [1, 3], [7, 8])
+    (
+      andThen [1, 2, 3] (x => [x, x * 10]),
+      andThen ([] : List Int) (x => [x]),
+      andThen [1, 2, 3, 4] (x => if x % 2 == 0 then [] else [x]),
+      andThen [1, 2] (x => if x == 1 then [7, 8] else []),
+    )
+
+test "List andThen calls f once per element, left to right" =
+  let log : Ref (List Int) = Ref []
+  let out = andThen [1, 2, 3] (x => setRef log (x :: !log) |> (u => [x, x]))
+  expectEqual ([1, 1, 2, 2, 3, 3], [3, 2, 1]) (out, !log)
+
+test "List andThen is stack safe on a long input" =
+  expectEqual 1000000 (length (andThen [1..=1000000] (x => [x])))
+
+test "List andThen is stack safe on a long inner list" =
+  expectEqual 1000000 (length (andThen [1] (x => [1..=1000000])))
 # DESUGAR
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
+(DUse false (UseGroup ("map") ((mem "Map" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EVar "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DTest false "debug of a one-element list has no separator" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1]"))) (EApp (EVar "debug") (EListLit (ELit (LInt 1))))))
 (DTest false "debug of a list separates elements with a comma and a space" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1, 2, 3]"))) (EApp (EVar "debug") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
@@ -320,8 +494,40 @@ test "floatToString renders the canonical lexeme" =
 (DTest false "intToString renders the Int bounds and a large value exactly" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "4611686018427387903")) (ELit (LString "-4611686018427387904")) (ELit (LString "1234567890123")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 4611686018427387903))) (EApp (EVar "intToString") (ELit (LInt -4611686018427387904))) (EApp (EVar "intToString") (ELit (LInt 1234567890123))))))
 (DTest false "intToString cell reports its byte length as its codepoint count" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 20)) (ELit (LInt 3)))) (EListLit (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt 7)))) (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt -4611686018427387904)))) (EApp (EVar "stringLength") (EBinOp "++" (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (ELit (LString "x")))))))
 (DTest false "floatToString renders the canonical lexeme" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.5")) (ELit (LString "100.0")) (ELit (LString "-2.5")) (ELit (LString "1e-07")) (ELit (LString "1e+20")))) (EListLit (EApp (EVar "floatToString") (ELit (LFloat 0.5))) (EApp (EVar "floatToString") (ELit (LFloat 100.0))) (EApp (EVar "floatToString") (EUnOp "-" (ELit (LFloat 2.5)))) (EApp (EVar "floatToString") (ELit (LFloat 1e-07))) (EApp (EVar "floatToString") (ELit (LFloat 1e+20))))))
+(DTest false "optionOrElse does not call the fallback for Some" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EApp (EVar "optionOrElse") (ELam ((PVar "u")) (EApp (EVar "panic") (ELit (LString "fallback ran"))))) (EApp (EVar "Some") (ELit (LInt 1))))))
+(DTest false "optionOrElse calls the fallback once for None" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "optionOrElse") (ELam ((PVar "u")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (ELit (LInt 7)))))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 7)) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "resultOrElse does not call the fallback for Ok" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EApp (EVar "resultOrElse") (ELam ((PVar "e")) (EApp (EVar "panic") (ELit (LString "fallback ran"))))) (EAnnot (EApp (EVar "Ok") (ELit (LInt 1))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DTest false "resultOrElse calls the fallback once with the error for Err" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "resultOrElse") (ELam ((PVar "e")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (EApp (EVar "stringLength") (EVar "e")))))) (EApp (EVar "Err") (ELit (LString "boom"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 4)) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "orElseWith on Some does not call the fallback" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "orElseWith") (EApp (EVar "Some") (ELit (LInt 1)))) (ELam ((PVar "u")) (EApp (EVar "panic") (ELit (LString "fallback ran")))))))
+(DTest false "orElseWith on None calls the fallback once" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "orElseWith") (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (ELam ((PVar "u")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (EApp (EVar "Some") (ELit (LInt 7)))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 7))) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "orElseWith on List appends the fallback" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EVar "orElseWith") (EListLit (ELit (LInt 1)) (ELit (LInt 2)))) (ELam ((PVar "u")) (EListLit (ELit (LInt 3)))))))
+(DTypeSig false "countedAny" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyCon "Bool") (TyCon "Int"))))))
+(DFunDef false "countedAny" ((PVar "target") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EVar "any") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "==" (EVar "x") (EVar "target")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTypeSig false "countedAll" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyCon "Bool") (TyCon "Int"))))))
+(DFunDef false "countedAll" ((PVar "limit") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EVar "all") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "<" (EVar "x") (EVar "limit")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTypeSig false "countedFind" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Int"))))))
+(DFunDef false "countedFind" ((PVar "target") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EVar "find") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "==" (EVar "x") (EVar "target")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTest false "any on a list stops at the hit and runs n times on a miss" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "True") (ELit (LInt 1))) (ETuple (EVar "True") (ELit (LInt 5))) (ETuple (EVar "True") (ELit (LInt 10))) (ETuple (EVar "False") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedAny") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "any on an array stops at the hit and runs n times on a miss" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "True") (ELit (LInt 1))) (ETuple (EVar "True") (ELit (LInt 5))) (ETuple (EVar "True") (ELit (LInt 10))) (ETuple (EVar "False") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedAny") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedAny") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "all on a list stops at the first failure and runs n times on success" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "False") (ELit (LInt 1))) (ETuple (EVar "False") (ELit (LInt 5))) (ETuple (EVar "False") (ELit (LInt 10))) (ETuple (EVar "True") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedAll") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "all on an array stops at the first failure and runs n times on success" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "False") (ELit (LInt 1))) (ETuple (EVar "False") (ELit (LInt 5))) (ETuple (EVar "False") (ELit (LInt 10))) (ETuple (EVar "True") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedAll") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedAll") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find on a list returns the first hit and stops there" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EApp (EVar "Some") (ELit (LInt 1))) (ELit (LInt 1))) (ETuple (EApp (EVar "Some") (ELit (LInt 5))) (ELit (LInt 5))) (ETuple (EApp (EVar "Some") (ELit (LInt 10))) (ELit (LInt 10))) (ETuple (EVar "None") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedFind") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find on an array returns the first hit and stops there" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EApp (EVar "Some") (ELit (LInt 1))) (ELit (LInt 1))) (ETuple (EApp (EVar "Some") (ELit (LInt 5))) (ELit (LInt 5))) (ETuple (EApp (EVar "Some") (ELit (LInt 10))) (ELit (LInt 10))) (ETuple (EVar "None") (ELit (LInt 10))))) (EListLit (EApp (EApp (EVar "countedFind") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "countedFind") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find returns the first of several matches" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 4)))) (EApp (EApp (EVar "find") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 4)) (ELit (LInt 9))))))
+(DTest false "elem on a list finds early, middle, late and misses" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "True") (EVar "True") (EVar "True") (EVar "False"))) (EListLit (EApp (EApp (EVar "elem") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "elem on an array finds early, middle, late and misses" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "True") (EVar "True") (EVar "True") (EVar "False"))) (EListLit (EApp (EApp (EVar "elem") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EVar "elem") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "any, all, elem and find on empty containers" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "False") (EVar "True") (EVar "False") (EVar "None"))) (ETuple (EApp (EApp (EVar "any") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "all") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EArrayLit) (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EApp (EVar "elem") (ELit (LInt 1))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "find") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EArrayLit) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTest false "foldUntil on a list breaks with the payload and skips the rest" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "step") (ELam ((PVar "acc") (PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EIf (EBinOp ">" (EVar "x") (ELit (LInt 2))) (EApp (EVar "Break") (EBinOp "*" (EVar "acc") (ELit (LInt 100)))) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x")))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 300)) (ELit (LInt 3)))) (ETuple (EApp (EApp (EApp (EVar "foldUntil") (EVar "step")) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)))) (EUnOp "!" (EVar "calls")))))))
+(DTest false "foldUntil on an array that never breaks folds everything" (EApp (EApp (EVar "expectEqual") (ELit (LInt 10))) (EApp (EApp (EApp (EVar "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))))
+(DTest false "foldUntil default on Option and Result" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 7)) (ELit (LInt 3)) (ELit (LInt 0)))) (ETuple (EApp (EApp (EApp (EVar "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 7)))) (EApp (EApp (EApp (EVar "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Break") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EAnnot (EApp (EVar "Ok") (ELit (LInt 3))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))) (EApp (EApp (EApp (EVar "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EAnnot (EApp (EVar "Err") (ELit (LString "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DTest false "foldUntil default on a Map stops early" (EBlock (DoLet false false (PVar "m") (EAnnot (EHeadAnnot (EApp (EVar "fromEntries") (EListLit (ETuple (ELit (LInt 1)) (ELit (LInt 10))) (ETuple (ELit (LInt 2)) (ELit (LInt 20))) (ETuple (ELit (LInt 3)) (ELit (LInt 30))))) (TyApp (TyApp (TyCon "Map") (TyVar "_k")) (TyVar "_v"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LInt 30))) (EApp (EApp (EApp (EVar "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "acc") (EVar "x")) (ELit (LInt 30))) (EApp (EVar "Break") (EBinOp "+" (EVar "acc") (EVar "x"))) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x")))))) (ELit (LInt 0))) (EVar "m"))))))
+(DTest false "List andThen concatenates in order" (EApp (EApp (EVar "expectEqual") (ETuple (EListLit (ELit (LInt 1)) (ELit (LInt 10)) (ELit (LInt 2)) (ELit (LInt 20)) (ELit (LInt 3)) (ELit (LInt 30))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))) (EListLit (ELit (LInt 1)) (ELit (LInt 3))) (EListLit (ELit (LInt 7)) (ELit (LInt 8))))) (ETuple (EApp (EApp (EVar "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ELam ((PVar "x")) (EListLit (EVar "x") (EBinOp "*" (EVar "x") (ELit (LInt 10)))))) (EApp (EApp (EVar "andThen") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (ELam ((PVar "x")) (EListLit (EVar "x")))) (EApp (EApp (EVar "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)))) (ELam ((PVar "x")) (EIf (EBinOp "==" (EBinOp "%" (EVar "x") (ELit (LInt 2))) (ELit (LInt 0))) (EListLit) (EListLit (EVar "x"))))) (EApp (EApp (EVar "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)))) (ELam ((PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 1))) (EListLit (ELit (LInt 7)) (ELit (LInt 8))) (EListLit)))))))
+(DTest false "List andThen calls f once per element, left to right" (EBlock (DoLet false false (PVar "log") (EAnnot (EApp (EVar "Ref") (EListLit)) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))))) (DoLet false false (PVar "out") (EApp (EApp (EVar "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "log")) (EBinOp "::" (EVar "x") (EUnOp "!" (EVar "log")))) (ELam ((PVar "u")) (EListLit (EVar "x") (EVar "x"))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EListLit (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 3))) (EListLit (ELit (LInt 3)) (ELit (LInt 2)) (ELit (LInt 1))))) (ETuple (EVar "out") (EUnOp "!" (EVar "log")))))))
+(DTest false "List andThen is stack safe on a long input" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1000000))) (EApp (EVar "length") (EApp (EApp (EVar "andThen") (ERangeList (ELit (LInt 1)) (ELit (LInt 1000000)) true)) (ELam ((PVar "x")) (EListLit (EVar "x")))))))
+(DTest false "List andThen is stack safe on a long inner list" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1000000))) (EApp (EVar "length") (EApp (EApp (EVar "andThen") (EListLit (ELit (LInt 1)))) (ELam ((PVar "x")) (ERangeList (ELit (LInt 1)) (ELit (LInt 1000000)) true))))))
 # MARK
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
+(DUse false (UseGroup ("map") ((mem "Map" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EMethodRef "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DTest false "debug of a one-element list has no separator" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1]"))) (EApp (EMethodRef "debug") (EListLit (ELit (LInt 1))))))
 (DTest false "debug of a list separates elements with a comma and a space" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1, 2, 3]"))) (EApp (EMethodRef "debug") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
@@ -379,3 +585,34 @@ test "floatToString renders the canonical lexeme" =
 (DTest false "intToString renders the Int bounds and a large value exactly" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "4611686018427387903")) (ELit (LString "-4611686018427387904")) (ELit (LString "1234567890123")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 4611686018427387903))) (EApp (EVar "intToString") (ELit (LInt -4611686018427387904))) (EApp (EVar "intToString") (ELit (LInt 1234567890123))))))
 (DTest false "intToString cell reports its byte length as its codepoint count" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 20)) (ELit (LInt 3)))) (EListLit (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt 7)))) (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt -4611686018427387904)))) (EApp (EVar "stringLength") (EBinOp "++" (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (ELit (LString "x")))))))
 (DTest false "floatToString renders the canonical lexeme" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.5")) (ELit (LString "100.0")) (ELit (LString "-2.5")) (ELit (LString "1e-07")) (ELit (LString "1e+20")))) (EListLit (EApp (EVar "floatToString") (ELit (LFloat 0.5))) (EApp (EVar "floatToString") (ELit (LFloat 100.0))) (EApp (EVar "floatToString") (EUnOp "-" (ELit (LFloat 2.5)))) (EApp (EVar "floatToString") (ELit (LFloat 1e-07))) (EApp (EVar "floatToString") (ELit (LFloat 1e+20))))))
+(DTest false "optionOrElse does not call the fallback for Some" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EApp (EVar "optionOrElse") (ELam ((PVar "u")) (EApp (EVar "panic") (ELit (LString "fallback ran"))))) (EApp (EVar "Some") (ELit (LInt 1))))))
+(DTest false "optionOrElse calls the fallback once for None" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "optionOrElse") (ELam ((PVar "u")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (ELit (LInt 7)))))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 7)) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "resultOrElse does not call the fallback for Ok" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EApp (EVar "resultOrElse") (ELam ((PVar "e")) (EApp (EVar "panic") (ELit (LString "fallback ran"))))) (EAnnot (EApp (EVar "Ok") (ELit (LInt 1))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DTest false "resultOrElse calls the fallback once with the error for Err" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "resultOrElse") (ELam ((PVar "e")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (EApp (EVar "stringLength") (EVar "e")))))) (EApp (EVar "Err") (ELit (LString "boom"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 4)) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "orElseWith on Some does not call the fallback" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "orElseWith") (EApp (EVar "Some") (ELit (LInt 1)))) (ELam ((PVar "u")) (EApp (EVar "panic") (ELit (LString "fallback ran")))))))
+(DTest false "orElseWith on None calls the fallback once" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "v") (EApp (EApp (EMethodRef "orElseWith") (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (ELam ((PVar "u")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "x")) (EApp (EVar "Some") (ELit (LInt 7)))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 7))) (ELit (LInt 1)))) (ETuple (EVar "v") (EUnOp "!" (EVar "calls")))))))
+(DTest false "orElseWith on List appends the fallback" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "orElseWith") (EListLit (ELit (LInt 1)) (ELit (LInt 2)))) (ELam ((PVar "u")) (EListLit (ELit (LInt 3)))))))
+(DTypeSig false "countedAny" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyCon "Bool") (TyCon "Int"))))))
+(DFunDef false "countedAny" ((PVar "target") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EDictApp "any") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "==" (EVar "x") (EVar "target")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTypeSig false "countedAll" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyCon "Bool") (TyCon "Int"))))))
+(DFunDef false "countedAll" ((PVar "limit") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EDictApp "all") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "<" (EVar "x") (EVar "limit")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTypeSig false "countedFind" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyVar "t") (TyCon "Int")) (TyTuple (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Int"))))))
+(DFunDef false "countedFind" ((PVar "target") (PVar "xs")) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EApp (EDictApp "find") (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EBinOp "==" (EVar "x") (EVar "target")))))) (EVar "xs"))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "calls"))))))
+(DTest false "any on a list stops at the hit and runs n times on a miss" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "True") (ELit (LInt 1))) (ETuple (EVar "True") (ELit (LInt 5))) (ETuple (EVar "True") (ELit (LInt 10))) (ETuple (EVar "False") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedAny") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "any on an array stops at the hit and runs n times on a miss" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "True") (ELit (LInt 1))) (ETuple (EVar "True") (ELit (LInt 5))) (ETuple (EVar "True") (ELit (LInt 10))) (ETuple (EVar "False") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedAny") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedAny") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "all on a list stops at the first failure and runs n times on success" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "False") (ELit (LInt 1))) (ETuple (EVar "False") (ELit (LInt 5))) (ETuple (EVar "False") (ELit (LInt 10))) (ETuple (EVar "True") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedAll") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "all on an array stops at the first failure and runs n times on success" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EVar "False") (ELit (LInt 1))) (ETuple (EVar "False") (ELit (LInt 5))) (ETuple (EVar "False") (ELit (LInt 10))) (ETuple (EVar "True") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedAll") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedAll") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find on a list returns the first hit and stops there" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EApp (EVar "Some") (ELit (LInt 1))) (ELit (LInt 1))) (ETuple (EApp (EVar "Some") (ELit (LInt 5))) (ELit (LInt 5))) (ETuple (EApp (EVar "Some") (ELit (LInt 10))) (ELit (LInt 10))) (ETuple (EVar "None") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedFind") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find on an array returns the first hit and stops there" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ETuple (EApp (EVar "Some") (ELit (LInt 1))) (ELit (LInt 1))) (ETuple (EApp (EVar "Some") (ELit (LInt 5))) (ELit (LInt 5))) (ETuple (EApp (EVar "Some") (ELit (LInt 10))) (ELit (LInt 10))) (ETuple (EVar "None") (ELit (LInt 10))))) (EListLit (EApp (EApp (EDictApp "countedFind") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "countedFind") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "find returns the first of several matches" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 4)))) (EApp (EApp (EDictApp "find") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 4)) (ELit (LInt 9))))))
+(DTest false "elem on a list finds early, middle, late and misses" (EBlock (DoLet false false (PVar "xs") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "True") (EVar "True") (EVar "True") (EVar "False"))) (EListLit (EApp (EApp (EDictApp "elem") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "elem on an array finds early, middle, late and misses" (EBlock (DoLet false false (PVar "xs") (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)) (ELit (LInt 6)) (ELit (LInt 7)) (ELit (LInt 8)) (ELit (LInt 9)) (ELit (LInt 10)))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "True") (EVar "True") (EVar "True") (EVar "False"))) (EListLit (EApp (EApp (EDictApp "elem") (ELit (LInt 1))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 5))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 10))) (EVar "xs")) (EApp (EApp (EDictApp "elem") (ELit (LInt 99))) (EVar "xs")))))))
+(DTest false "any, all, elem and find on empty containers" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "False") (EVar "True") (EVar "False") (EVar "None"))) (ETuple (EApp (EApp (EDictApp "any") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EDictApp "all") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EArrayLit) (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EApp (EDictApp "elem") (ELit (LInt 1))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EDictApp "find") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EArrayLit) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTest false "foldUntil on a list breaks with the payload and skips the rest" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "step") (ELam ((PVar "acc") (PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EUnOp "!" (EVar "calls")) (ELit (LInt 1)))) (ELam ((PVar "u")) (EIf (EBinOp ">" (EVar "x") (ELit (LInt 2))) (EApp (EVar "Break") (EBinOp "*" (EVar "acc") (ELit (LInt 100)))) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x")))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 300)) (ELit (LInt 3)))) (ETuple (EApp (EApp (EApp (EMethodRef "foldUntil") (EVar "step")) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)) (ELit (LInt 5)))) (EUnOp "!" (EVar "calls")))))))
+(DTest false "foldUntil on an array that never breaks folds everything" (EApp (EApp (EVar "expectEqual") (ELit (LInt 10))) (EApp (EApp (EApp (EMethodRef "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))))
+(DTest false "foldUntil default on Option and Result" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LInt 7)) (ELit (LInt 3)) (ELit (LInt 0)))) (ETuple (EApp (EApp (EApp (EMethodRef "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 7)))) (EApp (EApp (EApp (EMethodRef "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Break") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EAnnot (EApp (EVar "Ok") (ELit (LInt 3))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))) (EApp (EApp (EApp (EMethodRef "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EAnnot (EApp (EVar "Err") (ELit (LString "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DTest false "foldUntil default on a Map stops early" (EBlock (DoLet false false (PVar "m") (EAnnot (EHeadAnnot (EApp (EMethodRef "fromEntries") (EListLit (ETuple (ELit (LInt 1)) (ELit (LInt 10))) (ETuple (ELit (LInt 2)) (ELit (LInt 20))) (ETuple (ELit (LInt 3)) (ELit (LInt 30))))) (TyApp (TyApp (TyCon "Map") (TyVar "_k")) (TyVar "_v"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LInt 30))) (EApp (EApp (EApp (EMethodRef "foldUntil") (ELam ((PVar "acc") (PVar "x")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "acc") (EVar "x")) (ELit (LInt 30))) (EApp (EVar "Break") (EBinOp "+" (EVar "acc") (EVar "x"))) (EApp (EVar "Continue") (EBinOp "+" (EVar "acc") (EVar "x")))))) (ELit (LInt 0))) (EVar "m"))))))
+(DTest false "List andThen concatenates in order" (EApp (EApp (EVar "expectEqual") (ETuple (EListLit (ELit (LInt 1)) (ELit (LInt 10)) (ELit (LInt 2)) (ELit (LInt 20)) (ELit (LInt 3)) (ELit (LInt 30))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))) (EListLit (ELit (LInt 1)) (ELit (LInt 3))) (EListLit (ELit (LInt 7)) (ELit (LInt 8))))) (ETuple (EApp (EApp (EMethodRef "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ELam ((PVar "x")) (EListLit (EVar "x") (EBinOp "*" (EVar "x") (ELit (LInt 10)))))) (EApp (EApp (EMethodRef "andThen") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (ELam ((PVar "x")) (EListLit (EVar "x")))) (EApp (EApp (EMethodRef "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)))) (ELam ((PVar "x")) (EIf (EBinOp "==" (EBinOp "%" (EVar "x") (ELit (LInt 2))) (ELit (LInt 0))) (EListLit) (EListLit (EVar "x"))))) (EApp (EApp (EMethodRef "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)))) (ELam ((PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 1))) (EListLit (ELit (LInt 7)) (ELit (LInt 8))) (EListLit)))))))
+(DTest false "List andThen calls f once per element, left to right" (EBlock (DoLet false false (PVar "log") (EAnnot (EApp (EVar "Ref") (EListLit)) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))))) (DoLet false false (PVar "out") (EApp (EApp (EMethodRef "andThen") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ELam ((PVar "x")) (EBinOp "|>" (EApp (EApp (EVar "setRef") (EVar "log")) (EBinOp "::" (EVar "x") (EUnOp "!" (EVar "log")))) (ELam ((PVar "u")) (EListLit (EVar "x") (EVar "x"))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EListLit (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 3))) (EListLit (ELit (LInt 3)) (ELit (LInt 2)) (ELit (LInt 1))))) (ETuple (EVar "out") (EUnOp "!" (EVar "log")))))))
+(DTest false "List andThen is stack safe on a long input" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1000000))) (EApp (EMethodRef "length") (EApp (EApp (EMethodRef "andThen") (ERangeList (ELit (LInt 1)) (ELit (LInt 1000000)) true)) (ELam ((PVar "x")) (EListLit (EVar "x")))))))
+(DTest false "List andThen is stack safe on a long inner list" (EApp (EApp (EVar "expectEqual") (ELit (LInt 1000000))) (EApp (EMethodRef "length") (EApp (EApp (EMethodRef "andThen") (EListLit (ELit (LInt 1)))) (ELam ((PVar "x")) (ERangeList (ELit (LInt 1)) (ELit (LInt 1000000)) true))))))

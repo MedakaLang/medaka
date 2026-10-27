@@ -76,5 +76,8 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:776: padLeft 5 '.' "ab"
   ok   stdlib/string.mdk:790: padRight 5 '.' "ab"
   ok   stdlib/string.mdk:805: center 5 '.' "ab"
+  ERROR stdlib/string.mdk:834: nextChar (startCursor "")
+        could not evaluate: nextChar (startCursor ""): no impl of Debug for StrCursor; add `deriving Debug` to `StrCursor` or write `impl Debug StrCursor`
+  ok   stdlib/string.mdk:861: sliceBetween (startCursor "héllo") (startCursor "héllo")
 
-stdlib/string.mdk: 77/77 passed
+stdlib/string.mdk: 78/79 passed (0 failed, 1 errors)
