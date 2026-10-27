@@ -7339,6 +7339,7 @@ blockLet env pat e =
   let pr = inferPat env pat
   let _ = bindFrom env.teDyn (fst pr) t
   let _ = settlePatLits env.teDyn lits
+  let _ = checkBinderPat env (fst pr) pat
   extendLocalVars env (snd pr)
 
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
@@ -11778,10 +11779,17 @@ funDomain mctx _ = freshVar mctx ()
 -- expected result (`checkedInto`).
 inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLamChecked env expected pats body =
-  fst (inferBindingChecked env expected pats body)
+  fst (inferBindingChecked True env expected pats body)
 
-inferBindingChecked : TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
-inferBindingChecked env expected pats body =
+-- [judge] says the patterns are a lambda's own; a method clause's patterns are
+-- one row of its method's clauses, which are judged together.
+inferBindingChecked : Bool ->
+  TcEnv ->
+  Option Mono ->
+  List Pat ->
+  Expr ->
+  (Mono, EffRow)
+inferBindingChecked judge env expected pats body =
   let lits = takePatLits env.teDyn.dcModule ()
   let pr = inferPats env pats
   let arity = listLen pats
@@ -11794,6 +11802,7 @@ inferBindingChecked env expected pats body =
       env.teDyn.dcModule
       (takeOpenedExistentials env.teDyn.dcModule ())
   let _ = settlePatLits env.teDyn lits
+  let _ = if judge then checkBinderPats env (fst pr) pats
   let _ = match expected
     Some want => recordClauseFileBound env.teDyn.dcModule body arity want
     None => ()
@@ -12432,6 +12441,7 @@ inferLetBody env bodyLoc pat t1 _ _ e2 _ _ _ _ =
   let pr = inferPat env pat
   let _ = unifyIn env.teDyn (fst pr) t1
   let _ = settlePatLits env.teDyn lits
+  let _ = checkBinderPat env (fst pr) pat
   infer (envAt bodyLoc (extendLocalVars env (snd pr))) e2
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
@@ -12588,14 +12598,40 @@ checkAnnotTooGeneral mctx ty resolved =
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
   let result = joinValueTypes env.teDyn JoinMatch (inferArms env scrutTy arms)
-  let loc = matchWarningLoc env.teDyn.dcModule.mcLoc arms
-  let _ = match normalize scrutTy
-    TVar _ =>
-      env.teDyn.dcModule.mcCells.matchChecksDeferred :=
-        (scrutTy, arms, loc)
-          :: env.teDyn.dcModule.mcCells.matchChecksDeferred.value
-    _ => checkMatchChecks (mctxAt loc env.teDyn.dcModule) scrutTy arms
+  let _ =
+    scheduleMatchChecks
+      env
+      scrutTy
+      arms
+      (matchWarningLoc env.teDyn.dcModule.mcLoc arms)
   result
+
+scheduleMatchChecks : TcEnv -> Mono -> List Arm -> Option Loc -> Unit
+scheduleMatchChecks env scrutTy arms loc = match normalize scrutTy
+  TVar _ =>
+    env.teDyn.dcModule.mcCells.matchChecksDeferred :=
+      (scrutTy, arms, loc)
+        :: env.teDyn.dcModule.mcCells.matchChecksDeferred.value
+  _ => checkMatchChecks (mctxAt loc env.teDyn.dcModule) scrutTy arms
+
+-- A `let` pattern or lambda parameter is judged as the single arm of a match
+-- on its own type, at the binding.
+checkBinderPats : TcEnv -> List Mono -> List Pat -> Unit
+checkBinderPats env (t :: ts) (p :: ps) =
+  let _ = checkBinderPat env t p
+  checkBinderPats env ts ps
+checkBinderPats _ _ _ = ()
+
+checkBinderPat : TcEnv -> Mono -> Pat -> Unit
+checkBinderPat env ty pat =
+  if patIsVar pat then
+    ()
+  else
+    scheduleMatchChecks
+      env
+      ty
+      [Arm pat [] (ELit LUnit)]
+      env.teDyn.dcModule.mcLoc
 
 -- A match's warnings are located at the match through its last arm.  The
 -- match's own span runs on over any comment or blank line that follows, on the
@@ -24891,9 +24927,11 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
   -- A graded impl body collects the calls that run an effect variable, so the
   -- effect checks below can name the call rather than the whole body.
   let sites = if isEmptyL indexOnly then None else Some (Ref [])
+  let envSites = { env | teDyn = { env.teDyn | dcPerformSites = sites } }
   let (inferErred, inferred) = erredDuring env.teDyn.dcModule (_ =>
     inferBindingChecked
-      { env | teDyn = { env.teDyn | dcPerformSites = sites } }
+      False
+      envSites
       (Some (normalize inst.mbiExpected))
       pats
       body)

@@ -777,3 +777,74 @@ test "a graph recorded while another module was rejected serves what a cold anal
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (rejectedGraphCheck rsrc csrc)
     _ => fail "could not read the prelude pair"
+
+-- ── refutable binders ──────────────────────────────────────────────────────
+
+-- The non-exhaustiveness warnings of the single-file program [src].
+binderWarnings : String -> String -> String -> List String
+binderWarnings rsrc csrc src =
+  filter
+    (contains "W-NONEXHAUSTIVE")
+    (map
+      diagText
+      (analyzeFrom noStdlibExports "main" rsrc csrc (parseLocated src)))
+
+-- [top] is declared above `main`; [body] is a statement of `main`'s block.
+binderCase : String -> Int -> String -> <IO> Expectation
+binderCase top want body = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    expectEqual
+      want
+      (length
+        (binderWarnings
+          rsrc
+          csrc
+          (unlines [
+            "data Pair = Pair Int Int",
+            top,
+            "main =",
+            "  let p = None : Option Int",
+            body,
+            "  println \"done\"",
+          ])))
+  _ => fail "could not read the prelude pair"
+
+test "a refutable let pattern warns, an irrefutable one does not" = expectEach [
+  ("refutable let", binderCase "" 1 "  let (Some x) = p"),
+  ("tuple let", binderCase "" 0 "  let (a, b) = (1, 2)"),
+  ("single-constructor let", binderCase "" 0 "  let (Pair a b) = Pair 1 2"),
+]
+
+test "a refutable lambda parameter warns, an irrefutable one does not" = expectEach
+  [
+    ("refutable lambda", binderCase "" 1 "  let f = (Some x) => x"),
+    ("tuple lambda", binderCase "" 0 "  let f = (a, b) => a"),
+    (
+      "single-constructor lambda",
+      binderCase "" 0 "  let f = (Pair a b) => a",
+    ),
+  ]
+
+test "a refutable if-let or guard pattern does not warn as a binder" = expectEach
+  [
+    (
+      "if let",
+      binderCase "" 0 "  let _ = if let Some x = p then x else 0",
+    ),
+    (
+      "guard",
+      binderCase
+        "g : Option Int -> Int\ng o\n  | Some x <- o = x\n  | otherwise = 0"
+        0
+        "  let _ = g p",
+    ),
+  ]
+
+test "the clauses of an impl method are not judged one pattern at a time" =
+  binderCase
+    "data Two = A | B\nimpl Debug Two where\n  debug A = \"A\"\n  debug B = \"B\""
+    0
+    "  let _ = debug A"

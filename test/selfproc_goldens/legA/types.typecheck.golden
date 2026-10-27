@@ -167,6 +167,8 @@ checkAdmittedOccObls : ModuleCtx -> Unit -> Unit
 checkAnnotTooGeneral : ModuleCtx -> Ty -> List Mono -> Unit
 checkArgEffVarCoverage : ModuleCtx -> Option String -> List (String, List Kind) -> String -> Ty -> Unit
 checkArgEffVars : ModuleCtx -> Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+checkBinderPat : TcEnv -> Mono -> Pat -> Unit
+checkBinderPats : TcEnv -> List Mono -> List Pat -> Unit
 checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 checkCallObligationsU : ModuleCtx -> Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : ModuleCtx -> List String -> String -> List FunClause -> Unit
@@ -852,7 +854,7 @@ inferArmGuards : TcEnv -> List Guard -> TcEnv
 inferArmOpening : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
 inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
 inferArrayLit : TcEnv -> List Expr -> Mono
-inferBindingChecked : TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
+inferBindingChecked : Bool -> TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
 inferBinop : DynCtx -> String -> Mono -> Mono -> Mono
 inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> Mono
 inferBlock : TcEnv -> List DoStmt -> Mono
@@ -1682,6 +1684,7 @@ scalarGivenAnswers : GraphCtx -> EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
 scalarGivenProjection : GraphCtx -> EvidenceBinderId -> IfaceRef -> ScopeId -> Option (List Int)
 sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> Map String Unit
 sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (Int, AuthResidual) -> Int -> List ScopedMember -> List (String, Scheme)
+scheduleMatchChecks : TcEnv -> Mono -> List Arm -> Option Loc -> Unit
 schemeLines : List (String, PubScheme) -> List String
 schemeObligationsOf : ModuleCtx -> Bool -> List Int -> List UObligation -> List VecObl
 schemeOblsForMember : ModuleCtx -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
