@@ -195,13 +195,16 @@ routeWord _ = "other"
 test "marking a group mints a site for each operator, literal and field access in its clauses" =
   let m = scoped ()
   let marked =
-    markedAs m (marking [] [] [] []) ["f"] "f x = x + 1\nf x = x.name\n"
+    markedAs m (marking [] [] [] []) ["f"] """
+f x = x + 1
+f x = x.name
+"""
   let nodes = flatMap nodesOf (bodiesOf "f" marked)
   expectEqual ["op", "lit", "head"] (kindsOf nodes)
 
 test "a minted operator site's cell is the one its id reads, and starts unrouted" =
   let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f x = x + y\n"
+  let marked = markedAs m (marking [] [] [] []) ["f"] "f x = x + y"
   match flatMap nodesOf (bodiesOf "f" marked)
     (_, ev) :: _ =>
       let route = siteRouteCell m.mcGraph ev
@@ -214,7 +217,7 @@ test "a minted operator site's cell is the one its id reads, and starts unrouted
 
 test "a minted literal site has an unrouted fromInt route and a field access site the unknown head" =
   let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f r = (r.name, 5)\n"
+  let marked = markedAs m (marking [] [] [] []) ["f"] "f r = (r.name, 5)"
   match flatMap nodesOf (bodiesOf "f" marked)
     [("head", head), ("lit", lit)] =>
       expectEqual
@@ -228,7 +231,7 @@ test "a minted literal site has an unrouted fromInt route and a field access sit
 test "marking a body again keeps the ids it already minted" =
   let m = scoped ()
   let mm = marking [] [] [] []
-  let once = markedAs m mm ["f"] "f x = x + 1\n"
+  let once = markedAs m mm ["f"] "f x = x + 1"
   let twice = markGroupClauses mm (envFor m) ["f"] once
   expectEqual
     (map ordinalOfNode (flatMap nodesOf (bodiesOf "f" once)))
@@ -239,7 +242,7 @@ ordinalOfNode (kind, ev) = (kind, ordinalOf ev)
 
 test "a name in the return-position set becomes a method occurrence with a fresh undecided cell" =
   let m = scoped ()
-  let marked = markedAs m (marking ["make"] [] [] []) ["f"] "f x = make x\n"
+  let marked = markedAs m (marking ["make"] [] [] []) ["f"] "f x = make x"
   match flatMap nodesOf (bodiesOf "f" marked)
     [("method", ev)] => match methodCellLookup m.mcGraph ev
       Ok c => expectEqual ("", None) (c.ecIface.value, c.ecArity.value)
@@ -249,11 +252,7 @@ test "a name in the return-position set becomes a method occurrence with a fresh
 test "a mangled shadow symbol is marked as the bare method with the symbol as its route fallback" =
   let m = scoped ()
   let marked =
-    markedAs
-      m
-      (marking [] [] [("m__size", "size")] [])
-      ["f"]
-      "f x = m__size x\n"
+    markedAs m (marking [] [] [("m__size", "size")] []) ["f"] "f x = m__size x"
   match flatMap methodsOf (bodiesOf "f" marked)
     [(bare, sym, ev)] => match methodCellLookup m.mcGraph ev
       Ok c =>
@@ -277,7 +276,10 @@ test "a name in the dictionary set becomes a dictionary application unless a par
       m
       (marking [] [] [] ["needs"])
       ["f", "g"]
-      "f x = needs x\ng needs = needs\n"
+      """
+f x = needs x
+g needs = needs
+"""
   expectEqual
     (["dict"], [])
     (
@@ -292,7 +294,11 @@ test "every member of the group is marked and a name outside it is not" =
       m
       (marking [] [] [] [])
       ["f", "g"]
-      "f x = x + 1\ng x = x + 1\nh x = x + 1\n"
+      """
+f x = x + 1
+g x = x + 1
+h x = x + 1
+"""
   expectEqual
     (["op", "lit"], ["op", "lit"], [])
     (
@@ -330,7 +336,7 @@ test "the cell stores say why they hold no cell for an id" =
 
 test "a minted site is not a miss in the site store" =
   let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f x = x + y\n"
+  let marked = markedAs m (marking [] [] [] []) ["f"] "f x = x + y"
   match flatMap nodesOf (bodiesOf "f" marked)
     (_, ev) :: _ => expectEqual "" (fst (cellStoreMisses m.mcGraph ev))
     [] => expectEqual "an operator site" "none"
@@ -546,7 +552,7 @@ test "an operand that is not a literal leaves the ranges alone" =
 
 test "a literal without the prelude is a fresh variable recorded for the range check, its route unset" =
   let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f = 5\n"
+  let marked = markedAs m (marking [] [] [] []) ["f"] "f = 5"
   let ev = match flatMap nodesOf (bodiesOf "f" marked)
     [(_, e)] => e
     _ => EvId "" (0 - 1)
@@ -710,7 +716,11 @@ test "the mark pass applies its rewrite to a member's clauses in source order an
       counter := counter.value + 1
       (pats, EVar ("clause" ++ intToString counter.value))
   let marked =
-    mapGroupClauses stamp ["f"] (groupedOf "f 0 = a\nf n = b\ng n = c\n")
+    mapGroupClauses stamp ["f"] (groupedOf """
+f 0 = a
+f n = b
+g n = c
+""")
   expectEqual
     (["clause1", "clause2"], ["c"])
     (
@@ -729,7 +739,10 @@ test "a name outside the members is not rewritten" =
     mapGroupClauses
       (clause => (fst clause, EVar "rewritten"))
       ["f"]
-      (groupedOf "f n = a\ng n = b\n")
+      (groupedOf """
+f n = a
+g n = b
+""")
   expectEqual
     (["rewritten"], ["b"])
     (
@@ -741,7 +754,7 @@ test "the dict-name set keeps the bare names once and adds the local name an ali
   let gctx = probeGraphCtx ()
   expectEqual
     ["f", "g"]
-    (markDictNames gctx ["f", "f"] [] [("m", parse "import lib.{f as g}\n")])
+    (markDictNames gctx ["f", "f"] [] [("m", parse "import lib.{f as g}")])
 
 -- ── the ordinary-return probes ────────────────────────────────────────────
 
