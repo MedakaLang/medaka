@@ -1271,22 +1271,33 @@ export impl Thenable (Result e) where
    concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
    associative.
 
+   `orElseWith a k` is `orElse a (k ())`, except that for `Option` the
+   fallback `k` runs only when `a` failed.
+
    > orElse None (Some 2)
    Some 2
    > orElse [1, 2] [3]
+   [1, 2, 3]
+   > orElseWith None (u => Some 2)
+   Some 2
+   > orElseWith [1, 2] (u => [3])
    [1, 2, 3] -}
 export interface Alternative f requires Applicative f where
   noMatch : f a
   orElse : f a -> f a -> f a
+  orElseWith : f a -> (Unit -> <e> f a) -> <e> f a
 
 export impl Alternative List where
   noMatch = []
   orElse xs ys = xs ++ ys
+  orElseWith xs k = xs ++ k ()
 
 export impl Alternative Option where
   noMatch = None
   orElse (Some x) _ = Some x
   orElse None b = b
+  orElseWith (Some x) _ = Some x
+  orElseWith None k = k ()
 
 -- > isSome (orElse (Some 1) (Some 2))
 -- True
@@ -1839,6 +1850,20 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
+{- | The value inside a `Some`, or the result of calling `k ()` for `None`.
+
+   The fallback runs only when there is no value, so it can be expensive or
+   effectful.
+
+   > optionOrElse (u => 0) (Some 42)
+   42
+   > optionOrElse (u => 0) None
+   0 -}
+export
+optionOrElse : (Unit -> <e> a) -> Option a -> <e> a
+optionOrElse _ (Some a) = a
+optionOrElse k None = k ()
+
 {- | The value inside a `Some`, or a panic with `context` as its message
    for `None`.
 
@@ -1911,6 +1936,20 @@ resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
 
+{- | The value inside an `Ok`, or the result of applying `k` to the error of
+   an `Err`.
+
+   The fallback runs only for an `Err`.
+
+   > resultOrElse stringLength (Ok 42)
+   42
+   > resultOrElse stringLength (Err "boom")
+   4 -}
+export
+resultOrElse : (err -> <e> a) -> Result err a -> <e> a
+resultOrElse _ (Ok a) = a
+resultOrElse k (Err e) = k e
+
 {- | The value inside an `Ok`, or a panic for `Err` whose message is
    `context`, a colon, and the error.
 
@@ -1924,6 +1963,17 @@ export
 resultOrPanic : Display e => String -> Result e a -> a
 resultOrPanic _ (Ok a) = a
 resultOrPanic context (Err e) = panic "\{context}: \{e}"
+
+{- | Discards a `Result`, value and error alike, and returns `()`.
+
+   For a failure that is acceptable, where `reason` states at the call site
+   why. There is no form without `reason`, and no `Option` twin.
+
+   > bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
+   () -}
+export
+bestEffort : String -> Result e a -> Unit
+bestEffort _ _ = ()
 
 {- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
    `Ok`.
