@@ -1,0 +1,207 @@
+admittedDeclAnswer : SiteCtx -> ImplEnv -> List MethodRow -> Mono -> IfaceRef -> AdmittedAnswer
+admittedSelection : SiteCtx -> ImplEnv -> String -> Mono -> AdmittedAnswer
+answeredOnlyByBindingHead : ModuleCtx -> Map String Unit -> IfaceRef -> List Mono -> Bool
+anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
+anyIn : List Int -> List Int -> Bool
+arithEntry : Obligation -> List (Ref Route, Mono)
+bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
+bucketArgsMatchReqs : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
+builtinClassPresent : GraphCtx -> BuiltinClass -> Bool
+collectByParam : List String -> List (String, Mono) -> List Mono
+collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
+commitImprovement : DynCtx -> Map String Unit -> List (Mono, Mono) -> Unit
+concreteReqMatchByIface : SiteCtx -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
+consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
+currentModuleMarks : GraphCtx -> Unit -> GraphMarks
+dedupWalkGoals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+dedupWalkGoalsGo : List (IfaceRef, List Mono) -> Map String (List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+determinationCandidates : ModuleCtx -> GoalWindow -> List Mono -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
+determineByUniqueInstance : ModuleCtx -> Map String Unit -> List UObligation -> Unit
+determineByUniqueInstanceGo : ModuleCtx -> Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
+determineGoal : ModuleCtx -> Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineHeldGoal : ModuleCtx -> Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineSweeps : ModuleCtx -> Map String Unit -> GoalWindow -> Int -> Unit
+dictAppEntry : Obligation -> List PendingDictApp
+dictAppsIn : List Obligation -> List PendingDictApp
+dictAppsSince : GraphCtx -> Int -> List PendingDictApp
+dropGoalsSince : GraphCtx -> Int -> List GoalKind -> Unit
+enclosingVarIds : Option Int -> List Mono -> List Int
+enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
+evCell : EvDest -> Ref Route
+exactReturnBlockers : List Mono -> List SolverBlocker
+exactReturnDefers : ModuleCtx -> Wanted -> List Mono -> Bool
+exactReturnRoutes : SiteCtx -> String -> String -> ScopeId -> Bool -> MethodReturnResolution -> (Route, List Route)
+fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
+fileGoal : GraphCtx -> Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
+fillOmittedTemplateArgs : List String -> List (Option Mono) -> List (String, Mono) -> List (Option Mono)
+findMatchingImplReqsU : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
+finishMethodReturnTrace : TraceSink -> List EvEntry -> List MethodReturnTraceEntry
+firstReqMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
+goalAnsweredBy : GraphCtx -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
+goalDefersOpenWorld : ModuleCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
+goalIdsClaimed : ModuleCtx -> List Int -> Bool
+goalKindName : GoalKind -> String
+goalKindTag : GoalKind -> Int
+goalMonos : Obligation -> List Mono
+goalSelectionStable : ModuleCtx -> List Int -> IfaceRef -> List Mono -> Bool
+goalSlotStillOpen : ModuleCtx -> List Mono -> Bool
+goalVarsAllHeld : Map String Unit -> List Mono -> Bool
+goalWindowOf : GraphCtx -> List UObligation -> GoalWindow
+goalsMark : GraphCtx -> Unit -> Int
+goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
+goalsOnVar : GoalWindow -> Int -> List Int
+goalsSince : GraphCtx -> Int -> List Obligation
+ifaceRefBare : String -> IfaceRef
+ifaceRefNone : IfaceRef
+implHeadMatchesArgs : ModuleCtx -> List Ty -> List Mono -> Bool
+implMatchesU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
+implMatchesWithReqsU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
+improveByUniqueImpl : DynCtx -> Map String Unit -> List UObligation -> Unit
+improveGoal : DynCtx -> Map String Unit -> IfaceRef -> List Mono -> Unit
+improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
+improvementPool : ModuleCtx -> List Mono -> List ImplRow
+instanceSuperEvidence : GraphCtx -> IfaceRef -> List Mono -> List SuperEvidence
+isInterfaceDecl : Decl -> Bool
+isLegacyPredicateAnswer : Option AssumAnswer -> Bool
+isLocalAbsName : String -> Bool
+isSelection : AdmittedAnswer -> Bool
+isSemanticGivenAnswer : Option AssumAnswer -> Bool
+isUndecided : AdmittedAnswer -> Bool
+liveLocsOf : ModuleCtx -> List Obligation -> List String
+localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
+localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
+localSourceName : String -> String
+lookupTraceEvidence : EvId -> List EvEntry -> Option EvVal
+methodDictEntry : Obligation -> List PendingMethodDict
+methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
+methodPredicateRoutes : SiteCtx -> String -> ScopeId -> List PredicateSlot -> List Route
+methodPredicateTemplateArgs : List (Option Mono) -> Option (List Mono)
+methodPredicateTemplateArgumentsMatch : List (Option Mono) -> List Mono -> Bool
+methodPredicateTemplateCandidateCount : MethodPredicateTemplate -> List ImplRow -> Int -> Int
+methodPredicateTemplateHasAbsent : MethodPredicateTemplate -> Bool
+methodPredicateTemplateHeadPairs : List (Option Mono) -> List Ty -> Option (List (Ty, Mono))
+methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
+methodPredicateTemplateMatchesSlot : MethodPredicateTemplate -> PredicateSlot -> Bool
+methodReturnAmbiguousWithoutGiven : ModuleCtx -> MethodReturnRequest -> Bool
+methodReturnArgs : GraphCtx -> MethodReturnRequest -> Option (List Mono)
+methodReturnEvidenceRoute : SiteCtx -> String -> ScopeId -> PrerequisiteEvidence -> Route
+methodReturnEvidenceRoutes : SiteCtx -> String -> ScopeId -> List PrerequisiteEvidence -> List Route
+methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
+methodReturnInstantiation : ModuleCtx -> MethodReturnRequest -> Option Instantiation
+methodReturnMemoArguments : List Mono -> List String
+methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
+methodReturnMemoEvidence : EvId -> List EvEntry -> String
+methodReturnMemoIface : IfaceRef -> String
+methodReturnMemoOutcome : SolverOutcome -> String
+methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
+methodReturnMemoRoute : Route -> String
+methodReturnMemoSupers : List Route -> String
+methodReturnMemoView : GraphCtx -> List EvEntry -> Obligation -> MethodReturnRequest -> MethodReturnMemoView
+methodReturnOrigin : ModuleCtx -> Option Loc -> GoalOrigin
+methodReturnPredicate : GraphCtx -> MethodReturnRequest -> Option ClassPredicate
+methodReturnPredicateFromTemplate : GraphCtx -> MethodPredicateTemplate -> List String -> List (String, Mono) -> ScopeId -> Option ClassPredicate
+methodReturnPrerequisites : ModuleCtx -> List Mono -> ImplRow -> List PrerequisiteEvidence
+methodReturnPrerequisitesMatch : List PrerequisiteEvidence -> List PrerequisiteEvidence -> Bool
+methodReturnProbeGoalIfaces : List Obligation -> List String
+methodReturnProbeIface : String -> String -> Ty -> Decl
+methodReturnProbeImpl : String -> String -> Decl
+methodReturnProbeOblIfaces : List UObligation -> List String
+methodReturnProbeOccurrence : ModuleCtx -> MethodSchemeRow -> MethodTrackedInstantiation
+methodReturnProbeRouteKey : Route -> String
+methodReturnProbeScope : ModuleCtx -> String -> ScopeId
+methodReturnProbeSlotIfaces : List PredicateSlot -> List String
+methodReturnProbeSpelling : ModuleCtx -> MethodSchemeRow -> Unit
+methodReturnResolutionValid : ModuleCtx -> MethodReturnRequest -> MethodReturnResolution -> Bool
+methodReturnSelectedIdentity : MethodReturnResolution -> Int
+methodReturnWanted : ModuleCtx -> MethodReturnRequest -> Option Wanted
+methodReturnWantedMatches : ModuleCtx -> MethodReturnRequest -> Wanted -> Bool
+methodRowRegistrySlotIds : ModuleCtx -> String -> List (List Int)
+methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)
+methodSlotArgumentIdsOne : MethodPredicateSlot -> List Int
+methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
+methodSlotIdsAtPositions : List Int -> List MethodPredicateSlot -> List (List Int)
+methodSlotPositions : List MethodPredicateSlot -> List (List Int)
+methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
+noteMethodReturnTrace : ModuleCtx -> MethodReturnTraceStage -> MethodReturnRequest -> Option Route -> List Route -> Unit
+noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
+nthInt : Int -> List Int -> Int
+numAnchorObservationView : NumAnchorTestObservation -> (String, Bool, Bool, String, String)
+numericReturnRoute : Route -> List Route -> Route
+numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
+occurrenceDispatchMonos : List String -> Ty -> Mono -> List (String, Mono) -> List Mono
+openScope : ModuleCtx -> ScopeId -> Unit
+outerRigidIds : Option Int -> List Mono -> Map String Unit -> Map String Unit
+predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
+prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
+publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
+pushDictApp : GraphCtx -> PendingDictApp -> Unit
+pushGoal : GraphCtx -> Obligation -> Unit
+pushLocalDictApp : ModuleCtx -> String -> EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+recDictAppEntry : Obligation -> List RecDictApp
+recPredicateArgs : GraphCtx -> Mono -> PredicateSlot -> Option (List Mono)
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
+recRoutes : SiteCtx -> String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
+refileGoals : GraphCtx -> GoalWindow -> List Int -> Unit
+repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
+reqToObligation : ModuleCtx -> List (String, Mono) -> Require -> (IfaceRef, List Mono)
+residualSelectionStable : ModuleCtx -> List Int -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
+resolveAdmittedSite : SiteCtx -> String -> Ref String -> Ref Route -> Ref (List Route) -> Mono -> String -> ScopeId -> Unit
+resolveArgStamp : SiteCtx -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
+resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
+resolveArithSite : Ref Route -> Mono -> Unit
+resolveExactReturnSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
+resolveNumLitSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
+resolveOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> String -> ScopeId -> Unit
+resolvePredicateOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> ClassPredicate -> String -> ScopeId -> Unit
+resolveRecMono : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> Route
+resolveSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
+returnPosMethod : List String -> IfaceMethod -> List String
+returnPosMethodNames : List Decl -> List String
+returnPosOfDecl : Decl -> List String
+rigidHeadInstanceContext : SiteCtx -> Map String Unit -> IfaceRef -> List Mono -> Option (List (IfaceRef, List Mono))
+routableSelection : ModuleCtx -> String -> AdmittedAnswer -> AdmittedAnswer
+routeLocalSym : Route -> String
+routeOf : SiteCtx -> IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
+routesOfMonosTop : SiteCtx -> String -> ScopeId -> List Mono -> List IfaceRef -> List Route
+routesOfMonosTopV : SiteCtx -> String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
+rowHeadSubstRigid : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (Int, Mono))
+rowHeadUnifies : ModuleCtx -> List Mono -> ImplRow -> Bool
+sameTraceEvId : EvId -> EvId -> Bool
+scopeGivenProbe : Unit -> List Bool
+sealMethodReturnGoals : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoalsFrom : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView) -> (List Obligation, List MethodReturnMemoView)
+siblingStaysSatisfiable : ModuleCtx -> Ref (List (Int, Mono)) -> List Int -> UObligation -> Bool
+siblingsStaySatisfiable : ModuleCtx -> GoalWindow -> List (Int, Mono) -> Bool
+siteEntry : Obligation -> List PendingEntry
+siteKindMonos : SiteKind -> List Mono
+sitesFor : String -> Map String (List a) -> List a
+solveExactReturn : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solveExactReturnInstance : SiteCtx -> MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
+solveExactReturnOnce : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solvedCleanly : ModuleCtx -> (a -> List Mono) -> (Unit -> a) -> (Bool, a)
+solvedOnWalk : ModuleCtx -> ReqWalk -> IfaceRef -> List Mono -> (Unit -> List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono)
+spanKeys : List (Option Loc) -> List String
+stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
+stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
+stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
+stampRoutes : List (Ref Route) -> Unit
+superGoalClosure : GraphCtx -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+superGoalClosureGo : GraphCtx -> List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+topRouteV : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
+uOblArgs : GraphCtx -> UObligation -> List Mono
+uniqueMethodTemplateGiven : GraphCtx -> MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
+univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
+univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
+vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
+walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalSame : IfaceRef -> List Mono -> IfaceRef -> List Mono -> Bool
+walkGoalSameProbe : Unit -> List Bool
+wantedMatches : Wanted -> Wanted -> Bool
+withDeclaredVars : ModuleCtx -> Map String Unit -> List Mono -> Map String Unit
