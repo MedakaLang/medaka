@@ -6,7 +6,7 @@
 -- of the result, never taken back from the module under test.  Every test mints its own
 -- module record in a fresh graph record, so none needs a doctest's shared fixture.
 
-import list.{indexed, lookup, nub, reverse, zip}
+import list.{indexed, lookup, nub, zip}
 import test.{
   expectAll,
   expectEqual,
@@ -14,7 +14,6 @@ import test.{
 }
 import frontend.ast.{TyConOrigin(..)}
 import types.effect_rows.{pureRow}
-import types.publish.{tcCode}
 import types.repr.{Mono(..), Scheme(..), Tyvar(..), normalize}
 import types.tc_mono.{
   monoUnboundIds,
