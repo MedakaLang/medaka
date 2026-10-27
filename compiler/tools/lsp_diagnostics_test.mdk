@@ -1,0 +1,42 @@
+import tools.lsp_diagnostics.{parseDiagnosticActions}
+import tools.source_snapshot.{makeSnapshot}
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic(..), ParseEdit(..), EditApplicability(..),
+  ParseDiagnosticKind(..)
+}
+import test.{expectEach, expectEqual}
+
+test "parse actions require expected text and machine applicability" =
+  let snapshot = makeSnapshot "file:///a.mdk" None "x != y"
+  let loc = Loc "" 1 2 1 4
+  let diag edit = ParseDiagnostic BadNeq loc [edit]
+  expectEach [
+    (
+      "machine",
+      expectEqual
+        1
+        (length
+          (parseDiagnosticActions snapshot [
+            diag (ParseEdit loc "!=" "/=" MachineApplicable),
+          ])),
+    ),
+    (
+      "mismatch",
+      expectEqual
+        0
+        (length
+          (parseDiagnosticActions snapshot [
+            diag (ParseEdit loc "==" "/=" MachineApplicable),
+          ])),
+    ),
+    (
+      "human",
+      expectEqual
+        0
+        (length
+          (parseDiagnosticActions snapshot [
+            diag (ParseEdit loc "!=" "/=" HumanOnly),
+          ])),
+    ),
+  ]

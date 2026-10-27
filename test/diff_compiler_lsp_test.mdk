@@ -1848,3 +1848,189 @@ test "parse diagnostic carries typed code and UTF-16 edit" =
         ]
         _ => fail "expected one parse diagnostic"
       _ => fail "expected one publish"
+
+codeActionMsg : Int -> String -> Json -> Json
+codeActionMsg id uri diagnostic =
+  rpc
+    id
+    "textDocument/codeAction"
+    (jObject [
+      ("textDocument", jObject [("uri", JString uri)]),
+      ("context", jObject [("diagnostics", jArray [diagnostic])]),
+    ])
+
+test "parse quick fix uses the published snapshot and UTF-16 range" =
+  let uri = "file:///action.mdk"
+  let src = "main = (\"😀\", 1 != 2)\n"
+  let range = jObject [
+    ("start", jObject [("line", JInt 0), ("character", JInt 16)]),
+    ("end", jObject [("line", JInt 0), ("character", JInt 18)]),
+  ]
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", range),
+    (
+      "data",
+      jObject [("uri", JString uri), ("version", JInt 1), ("text", JString src)],
+    ),
+  ]
+  let (errors, out) = drive [
+    initBare,
+    didOpenMsg uri src,
+    codeActionMsg 2 uri diagnostic,
+    codeActionMsg 3 "file:///wrong.mdk" diagnostic,
+    didChangeMsg uri "main = (\"😀\", 1 /= 2)\n",
+    codeActionMsg 4 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match elems (resultTo 2 objs)
+      [action] => expectEach [
+        ("process", expectEqual [] errors),
+        (
+          "capability",
+          expectEqual (Some (JBool True)) (match replyTo 1 objs
+            Some o => dig ["result", "capabilities", "codeActionProvider"] o
+            None => None),
+        ),
+        ("kind", expectEqual (Some (JString "quickfix")) (get "kind" action)),
+        (
+          "versioned edit",
+          expectEqual
+            (Some
+              (jArray [
+                jObject [
+                  (
+                    "textDocument",
+                    jObject [("uri", JString uri), ("version", JInt 1)],
+                  ),
+                  (
+                    "edits",
+                    jArray [
+                      jObject [("range", range), ("newText", JString "/=")],
+                    ],
+                  ),
+                ],
+              ]))
+            (dig ["edit", "documentChanges"] action),
+        ),
+        ("wrong URI", expectEqual [] (elems (resultTo 3 objs))),
+        ("stale", expectEqual [] (elems (resultTo 4 objs))),
+        (
+          "follow-up",
+          expectEqual [] (match reverse (publishes objs)
+            p :: _ => diagsOf p
+            [] => [JNull]),
+        ),
+      ]
+      _ => fail "expected exactly one quick fix"
+
+test "project publication binds the open buffer snapshot" = withScratchDir
+  (dir =>
+    let src = "export\nbad = 1 != 2\n"
+    let entry = "import bad.{bad}\nmain = bad\n"
+    match layOut dir [("bad.mdk", src), ("main.mdk", entry)]
+      Err e => fail e
+      Ok _ =>
+        let uri = "file://" ++ dir ++ "/bad.mdk"
+        let main = "file://" ++ dir ++ "/main.mdk"
+        let snapshotData = jObject [
+          ("uri", JString uri),
+          ("version", JInt 1),
+          ("text", JString src),
+        ]
+        let diagnostic = jObject [
+          ("code", JString "P-BAD-NEQ"),
+          ("range", coordRange 1 8 10),
+          ("data", snapshotData),
+        ]
+        let (errors, out) = drive [
+          didOpenMsg uri src,
+          didOpenMsg main entry,
+          codeActionMsg 2 uri diagnostic,
+          didChangeMsg uri "export\nbad = 1 /= 2\n",
+          codeActionMsg 3 uri diagnostic,
+          bye,
+        ]
+        match decodeFrames out
+          Err e => fail e
+          Ok objs =>
+            let badPublishes = filter (p => uriOf p == uri) (publishes objs)
+            match badPublishes
+              _ :: project :: _ => expectEach [
+                ("process", expectEqual [] errors),
+                (
+                  "project identity",
+                  expectEqual
+                    [Some snapshotData, Some snapshotData]
+                    (map (get "data") (diagsOf project)),
+                ),
+                ("action", expectEqual 1 (length (elems (resultTo 2 objs)))),
+                ("stale", expectEqual [] (elems (resultTo 3 objs))),
+              ]
+              _ => fail "expected direct and project publications")
+
+test "unversioned diagnostics bind exact content" =
+  let uri = "file:///no-version.mdk"
+  let src = "main = 1 != 2\n"
+  let open =
+    notify
+      "textDocument/didOpen"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri), ("text", JString src)]),
+      ])
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", coordRange 0 9 11),
+    (
+      "data",
+      jObject [("uri", JString uri), ("version", JNull), ("text", JString src)],
+    ),
+  ]
+  let change =
+    notify
+      "textDocument/didChange"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri)]),
+        (
+          "contentChanges",
+          jArray [jObject [("text", JString "main = 2 != 3\n")]],
+        ),
+      ])
+  let (errors, out) = drive [
+    open,
+    codeActionMsg 2 uri diagnostic,
+    change,
+    codeActionMsg 3 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("unchanged", expectEqual 1 (length (elems (resultTo 2 objs)))),
+      ("changed", expectEqual [] (elems (resultTo 3 objs))),
+    ]
+
+test "non-parse suggestion keeps its code help and fix on wire" =
+  let (errors, out) =
+    drive [didOpenMsg "file:///typo.mdk" "main = printl \"hi\"\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "R-UNBOUND")) (get "code" d)),
+          (
+            "help",
+            expectEqual (Some (JString "did you mean `print`?")) (get "help" d),
+          ),
+          (
+            "fix",
+            expectEqual (Some (JString "print")) (dig ["fix", "replacement"] d),
+          ),
+        ]
+        _ => fail "expected one resolve diagnostic"
+      _ => fail "expected one publish"
