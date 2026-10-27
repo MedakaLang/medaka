@@ -463,6 +463,19 @@ arrToListGo : Array a -> Int -> List a -> List a
 arrToListGo arr i acc =
   if i < 0 then acc else arrToListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
 
+arrFoldUntilGo : (b -> a -> <e> ControlFlow b) ->
+  Array a ->
+  Int ->
+  Int ->
+  b ->
+  <e> b
+arrFoldUntilGo f arr i n acc =
+  if i >= n then
+    acc
+  else match f acc (arrayGetUnsafe i arr)
+    Continue acc' => arrFoldUntilGo f arr (i + 1) n acc'
+    Break r => r
+
 arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
 arrFoldGo f arr i n acc =
   if i >= n then
@@ -482,6 +495,7 @@ export impl Mappable Array where
 
 export impl Foldable Array where
   fold f z arr = arrFoldGo f arr 0 (arrayLength arr) z
+  foldUntil f z arr = arrFoldUntilGo f arr 0 (arrayLength arr) z
   foldRight f z arr = arrFoldRightGo f arr (arrayLength arr - 1) z
   toList arr = arrToListGo arr (arrayLength arr - 1) []
   isEmpty arr = arrayLength arr == 0
@@ -1356,26 +1370,43 @@ export impl Bimappable (,) where
 
 -- # Containers
 
+{- | The step result of `foldUntil`: `Continue` carries the accumulator
+   onward, `Break` ends the fold with its payload as the final result.
+
+   > foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+   3 -}
+-- `Result` would read as failure: `Break` is a successful early exit, not an error.
+-- lint-disable-next-line rule-clone-type
+public export data ControlFlow b = Continue b | Break b
+
 {- | Containers whose elements can be reduced to a single value.
 
    `fold` is a strict left fold. `foldRight` is the right fold, which
    preserves element order in the result and is the one to use when the
    step builds a structure. An instance defines `fold`, `foldRight`, and
-   `toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
-   instance may override where a faster version exists.
+   `toList`; `foldMap`, `foldUntil`, `length`, and `isEmpty` have defaults,
+   which an instance may override where a faster version exists.
+
+   `foldUntil` is a left fold that can stop early: the step returns
+   `Continue acc` to go on or `Break r` to finish with `r`, leaving the
+   remaining elements unvisited.
 
    > fold (acc x => acc + x) 0 [1, 2, 3]
    6
    > length (Some 5)
-   1 -}
+   1
+   > foldUntil (acc x => if x > 2 then Break x else Continue acc) 0 [1, 2, 3, 4]
+   3 -}
 export interface Foldable t where
   fold : (b -> a -> <e> b) -> b -> t a -> <e> b
   foldRight : (a -> b -> <e> b) -> b -> t a -> <e> b
   foldMap : Monoid m => (a -> <e> m) -> t a -> <e> m
+  foldUntil : (b -> a -> <e> ControlFlow b) -> b -> t a -> <e> b
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
   foldMap f = fold (acc x => acc ++ f x) empty
+  foldUntil f z t = foldUntilList f z (toList t)
   length t = fold (acc _ => acc + 1) 0 t
   isEmpty t = match toList t
     [] => True
@@ -1573,11 +1604,18 @@ listFoldMapGo : Monoid m => m -> List m -> m
 listFoldMapGo acc [] = acc
 listFoldMapGo acc (y :: ys) = listFoldMapGo (append y acc) ys
 
+foldUntilList : (b -> a -> <e> ControlFlow b) -> b -> List a -> <e> b
+foldUntilList _ acc [] = acc
+foldUntilList f acc (x :: xs) = match f acc x
+  Continue acc' => foldUntilList f acc' xs
+  Break r => r
+
 -- `length` goes through the strict left fold; `1 + length xs` would
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
   fold _ acc [] = acc
   fold f acc (x :: xs) = fold f (f acc x) xs
+  foldUntil = foldUntilList
   foldRight _ acc [] = acc
   foldRight f acc (x :: xs) = f x (foldRight f acc xs)
   toList = identity
@@ -1667,9 +1705,17 @@ export impl Traversable (Result e) where
 
 -- # Folding
 
--- These are generic over any `Foldable` and do not short-circuit, because
--- `fold` itself doesn't.  Container-specific versions in `list.mdk`,
--- `array.mdk`, etc. can short-circuit where it matters.
+-- `any`, `all`, `elem` and `find` stop at the first decisive element via
+-- `foldUntil`.  The `Continue` results of a miss are shared constants so a
+-- miss allocates nothing per element.
+anyMiss : ControlFlow Bool
+anyMiss = Continue False
+
+allMiss : ControlFlow Bool
+allMiss = Continue True
+
+findMiss : ControlFlow (Option a)
+findMiss = Continue None
 
 {- | Whether at least one element satisfies `f`.
 
@@ -1677,7 +1723,7 @@ export impl Traversable (Result e) where
    True -}
 export
 any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-any f = fold (acc x => acc || f x) False
+any f = foldUntil (_ x => if f x then Break True else anyMiss) False
 
 -- > any (x => x > 10) [1, 2, 3]
 -- False
@@ -1692,22 +1738,15 @@ any f = fold (acc x => acc || f x) False
    True -}
 export
 all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-all f = fold (acc x => acc && f x) True
+all f = foldUntil (_ x => if f x then allMiss else Break False) True
 
--- Latches the first hit via an as-pattern so later elements don't overwrite
--- the answer.
 {- | The first element satisfying `f`, or `None`.
 
    > find (x => x > 1) [1, 2, 3]
    Some 2 -}
 export
 find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
-find f = fold g None
-  where
-    g (acc@(Some _)) _ = acc
-    g None x
-      | f x = Some x
-      | otherwise = None
+find f = foldUntil (_ x => if f x then Break (Some x) else findMiss) None
 
 {- | The number of elements satisfying `f`.
 
@@ -1743,7 +1782,7 @@ product xs = fold (*) (fromInt 1) xs
    True -}
 export
 elem : (Foldable t, Eq a) => a -> t a -> Bool
-elem a = fold (acc x => acc || x == a) False
+elem a = foldUntil (_ x => if x == a then Break True else anyMiss) False
 
 -- | Whether the value does not occur in the container.
 export
