@@ -1731,6 +1731,25 @@ lookupStandaloneValue env name = match lookupBinding env name
   None => None
 
 export
+lookupImportedStandalone : TcEnv -> String -> Option Scheme
+lookupImportedStandalone env name = match lookupBinding env name
+  Some binding => match binding.ebStandalone
+    Some (ImportedStandalone, value) => Some value.vsScheme
+    _ => None
+  None => None
+
+-- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
+-- the qual constraint table for such a name is authoritative ("unconstrained in its
+-- source"), so `declaredConstraintFor` must NOT fall through to the source-blind bare-name
+-- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
+export
+hasImportDefiner : ModuleCtx -> String -> Bool
+hasImportDefiner mctx name =
+  match omLookup name mctx.mcCells.currentImportDefinersRef.value
+    Some _ => True
+    None => False
+
+export
 bindingWithStandalone : EnvBinding ->
   (StandaloneOrigin, ValueScheme) ->
   EnvBinding
@@ -3345,6 +3364,16 @@ reexportRenamed (origin, local) src =
 export
 ifaceMethodRows : List Decl -> List (String, List String)
 ifaceMethodRows decls = flatMap ifaceMethodRowOf decls
+
+-- C5: every interface method name declared anywhere in [decls] (unwrapping DAttrib).
+export
+allIfaceMethodNames : List Decl -> List String
+allIfaceMethodNames [] = []
+allIfaceMethodNames ((DAttrib _ d) :: rest) =
+  allIfaceMethodNames [d] ++ allIfaceMethodNames rest
+allIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
+  ifaceMethodNames methods ++ allIfaceMethodNames rest
+allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
 
 ifaceMethodRowOf : Decl -> List (String, List String)
 ifaceMethodRowOf (DAttrib _ d) = ifaceMethodRowOf d

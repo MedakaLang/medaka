@@ -74,14 +74,18 @@ import types.publish.{
   noEntryTables
 }
 import types.typecheck.{
+  TcDiag(..),
+  chainFullKey,
+  checkModulesChainReportFor,
+  checkModulesEntryFullReportK,
+  checkModulesPartialK,
   driveInputsFor,
-  checkModulesEntryFullReportK, entrySplit, schemeLines,
-  checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
-  entryOwnSchemes, dropModSchemes, ModDiags,
-  TcDiag(..), tcMsg,
-  -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
-  -- typechecker because S1's `nameable in M` operand does; see its own comment.
-  importedStandaloneShadows, importedStandaloneShadowsIn,
+  dropModSchemes,
+  entryOwnSchemes,
+  entrySplit,
+  ModDiags,
+  schemeLines,
+  tcMsg,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
@@ -128,6 +132,7 @@ import support.util.{
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
+import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 

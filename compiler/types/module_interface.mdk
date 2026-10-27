@@ -72,7 +72,8 @@ import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
   ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
   CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView, EvCell(..),
-  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder
+  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder, grantTopKey,
+  methodGrantKey, setGrantIds
 }
 
 -- ── the key ─────────────────────────────────────────────────────────────────
@@ -401,18 +402,6 @@ applyModuleTrees g t =
 zonkLocalAbs : LocalAbs -> LocalAbs
 zonkLocalAbs la = { la | laSlots = map zonkSlot la.laSlots }
 
--- The key a top-level binder's grant ids are recorded under.
-export
-grantTopKey : String -> String -> String
-grantTopKey mid n = "\{mid}|\{n}"
-
--- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
--- no binder that takes no grant has a row.
-export
-setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
-setGrantIds table (key, []) = table := omDelete key table.value
-setGrantIds table (key, ids) = table := omInsert key ids table.value
-
 -- Delete every row recorded under the renamed local binder [name].
 export
 forgetLocalRows : LocalAbsState -> GrantState -> String -> Unit
@@ -420,11 +409,6 @@ forgetLocalRows las gs name =
   las.lasBinders := omDelete name las.lasBinders.value
   las.lasRecOccs := omDelete name las.lasRecOccs.value
   gs.gsLocalIds := omDelete name gs.gsLocalIds.value
-
--- The key an interface method's grants are recorded under.
-export
-methodGrantKey : String -> String -> String
-methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
 
 -- The keys of the methods the interfaces of [prog] declare.
 methodGrantKeys : List Decl -> List String

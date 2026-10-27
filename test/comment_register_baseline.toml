@@ -640,16 +640,6 @@ class = "draft"
 count = 3
 
 [[entry]]
-file = "compiler/types/tc_mono.mdk"
-class = "history"
-count = 3
-
-[[entry]]
-file = "compiler/types/tc_mono.mdk"
-class = "deictic"
-count = 1
-
-[[entry]]
 file = "compiler/types/tc_scope.mdk"
 class = "history"
 count = 1
@@ -682,12 +672,12 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 47
+count = 40
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "ruling"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -697,12 +687,12 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 184
+count = 150
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 10
+count = 9
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -712,7 +702,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 172
+count = 150
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

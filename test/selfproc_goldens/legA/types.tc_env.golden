@@ -1,6 +1,7 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
+allIfaceMethodNames : List Decl -> List String
 anyArgMentions : List String -> List Ty -> Bool
 anyKRow : List Kind -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
@@ -117,6 +118,7 @@ funDefs : List Decl -> List (String, (List Pat, Expr))
 graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
+hasImportDefiner : ModuleCtx -> String -> Bool
 headBucketKey : Option HeadKey -> RegKey
 headTabEq : Option HeadKey -> Option TabKey -> Bool
 headTabIs : Option HeadKey -> TabKey -> Bool
@@ -226,6 +228,7 @@ letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 lookupBinding : TcEnv -> String -> Option EnvBinding
 lookupCtor : TcEnv -> String -> Option Scheme
 lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
+lookupImportedStandalone : TcEnv -> String -> Option Scheme
 lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
 lookupMethodRowById : IfaceRef -> String -> Registry MethodSchemeRow -> Option MethodSchemeRow
