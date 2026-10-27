@@ -28,6 +28,10 @@ units; combining characters and tabs are not display-width expanded. LF,
 CRLF, and lone CR end lines. Conversion accepts valid boundaries through EOF,
 rejects positions inside a surrogate pair and outside a line, and treats the
 interior of CRLF as invalid. Output ranges use valid source boundaries.
+Incoming positions use strict validation. When an existing diagnostic producer
+supplies an out-of-bounds endpoint, `clampSourcePositionToOffset` clamps its
+one-based source line and zero-based codepoint column to a valid boundary before
+converting it to a protocol position; it reuses the same line arrays.
 
 The immutable index holds line starts, line ends and UTF-16 prefix widths.
 Construction scans the source once; endpoint lookup uses binary search. It is

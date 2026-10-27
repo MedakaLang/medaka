@@ -90,6 +90,13 @@ sourcePositionToOffset (SourceIndex starts ends _) line column =
       Some (start + column)
 
 export
+clampSourcePositionToOffset : SourceIndex -> Int -> Int -> Int
+clampSourcePositionToOffset (SourceIndex starts ends _) line column =
+  let i = max 0 (min (arrayLength starts - 1) (line - 1))
+  let start = arrayGetUnsafe i starts
+  start + max 0 (min (arrayGetUnsafe i ends - start) column)
+
+export
 offsetToUtf16Position : SourceIndex -> Int -> Option (Int, Int)
 offsetToUtf16Position index offset = match index
   SourceIndex starts _ prefixes => match offsetToSourcePosition index offset

@@ -286,19 +286,43 @@ coordinateRun dir =
       "medaka_check"
       (jObject [("source", JString "main = (\"😀\", 1 + \"x\")\n")]),
     coordinateCall 8 "medaka_symbols" (coordinateFile path),
+    coordinateCall
+      9
+      "medaka_check"
+      (jObject [("source", JString "main = \"abc")]),
+    coordinateCall
+      10
+      "medaka_fmt"
+      (jObject [("source", JString "main = (\"😀\", )\n")]),
+    coordinateCall
+      11
+      "medaka_check"
+      (coordinateFile (stringConcat [dir, "/missing.mdk"])),
   ]
   match (
-    writeOk path "value = 1\nmain = (\"😀\", value + value)",
+    writeOk path """value = 1
+main = ("😀", value + value)""",
     writeOk one "main = (\n",
-    writeOk two "value = 1\nbad = )\n",
+    writeOk two """value = 1
+bad = )
+""",
     writeOk request (stringConcat [join "\n" calls, "\n"]),
   )
     (Ok _, Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
       Err e => fail e
       Ok (code, out, _) => match map coordinateResponse (split "\n" out)
-        first :: ambiguous :: missing :: ty :: firstError :: secondError :: diag :: symbols :: _ => expectEach
+        first :: ambiguous :: missing :: ty :: firstError :: secondError :: diag :: symbols :: eof :: fmt :: absent :: _ => expectEach
           [
             ("exit", expectEqual 0 code),
+            (
+              "EOF clamp",
+              expectTextContainsAll ["\"character\":11,\"line\":0"] eof,
+            ),
+            ("formatter astral", expectTextContainsAll ["line 0, col 12"] fmt),
+            (
+              "missing source",
+              expectTextContainsAll ["cannot read file"] absent,
+            ),
             ("definition", expectTextContainsAll ["\"character\":5"] first),
             (
               "ambiguity",
@@ -333,3 +357,76 @@ coordinateRun dir =
 
 test "mcp positions use UTF-16 and parse errors use zero-based lines" =
   withScratchDir coordinateRun
+
+scopeCoordinates : String -> <Exec, IO, FileRead> Expectation
+scopeCoordinates dir =
+  let path = stringConcat [dir, "/scope.mdk"]
+  let bad = stringConcat [dir, "/bad.mdk"]
+  let request = stringConcat [dir, "/scope.jsonl"]
+  let calls = [
+    coordinateCall
+      1
+      "medaka_type_at"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("symbol", JString "x"),
+      ]),
+    coordinateCall
+      2
+      "medaka_definition"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("symbol", JString "x"),
+      ]),
+    coordinateCall
+      3
+      "medaka_type_at"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 0),
+        ("symbol", JString "x"),
+      ]),
+    coordinateCall
+      4
+      "medaka_type_at"
+      (jObject [
+        ("file", JString bad),
+        ("line", JInt 0),
+        ("symbol", JString "x"),
+      ]),
+  ]
+  match (
+    writeOk path """x = True
+f x = (x + 1, x)
+main = f 2
+""",
+    writeOk bad "x = (x + x",
+    writeOk request (stringConcat [join "\n" calls, "\n"]),
+  )
+    (Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+        local :: defs :: global :: malformed :: _ => expectEach [
+          ("exit", expectEqual 0 code),
+          (
+            "local shadow",
+            expectTextContainsAll
+              ["col 2: x : a", "col 7: x : a", "col 14: x : a"]
+              local,
+          ),
+          (
+            "definitions",
+            expectTextContainsAll
+              ["\"col\":2", "\"col\":7", "\"col\":14", "\"character\":1"]
+              defs,
+          ),
+          ("global", expectEqual "x : Bool" global),
+          ("malformed", expectTextContainsAll ["no symbol"] malformed),
+        ]
+        _ => fail "scope responses missing"
+    _ => fail "scope fixture write failed"
+
+test "mcp ambiguous positions preserve local scope" =
+  withScratchDir scopeCoordinates

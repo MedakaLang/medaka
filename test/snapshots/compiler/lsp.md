@@ -1,5 +1,5 @@
 # META
-source_lines=2402
+source_lines=2469
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -29,6 +29,7 @@ stages=DESUGAR,MARK
 -- (lsp_main.mdk reads them once at startup) so `analyze` can run the full
 -- resolve+typecheck pipeline per document.
 
+import array.{sliceClamped}
 import json.{
   Json(..),
   jObject,
@@ -70,6 +71,7 @@ import frontend.parser.{
   parseWithPositions,
   parseWithPositionsOpt,
   positionsDecls,
+  Positions,
   DeclPos,
   declPosLine,
   declPosEndLine,
@@ -292,9 +294,12 @@ identStop arr len i
 -- The identifier under (line, col), or None if the cursor isn't on one.
 identifierAt : String -> Int -> Int -> Option String
 identifierAt src line col =
-  let arr = stringToChars src
+  identifierAtIndexed (indexSource src) (stringToChars src) line col
+
+identifierAtIndexed : SourceIndex -> Array Char -> Int -> Int -> Option String
+identifierAtIndexed index arr line col =
   let len = arrayLength arr
-  match sourcePositionToOffset (indexSource src) (line + 1) col
+  match sourcePositionToOffset index (line + 1) col
     None => None
     Some pos =>
       if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
@@ -302,7 +307,7 @@ identifierAt src line col =
       else
         let s = identStart arr pos
         let e = identStop arr len pos
-        Some (stringSlice s e src)
+        Some (stringFromChars (sliceClamped s e arr))
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
@@ -850,14 +855,35 @@ typeAtPoints : String ->
   List Int ->
   <IO> List (Option String)
 typeAtPoints runtimeSrc coreSrc filePath src line cols =
+  typeAtPointsWithIndex
+    (indexSource src)
+    runtimeSrc
+    coreSrc
+    filePath
+    src
+    line
+    cols
+
+export
+typeAtPointsWithIndex : SourceIndex ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  List Int ->
+  <IO> List (Option String)
+typeAtPointsWithIndex index runtimeSrc coreSrc filePath src line cols =
+  let chars = stringToChars src
   let positions =
     map
-      (col => sourceCursor src (jObject [("position", jPosition line col)]))
+      (col =>
+        sourceCursorIndexed index (jObject [("position", jPosition line col)]))
       cols
   let names =
     map
       (pos => match pos
-        Some (ln, col) => identifierAt src ln col
+        Some (ln, col) => identifierAtIndexed index chars ln col
         None => None)
       positions
   if allList isNone names then
@@ -867,24 +893,21 @@ typeAtPoints runtimeSrc coreSrc filePath src line cols =
     let docs = docsPut uri src emptyDocs
     match hoverEnvFor runtimeSrc coreSrc uri src docs
       None => map (_ => None) cols
-      Some env => zipWith (typeAtPosition src line env) names positions
+      Some env =>
+        let parsed = map snd (parseWithPositionsOpt src)
+        zipWith (typeAtPosition parsed env) names positions
 
-typeAtPosition : String ->
-  Int ->
+typeAtPosition : Option Positions ->
   HoverEnv ->
   Option String ->
   Option (Int, Int) ->
   Option String
-typeAtPosition _ _ _ _ None = None
-typeAtPosition src _ env name (Some (line, col)) =
-  typeAtIn src line env name col
-
-typeAtIn : String -> Int -> HoverEnv -> Option String -> Int -> Option String
-typeAtIn _ _ _ None _ = None
-typeAtIn src line env (Some name) col =
+typeAtPosition _ _ _ None = None
+typeAtPosition _ _ None _ = None
+typeAtPosition parsed env (Some name) (Some (line, col)) =
   map
     (hit => stringConcat [name, " : ", ppHoverScheme hit])
-    (hoverSchemeAt name src line col env)
+    (hoverSchemeAtParsed name parsed line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (`projectEntryEnv`: it loads the
@@ -975,7 +998,16 @@ hoverScheme name env = match lookupSchemeL name env.heSchemes
 -- every non-shadowing hover in the buffer answers exactly as before.
 hoverSchemeAt : String -> String -> Int -> Int -> HoverEnv -> Option HoverHit
 hoverSchemeAt name src line col env =
-  match localSchemeAt name line col src env.heLocals
+  hoverSchemeAtParsed name (map snd (parseWithPositionsOpt src)) line col env
+
+hoverSchemeAtParsed : String ->
+  Option Positions ->
+  Int ->
+  Int ->
+  HoverEnv ->
+  Option HoverHit
+hoverSchemeAtParsed name parsed line col env =
+  match localSchemeAt name line col parsed env.heLocals
     Some s => Some (LocalHit s)
     None => hoverScheme name env
 
@@ -1003,17 +1035,16 @@ hoverSchemeAt name src line col env =
 localSchemeAt : String ->
   Int ->
   Int ->
-  String ->
+  Option Positions ->
   List (String, PubScheme, Option Loc) ->
   Option PubScheme
-localSchemeAt name line col src locals = match parseWithPositionsOpt src
-  None => None
-  Some (_, pos) =>
-    let decls = positionsDecls pos
-    let cl = line + 1
-    match declIndexAt decls 0 cl
-      None => None
-      Some di => latestLocal None (localCandidates name cl col di decls locals)
+localSchemeAt _ _ _ None _ = None
+localSchemeAt name line col (Some pos) locals =
+  let decls = positionsDecls pos
+  let cl = line + 1
+  match declIndexAt decls 0 cl
+    None => None
+    Some di => latestLocal None (localCandidates name cl col di decls locals)
 
 -- Index of the top-level decl whose start..end line range contains `l` (1-based).
 declIndexAt : List DeclPos -> Int -> Int -> Option Int
@@ -1321,8 +1352,10 @@ handleInlayHint runtimeSrc coreSrc idJson params docs =
 
 -- ── request-position helpers ────────────────────────────────────────────────
 sourceCursor : String -> Json -> Option (Int, Int)
-sourceCursor src params = do
-  let index = indexSource src
+sourceCursor src params = sourceCursorIndexed (indexSource src) params
+
+sourceCursorIndexed : SourceIndex -> Json -> Option (Int, Int)
+sourceCursorIndexed index params = do
   pos <- get "position" params
   off <- lspPositionToOffset index pos
   map ((line, col) => (line - 1, col)) (offsetToSourcePosition index off)
@@ -1443,12 +1476,9 @@ parseContentLength line = match find contentLengthRe line
    `semanticLegend` / `semanticTokensOptions`):
      0 keyword  1 type  2 function  3 variable  4 string  5 number  6 operator
 
-   Positions: `tokenizeWithOffsetPairs` gives each token a (startByte, endByte)
-   char-offset pair; synthetic layout tokens (NEWLINE/INDENT/DEDENT/EOF) carry an
-   EMPTY span (start == end) and are filtered.  `posOfOffset` turns an offset into
-   a 0-based (line, char) — codepoint-based, which equals UTF-16 for BMP chars
-   (incl. em-dashes); only astral/emoji positions would differ (DEFERRED — see
-   the multiline/astral note in `semTokenLen`).  The wire format is delta-encoded:
+   Positions: token spans are codepoint offsets; synthetic layout tokens have
+   empty spans and are filtered. SourceIndex converts offsets to zero-based
+   UTF-16 positions. The wire format is delta-encoded:
    5 ints per token `[deltaLine, deltaChar, length, tokenType, tokenModifiers]`,
    tokens in start order (the lexer stream already is). -}
 
@@ -2060,6 +2090,43 @@ definitionResult uri src params = match sourceCursor src params
       Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
   _ => JNull
 
+-- Resolve a set of columns using one index and one parse.
+export
+definitionResultsWithIndex : SourceIndex ->
+  String ->
+  String ->
+  Int ->
+  List Int ->
+  List Json
+definitionResultsWithIndex index uri src line cols =
+  let chars = stringToChars src
+  let parsed = parseWithPositionsOpt src
+  map
+    (col =>
+      definitionIndexed uri (arrayLength chars) index chars parsed line col)
+    cols
+
+definitionIndexed : String ->
+  Int ->
+  SourceIndex ->
+  Array Char ->
+  Option (List Decl, Positions) ->
+  Int ->
+  Int ->
+  Json
+definitionIndexed uri sourceLength index chars parsed line col =
+  match sourceCursorIndexed index (jObject [("position", jPosition line col)])
+    None => JNull
+    Some (ln, cp) => match identifierAtIndexed index chars ln cp
+      None => JNull
+      Some name => match parsed
+        None => JNull
+        Some (decls, positions) =>
+          match defZip index sourceLength decls (positionsDecls positions) name
+            None => JNull
+            Some range =>
+              jArray [jObject [("uri", JString uri), ("range", range)]]
+
 -- textDocument/references → Location[] (cross-file, #254 Stage 1). Shares the
 -- MVP substrate with the `medaka_references` MCP tool (mcp.mdk calls this
 -- SAME function): build (or load-and-build) the whole-project reference index
@@ -2405,6 +2472,7 @@ export
 unit : Unit
 unit = ()
 # DESUGAR
+(DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false))))
@@ -2413,7 +2481,7 @@ unit = ()
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
@@ -2476,7 +2544,9 @@ unit = ()
 (DTypeSig false "identStop" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identStop" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr"))) (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "identifierAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "identifierAt" ((PVar "src") (PVar "line") (PVar "col")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EApp (EVar "indexSource") (EVar "src"))) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "pos")) () (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "arr"))))) (EVar "None") (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "identStart") (EVar "arr")) (EVar "pos"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EVar "pos"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")))))))))))
+(DFunDef false "identifierAt" ((PVar "src") (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "src"))) (EVar "line")) (EVar "col")))
+(DTypeSig false "identifierAtIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "identifierAtIndexed" ((PVar "index") (PVar "arr") (PVar "line") (PVar "col")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "pos")) () (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "arr"))))) (EVar "None") (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "identStart") (EVar "arr")) (EVar "pos"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EVar "pos"))) (DoExpr (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "s")) (EVar "e")) (EVar "arr"))))))))))))
 (DTypeSig false "occurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EVar "occStart") (EVar "arr")) (EVar "len"))) (EApp (EApp (EVar "findAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "name")))) (EVar "src")))))))
 (DTypeSig false "occStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -2572,13 +2642,13 @@ unit = ()
 (DTypeSig true "typeAtPoint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "typeAtPoint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EListLit (EVar "col"))) (arm (PList (PVar "answer")) () (EVar "answer")) (arm PWild () (EVar "None"))))
 (DTypeSig true "typeAtPoints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))))))))
-(DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EApp (EVar "typeAtPosition") (EVar "src")) (EVar "line")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))
-(DTypeSig false "typeAtPosition" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "typeAtPosition" (PWild PWild PWild PWild (PCon "None")) (EVar "None"))
-(DFunDef false "typeAtPosition" ((PVar "src") PWild (PVar "env") (PVar "name") (PCon "Some" (PTuple (PVar "line") (PVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "typeAtIn") (EVar "src")) (EVar "line")) (EVar "env")) (EVar "name")) (EVar "col")))
-(DTypeSig false "typeAtIn" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "typeAtIn" (PWild PWild PWild (PCon "None") PWild) (EVar "None"))
-(DFunDef false "typeAtIn" ((PVar "src") (PVar "line") (PVar "env") (PCon "Some" (PVar "name")) (PVar "col")) (EApp (EApp (EVar "map") (ELam ((PVar "hit")) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppHoverScheme") (EVar "hit")))))) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAt") (EVar "name")) (EVar "src")) (EVar "line")) (EVar "col")) (EVar "env"))))
+(DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPointsWithIndex") (EApp (EVar "indexSource") (EVar "src"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EVar "cols")))
+(DTypeSig true "typeAtPointsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))))))))
+(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EVar "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EVar "index")) (EVar "chars")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
+(DTypeSig false "typeAtPosition" (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "typeAtPosition" (PWild PWild PWild (PCon "None")) (EVar "None"))
+(DFunDef false "typeAtPosition" (PWild PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "typeAtPosition" ((PVar "parsed") (PVar "env") (PCon "Some" (PVar "name")) (PCon "Some" (PTuple (PVar "line") (PVar "col")))) (EApp (EApp (EVar "map") (ELam ((PVar "hit")) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppHoverScheme") (EVar "hit")))))) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAtParsed") (EVar "name")) (EVar "parsed")) (EVar "line")) (EVar "col")) (EVar "env"))))
 (DTypeSig false "hoverEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
 (DFunDef false "hoverEnvFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EIf (EApp (EVar "bufferHasImports") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryEnv") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "docEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "projectEntryEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
@@ -2591,9 +2661,12 @@ unit = ()
 (DTypeSig false "hoverScheme" (TyFun (TyCon "String") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit")))))
 (DFunDef false "hoverScheme" ((PVar "name") (PVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EFieldAccess (EVar "env") "heSchemes")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EApp (EVar "EnvHit") (EVar "p")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EApp (EVar "localSchemes") (EFieldAccess (EVar "env") "heLocals"))) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EVar "SeedHit")) (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EFieldAccess (EVar "env") "heSeed"))))))))
 (DTypeSig false "hoverSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit"))))))))
-(DFunDef false "hoverSchemeAt" ((PVar "name") (PVar "src") (PVar "line") (PVar "col") (PVar "env")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "localSchemeAt") (EVar "name")) (EVar "line")) (EVar "col")) (EVar "src")) (EFieldAccess (EVar "env") "heLocals")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "hoverScheme") (EVar "name")) (EVar "env")))))
-(DTypeSig false "localSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyCon "PubScheme"))))))))
-(DFunDef false "localSchemeAt" ((PVar "name") (PVar "line") (PVar "col") (PVar "src") (PVar "locals")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "pos"))) () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "cl") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "declIndexAt") (EVar "decls")) (ELit (LInt 0))) (EVar "cl")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "di")) () (EApp (EApp (EVar "latestLocal") (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "localCandidates") (EVar "name")) (EVar "cl")) (EVar "col")) (EVar "di")) (EVar "decls")) (EVar "locals"))))))))))
+(DFunDef false "hoverSchemeAt" ((PVar "name") (PVar "src") (PVar "line") (PVar "col") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAtParsed") (EVar "name")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (EVar "line")) (EVar "col")) (EVar "env")))
+(DTypeSig false "hoverSchemeAtParsed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit"))))))))
+(DFunDef false "hoverSchemeAtParsed" ((PVar "name") (PVar "parsed") (PVar "line") (PVar "col") (PVar "env")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "localSchemeAt") (EVar "name")) (EVar "line")) (EVar "col")) (EVar "parsed")) (EFieldAccess (EVar "env") "heLocals")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "hoverScheme") (EVar "name")) (EVar "env")))))
+(DTypeSig false "localSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyCon "PubScheme"))))))))
+(DFunDef false "localSchemeAt" (PWild PWild PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "localSchemeAt" ((PVar "name") (PVar "line") (PVar "col") (PCon "Some" (PVar "pos")) (PVar "locals")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "cl") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "declIndexAt") (EVar "decls")) (ELit (LInt 0))) (EVar "cl")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "di")) () (EApp (EApp (EVar "latestLocal") (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "localCandidates") (EVar "name")) (EVar "cl")) (EVar "col")) (EVar "di")) (EVar "decls")) (EVar "locals"))))))))
 (DTypeSig false "declIndexAt" (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "declIndexAt" ((PList) PWild PWild) (EVar "None"))
 (DFunDef false "declIndexAt" ((PCons (PVar "p") (PVar "rest")) (PVar "i") (PVar "l")) (EIf (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "p")) (EVar "l")) (EBinOp "<=" (EVar "l") (EApp (EVar "declPosEndLine") (EVar "p")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declIndexAt") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2656,7 +2729,9 @@ unit = ()
 (DTypeSig false "handleInlayHint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleInlayHint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EApp (EVar "inlayHints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "sourceCursor" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "sourceCursor" ((PVar "src") (PVar "params")) (ELet false (PVar "index") (EApp (EVar "indexSource") (EVar "src")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params"))) (ELam ((PVar "pos")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lspPositionToOffset") (EVar "index")) (EVar "pos"))) (ELam ((PVar "off")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "line") (PVar "col"))) (ETuple (EBinOp "-" (EVar "line") (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "off")))))))))
+(DFunDef false "sourceCursor" ((PVar "src") (PVar "params")) (EApp (EApp (EVar "sourceCursorIndexed") (EApp (EVar "indexSource") (EVar "src"))) (EVar "params")))
+(DTypeSig false "sourceCursorIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "sourceCursorIndexed" ((PVar "index") (PVar "params")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params"))) (ELam ((PVar "pos")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lspPositionToOffset") (EVar "index")) (EVar "pos"))) (ELam ((PVar "off")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "line") (PVar "col"))) (ETuple (EBinOp "-" (EVar "line") (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "off"))))))))
 (DTypeSig false "requestUri" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "requestUri" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))))
 (DTypeSig false "logFilePath" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -2835,6 +2910,10 @@ unit = ()
 (DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))))
 (DTypeSig true "definitionResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json")))))
 (DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))))) (arm PWild () (EVar "JNull"))))
+(DTypeSig true "definitionResultsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Json"))))))))
+(DFunDef false "definitionResultsWithIndex" ((PVar "index") (PVar "uri") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "definitionIndexed") (EVar "uri")) (EApp (EVar "arrayLength") (EVar "chars"))) (EVar "index")) (EVar "chars")) (EVar "parsed")) (EVar "line")) (EVar "col")))) (EVar "cols")))))
+(DTypeSig false "definitionIndexed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))))))
+(DFunDef false "definitionIndexed" ((PVar "uri") (PVar "sourceLength") (PVar "index") (PVar "chars") (PVar "parsed") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "sourceCursorIndexed") (EVar "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "ln") (PVar "cp"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EVar "index")) (EVar "chars")) (EVar "ln")) (EVar "cp")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EVar "parsed") (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "defZip") (EVar "index")) (EVar "sourceLength")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range")))))))))))))))
 (DTypeSig false "handleReferences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleReferences" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "referencesResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig true "referencesResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
@@ -2882,6 +2961,7 @@ unit = ()
 (DTypeSig true "unit" (TyCon "Unit"))
 (DFunDef false "unit" () (ELit LUnit))
 # MARK
+(DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false))))
@@ -2890,7 +2970,7 @@ unit = ()
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
@@ -2953,7 +3033,9 @@ unit = ()
 (DTypeSig false "identStop" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identStop" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr"))) (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "identifierAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "identifierAt" ((PVar "src") (PVar "line") (PVar "col")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EApp (EVar "indexSource") (EVar "src"))) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "pos")) () (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "arr"))))) (EVar "None") (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "identStart") (EVar "arr")) (EVar "pos"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EVar "pos"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")))))))))))
+(DFunDef false "identifierAt" ((PVar "src") (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "src"))) (EVar "line")) (EVar "col")))
+(DTypeSig false "identifierAtIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "identifierAtIndexed" ((PVar "index") (PVar "arr") (PVar "line") (PVar "col")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "pos")) () (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "arr"))))) (EVar "None") (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "identStart") (EVar "arr")) (EVar "pos"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identStop") (EVar "arr")) (EVar "len")) (EVar "pos"))) (DoExpr (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "s")) (EVar "e")) (EVar "arr"))))))))))))
 (DTypeSig false "occurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EVar "occStart") (EVar "arr")) (EVar "len"))) (EApp (EApp (EVar "findAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "name")))) (EVar "src")))))))
 (DTypeSig false "occStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -3049,13 +3131,13 @@ unit = ()
 (DTypeSig true "typeAtPoint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "typeAtPoint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EListLit (EVar "col"))) (arm (PList (PVar "answer")) () (EVar "answer")) (arm PWild () (EVar "None"))))
 (DTypeSig true "typeAtPoints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))))))))
-(DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EApp (EVar "typeAtPosition") (EVar "src")) (EVar "line")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))
-(DTypeSig false "typeAtPosition" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "typeAtPosition" (PWild PWild PWild PWild (PCon "None")) (EVar "None"))
-(DFunDef false "typeAtPosition" ((PVar "src") PWild (PVar "env") (PVar "name") (PCon "Some" (PTuple (PVar "line") (PVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "typeAtIn") (EVar "src")) (EVar "line")) (EVar "env")) (EVar "name")) (EVar "col")))
-(DTypeSig false "typeAtIn" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "typeAtIn" (PWild PWild PWild (PCon "None") PWild) (EVar "None"))
-(DFunDef false "typeAtIn" ((PVar "src") (PVar "line") (PVar "env") (PCon "Some" (PVar "name")) (PVar "col")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "hit")) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppHoverScheme") (EVar "hit")))))) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAt") (EVar "name")) (EVar "src")) (EVar "line")) (EVar "col")) (EVar "env"))))
+(DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPointsWithIndex") (EApp (EVar "indexSource") (EVar "src"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EVar "cols")))
+(DTypeSig true "typeAtPointsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))))))))
+(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EMethodRef "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EMethodRef "index")) (EVar "chars")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
+(DTypeSig false "typeAtPosition" (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "typeAtPosition" (PWild PWild PWild (PCon "None")) (EVar "None"))
+(DFunDef false "typeAtPosition" (PWild PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "typeAtPosition" ((PVar "parsed") (PVar "env") (PCon "Some" (PVar "name")) (PCon "Some" (PTuple (PVar "line") (PVar "col")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "hit")) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppHoverScheme") (EVar "hit")))))) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAtParsed") (EVar "name")) (EVar "parsed")) (EVar "line")) (EVar "col")) (EVar "env"))))
 (DTypeSig false "hoverEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
 (DFunDef false "hoverEnvFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EIf (EApp (EVar "bufferHasImports") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryEnv") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "docEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "projectEntryEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
@@ -3068,9 +3150,12 @@ unit = ()
 (DTypeSig false "hoverScheme" (TyFun (TyCon "String") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit")))))
 (DFunDef false "hoverScheme" ((PVar "name") (PVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EFieldAccess (EVar "env") "heSchemes")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EApp (EVar "EnvHit") (EVar "p")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EApp (EVar "localSchemes") (EFieldAccess (EVar "env") "heLocals"))) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EVar "SeedHit")) (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EFieldAccess (EVar "env") "heSeed"))))))))
 (DTypeSig false "hoverSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit"))))))))
-(DFunDef false "hoverSchemeAt" ((PVar "name") (PVar "src") (PVar "line") (PVar "col") (PVar "env")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "localSchemeAt") (EVar "name")) (EVar "line")) (EVar "col")) (EVar "src")) (EFieldAccess (EVar "env") "heLocals")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "hoverScheme") (EVar "name")) (EVar "env")))))
-(DTypeSig false "localSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyCon "PubScheme"))))))))
-(DFunDef false "localSchemeAt" ((PVar "name") (PVar "line") (PVar "col") (PVar "src") (PVar "locals")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "pos"))) () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "cl") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "declIndexAt") (EVar "decls")) (ELit (LInt 0))) (EVar "cl")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "di")) () (EApp (EApp (EVar "latestLocal") (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "localCandidates") (EVar "name")) (EVar "cl")) (EVar "col")) (EVar "di")) (EVar "decls")) (EVar "locals"))))))))))
+(DFunDef false "hoverSchemeAt" ((PVar "name") (PVar "src") (PVar "line") (PVar "col") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "hoverSchemeAtParsed") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (EVar "line")) (EVar "col")) (EVar "env")))
+(DTypeSig false "hoverSchemeAtParsed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HoverEnv") (TyApp (TyCon "Option") (TyCon "HoverHit"))))))))
+(DFunDef false "hoverSchemeAtParsed" ((PVar "name") (PVar "parsed") (PVar "line") (PVar "col") (PVar "env")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "localSchemeAt") (EVar "name")) (EVar "line")) (EVar "col")) (EVar "parsed")) (EFieldAccess (EVar "env") "heLocals")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EApp (EVar "LocalHit") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "hoverScheme") (EVar "name")) (EVar "env")))))
+(DTypeSig false "localSchemeAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyCon "PubScheme"))))))))
+(DFunDef false "localSchemeAt" (PWild PWild PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "localSchemeAt" ((PVar "name") (PVar "line") (PVar "col") (PCon "Some" (PVar "pos")) (PVar "locals")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "cl") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "declIndexAt") (EVar "decls")) (ELit (LInt 0))) (EVar "cl")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "di")) () (EApp (EApp (EVar "latestLocal") (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "localCandidates") (EVar "name")) (EVar "cl")) (EVar "col")) (EVar "di")) (EVar "decls")) (EVar "locals"))))))))
 (DTypeSig false "declIndexAt" (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "declIndexAt" ((PList) PWild PWild) (EVar "None"))
 (DFunDef false "declIndexAt" ((PCons (PVar "p") (PVar "rest")) (PVar "i") (PVar "l")) (EIf (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "p")) (EVar "l")) (EBinOp "<=" (EVar "l") (EApp (EVar "declPosEndLine") (EVar "p")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declIndexAt") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3133,7 +3218,9 @@ unit = ()
 (DTypeSig false "handleInlayHint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleInlayHint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EApp (EVar "inlayHints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "sourceCursor" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "sourceCursor" ((PVar "src") (PVar "params")) (ELet false (PVar "index") (EApp (EVar "indexSource") (EVar "src")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params"))) (ELam ((PVar "pos")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lspPositionToOffset") (EMethodRef "index")) (EVar "pos"))) (ELam ((PVar "off")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "line") (PVar "col"))) (ETuple (EBinOp "-" (EVar "line") (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "off")))))))))
+(DFunDef false "sourceCursor" ((PVar "src") (PVar "params")) (EApp (EApp (EVar "sourceCursorIndexed") (EApp (EVar "indexSource") (EVar "src"))) (EVar "params")))
+(DTypeSig false "sourceCursorIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "sourceCursorIndexed" ((PVar "index") (PVar "params")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params"))) (ELam ((PVar "pos")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lspPositionToOffset") (EMethodRef "index")) (EVar "pos"))) (ELam ((PVar "off")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "line") (PVar "col"))) (ETuple (EBinOp "-" (EVar "line") (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "off"))))))))
 (DTypeSig false "requestUri" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "requestUri" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))))
 (DTypeSig false "logFilePath" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -3312,6 +3399,10 @@ unit = ()
 (DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))))
 (DTypeSig true "definitionResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json")))))
 (DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))))) (arm PWild () (EVar "JNull"))))
+(DTypeSig true "definitionResultsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Json"))))))))
+(DFunDef false "definitionResultsWithIndex" ((PVar "index") (PVar "uri") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "definitionIndexed") (EVar "uri")) (EApp (EVar "arrayLength") (EVar "chars"))) (EMethodRef "index")) (EVar "chars")) (EVar "parsed")) (EVar "line")) (EVar "col")))) (EVar "cols")))))
+(DTypeSig false "definitionIndexed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))))))
+(DFunDef false "definitionIndexed" ((PVar "uri") (PVar "sourceLength") (PVar "index") (PVar "chars") (PVar "parsed") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "sourceCursorIndexed") (EMethodRef "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "ln") (PVar "cp"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EMethodRef "index")) (EVar "chars")) (EVar "ln")) (EVar "cp")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EVar "parsed") (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "defZip") (EMethodRef "index")) (EVar "sourceLength")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range")))))))))))))))
 (DTypeSig false "handleReferences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleReferences" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "referencesResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig true "referencesResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))

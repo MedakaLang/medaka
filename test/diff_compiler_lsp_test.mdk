@@ -1344,7 +1344,9 @@ drive msgs =
 test "inlay positions remain stable with astral source" =
   let uri = "file:///unicode-inlay.mdk"
   let (errors, out) = drive [
-    didOpenMsg uri "first = (\"😀\", 123)\nsecond = first\n",
+    didOpenMsg uri """first = ("😀", 123)
+second = first
+""",
     rpc 3 "textDocument/inlayHint" (inlayParams uri),
     bye,
   ]
@@ -1509,7 +1511,9 @@ test "cross-file coordinates use unsaved destination source" = withScratchDir
   (dir => match layOut dir [
     ("medaka.toml", "[project]\nname = \"coords\"\n"),
     ("lib.mdk", "export value = 1\n"),
-    ("main.mdk", "import lib.{value}\nmain = value\n"),
+    ("main.mdk", """import lib.{value}
+main = value
+"""),
   ]
     Err e => fail e
     Ok _ =>
@@ -1517,7 +1521,9 @@ test "cross-file coordinates use unsaved destination source" = withScratchDir
       let main = stringConcat ["file://", dir, "/main.mdk"]
       let (errors, out) = drive [
         didOpenMsg lib "export value = 1\n",
-        didOpenMsg main "import lib.{value}\nmain = (\"😀\", value + \"x\")\n",
+        didOpenMsg main """import lib.{value}
+main = ("😀", value + "x")
+""",
         rpc
           2
           "textDocument/references"

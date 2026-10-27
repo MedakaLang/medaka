@@ -1,6 +1,6 @@
 import support.source_index.{
   indexSource, offsetToSourcePosition, sourcePositionToOffset,
-  offsetToUtf16Position, utf16PositionToOffset
+  offsetToUtf16Position, utf16PositionToOffset, clampSourcePositionToOffset
 }
 import test.{expectEach, expectEqual, expectNone, expectSome}
 
@@ -25,6 +25,14 @@ test "coordinate boundaries" =
     ("line past end", expectNone (sourcePositionToOffset index 1 5)),
     ("negative line", expectNone (utf16PositionToOffset index (-1) 0)),
     ("negative column", expectNone (utf16PositionToOffset index 0 (-1))),
+    (
+      "clamp negative",
+      expectEqual 0 (clampSourcePositionToOffset index (-2) (-4)),
+    ),
+    ("clamp line end", expectEqual 4 (clampSourcePositionToOffset index 1 99)),
+    ("clamp astral", expectEqual 3 (clampSourcePositionToOffset index 1 3)),
+    ("clamp crlf", expectEqual 6 (clampSourcePositionToOffset index 2 (-1))),
+    ("clamp eof", expectEqual 10 (clampSourcePositionToOffset index 99 99)),
     ("eof valid", expectSome (utf16PositionToOffset index 3 0)),
   ]
 
