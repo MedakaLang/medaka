@@ -1,8 +1,10 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
-  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp,
-  envEmpty
+  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp, Env,
+  EnvRef(..), envEmpty, envBind, envBindUnstamped, envExtendUnstamped,
+  envRestrict, envLookup, envHas
 }
+import frontend.ast.{BinderId(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import backend.emit_target.{Backend(..)}
 import backend.extern_catalog.{RuntimeExternDomain(..), WasmUse(..)}
@@ -19,7 +21,10 @@ import ir.core_ir_lower.{lowerProgramEmitWith}
 import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
 import support.ordmap.{omEmpty, omFromNames, omKeys}
 import support.util.{joinNl}
-import test.{Expectation, expectAll, expectEach, expectEqual, expectErrContains}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectErrContains,
+  expectFalse
+}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -411,4 +416,40 @@ test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   expectAll [
     expectEqual RTValue (returnStamp context envEmpty "putStrLn"),
     expectEqual RTValue (cexprStamp context envEmpty (CVar "pi" AGlobal)),
+  ]
+
+-- what `envLookup` found, as text, so a test states the binder it expects
+refText : EnvRef -> String
+refText NotLocal = "not-local"
+refText LocalUnstamped = "unstamped"
+refText (LocalBinder ord) = "binder " ++ ord
+
+test "an inner binding shadows in its own scope only; the outer env keeps its binder" =
+  let outer = envBind "x" (BinderId "x" 7) envEmpty
+  let inner = envBind "x" (BinderId "x" 9) outer
+  expectAll [
+    expectEqual "binder 7" (refText (envLookup "x" outer)),
+    expectEqual "binder 9" (refText (envLookup "x" inner)),
+    expectEqual "not-local" (refText (envLookup "y" inner)),
+  ]
+
+test "extending with unstamped names never replaces a stamped binder" =
+  let env = envBind "x" (BinderId "x" 7) envEmpty
+  let extended = envExtendUnstamped ["x", "__lp0"] env
+  expectAll [
+    expectEqual "binder 7" (refText (envLookup "x" extended)),
+    expectEqual "unstamped" (refText (envLookup "__lp0" extended)),
+    expectEqual "unstamped" (refText (envLookup "s" (envBindUnstamped "s" env))),
+  ]
+
+test "restricting to the captured names keeps their stamps and drops the rest" =
+  let env =
+    envBindUnstamped
+      "scratch"
+      (envBind "b" (BinderId "b" 2) (envBind "a" (BinderId "a" 1) envEmpty))
+  let captured = envRestrict ["a", "scratch"] env
+  expectAll [
+    expectEqual "binder 1" (refText (envLookup "a" captured)),
+    expectEqual "unstamped" (refText (envLookup "scratch" captured)),
+    expectFalse (envHas "b" captured),
   ]

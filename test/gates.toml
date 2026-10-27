@@ -2815,11 +2815,10 @@ corpus = []
 toolchain = []
 link = "production"
 
-# Guessed onto a `wasm_arm = true` row: that flag is what installs wasm-tools and
-# Node 24 on a `gates` runner. On a row without it the gate's `perl … exec`
-# wrappers found no `wasm-tools`, so parse and validate produced nothing and the
-# Node launch reported ENOENT (CI runs 40413490759, 40438352647). The balancer
-# must keep it on a wasm-arm row.
+# `shard` is a guess ([W-SHARD-DERIVED]). It sits on a `wasm_arm = true` row
+# because that flag is what installs wasm-tools and Node 24 on a `gates` runner,
+# and the gate's parse, validate and run steps need both. The balancer must keep
+# it on a wasm-arm row.
 [[gate]]
 name = "diff_compiler_wasm_single_traversal"
 area = "wasm"

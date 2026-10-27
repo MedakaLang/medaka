@@ -1,7 +1,12 @@
 # META
-source_lines=22
+source_lines=27
 stages=DESUGAR,MARK
 # SOURCE
+-- The Wasm backend's physical value vocabulary (EMITTER-TARGET-ARCHITECTURE.md
+-- §8 "W - Wasm Physical Plan"): which physical shape a value has and which
+-- numeric local holds it.  Data and accessors only, no traversal.  This module
+-- stays import-free so it sits below every emitter module; `test/wasm/
+-- diff_wasm_typed.sh` pins that closure.
 public export data WasmRepr = WBoxEq | WInt63 | WBool64 | WUnit64
 
 public export data WasmValue = WasmValue WasmRepr (List String)

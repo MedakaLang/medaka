@@ -3405,9 +3405,15 @@ clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 -- whether a top-level fn needs its closure wrapper. The pre-emission program-index
 -- build scans value positions once and stores the immutable membership set in this
 -- Prog's invocation-private index; lookup is O(log n) with no ambient authority.
+-- Never in raw mode: a raw program declares no closure types, and the demand
+-- planner routes every genuine value use of a function to ref mode.  The scan
+-- behind the index is keyed by bare name, so in raw mode a hit can only be a
+-- local that shadows the function's name (`twice inc = inc + inc`), whose
+-- wrapper would reference the undeclared `$codety`.
 needsClosWrapper : Prog -> String -> Bool
 needsClosWrapper prog name =
-  omHasKey name (indexFnsUsedAsValuesW (progIndex prog))
+  not (rawProgramW prog)
+    && omHasKey name (indexFnsUsedAsValuesW (progIndex prog))
 
 -- the closure wrapper for a top-level fn: `$mdk_w_<name>` is a $codety that unpacks
 -- the args array and calls $name; `$name__clos` is built by `mkFnClos` at each value
@@ -8470,7 +8476,7 @@ emitLamDefine : Prog ->
   Env ->
   CExpr ->
   List String
-emitLamDefine prog lamName pats captured capMarks body =
+emitLamDefine prog lamName pats captured capEnv body =
   let arity = listLen pats
   -- each param i: load $args[i] into a synthetic local `$__lp<i>`, then bind its
   -- (possibly-destructuring) pattern against that local via bindPatRef (the same
@@ -8482,7 +8488,7 @@ emitLamDefine prog lamName pats captured capMarks body =
   let (paramBinds, bodyEnv0) =
     bindParamPats
       prog
-      (envExtendUnstamped (captured ++ synthPs) capMarks)
+      (envExtendUnstamped synthPs capEnv)
       (zipPatsP pats synthPs)
   let bodyEnv = bodyEnv0
   let patBoundVars = flatMap patVars pats
@@ -8590,7 +8596,7 @@ argLoadAt (p, i) = [
 -- binds the name first).  Reuse the W9 letgroup machinery for a ONE-member group:
 -- lift `$mdk_lgN_go` (its prologue rebuilds `go`'s own closure into a local, so the
 -- self-call resolves), then at the use site rebuild `go`'s closure into local `$go`.
--- Returns the use-site rebuild instrs; the caller binds `go` (`x::env`) for the rest
+-- Returns the use-site rebuild instrs; the caller binds `go` (`envBind`) for the rest
 -- of the block.  Peer of the native emitter's `emitRecLam` route in emitBlock.
 emitSelfRecLocalBind : Prog ->
   Env ->
@@ -8606,8 +8612,8 @@ emitSelfRecLocalBind prog env x bid pats body =
     filterList
       (c => envHas c env)
       (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
-  let marks = envBind x bid (envRestrict groupCaps env)
-  let _ = emitLgLifted prog gid [x] groupCaps marks [bind] bind
+  let groupEnv = envBind x bid (envRestrict groupCaps env)
+  let _ = emitLgLifted prog gid [x] groupCaps groupEnv [bind] bind
   -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
   -- capture-free `go` reaches the hoisted-global branch.  Self-reference is not a
   -- forward reference — the knot is tied inside the lifted prologue, not here.
@@ -8645,10 +8651,10 @@ emitLetGroupWith prog env d emitBody binds body =
     -- the group's value bindings are shared by every member, so they ride along as caps.
     let groupCaps = freeCaps ++ valNames
     -- emit each lifted top-level fn (drained into the module like other lifted lams).
-    let marks = envBindGroups binds (envRestrict freeCaps env)
+    let groupEnv = envBindGroups binds (envRestrict freeCaps env)
     let _ =
       forEachU
-        (b => emitLgLifted prog gid names groupCaps marks fnBinds b)
+        (b => emitLgLifted prog gid names groupCaps groupEnv fnBinds b)
         fnBinds
     -- at the use site: compute the value bindings into their locals (each visible to the
     -- next), rebuild every FUNCTION member's closure, then emit the body with all bound.
@@ -8740,7 +8746,7 @@ emitLgLifted : Prog ->
   List CBind ->
   CBind ->
   Unit
-emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _) =
+emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc _) =
   let memberProg =
     progForBinding ("lg:" ++ name) (sitePackedW (progEmit prog) bindLoc) prog
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
@@ -8757,13 +8763,7 @@ emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _)
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
   let bodyLines =
-    emitClausesRefEnv
-      memberProg
-      (envExtendUnstamped (names ++ groupCaps) marks)
-      name
-      params
-      arity
-      clauses
+    emitClausesRefEnv memberProg groupEnv name params arity clauses
   let memberLocals = names
   let bodyLocals =
     filterList

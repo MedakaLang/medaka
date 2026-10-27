@@ -477,7 +477,7 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
 -- `locals` = the in-scope LOCALLY-BOUND names (clause params, let/lambda binders).
 -- A CVar matching a local SHADOWS any same-named top-level fn / ctor, so applying it
 -- is an INDIRECT (closure) call — the analysis MUST agree with emitAppRef/emitTailCallW's
--- `contains f0 env`-first guard, else a shadowing-local call (`applyEq eq x y = eq x y`
+-- `envHas f0 env`-first guard, else a shadowing-local call (`applyEq eq x y = eq x y`
 -- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
 -- the closure types are never emitted though emit uses them (parse/validate failure).
 exprUsesClosures : OrdMap Unit -> List (String, Int) -> Env -> CExpr -> Bool

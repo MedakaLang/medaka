@@ -154,6 +154,26 @@ main = probe 0
 """
     "9",
   ValueCase
+    "shadowed-fn-param"
+    """
+inc : Int -> Int
+inc x = x + 1
+twice : Int -> Int
+twice inc = inc + inc
+main = twice 4
+"""
+    "8",
+  ValueCase
+    "shadowed-fn-let"
+    """
+inc : Int -> Int
+inc x = x + 1
+probe : Int -> Int
+probe n = let inc = n * 2 in inc + 1
+main = probe 4
+"""
+    "9",
+  ValueCase
     "where-ref"
     """
 anchor = "ref"
