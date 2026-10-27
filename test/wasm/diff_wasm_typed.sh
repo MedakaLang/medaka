@@ -214,8 +214,8 @@ done
 for required in \
   'emitRefProgram prog plan groups' \
   'emitRefExpr prog env d expr = valueLines (emitValueW prog env d expr)' \
-  'emitValueW : Prog -> List String -> Int -> CExpr -> WasmValue' \
-  'emitRefTailWrap : Prog -> List String -> Int -> CExpr -> List String'; do
+  'emitValueW : Prog -> Env -> Int -> CExpr -> WasmValue' \
+  'emitRefTailWrap : Prog -> Env -> Int -> CExpr -> List String'; do
   has_wasm_pin "$required" || {
     echo "FAIL WASM-SINGLE-TRAVERSAL: missing $required"
     exit 1
