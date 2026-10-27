@@ -2,7 +2,8 @@ import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{
   ParseDiagnostic(..), ParseDiagnosticKind(..), ParseEdit(..),
   EditApplicability(..), UnicodeProblem(..), diagnosticCode, diagnosticLoc,
-  diagnosticEdits, diagnosticHelp, renderParseDiagnostic, locateParseProblem
+  diagnosticEdits, diagnosticHelp, renderParseDiagnostic, locateParseProblem,
+  makeParseDiagnostic
 }
 import frontend.parser.{
   parseResult, parseLocatedResult, parseResultPairs, parseErrorDiagnostic
@@ -234,4 +235,14 @@ test "unterminated string EOF location uses original Unicode and CRLF" = expectE
         (2, 4, 2, 4)
         [],
     ),
+  ]
+
+test "shared diagnostic construction retains typed edits" =
+  let loc = Loc "" 2 3 2 5
+  let diagnostic = makeParseDiagnostic BadNeq loc
+  expectAll [
+    expectEqual "P-BAD-NEQ" (diagnosticCode diagnostic),
+    expectEqual
+      [((2, 3, 2, 5), "!=", "/=", True)]
+      (map editText (diagnosticEdits diagnostic)),
   ]

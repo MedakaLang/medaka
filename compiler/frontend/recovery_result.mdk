@@ -1,0 +1,63 @@
+import frontend.ast.{Decl}
+import frontend.parse_positions.{Positions}
+import frontend.parse_diagnostic.{ParseDiagnostic}
+
+public export data SourceExtent = SourceExtent Int Int
+public export data InvalidReason =
+  | InvalidDeclaration
+  | TerminalLexError
+  | UnclosedDelimiter
+  | MismatchedDelimiter
+  | UntrustedBoundary
+  | RecoveryBudget
+public export data RecoveryStop =
+  | ReachedEnd
+  | StoppedLexically
+  | StoppedDelimiter
+  | StoppedBoundary
+  | ExhaustedBudget
+-- Complete and Partial name source completeness, not presence of a value.
+-- lint-disable-next-line rule-clone-type
+public export data RecoveryCompleteness = Complete | Partial RecoveryStop
+public export data RecoveryStats = RecoveryStats Int Int Int
+export data InvalidRegion = InvalidRegion SourceExtent InvalidReason
+export data RecoveredSource =
+  RecoveredSource (List Decl) Positions (List ParseDiagnostic) (List InvalidRegion) RecoveryCompleteness RecoveryStats
+
+export
+makeInvalidRegion : SourceExtent -> InvalidReason -> InvalidRegion
+makeInvalidRegion extent reason = InvalidRegion extent reason
+export
+invalidExtent : InvalidRegion -> SourceExtent
+invalidExtent (InvalidRegion extent _) = extent
+export
+invalidReason : InvalidRegion -> InvalidReason
+invalidReason (InvalidRegion _ reason) = reason
+export
+makeRecoveredSource : List Decl ->
+  Positions ->
+  List ParseDiagnostic ->
+  List InvalidRegion ->
+  RecoveryCompleteness ->
+  RecoveryStats ->
+  RecoveredSource
+makeRecoveredSource ds ps diagnostics regions completeness stats =
+  RecoveredSource ds ps diagnostics regions completeness stats
+export
+recoveredDecls : RecoveredSource -> List Decl
+recoveredDecls (RecoveredSource ds _ _ _ _ _) = ds
+export
+recoveredPositions : RecoveredSource -> Positions
+recoveredPositions (RecoveredSource _ ps _ _ _ _) = ps
+export
+recoveredDiagnostics : RecoveredSource -> List ParseDiagnostic
+recoveredDiagnostics (RecoveredSource _ _ ds _ _ _) = ds
+export
+invalidRegions : RecoveredSource -> List InvalidRegion
+invalidRegions (RecoveredSource _ _ _ rs _ _) = rs
+export
+recoveredCompleteness : RecoveredSource -> RecoveryCompleteness
+recoveredCompleteness (RecoveredSource _ _ _ _ c _) = c
+export
+recoveredStats : RecoveredSource -> RecoveryStats
+recoveredStats (RecoveredSource _ _ _ _ _ s) = s

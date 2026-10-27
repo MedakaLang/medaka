@@ -1382,3 +1382,27 @@ stringEofRun = match scratchDir
       result
 
 test "unterminated string EOF fails strict CLI verbs" = stringEofRun
+
+recoveryStrictRun : <Exec, FileWrite, IO> Expectation
+recoveryStrictRun = match scratchDir
+  Err e => fail "could not make scratch directory: \{e}"
+  Ok dir =>
+    let _ = runVerb "mkdir" ["-p", dir]
+    match writeAll dir [("broken.mdk", "before = 1\nbroken = )\nafter = 2\n")]
+      Err e => fail "could not write broken source: \{e}"
+      Ok () =>
+        let result =
+          expectEach
+            (map
+              (verb => (
+                verb,
+                expectSpawnFailsAll
+                  medakaBin
+                  [verb, "\{dir}/broken.mdk"]
+                  ["expected an expression"],
+              ))
+              ["check", "run", "build"])
+        let _ = runVerb "rm" ["-rf", dir]
+        result
+
+test "recovered declarations never enter strict CLI verbs" = recoveryStrictRun

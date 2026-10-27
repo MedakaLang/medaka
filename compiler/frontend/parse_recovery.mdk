@@ -1,0 +1,425 @@
+import list.{reverse}
+import array.{sliceClamped}
+import frontend.parser as P
+import frontend.lexer.{tokenizeWithOffsetPairs}
+import frontend.lex_token.{Token(..), isNoiseTok, isEofTok}
+import frontend.parse_engine.{
+  ParseContext, PR(..), newParseContext, contextTokens, contextOffsets,
+  contextLineStarts, peekTok, mark, rewind, failProblem, locOfSpan
+}
+import frontend.parse_result.{
+  ParsedSource, parsedDecls, parsedPositions, parseErrorDiagnostic
+}
+import frontend.parse_positions.{Positions(..), positionsFromSpans}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, ParseDiagnosticKind(..), makeParseDiagnostic
+}
+import frontend.ast.{Decl, Loc(..)}
+import support.source_index.{offsetToLineColFast}
+
+import frontend.recovery_result.{
+  RecoveredSource, SourceExtent(..), InvalidReason(..), RecoveryStop(..),
+  RecoveryCompleteness(..), RecoveryStats(..), makeInvalidRegion,
+  makeRecoveredSource, recoveredDecls, recoveredPositions, recoveredDiagnostics,
+  invalidRegions, recoveredCompleteness, recoveredStats
+}
+
+public export data RecoveryLimits = RecoveryLimits Int Int Int Int
+
+export
+defaultRecoveryLimits : RecoveryLimits
+defaultRecoveryLimits = RecoveryLimits 8388608 500000 4096 32
+
+openKind : Token -> Int
+openKind TLParen = 1
+openKind TLBracket = 2
+openKind TLBracketTight = 2
+openKind TLArray = 3
+openKind TLBrace = 4
+openKind TDotLBrace = 4
+openKind (TInterpOpen _) = 5
+openKind _ = 0
+
+closeKind : Token -> Int
+closeKind TRParen = 1
+closeKind TRBracket = 2
+closeKind TRArray = 3
+closeKind TRBrace = 4
+closeKind (TInterpEnd _) = 5
+closeKind _ = 0
+
+isRoot : List Int -> Bool
+isRoot [] = True
+isRoot _ = False
+
+fences : ParseContext -> (Array Bool, Option InvalidReason)
+fences ctx =
+  let (flags, reason) = walkFence ctx 0 0 [] False []
+  (arrayFromList (reverse flags), reason)
+
+walkFence : ParseContext ->
+  Int ->
+  Int ->
+  List Int ->
+  Bool ->
+  List Bool ->
+  (List Bool, Option InvalidReason)
+walkFence ctx p depth stack poison acc
+  | p >= arrayLength (contextTokens ctx) = (
+    acc,
+    if poison then
+      Some MismatchedDelimiter
+    else if not (isRoot stack) then
+      Some UnclosedDelimiter
+    else
+      None,
+  )
+  | otherwise =
+    let t = peekTok (contextTokens ctx) p
+    let off = fst (arrayGetUnsafe p (contextOffsets ctx))
+    let (_line, col) = offsetToLineColFast (contextLineStarts ctx) off
+    let allowed =
+      col == 0 && not (isNoiseTok t) && depth == 0 && isRoot stack && not poison
+    let d = match t
+      TIndent => depth + 1
+      TDedent => max 0 (depth - 1)
+      _ => depth
+    let o = openKind t
+    let c = closeKind t
+    if o > 0 then
+      walkFence ctx (p + 1) d (o :: stack) poison (allowed :: acc)
+    else if c > 0 then match stack
+      [] => walkFence ctx (p + 1) d [] poison (allowed :: acc)
+      k :: rest =>
+        walkFence ctx (p + 1) d rest (poison || k /= c) (allowed :: acc)
+    else
+      walkFence ctx (p + 1) d stack poison (allowed :: acc)
+
+noiseEnd : ParseContext -> Int -> Int
+noiseEnd ctx p
+  | isNoiseTok (peekTok (contextTokens ctx) p) = noiseEnd ctx (p + 1)
+  | otherwise = p
+
+nextFence : ParseContext -> Array Bool -> Int -> Int
+nextFence ctx fs p
+  | p >= arrayLength fs = p
+  | isEofTok (peekTok (contextTokens ctx) p) = p
+  | arrayGetUnsafe p fs = p
+  | otherwise = nextFence ctx fs (p + 1)
+
+offAt : ParseContext -> Int -> Int -> Int
+offAt ctx size p
+  | isEofTok (peekTok (contextTokens ctx) p) = size
+  | p < arrayLength (contextOffsets ctx) =
+    fst (arrayGetUnsafe p (contextOffsets ctx))
+  | otherwise = size
+
+sliceList : Array a -> Int -> Int -> List a
+sliceList xs s e = toList (sliceClamped s e xs)
+
+publish : ParseContext ->
+  List (Decl, Int, Int) ->
+  List ParseDiagnostic ->
+  List (Int, Int, InvalidReason) ->
+  RecoveryStop ->
+  Int ->
+  RecoveredSource
+publish ctx revSpans ds rs stop attempts =
+  let spans = reverse revSpans
+  makeRecoveredSource
+    (map ((d, _s, _e) => d) spans)
+    (positionsFromSpans
+      (contextLineStarts ctx)
+      (contextTokens ctx)
+      (contextOffsets ctx)
+      spans)
+    (reverse ds)
+    (map
+      ((s, e, reason) => makeInvalidRegion (SourceExtent s e) reason)
+      (reverse rs))
+    (Partial stop)
+    (RecoveryStats (arrayLength (contextTokens ctx)) attempts (length ds))
+
+failureDiag : ParseContext ->
+  Int ->
+  Int ->
+  ParseDiagnosticKind ->
+  ParseDiagnostic
+failureDiag ctx size p problem =
+  let loc =
+    if isEofTok (peekTok (contextTokens ctx) p)
+      || size > 0
+        && offAt ctx size p == 0
+        && isEofTok (peekTok (contextTokens ctx) (noiseEnd ctx p)) then
+      let (line, col) = offsetToLineColFast (contextLineStarts ctx) size
+      Loc "" line col line col
+    else
+      locOfSpan ctx p (p + 1)
+  makeParseDiagnostic problem loc
+
+recoverLoop : RecoveryLimits ->
+  String ->
+  ParseContext ->
+  Array Bool ->
+  Option InvalidReason ->
+  Int ->
+  Int ->
+  List (Decl, Int, Int) ->
+  List ParseDiagnostic ->
+  List (Int, Int, InvalidReason) ->
+  Int ->
+  RecoveredSource
+recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs damage size p spans ds rs attempts
+  | isEofTok (peekTok (contextTokens ctx) p) =
+    publish ctx spans ds rs ReachedEnd attempts
+  | attempts >= maxAttempts || length ds >= maxDiagnostics =
+    publish
+      ctx
+      spans
+      ds
+      ((offAt ctx size p, size, RecoveryBudget) :: rs)
+      ExhaustedBudget
+      attempts
+  | p >= arrayLength fs || not (arrayGetUnsafe p fs) =
+    publish
+      ctx
+      spans
+      ds
+      ((offAt ctx size p, size, UntrustedBoundary) :: rs)
+      StoppedBoundary
+      attempts
+  | otherwise = match peekTok (contextTokens ctx) p
+    TLexError kind =>
+      publish
+        ctx
+        spans
+        (failureDiag ctx size p kind :: ds)
+        ((offAt ctx size p, size, TerminalLexError) :: rs)
+        StoppedLexically
+        (attempts + 1)
+    _ =>
+      let saved = mark ctx
+      match P.parseDeclAt ctx p
+        POk d q =>
+          let end = noiseEnd ctx q
+          let boundary =
+            isEofTok (peekTok (contextTokens ctx) end)
+              || end < arrayLength fs && arrayGetUnsafe end fs
+          if q > p && boundary then
+            let ts = sliceList (contextTokens ctx) p q
+            let os = sliceList (contextOffsets ctx) p q
+            match (P.prescanErrorPairs
+              src
+              (ts ++ [TEof])
+              (os ++ [(offAt ctx size q, offAt ctx size q)]))
+              None =>
+                recoverLoop
+                  limits
+                  src
+                  ctx
+                  fs
+                  damage
+                  size
+                  end
+                  ((d, p, q) :: spans)
+                  ds
+                  rs
+                  (attempts + 1)
+              Some err =>
+                rewind saved
+                reject
+                  limits
+                  src
+                  ctx
+                  fs
+                  damage
+                  size
+                  p
+                  spans
+                  ds
+                  rs
+                  attempts
+                  (parseErrorDiagnostic err)
+          else
+            rewind saved
+            reject
+              limits
+              src
+              ctx
+              fs
+              damage
+              size
+              p
+              spans
+              ds
+              rs
+              attempts
+              (failureDiag
+                ctx
+                size
+                q
+                (GenericParse "declaration did not end at a safe boundary"))
+        PErr f q =>
+          reject
+            limits
+            src
+            ctx
+            fs
+            damage
+            size
+            p
+            spans
+            ds
+            rs
+            attempts
+            (failureDiag ctx size q (failProblem f))
+        PFatal f q =>
+          reject
+            limits
+            src
+            ctx
+            fs
+            damage
+            size
+            p
+            spans
+            ds
+            rs
+            attempts
+            (failureDiag ctx size q (failProblem f))
+
+reject : RecoveryLimits ->
+  String ->
+  ParseContext ->
+  Array Bool ->
+  Option InvalidReason ->
+  Int ->
+  Int ->
+  List (Decl, Int, Int) ->
+  List ParseDiagnostic ->
+  List (Int, Int, InvalidReason) ->
+  Int ->
+  ParseDiagnostic ->
+  RecoveredSource
+reject limits src ctx fs damage size p spans ds rs attempts diagnostic =
+  let next = nextFence ctx fs (p + 1)
+  let terminal = findLex ctx p (min (arrayLength fs) (next + 1))
+  if terminal >= 0 then
+    let kind = match peekTok (contextTokens ctx) terminal
+      TLexError k => k
+      _ => GenericParse "unreachable"
+    publish
+      ctx
+      spans
+      (failureDiag ctx size terminal kind :: ds)
+      ((offAt ctx size p, size, TerminalLexError) :: rs)
+      StoppedLexically
+      (attempts + 1)
+  else
+    let ts = sliceList (contextTokens ctx) p next
+    let os = sliceList (contextOffsets ctx) p next
+    let checked =
+      match P.prescanErrorPairs src (ts ++ [TEof]) (os ++ [(size, size)])
+        Some err => parseErrorDiagnostic err
+        None => diagnostic
+    if isEofTok (peekTok (contextTokens ctx) next) && isSome damage then
+      publish
+        ctx
+        spans
+        (checked :: ds)
+        ((offAt ctx size p, size, optionOr UnclosedDelimiter damage) :: rs)
+        StoppedDelimiter
+        (attempts + 1)
+    else
+      recoverLoop
+        limits
+        src
+        ctx
+        fs
+        damage
+        size
+        next
+        spans
+        (checked :: ds)
+        ((offAt ctx size p, offAt ctx size next, InvalidDeclaration) :: rs)
+        (attempts + 1)
+
+findLex : ParseContext -> Int -> Int -> Int
+findLex ctx p end
+  | p >= end = -1
+  | otherwise = match peekTok (contextTokens ctx) p
+    TLexError _ => p
+    _ => findLex ctx (p + 1) end
+
+export
+parseRecovering : String -> RecoveredSource
+parseRecovering = parseRecoveringWith defaultRecoveryLimits
+
+export
+parseRecoveringWith : RecoveryLimits -> String -> RecoveredSource
+parseRecoveringWith (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src
+  | min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0 =
+    budgetResult src 0
+  | stringLength src > maxSource = budgetResult src 0
+  | otherwise = recoverTokens limits src
+
+budgetResult : String -> Int -> RecoveredSource
+budgetResult src count =
+  makeRecoveredSource
+    []
+    (Positions [] [] 0 [])
+    []
+    [makeInvalidRegion (SourceExtent 0 (stringLength src)) RecoveryBudget]
+    (Partial ExhaustedBudget)
+    (RecoveryStats count 0 0)
+
+recoverTokens : RecoveryLimits -> String -> RecoveredSource
+recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src =
+  let (ts, os) = tokenizeWithOffsetPairs src
+  let count = length ts
+  if count > maxTokens then
+    budgetResult src count
+  else match P.parseSourcePairs src ts os
+    Ok result =>
+      makeRecoveredSource
+        (parsedDecls result)
+        (parsedPositions result)
+        []
+        []
+        Complete
+        (RecoveryStats count 0 0)
+    Err firstDiagnostic =>
+      let ctx = newParseContext src (arrayFromList ts) (arrayFromList os)
+      let (fs, damage) = fences ctx
+      ensureDiagnostic
+        limits
+        firstDiagnostic
+        (recoverLoop
+          limits
+          src
+          ctx
+          fs
+          damage
+          (stringLength src)
+          (noiseEnd ctx 0)
+          []
+          []
+          []
+          0)
+
+ensureDiagnostic : RecoveryLimits ->
+  ParseDiagnostic ->
+  RecoveredSource ->
+  RecoveredSource
+ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
+  if maxDiagnostics <= 0 || length (recoveredDiagnostics result) > 0 then
+    result
+  else
+    makeRecoveredSource
+      (recoveredDecls result)
+      (recoveredPositions result)
+      [diagnostic]
+      (invalidRegions result)
+      (recoveredCompleteness result)
+      (match recoveredStats result
+        RecoveryStats tokens attempts _ => RecoveryStats tokens attempts 1)

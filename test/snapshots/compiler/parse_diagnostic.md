@@ -1,5 +1,5 @@
 # META
-source_lines=284
+source_lines=288
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Loc(..)}
@@ -269,7 +269,7 @@ locateParseProblem index start end kind =
   let (sl, sc) = optionOr (1, 0) (offsetToSourcePosition index start)
   let (el, ec) = optionOr (sl, sc) (offsetToSourcePosition index end)
   let loc = Loc "" sl sc el ec
-  ParseDiagnostic kind loc (problemEdits kind loc)
+  makeParseDiagnostic kind loc
 
 replacementEdit : Loc -> String -> String -> List ParseEdit
 replacementEdit loc old new = [ParseEdit loc old new MachineApplicable]
@@ -286,6 +286,10 @@ problemEdits (PublicDataOnly _) loc = replacementEdit loc "public" ""
 problemEdits MatchGuardBar loc = replacementEdit loc "|" "if"
 problemEdits EquationGuardIf loc = replacementEdit loc "if" "|"
 problemEdits _ _ = []
+
+export
+makeParseDiagnostic : ParseDiagnosticKind -> Loc -> ParseDiagnostic
+makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToSourcePosition" false))))
@@ -415,7 +419,7 @@ problemEdits _ _ = []
 (DFunDef false "problemHelp" ((PCon "EquationGuardIf")) (EApp (EVar "Some") (ELit (LString "replace `if` with `|`"))))
 (DFunDef false "problemHelp" (PWild) (EVar "None"))
 (DTypeSig true "locateParseProblem" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ParseDiagnosticKind") (TyCon "ParseDiagnostic"))))))
-(DFunDef false "locateParseProblem" ((PVar "index") (PVar "start") (PVar "end") (PVar "kind")) (EBlock (DoLet false false (PTuple (PVar "sl") (PVar "sc")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "start")))) (DoLet false false (PTuple (PVar "el") (PVar "ec")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "sl") (EVar "sc"))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "end")))) (DoLet false false (PVar "loc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (DoExpr (EApp (EApp (EApp (EVar "ParseDiagnostic") (EVar "kind")) (EVar "loc")) (EApp (EApp (EVar "problemEdits") (EVar "kind")) (EVar "loc"))))))
+(DFunDef false "locateParseProblem" ((PVar "index") (PVar "start") (PVar "end") (PVar "kind")) (EBlock (DoLet false false (PTuple (PVar "sl") (PVar "sc")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "start")))) (DoLet false false (PTuple (PVar "el") (PVar "ec")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "sl") (EVar "sc"))) (EApp (EApp (EVar "offsetToSourcePosition") (EVar "index")) (EVar "end")))) (DoLet false false (PVar "loc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (DoExpr (EApp (EApp (EVar "makeParseDiagnostic") (EVar "kind")) (EVar "loc")))))
 (DTypeSig false "replacementEdit" (TyFun (TyCon "Loc") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ParseEdit"))))))
 (DFunDef false "replacementEdit" ((PVar "loc") (PVar "old") (PVar "new")) (EListLit (EApp (EApp (EApp (EApp (EVar "ParseEdit") (EVar "loc")) (EVar "old")) (EVar "new")) (EVar "MachineApplicable"))))
 (DTypeSig false "problemEdits" (TyFun (TyCon "ParseDiagnosticKind") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "ParseEdit")))))
@@ -429,6 +433,8 @@ problemEdits _ _ = []
 (DFunDef false "problemEdits" ((PCon "MatchGuardBar") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "|"))) (ELit (LString "if"))))
 (DFunDef false "problemEdits" ((PCon "EquationGuardIf") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "if"))) (ELit (LString "|"))))
 (DFunDef false "problemEdits" (PWild PWild) (EListLit))
+(DTypeSig true "makeParseDiagnostic" (TyFun (TyCon "ParseDiagnosticKind") (TyFun (TyCon "Loc") (TyCon "ParseDiagnostic"))))
+(DFunDef false "makeParseDiagnostic" ((PVar "kind") (PVar "loc")) (EApp (EApp (EApp (EVar "ParseDiagnostic") (EVar "kind")) (EVar "loc")) (EApp (EApp (EVar "problemEdits") (EVar "kind")) (EVar "loc"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToSourcePosition" false))))
@@ -558,7 +564,7 @@ problemEdits _ _ = []
 (DFunDef false "problemHelp" ((PCon "EquationGuardIf")) (EApp (EVar "Some") (ELit (LString "replace `if` with `|`"))))
 (DFunDef false "problemHelp" (PWild) (EVar "None"))
 (DTypeSig true "locateParseProblem" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ParseDiagnosticKind") (TyCon "ParseDiagnostic"))))))
-(DFunDef false "locateParseProblem" ((PVar "index") (PVar "start") (PVar "end") (PVar "kind")) (EBlock (DoLet false false (PTuple (PVar "sl") (PVar "sc")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "start")))) (DoLet false false (PTuple (PVar "el") (PVar "ec")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "sl") (EVar "sc"))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "end")))) (DoLet false false (PVar "loc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (DoExpr (EApp (EApp (EApp (EVar "ParseDiagnostic") (EVar "kind")) (EVar "loc")) (EApp (EApp (EVar "problemEdits") (EVar "kind")) (EVar "loc"))))))
+(DFunDef false "locateParseProblem" ((PVar "index") (PVar "start") (PVar "end") (PVar "kind")) (EBlock (DoLet false false (PTuple (PVar "sl") (PVar "sc")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "start")))) (DoLet false false (PTuple (PVar "el") (PVar "ec")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "sl") (EVar "sc"))) (EApp (EApp (EVar "offsetToSourcePosition") (EMethodRef "index")) (EVar "end")))) (DoLet false false (PVar "loc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (DoExpr (EApp (EApp (EVar "makeParseDiagnostic") (EVar "kind")) (EVar "loc")))))
 (DTypeSig false "replacementEdit" (TyFun (TyCon "Loc") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ParseEdit"))))))
 (DFunDef false "replacementEdit" ((PVar "loc") (PVar "old") (PVar "new")) (EListLit (EApp (EApp (EApp (EApp (EVar "ParseEdit") (EVar "loc")) (EVar "old")) (EVar "new")) (EVar "MachineApplicable"))))
 (DTypeSig false "problemEdits" (TyFun (TyCon "ParseDiagnosticKind") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "ParseEdit")))))
@@ -572,3 +578,5 @@ problemEdits _ _ = []
 (DFunDef false "problemEdits" ((PCon "MatchGuardBar") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "|"))) (ELit (LString "if"))))
 (DFunDef false "problemEdits" ((PCon "EquationGuardIf") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "if"))) (ELit (LString "|"))))
 (DFunDef false "problemEdits" (PWild PWild) (EListLit))
+(DTypeSig true "makeParseDiagnostic" (TyFun (TyCon "ParseDiagnosticKind") (TyFun (TyCon "Loc") (TyCon "ParseDiagnostic"))))
+(DFunDef false "makeParseDiagnostic" ((PVar "kind") (PVar "loc")) (EApp (EApp (EApp (EVar "ParseDiagnostic") (EVar "kind")) (EVar "loc")) (EApp (EApp (EVar "problemEdits") (EVar "kind")) (EVar "loc"))))
