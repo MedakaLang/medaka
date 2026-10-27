@@ -1,5 +1,5 @@
 # META
-source_lines=714
+source_lines=700
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -569,20 +569,6 @@ lazyGlobalNames binds =
   let tainted = foldTaintSCCs adj methodSet (tarjanSCCs allNames adj) omEmpty
   filterList (n => n /= "main" && omHasKey n tainted) (valGlobalNames binds)
 
--- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
--- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS
--- to a `=>`-constrained fn's source params.  Both backends must recognize one, for the
--- same reason: a synthesized dict param occupies an IR param slot but has NO entry in
--- the DECLARED signature, so any walk that lines declared types up against lowered
--- params must skip it WITHOUT consuming a declared type — otherwise every declared type
--- describes the param one slot to its LEFT.  llvm_emit's inferParamTysSeedD does this;
--- wasm_emit's numPolyPatsAt/floatPatsAt did NOT, which is what made an explicit
--- `Num a =>` signature *disable* the very runtime dispatch it should have guaranteed
--- (2026-07-14; fixture `test/wasm/fixtures/polynum_sq_sig_float.mdk`).
-export
-isDictParamName : String -> Bool
-isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
-
 -- ── clause fall-through labelling (shared by BOTH backends) ──────────────────
 -- `desugar.mdk` lowers a clause's guard chain to a nested `CIf`/`CDecision`
 -- terminated by the sentinel call `__fallthrough__ ()` — "no guard arm matched,
@@ -915,8 +901,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
 (DFunDef false "ftPrefix" () (ELit (LString "__ft__")))
 (DTypeSig true "ftLabelOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1156,8 +1140,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
 (DFunDef false "ftPrefix" () (ELit (LString "__ft__")))
 (DTypeSig true "ftLabelOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

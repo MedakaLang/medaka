@@ -294,6 +294,7 @@ import ir.core_ir_lower.{
   callModeFor,
   isPartialMode,
   definedArityOf,
+  leadingDictParams,
   programArities,
 }
 import backend.trmc_analysis.{
@@ -329,7 +330,6 @@ import backend.emit_plan.{
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
-  isDictParamName,
   ftPrefix,
   labelFallthrough,
   rngBound,
@@ -4088,7 +4088,7 @@ dispatchCallSeqW prog arm name nArgs end =
 armIsExactW : ImplArmW -> Int -> Bool
 armIsExactW arm nArgs =
   let pats = implEntryPatsW (armEntryW arm)
-  listLen pats - wLeadingDictPats pats == nArgs
+  listLen pats - leadingDictParams pats == nArgs
 
 -- The define of [arm]'s entry as a closure value: a lifted `$codety` wrapper that
 -- unpacks its argument array into the define's parameters, at the define's arity.
@@ -4229,7 +4229,7 @@ projPathWord : List Int -> String
 projPathWord path = joinWith "_" (map intToString path)
 
 implLeadingDictCountOfEntryW : CImplEntry -> Int
-implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
+implLeadingDictCountOfEntryW ent = leadingDictParams (implEntryPatsW ent)
 
 -- `take n` for a route list (no stdlib `take` in scope here).
 takeRoutesW : Int -> List Route -> List Route
@@ -4588,13 +4588,6 @@ gatherImplGroup prog entries (m, key) =
     Some ent => implEntrySymW m ent
     None => panic "wasm: impl group without an entry (internal error)"
   ImplG m headTag key (implGroupArity clauses) clauses fnName
-
--- count of leading `$dict_…` param patterns the dict-pass prepends ahead of the
--- source value params (mirror of llvm_emit's leadingDictPats; uses wIsDictParamName).
-wLeadingDictPats : List Pat -> Int
-wLeadingDictPats ((PVar x _ _) :: rest) =
-  if wIsDictParamName x then 1 + wLeadingDictPats rest else 0
-wLeadingDictPats _ = 0
 
 -- the clauses of (method, key): the def-side grouping passes a canonical key, which
 -- selects exactly one impl's clauses even when it shares a head with an overlapping
@@ -7921,9 +7914,6 @@ wTrmcImplTry prog method key fnName arity clauses =
         (wTrmcCtorSet prog self arity pairs))
   else
     None
-
-wIsDictParamName : String -> Bool
-wIsDictParamName x = startsWith "$dict" x
 
 -- the fn's distinct (ctorName, selfFieldIdx) leaf-ctor pairs, in first-seen
 -- clause/leaf order (deterministic).  Cons-tail leaves report ("Cons", 1).

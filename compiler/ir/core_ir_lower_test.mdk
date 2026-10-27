@@ -7,10 +7,10 @@ import test.{expectAll, expectEqual, expectFalse, expectTrue, fail}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import ir.core_ir_lower.{
-  noInlineFnNames, methodResultFacts, lowerProgramEmitWith
+  noInlineFnNames, methodResultFacts, lowerProgramEmitWith, leadingDictParams
 }
 import ir.core_ir.{CProgram(..), EntryFact(..), MethodResultFact(..)}
-import frontend.ast.{Decl(..), TyConOrigin(..)}
+import frontend.ast.{Decl(..), Pat(..), TyConOrigin(..), noDeclLoc, noBinderId}
 import types.annotate.{annotateProgram}
 import types.program_facts.{ProgramFacts(..), emptyFacts}
 import types.publish.{EntryOutcome(..)}
@@ -222,3 +222,14 @@ test "lowering projects the selected entry outcome without inspecting the progra
       expectTrue outcome.entryMainIsFloat,
     ]
     None => fail "lowering dropped its entry outcome"
+
+-- Both emitters size an impl's dictionary pushes from this count, so a corrupted
+-- count makes the caller push a different number of words than the define binds.
+test "leadingDictParams counts only the leading dict witnesses" =
+  let var name = PVar name noDeclLoc noBinderId
+  expectAll [
+    expectEqual 0 (leadingDictParams [var "x", var "$dict_eq_0"]),
+    expectEqual 2 (leadingDictParams [var "$dict_a", var "$dict_b", PWild]),
+    expectEqual 1 (leadingDictParams [var "$dict_a", var "x", var "$dict_b"]),
+    expectEqual 0 (leadingDictParams []),
+  ]
