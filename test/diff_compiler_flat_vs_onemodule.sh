@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
-run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+run_t() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }
 LIMIT=180
 WORK="$(mktemp -d)" || { echo "mktemp -d failed"; exit 2; }
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM

@@ -73,7 +73,7 @@ wanted() {
   return 1
 }
 
-bounded() { perl -e 'alarm 180; exec @ARGV' -- "$@"; }
+bounded() { perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$@"; }
 
 # The two halves of the protocol, kept as files rather than inline heredocs so
 # each can read the PIPE as its stdin.

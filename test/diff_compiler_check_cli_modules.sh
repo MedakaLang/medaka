@@ -29,7 +29,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
-bound() { perl -e 'alarm 120; exec @ARGV' "$@"; }
+bound() { perl -e 'alarm 120; exec @ARGV or die qq(exec: $!)' "$@"; }
 strip_unit() { sed '$ s/0$//'; }
 
 TMP="$(mktemp -d)"

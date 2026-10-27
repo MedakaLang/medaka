@@ -68,7 +68,7 @@ bad() {
 }
 
 # #2: located error at the `!=` column with the hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/bangeq_error.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/bangeq_error.mdk" 2>&1)"
 case "$out" in
   *':7: unexpected `!=`; did you mean `/=`?'*)
     ok bangeq_error ;;
@@ -76,7 +76,7 @@ case "$out" in
 esac
 
 # #3: multiline let RHS + if/then/else checks cleanly (exit 0).
-perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/let_multiline_rhs_if.mdk" >/dev/null 2>&1
+perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/let_multiline_rhs_if.mdk" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
   ok let_multiline_rhs_if
 else
@@ -88,7 +88,7 @@ fi
 # flat single-file path used to flatten core+user and let the user scheme shadow
 # the method in core's own prop/`neq` bodies → spurious "List Int vs Int".  The
 # oracle accepts it (method-marks the prop ref), so this is NATIVE-only assurance.
-perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/method_shadow_check.mdk" >/dev/null 2>&1
+perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/method_shadow_check.mdk" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
   ok method_shadow_check
 else
@@ -99,7 +99,7 @@ fi
 # resolve to the USER's definition on the EVAL path (run), matching build + the
 # oracle, even though `List Int` HAS an `Eq` impl (the eval path used to arg-stamp
 # the `Eq (List a)` impl → False; the user's `eq` returns True).
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/method_shadow_run.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" run "$FIX/method_shadow_run.mdk" 2>&1)"
 case "$out" in
   True) ok method_shadow_run ;;
   *) bad method_shadow_run "expected True, got [$out]" ;;
@@ -110,7 +110,7 @@ esac
 # removed-keyword diagnostic firing on the bare token regardless of position,
 # so wiring it up would only have pinned the bug.  Freeing the word unblocked
 # it, so it is live now: the import must resolve and the program must run.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/keyword_import_record/main.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" run "$FIX/keyword_import_record/main.mdk" 2>&1)"
 case "$out" in
   "hello from record module") ok keyword_import_record ;;
   *) bad keyword_import_record "expected 'hello from record module', got [$out]" ;;
@@ -118,7 +118,7 @@ esac
 
 # inline-let missing-in: located error at the `let` keyword with a hint.
 # Before the fix, native reported 2:0 ("if" line) with no hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/inline_let_missing_in.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/inline_let_missing_in.mdk" 2>&1)"
 case "$out" in
   *'inline `let` requires `in`'*)
     ok inline_let_missing_in ;;
@@ -127,7 +127,7 @@ esac
 
 # arrayBlit + arraySetUnsafe in native interpreter: Vector.push triggers both.
 # Before the fix: "unbound identifier: arrayBlit" on the 3rd push (first grow).
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/vector_push.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" run "$FIX/vector_push.mdk" 2>&1)"
 case "$out" in
   ok) ok vector_push ;;
   *) bad vector_push "expected 'ok', got [$out]" ;;
@@ -139,7 +139,7 @@ esac
 
 # Stage 2: C-style brace block on `if` — located at the `{` (col 15) with the hint,
 # AND the Stage-1 caret block (the `^` line proves the snippet renderer fired).
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/brace_block_if.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/brace_block_if.mdk" 2>&1)"
 case "$out" in
   *':1:15: Medaka has no `{ ... }` blocks'*'^'*)
     ok brace_block_if ;;
@@ -147,21 +147,21 @@ case "$out" in
 esac
 
 # Stage 2: `for` loop — located at the `for` keyword with the recursion hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/for_loop.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/for_loop.mdk" 2>&1)"
 case "$out" in
   *'Medaka has no `for` loops'*) ok for_loop ;;
   *) bad for_loop "got [$out]" ;;
 esac
 
 # Stage 2: `def` function header — located at the `def` keyword with the hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/def_keyword.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/def_keyword.mdk" 2>&1)"
 case "$out" in
   *':1:0: Medaka has no `def`'*) ok def_keyword ;;
   *) bad def_keyword "got [$out]" ;;
 esac
 
 # Stage 2: `/* … */` block comment — located at the `/` with the `{- -}`/`--` hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/block_comment.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/block_comment.mdk" 2>&1)"
 case "$out" in
   *'Medaka has no `/* ... */` comments'*)
     ok block_comment ;;
@@ -169,7 +169,7 @@ case "$out" in
 esac
 
 # Stage 2: trailing `;` statement terminator — located at the `;` with the hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/semicolon_stmt.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV or die qq(exec: $!)' -- "$M" check "$FIX/semicolon_stmt.mdk" 2>&1)"
 case "$out" in
   *'Medaka has no statement terminator `;`'*)
     ok semicolon_stmt ;;
@@ -182,9 +182,9 @@ esac
 # Each case runs in its own directory, whose `cfg/a.txt` holds `granted`.
 GRANTS="$FIX/authority_grants"
 grant_case() {
-  out_run="$(cd "$GRANTS" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$1.mdk" 2>&1)"
+  out_run="$(cd "$GRANTS" && perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- "$M" run "$1.mdk" 2>&1)"
   bin="${TMPDIR:-/tmp}/medaka_grants_$$_$1"
-  (cd "$GRANTS" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$1.mdk" -o "$bin" >/dev/null 2>&1)
+  (cd "$GRANTS" && perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build "$1.mdk" -o "$bin" >/dev/null 2>&1)
   out_build="$( (cd "$GRANTS" && "$bin") 2>&1)"
   rm -f "$bin" "$bin.ll"
   if [ "$out_run" = "$2" ] && [ "$out_build" = "$2" ]; then
@@ -265,7 +265,7 @@ if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
   fi
 fi
 wasm_build() {
-  (cd "$FIX" && MEDAKA_WASM_EMITTER="$WASM_EMIT" perl -e 'alarm 180; exec @ARGV' -- "$M" build --target wasmgc/node "$1" -o "$2" >/dev/null 2>&1)
+  (cd "$FIX" && MEDAKA_WASM_EMITTER="$WASM_EMIT" perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build --target wasmgc/node "$1" -o "$2" >/dev/null 2>&1)
 }
 # confine_case <fixture> <dir to run from, relative to the tree> <stdout> [panic]
 # A multi-module fixture is named by its entry, `<dir>/main`.
@@ -275,7 +275,7 @@ confine_case() {
   tree="${TMPDIR:-/tmp}/medaka_confine_$$"
   bin="${TMPDIR:-/tmp}/medaka_confine_$$_$(printf '%s' "$1" | tr / _)"
   refusal='runtime error [E-PANIC]: cfg/../secret.txt is outside the granted authority ["cfg/*"]'
-  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/$1.mdk" -o "$bin" >/dev/null 2>&1)
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build "$CONFINE/$1.mdk" -o "$bin" >/dev/null 2>&1)
   detail=""
   engines='run build'
   [ "${4:-}" = native ] && engines=build
@@ -286,9 +286,9 @@ confine_case() {
   for engine in $engines; do
     confine_tree "$tree"
     if [ "$engine" = run ]; then
-      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$CONFINE/$1.mdk" 2>"$tree.err")"
+      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- "$M" run "$CONFINE/$1.mdk" 2>"$tree.err")"
     elif [ "$engine" = wasm ]; then
-      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>"$tree.err")"
+      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>"$tree.err")"
     else
       out="$(cd "$tree/$2" && "$bin" 2>"$tree.err")"
     fi
@@ -530,7 +530,7 @@ canon_case() {
   tree="${TMPDIR:-/tmp}/medaka_canon_$$"
   bin="${TMPDIR:-/tmp}/medaka_canon_$$_bin"
   src="$CONFINE/canonicalize_dots.mdk"
-  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$src" -o "$bin" >/dev/null 2>&1)
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build "$src" -o "$bin" >/dev/null 2>&1)
   engines='run build'
   if [ "$wasm_ok" -eq 1 ]; then
     engines="$engines wasm"
@@ -544,9 +544,9 @@ cfg/../nowhere/./x.txt"
   detail=""
   for engine in $engines; do
     case "$engine" in
-      run) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$src" 2>&1)" ;;
+      run) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- "$M" run "$src" 2>&1)" ;;
       build) out="$(cd "$tree" && "$bin" 2>&1)" ;;
-      wasm) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>&1)" ;;
+      wasm) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>&1)" ;;
     esac
     [ "$out" = "$want" ] || detail="$detail $engine printed [$out];"
   done
@@ -598,7 +598,7 @@ out: Err data/../pwned.txt $outside [\"data/*\"]"
 # A `..` in a path's constant part is refused before any grant exists: a `..`
 # after a named component is never within a narrower bound, so a `data/*` bound
 # does not cover a write under `data/../`, and the program does not check.
-out="$(perl -e 'alarm 60; exec @ARGV' -- "$M" check "$CONFINE/constant_dotdot.mdk" 2>&1)"
+out="$(perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- "$M" check "$CONFINE/constant_dotdot.mdk" 2>&1)"
 status=$?
 case "$status:$out" in
   1:*'performs <FileWrite "data/../*"> where only <FileWrite "data/*"> is allowed'*)
@@ -626,7 +626,7 @@ deep_case() {
     mkdir "cfg" or die "$!";
     open(my $a, ">", "cfg/a.txt") or die "$!"; print $a "granted"; close $a;
     open(my $s, ">", "secret.txt") or die "$!"; print $s "top secret"; close $s' "$tree"
-  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/deep_cwd.mdk" -o "$bin" >/dev/null 2>&1)
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build "$CONFINE/deep_cwd.mdk" -o "$bin" >/dev/null 2>&1)
   out_run="$(deep_in "$tree" "$M" run "$CONFINE/deep_cwd.mdk" 2>&1)"
   out_build="$(deep_in "$tree" "$bin" 2>&1)"
   out_wasm="$1"
@@ -653,7 +653,7 @@ Err (cfg/../secret.txt $outside [\"cfg/*\"])"
 # stopped, a short readExactly is None and consumes the rest).
 stdin_case() {
   bin="${TMPDIR:-/tmp}/medaka_stdin_$$"
-  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$FIX/stdin/readers.mdk" -o "$bin" >/dev/null 2>&1)
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$M" build "$FIX/stdin/readers.mdk" -o "$bin" >/dev/null 2>&1)
   engines=build
   if [ "$wasm_ok" -eq 1 ]; then
     wasm_build "$FIX/stdin/readers.mdk" "$bin.wasm"
@@ -667,7 +667,7 @@ stdin_case() {
     native_out="$("$bin" < "$bin.in" 2>&1)"
     for engine in $engines; do
       [ "$engine" = build ] && continue
-      wasm_out="$(perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" < "$bin.in" 2>&1)"
+      wasm_out="$(perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" < "$bin.in" 2>&1)"
       [ "$wasm_out" = "$native_out" ] || detail="$detail wasm differs on [$input]: [$wasm_out] vs native [$native_out];"
     done
     if [ "$input" = 'abc\ndef\nghijkl\nmn\nop\nqr\n' ]; then

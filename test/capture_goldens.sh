@@ -161,7 +161,7 @@ capture_build_golden() {  # $1=fixture .mdk  $2=golden path
   bin="$TMP/cb.bin"; out="$TMP/cb.out"
   rm -f "$bin"
   MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}" \
-    perl -e 'alarm 180; exec @ARGV' -- "$MAIN" build --allow-internal "$src" -o "$bin" >/dev/null 2>&1 || true
+    perl -e 'alarm 180; exec @ARGV or die qq(exec: $!)' -- "$MAIN" build --allow-internal "$src" -o "$bin" >/dev/null 2>&1 || true
   if [ -x "$bin" ]; then "$bin" > "$out" 2>/dev/null || true; else : > "$out"; fi
   if [ "$CHECK" -eq 1 ]; then
     if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
@@ -343,7 +343,7 @@ if [ -n "$FROZEN_TAG" ]; then
       # capture instead of wedging it.
       TESTB="$BIN/test_main"
       [ -x "$TESTB" ] || { echo "missing $TESTB — run: sh test/build_oracles.sh --build-one test_main"; exit 2; }
-      tr_run() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+      tr_run() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }
       for f in "$ROOT"/stdlib/core.mdk "$ROOT"/stdlib/args.mdk \
         "$ROOT"/stdlib/json.mdk "$ROOT"/stdlib/toml.mdk \
         "$ROOT"/stdlib/list.mdk "$ROOT"/stdlib/set.mdk \
@@ -513,7 +513,7 @@ if [ -n "$FROZEN_TAG" ]; then
       NCGOLD="$ROOT/test/native_cli_goldens"
       NCFIX="$ROOT/test/native_cli_fixtures"
       NCEMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
-      ncbound() { perl -e 'alarm 120; exec @ARGV' "$@"; }
+      ncbound() { perl -e 'alarm 120; exec @ARGV or die qq(exec: $!)' "$@"; }
       nc_strip_unit() { sed '${/^0$/d;}'; }
 
       # ── check/ ──────────────────────────────────────────────────────────
@@ -1027,7 +1027,7 @@ if want repl; then
   out="$TMP/repl_out"
   err_out="$TMP/repl_err_out"
   if [ -x "$REPL_BIN" ] && [ -f "$REPL_IN" ]; then
-    perl -e 'alarm 120; exec @ARGV' -- "$REPL_BIN" "$RUNTIME" "$CORE" \
+    perl -e 'alarm 120; exec @ARGV or die qq(exec: $!)' -- "$REPL_BIN" "$RUNTIME" "$CORE" \
       < "$REPL_IN" > "$out" 2> "$err_out" || true
     if [ "$CHECK" -eq 1 ]; then
       if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :

@@ -35,7 +35,7 @@ fail=0
 checked=0
 ok() { checked=$((checked + 1)); echo "ok   $1"; }
 bad() { checked=$((checked + 1)); fail=$((fail + 1)); echo "FAIL $1: $2"; }
-run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+run_t() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }
 
 build_one() {
   name="$1"

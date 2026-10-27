@@ -115,7 +115,7 @@ boundedVerbsSeconds : Int ->
   List (String, List String) ->
   <Exec, IO> List (Result String (Int, String, String))
 boundedVerbsSeconds secs rows =
-  let alarm = "alarm \{intToString secs}; exec @ARGV"
+  let alarm = "alarm \{intToString secs}; exec @ARGV or die qq(exec: $!)"
   let argvs = map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows
   map (mapErr (e => "perl: \{e}")) (runCommandBatch "perl" testJobs argvs)
 
