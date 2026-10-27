@@ -29,6 +29,8 @@ import backend.llvm_symbols.{
   SymbolDefect(..),
   SymbolRegistry,
   checkCall,
+  checkRef,
+  declareOnce,
   declareSymbol,
   defectCode,
   defineSymbol,
@@ -294,6 +296,95 @@ test "a whole module may not leave a generated symbol only declared" = expectAll
             (Foreign "mdk_oob_at")
             (FuncProto "void" [LlvmParam "i64" ""] " noreturn")
             (at "module"),
+        ])),
+  ]
+
+test "a use of a global's address nothing declares is unresolved" = expectAll [
+  labelFail
+    "never declared"
+    (expectEqual
+      [UndefinedReference "mdk_g_x" (at "f")]
+      (verdict [
+        checkRef (Generated "mdk_g_x") (at "f"),
+        checkRef (Generated "mdk_g_x") (at "g"),
+      ])),
+  labelFail
+    "defined before, or after, the use"
+    (expectEqual
+      []
+      (verdict [
+        checkRef (Generated "mdk_g_x") (at "f"),
+        defineSymbol (Generated "mdk_g_x") (DataProto "i64") (at "x"),
+        checkRef (Generated "mdk_g_x") (at "g"),
+      ])),
+  labelFail
+    "declared by the other half"
+    (expectEqual
+      []
+      (verdictIn ModuleHalf [
+        declareSymbol (Generated "mdk_g_x") (DataProto "i64") (at "x"),
+        checkRef (Generated "mdk_g_x") (at "f"),
+      ])),
+]
+
+-- A user extern's `declare` is built from its declared signature; the call is
+-- built from the marshalled operands, so the two can disagree.
+test "a foreign call whose operands contradict the extern's declaration is refused" = expectAll
+  [
+    labelFail
+      "a double where the extern takes a word"
+      (expectEqual
+        [
+          ShapeMismatch
+            "c_scale"
+            (CallShape "i64" ["double", "i64"])
+            (FuncProto "i64" [LlvmParam "i64" "", LlvmParam "i64" ""] "")
+            (at "main")
+            (at "module"),
+        ]
+        (verdict [
+          declareSymbol
+            (Foreign "c_scale")
+            (FuncProto "i64" [LlvmParam "i64" "", LlvmParam "i64" ""] "")
+            (at "module"),
+          checkCall
+            (Foreign "c_scale")
+            (CallShape "i64" ["double", "i64"])
+            (at "main"),
+        ])),
+    labelFail
+      "the declared operands"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol
+            (Foreign "c_scale")
+            (FuncProto "i64" [LlvmParam "i64" "", LlvmParam "i64" ""] "")
+            (at "module"),
+          checkCall
+            (Foreign "c_scale")
+            (CallShape "i64" ["i64", "i64"])
+            (at "main"),
+        ])),
+  ]
+
+test "a declaration written once per registration refuses a compatible repeat" = expectAll
+  [
+    labelFail
+      "declareOnce twice"
+      (expectEqual
+        [DuplicateDefinition "mdk_oob" (at "b") (at "a")]
+        (verdict [
+          declareOnce (Foreign "mdk_oob") (words []) (at "a"),
+          declareOnce (Foreign "mdk_oob") (words []) (at "b"),
+        ])),
+    labelFail
+      "declareSymbol twice"
+      (expectEqual
+        []
+        (verdict [
+          declareSymbol (Foreign "mdk_oob") (words []) (at "a"),
+          declareSymbol (Foreign "mdk_oob") (words []) (at "b"),
         ])),
   ]
 

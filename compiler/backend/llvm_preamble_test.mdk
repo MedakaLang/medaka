@@ -1,0 +1,191 @@
+-- Sibling test for `compiler/backend/llvm_preamble.mdk` ([P-TEST-SIBLING]).
+--
+-- The preamble's rows are the prototypes the registry checks runtime calls
+-- against, and its rendering is the text every module declares.  These tests
+-- hold the two together, and give each registry defect a runtime row can raise
+-- beside a valid control that uses the same names.
+
+import backend.llvm_preamble.{
+  RuntimeDecl(..),
+  declareLine,
+  declareRuntime,
+  ffiRuntimeDecls,
+  preambleLines,
+  runtimeDecls,
+}
+import backend.llvm_symbols.{
+  CallShape(..),
+  LlvmParam(..),
+  LlvmSymbol(..),
+  ModuleScope(..),
+  Prototype(..),
+  SymbolDefect(..),
+  SymbolRegistry,
+  checkCall,
+  emptyRegistry,
+  unresolved,
+}
+import support.symbol_origin.{SymbolOrigin(..)}
+import support.util.{joinWith}
+import test.{Expectation, expectAll, expectEqual, labelFail}
+
+at : String -> SymbolOrigin
+at b = SymbolOrigin b "" 0 0
+
+-- the declaration a row describes, spelled out from its parts
+expectedLine : RuntimeDecl -> String
+expectedLine (RuntimeDecl retAttrs ret name params attrs) =
+  "declare \{retAttrs}\{ret} @\{name}(\{joinWith ", " params})\{attrs}"
+
+test "each row renders as the declaration its parts describe" = expectAll [
+  expectEqual (map expectedLine runtimeDecls) (map declareLine runtimeDecls),
+  expectEqual
+    (map expectedLine ffiRuntimeDecls)
+    (map declareLine ffiRuntimeDecls),
+]
+
+test "the preamble is two comment lines, one declaration per row, then a blank line" =
+  match preambleLines
+    c1 :: c2 :: rest => expectAll [
+      expectEqual
+        [True, True]
+        [stringStartsWith "; " c1, stringStartsWith "; " c2],
+      expectEqual (map declareLine runtimeDecls ++ [""]) rest,
+    ]
+    short => expectEqual (length runtimeDecls + 3) (length short)
+
+test "rows of each shape render byte for byte" = expectAll [
+  expectEqual
+    (Some
+      "declare noalias align 8 ptr @mdk_alloc(i64) allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"")
+    (lineOf "mdk_alloc"),
+  expectEqual
+    (Some "declare void @mdk_int_overflow(i64, i64, i64) noreturn")
+    (lineOf "mdk_int_overflow"),
+  expectEqual
+    (Some "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)")
+    (lineOf "llvm.sadd.with.overflow.i64"),
+  expectEqual (Some "declare void @mdk_print_unit()") (lineOf "mdk_print_unit"),
+  expectEqual
+    (Some "declare i64 @__mdk_apply(i64, i64, ptr)")
+    (lineOf "__mdk_apply"),
+]
+
+lineOf : String -> Option String
+lineOf name = match filter (d => rowName d == name) runtimeDecls
+  [d] => Some (declareLine d)
+  _ => None
+
+rowName : RuntimeDecl -> String
+rowName (RuntimeDecl _ _ name _ _) = name
+
+-- the registry once the preamble, and then [fs], ran over it
+afterPreamble : List (SymbolRegistry -> Result SymbolDefect SymbolRegistry) ->
+  List SymbolDefect
+afterPreamble fs =
+  let steps = declareRuntime (at "module") runtimeDecls :: fs
+  match fold (acc f => andThen acc f) (Ok (emptyRegistry WholeModule)) steps
+    Err d => [d]
+    Ok reg => unresolved reg
+
+test "a duplicate row is refused, even one identical to the first" = expectAll [
+  labelFail
+    "the rows as they stand, then the foreign-call helpers"
+    (expectEqual
+      []
+      (afterPreamble [declareRuntime (at "ffi") ffiRuntimeDecls])),
+  labelFail
+    "an identical row again"
+    (expectEqual
+      [DuplicateDefinition "mdk_oob" (at "again") (at "module")]
+      (afterPreamble [
+        declareRuntime (at "again") [
+          RuntimeDecl "" "void" "mdk_oob" [] " noreturn",
+        ],
+      ])),
+  labelFail
+    "a row again with another signature"
+    (expectEqual
+      [
+        PrototypeConflict
+          "mdk_oob"
+          (FuncProto "void" [LlvmParam "i64" ""] " noreturn")
+          (FuncProto "void" [] " noreturn")
+          (at "again")
+          (at "module"),
+      ]
+      (afterPreamble [
+        declareRuntime (at "again") [
+          RuntimeDecl "" "void" "mdk_oob" ["i64"] " noreturn",
+        ],
+      ])),
+]
+
+test "a runtime call is checked against its row's prototype" = expectAll [
+  labelFail
+    "the declared shape"
+    (expectEqual
+      []
+      (afterPreamble [
+        checkCall
+          (Foreign "mdk_num_add")
+          (CallShape "i64" ["i64", "i64"])
+          (at "f"),
+        checkCall (Foreign "mdk_alloc") (CallShape "ptr" ["i64"]) (at "f"),
+        checkCall
+          (Foreign "mdk_print_float")
+          (CallShape "void" ["double"])
+          (at "f"),
+      ])),
+  labelFail
+    "one operand short"
+    (expectEqual
+      [
+        ShapeMismatch
+          "mdk_num_add"
+          (CallShape "i64" ["i64"])
+          (FuncProto "i64" [LlvmParam "i64" "", LlvmParam "i64" ""] "")
+          (at "f")
+          (at "module"),
+      ]
+      (afterPreamble [
+        checkCall (Foreign "mdk_num_add") (CallShape "i64" ["i64"]) (at "f"),
+      ])),
+  labelFail
+    "a word passed where the row takes a double"
+    (expectEqual
+      [
+        ShapeMismatch
+          "mdk_print_float"
+          (CallShape "void" ["i64"])
+          (FuncProto "void" [LlvmParam "double" ""] "")
+          (at "f")
+          (at "module"),
+      ]
+      (afterPreamble [
+        checkCall
+          (Foreign "mdk_print_float")
+          (CallShape "void" ["i64"])
+          (at "f"),
+      ])),
+]
+
+test "a call of a runtime function no row declares is unresolved" = expectAll [
+  labelFail
+    "declared"
+    (expectEqual
+      []
+      (afterPreamble [
+        checkCall
+          (Foreign "mdk_string_reverse")
+          (CallShape "i64" ["i64"])
+          (at "f"),
+      ])),
+  labelFail
+    "not declared"
+    (expectEqual
+      [UndefinedReference "mdk_string_rev" (at "f")]
+      (afterPreamble [
+        checkCall (Foreign "mdk_string_rev") (CallShape "i64" ["i64"]) (at "f"),
+      ])),
+]

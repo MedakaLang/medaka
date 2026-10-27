@@ -1,5 +1,5 @@
 # META
-source_lines=286
+source_lines=328
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical symbols of one LLVM module under emission: each function and
@@ -15,8 +15,9 @@ stages=DESUGAR,MARK
 -- accepts twice; the emitter writes it once.
 --
 -- A function may be called before it is defined (`@mdk_program_main` is emitted
--- before every function it calls), so a call to a name with no entry yet waits:
--- it is judged against the prototype when that arrives, and whatever still waits
+-- before every function it calls), so a call to a name with no entry yet waits,
+-- and so does a use of a name's address: a call is judged against the prototype
+-- when that arrives, and whatever still waits
 -- once the module is complete is `unresolved`.  A whole module (no prelude
 -- object) is the only Medaka code in its link, so there a generated symbol that is
 -- only declared is unresolved too; a module half declares the other half's.
@@ -74,8 +75,9 @@ data Binding = Declared | Defined deriving (Eq)
 
 data Entry = Entry Binding LlvmSymbol Prototype SymbolOrigin
 
--- a call still waiting for its symbol
-data Waiting = Waiting CallShape SymbolOrigin
+-- a call, with its shape, or a reference to an address, still waiting for its
+-- symbol
+data Waiting = Waiting (Option CallShape) SymbolOrigin
 
 export data SymbolRegistry = SymbolRegistry {
   scope : ModuleScope,
@@ -93,6 +95,8 @@ emptyRegistry scope = SymbolRegistry {
   excused = omEmpty,
 }
 
+-- the global name, without its `@`
+export
 symbolName : LlvmSymbol -> String
 symbolName (Generated n) = n
 symbolName (Foreign n) = n
@@ -125,10 +129,29 @@ defineSymbol : LlvmSymbol ->
   SymbolOrigin ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
-defineSymbol sym proto origin reg =
+defineSymbol sym proto origin reg = writeOnce Defined sym proto origin reg
+
+-- A declaration the module writes each time it is registered (a row of the
+-- runtime preamble), so an earlier entry for its name, however compatible, is a
+-- second write.
+export
+declareOnce : LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+declareOnce sym proto origin reg = writeOnce Declared sym proto origin reg
+
+writeOnce : Binding ->
+  LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+writeOnce binding sym proto origin reg =
   let name = symbolName sym
   match omLookup name reg.entries
-    None => settle name (Entry Defined sym proto origin) reg
+    None => settle name (Entry binding sym proto origin) reg
     Some (Entry _ _ first at) => Err (secondWrite name proto origin first at)
 
 -- The defect of writing [name] again with [proto] where [first] was written: a
@@ -178,10 +201,12 @@ judgeWaiting : String ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
 judgeWaiting _ _ [] reg = Ok reg
-judgeWaiting name entry ((Waiting shape at) :: rest) reg =
+judgeWaiting name entry ((Waiting (Some shape) at) :: rest) reg =
   match callDefect name shape at entry
     Some d => Err d
     None => judgeWaiting name entry rest reg
+judgeWaiting name entry ((Waiting None _) :: rest) reg =
+  judgeWaiting name entry rest reg
 
 callDefect : String -> CallShape -> SymbolOrigin -> Entry -> Option SymbolDefect
 callDefect name (shape@(CallShape ret operands)) at (Entry _ _ proto declared) =
@@ -206,12 +231,29 @@ checkCall sym shape origin reg =
     Some entry => match callDefect name shape origin entry
       Some d => Err d
       None => Ok reg
-    None =>
-      let earlier = match omLookup name reg.waiting
-        Some calls => calls
-        None => []
-      let waits = omInsert name (Waiting shape origin :: earlier) reg.waiting
-      Ok ({ reg | waiting = waits })
+    None => Ok (wait name (Waiting (Some shape) origin) reg)
+
+-- A use of [sym]'s address: a load or store of a global variable, or a
+-- function taken as a code pointer.  Any entry answers it; with none yet, it
+-- waits like a call.
+export
+checkRef : LlvmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkRef sym origin reg =
+  let name = symbolName sym
+  if omHasKey name reg.entries then
+    Ok reg
+  else
+    Ok (wait name (Waiting None origin) reg)
+
+wait : String -> Waiting -> SymbolRegistry -> SymbolRegistry
+wait name w reg =
+  let earlier = match omLookup name reg.waiting
+    Some uses => uses
+    None => []
+  { reg | waiting = omInsert name (w :: earlier) reg.waiting }
 
 -- [sym]'s definer recorded a gap instead of defining it, so a call of it is the
 -- gap's to report, not the registry's.
@@ -220,8 +262,8 @@ excuseSymbol : LlvmSymbol -> SymbolRegistry -> SymbolRegistry
 excuseSymbol sym reg =
   { reg | excused = omInsert (symbolName sym) () reg.excused }
 
--- Once the module is complete: one defect for each name some call still waits
--- for, at its first call, in name order; then, in a whole module, one for each
+-- Once the module is complete: one defect for each name some call or reference
+-- still waits for, at its first use, in name order; then, in a whole module, one for each
 -- generated symbol it only declares.
 export
 unresolved : SymbolRegistry -> List SymbolDefect
@@ -313,17 +355,21 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DData Private "Binding" () ((variant "Declared" (ConPos)) (variant "Defined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Binding")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Declared") (PCon "Declared")) () (EVar "True")) (arm (PTuple (PCon "Defined") (PCon "Defined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Private "Entry" () ((variant "Entry" (ConPos (TyCon "Binding") (TyCon "LlvmSymbol") (TyCon "Prototype") (TyCon "SymbolOrigin")))) ())
-(DData Private "Waiting" () ((variant "Waiting" (ConPos (TyCon "CallShape") (TyCon "SymbolOrigin")))) ())
+(DData Private "Waiting" () ((variant "Waiting" (ConPos (TyApp (TyCon "Option") (TyCon "CallShape")) (TyCon "SymbolOrigin")))) ())
 (DData Abstract "SymbolRegistry" () ((variant "SymbolRegistry" (ConNamed (field "scope" (TyCon "ModuleScope")) (field "entries" (TyApp (TyCon "OrdMap") (TyCon "Entry"))) (field "waiting" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Waiting")))) (field "excused" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "emptyRegistry" (TyFun (TyCon "ModuleScope") (TyCon "SymbolRegistry")))
 (DFunDef false "emptyRegistry" ((PVar "scope")) (ERecordCreate "SymbolRegistry" ((fa "scope" (EVar "scope")) (fa "entries" (EVar "omEmpty")) (fa "waiting" (EVar "omEmpty")) (fa "excused" (EVar "omEmpty")))))
-(DTypeSig false "symbolName" (TyFun (TyCon "LlvmSymbol") (TyCon "String")))
+(DTypeSig true "symbolName" (TyFun (TyCon "LlvmSymbol") (TyCon "String")))
 (DFunDef false "symbolName" ((PCon "Generated" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "Foreign" (PVar "n"))) (EVar "n"))
 (DTypeSig true "declareSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "declareSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "Declared")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" (PCon "Declared") PWild (PVar "first") (PVar "at"))) () (EIf (EApp (EApp (EVar "sameSignature") (EVar "proto")) (EVar "first")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PrototypeConflict") (EVar "name")) (EVar "proto")) (EVar "first")) (EVar "origin")) (EVar "at"))))) (arm (PCon "Some" (PCon "Entry" (PCon "Defined") PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
 (DTypeSig true "defineSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "defineSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "Defined")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" PWild PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
+(DFunDef false "defineSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EApp (EVar "writeOnce") (EVar "Defined")) (EVar "sym")) (EVar "proto")) (EVar "origin")) (EVar "reg")))
+(DTypeSig true "declareOnce" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
+(DFunDef false "declareOnce" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EApp (EVar "writeOnce") (EVar "Declared")) (EVar "sym")) (EVar "proto")) (EVar "origin")) (EVar "reg")))
+(DTypeSig false "writeOnce" (TyFun (TyCon "Binding") (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))))
+(DFunDef false "writeOnce" ((PVar "binding") (PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "binding")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" PWild PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
 (DTypeSig false "secondWrite" (TyFun (TyCon "String") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyCon "SymbolDefect")))))))
 (DFunDef false "secondWrite" ((PVar "name") (PVar "proto") (PVar "origin") (PVar "first") (PVar "at")) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameKind") (EVar "proto")) (EVar "first")) (EApp (EVar "not") (EApp (EApp (EVar "sameSignature") (EVar "proto")) (EVar "first")))) (EApp (EApp (EApp (EApp (EApp (EVar "PrototypeConflict") (EVar "name")) (EVar "proto")) (EVar "first")) (EVar "origin")) (EVar "at")) (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "name")) (EVar "origin")) (EVar "at"))))
 (DTypeSig false "sameKind" (TyFun (TyCon "Prototype") (TyFun (TyCon "Prototype") (TyCon "Bool"))))
@@ -340,11 +386,16 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DFunDef false "settle" ((PVar "name") (PVar "entry") (PVar "reg")) (EBlock (DoLet false false (PVar "reg2") (ERecordUpdate (EVar "reg") ((fa "entries" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "entry")) (EFieldAccess (EVar "reg") "entries"))) (fa "waiting" (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg2"))) (arm (PCon "Some" (PVar "calls")) () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EApp (EVar "reverseL") (EVar "calls"))) (EVar "reg2")))))))
 (DTypeSig false "judgeWaiting" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyApp (TyCon "List") (TyCon "Waiting")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "judgeWaiting" (PWild PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PVar "shape") (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest")) (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))
 (DTypeSig false "callDefect" (TyFun (TyCon "String") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Entry") (TyApp (TyCon "Option") (TyCon "SymbolDefect")))))))
 (DFunDef false "callDefect" ((PVar "name") (PAs "shape" (PCon "CallShape" (PVar "ret") (PVar "operands"))) (PVar "at") (PCon "Entry" PWild PWild (PVar "proto") (PVar "declared"))) (EMatch (EVar "proto") (arm (PCon "FuncProto" (PVar "r") (PVar "ps") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "r") (EVar "ret")) (EBinOp "==" (EApp (EApp (EVar "map") (EVar "paramType")) (EVar "ps")) (EVar "operands"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))) (arm (PCon "DataProto" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))))
 (DTypeSig true "checkCall" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "checkCall" ((PVar "sym") (PVar "shape") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "calls")) () (EVar "calls")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "waits") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EApp (EApp (EVar "Waiting") (EVar "shape")) (EVar "origin")) (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))) (DoExpr (EApp (EVar "Ok") (ERecordUpdate (EVar "reg") ((fa "waiting" (EVar "waits"))))))))))))
+(DFunDef false "checkCall" ((PVar "sym") (PVar "shape") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "wait") (EVar "name")) (EApp (EApp (EVar "Waiting") (EApp (EVar "Some") (EVar "shape"))) (EVar "origin"))) (EVar "reg"))))))))
+(DTypeSig true "checkRef" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkRef" ((PVar "sym") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "wait") (EVar "name")) (EApp (EApp (EVar "Waiting") (EVar "None")) (EVar "origin"))) (EVar "reg")))))))
+(DTypeSig false "wait" (TyFun (TyCon "String") (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry")))))
+(DFunDef false "wait" ((PVar "name") (PVar "w") (PVar "reg")) (EBlock (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "uses")) () (EVar "uses")) (arm (PCon "None") () (EListLit)))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
 (DTypeSig true "excuseSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolName") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
@@ -401,17 +452,21 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DData Private "Binding" () ((variant "Declared" (ConPos)) (variant "Defined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Binding")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Declared") (PCon "Declared")) () (EVar "True")) (arm (PTuple (PCon "Defined") (PCon "Defined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Private "Entry" () ((variant "Entry" (ConPos (TyCon "Binding") (TyCon "LlvmSymbol") (TyCon "Prototype") (TyCon "SymbolOrigin")))) ())
-(DData Private "Waiting" () ((variant "Waiting" (ConPos (TyCon "CallShape") (TyCon "SymbolOrigin")))) ())
+(DData Private "Waiting" () ((variant "Waiting" (ConPos (TyApp (TyCon "Option") (TyCon "CallShape")) (TyCon "SymbolOrigin")))) ())
 (DData Abstract "SymbolRegistry" () ((variant "SymbolRegistry" (ConNamed (field "scope" (TyCon "ModuleScope")) (field "entries" (TyApp (TyCon "OrdMap") (TyCon "Entry"))) (field "waiting" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Waiting")))) (field "excused" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "emptyRegistry" (TyFun (TyCon "ModuleScope") (TyCon "SymbolRegistry")))
 (DFunDef false "emptyRegistry" ((PVar "scope")) (ERecordCreate "SymbolRegistry" ((fa "scope" (EVar "scope")) (fa "entries" (EVar "omEmpty")) (fa "waiting" (EVar "omEmpty")) (fa "excused" (EVar "omEmpty")))))
-(DTypeSig false "symbolName" (TyFun (TyCon "LlvmSymbol") (TyCon "String")))
+(DTypeSig true "symbolName" (TyFun (TyCon "LlvmSymbol") (TyCon "String")))
 (DFunDef false "symbolName" ((PCon "Generated" (PVar "n"))) (EVar "n"))
 (DFunDef false "symbolName" ((PCon "Foreign" (PVar "n"))) (EVar "n"))
 (DTypeSig true "declareSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "declareSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "Declared")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" (PCon "Declared") PWild (PVar "first") (PVar "at"))) () (EIf (EApp (EApp (EVar "sameSignature") (EVar "proto")) (EVar "first")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PrototypeConflict") (EVar "name")) (EVar "proto")) (EVar "first")) (EVar "origin")) (EVar "at"))))) (arm (PCon "Some" (PCon "Entry" (PCon "Defined") PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
 (DTypeSig true "defineSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "defineSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "Defined")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" PWild PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
+(DFunDef false "defineSymbol" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EApp (EVar "writeOnce") (EVar "Defined")) (EVar "sym")) (EVar "proto")) (EVar "origin")) (EVar "reg")))
+(DTypeSig true "declareOnce" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
+(DFunDef false "declareOnce" ((PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EApp (EApp (EApp (EApp (EApp (EVar "writeOnce") (EVar "Declared")) (EVar "sym")) (EVar "proto")) (EVar "origin")) (EVar "reg")))
+(DTypeSig false "writeOnce" (TyFun (TyCon "Binding") (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))))
+(DFunDef false "writeOnce" ((PVar "binding") (PVar "sym") (PVar "proto") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "settle") (EVar "name")) (EApp (EApp (EApp (EApp (EVar "Entry") (EVar "binding")) (EVar "sym")) (EVar "proto")) (EVar "origin"))) (EVar "reg"))) (arm (PCon "Some" (PCon "Entry" PWild PWild (PVar "first") (PVar "at"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "secondWrite") (EVar "name")) (EVar "proto")) (EVar "origin")) (EVar "first")) (EVar "at"))))))))
 (DTypeSig false "secondWrite" (TyFun (TyCon "String") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Prototype") (TyFun (TyCon "SymbolOrigin") (TyCon "SymbolDefect")))))))
 (DFunDef false "secondWrite" ((PVar "name") (PVar "proto") (PVar "origin") (PVar "first") (PVar "at")) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameKind") (EVar "proto")) (EVar "first")) (EApp (EVar "not") (EApp (EApp (EVar "sameSignature") (EVar "proto")) (EVar "first")))) (EApp (EApp (EApp (EApp (EApp (EVar "PrototypeConflict") (EVar "name")) (EVar "proto")) (EVar "first")) (EVar "origin")) (EVar "at")) (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "name")) (EVar "origin")) (EVar "at"))))
 (DTypeSig false "sameKind" (TyFun (TyCon "Prototype") (TyFun (TyCon "Prototype") (TyCon "Bool"))))
@@ -428,11 +483,16 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DFunDef false "settle" ((PVar "name") (PVar "entry") (PVar "reg")) (EBlock (DoLet false false (PVar "reg2") (ERecordUpdate (EVar "reg") ((fa "entries" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "entry")) (EFieldAccess (EVar "reg") "entries"))) (fa "waiting" (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg2"))) (arm (PCon "Some" (PVar "calls")) () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EApp (EVar "reverseL") (EVar "calls"))) (EVar "reg2")))))))
 (DTypeSig false "judgeWaiting" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyApp (TyCon "List") (TyCon "Waiting")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "judgeWaiting" (PWild PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PVar "shape") (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest")) (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))
 (DTypeSig false "callDefect" (TyFun (TyCon "String") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Entry") (TyApp (TyCon "Option") (TyCon "SymbolDefect")))))))
 (DFunDef false "callDefect" ((PVar "name") (PAs "shape" (PCon "CallShape" (PVar "ret") (PVar "operands"))) (PVar "at") (PCon "Entry" PWild PWild (PVar "proto") (PVar "declared"))) (EMatch (EVar "proto") (arm (PCon "FuncProto" (PVar "r") (PVar "ps") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "r") (EVar "ret")) (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "paramType")) (EVar "ps")) (EVar "operands"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))) (arm (PCon "DataProto" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))))
 (DTypeSig true "checkCall" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "checkCall" ((PVar "sym") (PVar "shape") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "calls")) () (EVar "calls")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "waits") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EApp (EApp (EVar "Waiting") (EVar "shape")) (EVar "origin")) (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))) (DoExpr (EApp (EVar "Ok") (ERecordUpdate (EVar "reg") ((fa "waiting" (EVar "waits"))))))))))))
+(DFunDef false "checkCall" ((PVar "sym") (PVar "shape") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (arm (PCon "Some" (PVar "entry")) () (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "origin")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "wait") (EVar "name")) (EApp (EApp (EVar "Waiting") (EApp (EVar "Some") (EVar "shape"))) (EVar "origin"))) (EVar "reg"))))))))
+(DTypeSig true "checkRef" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkRef" ((PVar "sym") (PVar "origin") (PVar "reg")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "symbolName") (EVar "sym"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "wait") (EVar "name")) (EApp (EApp (EVar "Waiting") (EVar "None")) (EVar "origin"))) (EVar "reg")))))))
+(DTypeSig false "wait" (TyFun (TyCon "String") (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry")))))
+(DFunDef false "wait" ((PVar "name") (PVar "w") (PVar "reg")) (EBlock (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "uses")) () (EVar "uses")) (arm (PCon "None") () (EListLit)))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
 (DTypeSig true "excuseSymbol" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolName") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))

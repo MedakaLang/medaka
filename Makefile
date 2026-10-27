@@ -266,6 +266,11 @@ inlang-backend-wasm-symbols-test:
 inlang-backend-llvm-symbols-test:
 	./medaka test compiler/backend/llvm_symbols_test.mdk
 
+## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as
+## the declaration its parts describe, and the registry checks calls against it.
+inlang-backend-llvm-preamble-test:
+	./medaka test compiler/backend/llvm_preamble_test.mdk
+
 ## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
 ## payload, shared by every site that spells the same bytes.
 inlang-backend-wasm-emit-strseg-test:

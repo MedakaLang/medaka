@@ -11,8 +11,9 @@
 -- accepts twice; the emitter writes it once.
 --
 -- A function may be called before it is defined (`@mdk_program_main` is emitted
--- before every function it calls), so a call to a name with no entry yet waits:
--- it is judged against the prototype when that arrives, and whatever still waits
+-- before every function it calls), so a call to a name with no entry yet waits,
+-- and so does a use of a name's address: a call is judged against the prototype
+-- when that arrives, and whatever still waits
 -- once the module is complete is `unresolved`.  A whole module (no prelude
 -- object) is the only Medaka code in its link, so there a generated symbol that is
 -- only declared is unresolved too; a module half declares the other half's.
@@ -70,8 +71,9 @@ data Binding = Declared | Defined deriving (Eq)
 
 data Entry = Entry Binding LlvmSymbol Prototype SymbolOrigin
 
--- a call still waiting for its symbol
-data Waiting = Waiting CallShape SymbolOrigin
+-- a call, with its shape, or a reference to an address, still waiting for its
+-- symbol
+data Waiting = Waiting (Option CallShape) SymbolOrigin
 
 export data SymbolRegistry = SymbolRegistry {
   scope : ModuleScope,
@@ -89,6 +91,8 @@ emptyRegistry scope = SymbolRegistry {
   excused = omEmpty,
 }
 
+-- the global name, without its `@`
+export
 symbolName : LlvmSymbol -> String
 symbolName (Generated n) = n
 symbolName (Foreign n) = n
@@ -121,10 +125,29 @@ defineSymbol : LlvmSymbol ->
   SymbolOrigin ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
-defineSymbol sym proto origin reg =
+defineSymbol sym proto origin reg = writeOnce Defined sym proto origin reg
+
+-- A declaration the module writes each time it is registered (a row of the
+-- runtime preamble), so an earlier entry for its name, however compatible, is a
+-- second write.
+export
+declareOnce : LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+declareOnce sym proto origin reg = writeOnce Declared sym proto origin reg
+
+writeOnce : Binding ->
+  LlvmSymbol ->
+  Prototype ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+writeOnce binding sym proto origin reg =
   let name = symbolName sym
   match omLookup name reg.entries
-    None => settle name (Entry Defined sym proto origin) reg
+    None => settle name (Entry binding sym proto origin) reg
     Some (Entry _ _ first at) => Err (secondWrite name proto origin first at)
 
 -- The defect of writing [name] again with [proto] where [first] was written: a
@@ -174,10 +197,12 @@ judgeWaiting : String ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
 judgeWaiting _ _ [] reg = Ok reg
-judgeWaiting name entry ((Waiting shape at) :: rest) reg =
+judgeWaiting name entry ((Waiting (Some shape) at) :: rest) reg =
   match callDefect name shape at entry
     Some d => Err d
     None => judgeWaiting name entry rest reg
+judgeWaiting name entry ((Waiting None _) :: rest) reg =
+  judgeWaiting name entry rest reg
 
 callDefect : String -> CallShape -> SymbolOrigin -> Entry -> Option SymbolDefect
 callDefect name (shape@(CallShape ret operands)) at (Entry _ _ proto declared) =
@@ -202,12 +227,29 @@ checkCall sym shape origin reg =
     Some entry => match callDefect name shape origin entry
       Some d => Err d
       None => Ok reg
-    None =>
-      let earlier = match omLookup name reg.waiting
-        Some calls => calls
-        None => []
-      let waits = omInsert name (Waiting shape origin :: earlier) reg.waiting
-      Ok ({ reg | waiting = waits })
+    None => Ok (wait name (Waiting (Some shape) origin) reg)
+
+-- A use of [sym]'s address: a load or store of a global variable, or a
+-- function taken as a code pointer.  Any entry answers it; with none yet, it
+-- waits like a call.
+export
+checkRef : LlvmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkRef sym origin reg =
+  let name = symbolName sym
+  if omHasKey name reg.entries then
+    Ok reg
+  else
+    Ok (wait name (Waiting None origin) reg)
+
+wait : String -> Waiting -> SymbolRegistry -> SymbolRegistry
+wait name w reg =
+  let earlier = match omLookup name reg.waiting
+    Some uses => uses
+    None => []
+  { reg | waiting = omInsert name (w :: earlier) reg.waiting }
 
 -- [sym]'s definer recorded a gap instead of defining it, so a call of it is the
 -- gap's to report, not the registry's.
@@ -216,8 +258,8 @@ excuseSymbol : LlvmSymbol -> SymbolRegistry -> SymbolRegistry
 excuseSymbol sym reg =
   { reg | excused = omInsert (symbolName sym) () reg.excused }
 
--- Once the module is complete: one defect for each name some call still waits
--- for, at its first call, in name order; then, in a whole module, one for each
+-- Once the module is complete: one defect for each name some call or reference
+-- still waits for, at its first use, in name order; then, in a whole module, one for each
 -- generated symbol it only declares.
 export
 unresolved : SymbolRegistry -> List SymbolDefect
