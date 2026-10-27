@@ -1,0 +1,554 @@
+-- Tests of `types.tc_effects`'s own API: the effect summary a binding boundary opens, joins
+-- and closes (`beginEffectSummaryScope`, `collectProducedSummary`,
+-- `finishEffectSummaryScopeKeeping`), the rejections of an interface method's or an
+-- argument's effect variables (`checkUndeterminedRetEffVars`, `checkMethodEffVarRigidity`),
+-- the effect variables an impl body performed (`eagerIndexOnlyVars`), grant order and the
+-- grants a use records (`grantOrder`, `recordGrantOcc`, `recordStandaloneGrantOcc`,
+-- `markSourceless`, `markBinders`), and the file-bound values (`narrowFileAtom`,
+-- `hasFileBoundValue`, `fileBodyLoc`, `fileBoundSite`, `fileValueKey`, `recordFileBound`,
+-- `recordClauseFileBound`, `recordValueFileBound`).  One property: joining one more
+-- effect row into a summary never removes an effect the summary already had.  What a
+-- whole check does with a binding's effects is in `typecheck_test`.
+
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import frontend.ast.{EvId(..), Expr(..), Loc(..), Pat(..), Ty, TyConOrigin(..)}
+import frontend.parser.{parse}
+import map.{Map(..), get}
+import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
+import support.util.{contains, isEmptyL, isSome}
+import list.{sort}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom(..),
+  EffLabel(..),
+  EffRow(..),
+  Effvar(..),
+  atomBuiltin,
+  builtinLabel,
+  effrowLabels,
+  renderAtom,
+}
+import types.effect_solver.{noScopeRoles}
+import types.repr.{AuthResidual(..), Mono(..), Scheme(..)}
+import types.tc_effects.{
+  anyContainsI,
+  appSpineArgCount,
+  beginEffectSummaryScope,
+  checkMethodEffVarRigidity,
+  checkUndeterminedRetEffVars,
+  clausesAt,
+  clausesOf,
+  collectProducedSummary,
+  eagerIndexOnlyVars,
+  evOrdinal,
+  fileBodyLoc,
+  fileBoundSite,
+  fileGrantExterns,
+  fileValueKey,
+  finishEffectSummaryScopeKeeping,
+  grantOccOf,
+  grantOrder,
+  hasDupI,
+  hasFileBoundValue,
+  markBinders,
+  markSourceless,
+  narrowFileAtom,
+  recordClauseFileBound,
+  recordFileBound,
+  recordGrantOcc,
+  recordStandaloneGrantOcc,
+  recordValueFileBound,
+  revClauses,
+  spineHeadEv,
+}
+import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
+import types.tc_state.{currentScopeStore, probeGraphCtx}
+import types.tc_test_support.{codesOf, fresh, intM, sigsOf}
+import types.tc_types.{GrantOcc(..), ModuleCtx(..)}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+here : Loc
+here = Loc "m.mdk" 3 1 3 9
+
+-- A closed row of one built-in label with parameter [p].
+rowOf : String -> Param -> EffRow
+rowOf label p = EffRow [atomBuiltin label p] None
+
+narrowRead : Atom
+narrowRead = atomBuiltin "FileRead" (PPrefix (Some "config/"))
+
+topRead : Atom
+topRead = atomBuiltin "FileRead" (PPrefix (Some ""))
+
+-- A function from Int to Int that performs [row].
+arrowOver : EffRow -> Mono
+arrowOver row = TFun intM row intM
+
+authCell : Int -> Ref Authvar
+authCell id = Ref (AUnbound id 0 (PPrefix None) False (Some "p"))
+
+-- Int -> <FileRead p2> Int -> <FileRead p1> Int quantifying [ids].
+twoGrantScheme : List Int -> Scheme
+twoGrantScheme ids =
+  Forall
+    []
+    []
+    ids
+    []
+    (EffRow [] None)
+    (TFun
+      intM
+      (EffRow [Atom (builtinLabel "FileRead") (AVar (authCell 2))] None)
+      (TFun
+        intM
+        (EffRow [Atom (builtinLabel "FileRead") (AVar (authCell 1))] None)
+        intM))
+
+-- A module record named "probe" whose inference sits in the root scope of its own module, as
+-- the checks that record where a use stands expect.
+scoped : Unit -> ModuleCtx
+scoped _ =
+  let m = fresh ()
+  let root =
+    freshScope (currentScopeStore m.mcGraph ()) None 0 "probe" ModuleOwner
+  m.mcCells.currentScope := openScopeCursor root
+  m
+
+-- ── small projections ─────────────────────────────────────────────────────
+
+test "the ordinal of an evidence id is its index" = expectAll [
+  expectEqual 7 (evOrdinal (EvId "m" 7)),
+  expectEqual 0 (evOrdinal (EvId "other" 0)),
+]
+
+test "an application spine's head is the method occurrence under any located or applied wrapper" =
+  let ev = EvId "m" 4
+  let head = EMethodAt "size" "" ev
+  expectAll [
+    expectEqual (Some 4) (map evOrdinal (spineHeadEv head)),
+    expectEqual
+      (Some 4)
+      (map
+        evOrdinal
+        (spineHeadEv (ELoc here (EApp (EApp head (EVar "x")) (EVar "y"))))),
+    expectEqual None (map evOrdinal (spineHeadEv (EApp (EVar "f") (EVar "x")))),
+  ]
+
+test "a spine's argument count is the applications under located, annotated and do wrappers" =
+  let f = EVar "f"
+  expectAll [
+    expectEqual 0 (appSpineArgCount f),
+    expectEqual 2 (appSpineArgCount (EApp (EApp f (EVar "a")) (EVar "b"))),
+    expectEqual 1 (appSpineArgCount (ELoc here (EApp f (EVar "a")))),
+    expectEqual 1 (appSpineArgCount (EDoOrigin here (EApp f (EVar "a")))),
+    expectEqual 0 (appSpineArgCount (ELam [] f)),
+  ]
+
+test "a list has a duplicate exactly when some id repeats" = expectAll [
+  expectTrue (hasDupI [1, 2, 1]),
+  expectFalse (hasDupI [1, 2, 3]),
+  expectFalse (hasDupI []),
+]
+
+test "two id lists meet when they share a member" = expectAll [
+  expectTrue (anyContainsI [1, 2] [2, 9]),
+  expectFalse (anyContainsI [1, 2] [3, 4]),
+  expectFalse (anyContainsI [] [1]),
+  expectFalse (anyContainsI [1] []),
+]
+
+test "a clause table answers a name's clauses in source order, and an unknown name has none" =
+  let table =
+    omInsert "f" [([PWild], EVar "second"), ([PWild], EVar "first")] omEmpty
+  let bodies =
+    cs =>
+      map
+        (c => match snd c
+          EVar n => n
+          _ => "")
+        cs
+  expectAll [
+    expectEqual ["first", "second"] (bodies (clausesOf "f" table)),
+    expectEqual ["second", "first"] (bodies (clausesAt "f" table)),
+    expectEqual [] (bodies (clausesOf "g" table)),
+    expectEqual
+      ["b", "a"]
+      (bodies (revClauses [([PWild], EVar "a"), ([PWild], EVar "b")] [])),
+  ]
+
+-- ── effect summaries ──────────────────────────────────────────────────────
+
+-- The summary the rows [rows] join into, and the residual obligations its scope closed with.
+closeOver : List EffRow -> (EffRow, List (Int, AuthResidual))
+closeOver rows =
+  let m = fresh ()
+  beginEffectSummaryScope m ()
+  let summary = collectProducedSummary m rows
+  (summary, finishEffectSummaryScopeKeeping m noScopeRoles Tip Tip)
+
+-- The effects of the summary the rows [rows] join into, after its scope closed.
+summaryOf : List EffRow -> List String
+summaryOf rows = sort (map renderAtom (effrowLabels (fst (closeOver rows))))
+
+stdout : EffRow
+stdout = rowOf "Stdout" PUnit
+
+clock : EffRow
+clock = rowOf "Clock" PUnit
+
+test "a summary of no rows performs nothing" = expectEqual [] (summaryOf [])
+
+test "a summary joins every row recorded into it" =
+  expectEqual ["Clock", "Stdout"] (summaryOf [stdout, clock])
+
+test "a row recorded twice is performed once" =
+  expectEqual ["Stdout"] (summaryOf [stdout, stdout])
+
+test "a summary's open row joins in what the closed rows add" =
+  expectEqual
+    ["Stdout"]
+    (summaryOf [EffRow [] (Some (Ref (EUnbound 900 0))), stdout])
+
+test "closing a summary of plain labels leaves no residual obligation" =
+  expectTrue (isEmptyL (snd (closeOver [stdout, clock])))
+
+-- The labels each draw of the property joins: up to four rows of three labels.
+data SummaryCase = SummaryCase (List (List Int)) (List Int)
+
+impl Arbitrary SummaryCase where
+  arbitrary () = SummaryCase (rowDraws (randomInt 0 4)) (labelDraws 3)
+  shrink (SummaryCase rows extra) = match rows
+    _ :: rest => [SummaryCase rest extra]
+    [] => []
+
+rowDraws : Int -> <Rand> List (List Int)
+rowDraws n
+  | n <= 0 = []
+  | otherwise = labelDraws 3 :: rowDraws (n - 1)
+
+labelDraws : Int -> <Rand> List Int
+labelDraws n
+  | n <= 0 = []
+  | otherwise = randomInt 0 4 :: labelDraws (n - 1)
+
+labelRow : List Int -> EffRow
+labelRow ks =
+  EffRow
+    (map
+      (k =>
+        atomBuiltin
+          (match k
+            0 => "Stdout"
+            1 => "Clock"
+            2 => "Stdin"
+            3 => "Env"
+            _ => "Random")
+          PUnit)
+      ks)
+    None
+
+-- Law: the effects a summary has after one more row joins into it include the effects it
+-- had before.  Precondition: none; a draw with no earlier row checks that an empty summary
+-- is below every summary.
+prop "joining one more row into a summary never removes an effect" (c : SummaryCase) =
+  let (SummaryCase rows extra) = c
+  let before = summaryOf (map labelRow rows)
+  let after = summaryOf (map labelRow rows ++ [labelRow extra])
+  all (e => contains e after) before
+
+-- ── the rejections at a declaration ───────────────────────────────────────
+
+test "an effect variable only an interface method's result mentions is undetermined" =
+  let m = fresh ()
+  checkUndeterminedRetEffVars
+    m
+    (parse """
+interface Run a where
+  run : a -> Unit -> <e> Unit
+""")
+  expectEqual ["T-EFFECT-UNDETERMINED"] (codesOf m)
+
+test "an effect variable the method's argument also mentions is determined" =
+  let m = fresh ()
+  checkUndeterminedRetEffVars
+    m
+    (parse
+      """
+interface Run a where
+  run : (Unit -> <e> Unit) -> a -> <e> Unit
+""")
+  expectEqual [] (codesOf m)
+
+test "an effect variable only a callback argument carries is uncovered by the method's result" =
+  let m = fresh ()
+  checkUndeterminedRetEffVars
+    m
+    (parse """
+interface Use a where
+  use : a -> (Unit -> <e> Unit) -> Int
+""")
+  expectEqual ["T-EFFECT-ARG-UNCOVERED"] (codesOf m)
+
+test "a top-level signature that pours a callback's effect into a bare row is uncovered" =
+  let m = fresh ()
+  checkUndeterminedRetEffVars
+    m
+    (parse "launder : (Unit -> <Stdout | e> Unit) -> (Unit -> <e> Unit)")
+  expectEqual ["T-EFFECT-ARG-UNCOVERED"] (codesOf m)
+
+test "a signature whose effects its callback and result agree on is accepted" =
+  let m = fresh ()
+  checkUndeterminedRetEffVars
+    m
+    (parse "twice : (Unit -> <e> Unit) -> Unit -> <e> Unit")
+  expectEqual [] (codesOf m)
+
+-- A method type whose effect variable [v] sits on an argument arrow.
+rigidityType : Option Ty
+rigidityType = match sigsOf (parse "g : (Unit -> <e> Unit) -> Unit -> <e> Unit")
+  t :: _ => Some t
+  [] => None
+
+test "two method effect variables that share one tail are too specific for an impl" =
+  let m = fresh ()
+  let shared = Ref (EUnbound 800 0)
+  match rigidityType
+    Some ty =>
+      checkMethodEffVarRigidity
+        m
+        "impl Run Foo"
+        []
+        []
+        ty
+        [("e", shared), ("f", shared)]
+        True
+        []
+        (Some here)
+    None => ()
+  expectEqual ["T-IMPL-TOO-SPECIFIC"] (codesOf m)
+
+test "method effect variables with distinct tails are accepted" =
+  let m = fresh ()
+  match rigidityType
+    Some ty =>
+      checkMethodEffVarRigidity
+        m
+        "impl Run Foo"
+        []
+        []
+        ty
+        [("e", Ref (EUnbound 801 0)), ("f", Ref (EUnbound 802 0))]
+        True
+        []
+        (Some here)
+    None => ()
+  expectEqual [] (codesOf m)
+
+test "an index-only variable whose cell a body arrow carries as its tail was performed" =
+  let cell = Ref (EUnbound 810 0)
+  let declared = TFun intM (EffRow [] (Some cell)) intM
+  let actual = TFun intM (EffRow [] (Some cell)) intM
+  expectAll [
+    expectEqual
+      ["e"]
+      (eagerIndexOnlyVars
+        ["e"]
+        [("e", cell)]
+        [EffRow [] (Some cell)]
+        declared
+        actual),
+    expectEqual
+      []
+      (eagerIndexOnlyVars
+        ["e"]
+        [("e", cell)]
+        [EffRow [] (Some (Ref (EUnbound 811 0)))]
+        declared
+        actual),
+    expectEqual [] (eagerIndexOnlyVars [] [("e", cell)] [] declared actual),
+  ]
+
+-- ── grants ────────────────────────────────────────────────────────────────
+
+test "a scheme's grants are its authorities in the order the type first mentions them" = expectAll
+  [
+    expectEqual [2, 1] (grantOrder (twoGrantScheme [1, 2])),
+    expectEqual [2, 1, 3] (grantOrder (twoGrantScheme [1, 2, 3])),
+    expectEqual [] (grantOrder (twoGrantScheme [])),
+  ]
+
+-- The kind of each cell a recorded use carries.
+cellKinds : GrantOcc -> List String
+cellKinds occ =
+  map
+    (a => match a
+      AConst _ => "const"
+      AJoin _ => "join"
+      _ => "other")
+    occ.goCells
+
+test "a use of a source binding records the instantiation of each grant in grant order" =
+  let m = scoped ()
+  let ev = EvId "probe" 3
+  recordGrantOcc m "f" ev (twoGrantScheme [1, 2]) [
+    (2, AConst (PPrefix (Some "a/"))),
+  ]
+  expectAll [
+    expectEqual
+      (Some ("f", ["const", "join"], False))
+      (map
+        (o => (o.goCallee, cellKinds o, o.goStandalone))
+        (grantOccOf m.mcGraph ev)),
+    expectEqual
+      None
+      (map (o => o.goCallee) (grantOccOf m.mcGraph (EvId "probe" 4))),
+  ]
+
+test "a use whose scheme quantifies no authority records nothing" =
+  let m = scoped ()
+  let ev = EvId "probe" 5
+  recordGrantOcc m "f" ev (twoGrantScheme []) []
+  expectEqual None (map (o => o.goCallee) (grantOccOf m.mcGraph ev))
+
+test "a method occurrence typed as the standalone it shadows records the standalone's arity" =
+  let m = scoped ()
+  let ev = EvId "probe" 6
+  recordStandaloneGrantOcc m "size" ev (twoGrantScheme [1, 2]) [] 2
+  expectEqual
+    (Some (True, Some 2))
+    (map (o => (o.goStandalone, o.goTrailing)) (grantOccOf m.mcGraph ev))
+
+test "an authority variable marked sourceless is in the graph's sourceless table" =
+  let gctx = probeGraphCtx ()
+  markSourceless gctx [4, 9]
+  let table = gctx.graphRun.grants.gsSourceless.value
+  expectAll [
+    expectEqual (Some ()) (get 4 table),
+    expectEqual (Some ()) (get 9 table),
+    expectEqual None (get 5 table),
+  ]
+
+test "binders mark each authority cell once by its id" =
+  let table = Ref Tip
+  markBinders table [authCell 3, authCell 3, authCell 8]
+  expectAll [
+    expectEqual (Some ()) (get 3 table.value),
+    expectEqual (Some ()) (get 8 table.value),
+    expectEqual None (get 4 table.value),
+  ]
+
+test "the catalog's file externs are the operations whose authority names a path" = expectAll
+  [
+    expectTrue (isSome (omLookup "readFile" fileGrantExterns)),
+    expectEqual None (omLookup "println" fileGrantExterns),
+  ]
+
+-- ── file-bound values ─────────────────────────────────────────────────────
+
+test "only a built-in file label with a narrowed authority is a narrow file atom" = expectAll
+  [
+    expectTrue (narrowFileAtom narrowRead),
+    expectTrue
+      (narrowFileAtom (atomBuiltin "FileWrite" (PPrefix (Some "out/")))),
+    expectFalse (narrowFileAtom topRead),
+    expectFalse (narrowFileAtom (atomBuiltin "Stdout" PUnit)),
+    expectFalse
+      (narrowFileAtom
+        (Atom
+          (EffLabel "FileRead" (OriginModule "lib"))
+          (AConst (PPrefix (Some "config/"))))),
+  ]
+
+test "a function value is file-bound when a closed row of it, or of its result, is narrowed" = expectAll
+  [
+    expectTrue (hasFileBoundValue (arrowOver (EffRow [narrowRead] None))),
+    expectTrue
+      (hasFileBoundValue
+        (TFun intM (EffRow [] None) (arrowOver (EffRow [narrowRead] None)))),
+    expectFalse (hasFileBoundValue (arrowOver (EffRow [topRead] None))),
+    expectFalse
+      (hasFileBoundValue
+        (arrowOver (EffRow [narrowRead] (Some (Ref (EUnbound 820 0)))))),
+    expectFalse (hasFileBoundValue intM),
+  ]
+
+-- The line and column a location starts at.
+startOf : Loc -> (Int, Int)
+startOf (Loc _ line col _ _) = (line, col)
+
+test "a body's location is its own, else its first located child's, else none" =
+  let there = Loc "m.mdk" 7 2 7 5
+  expectAll [
+    expectEqual
+      (Some (3, 1))
+      (map startOf (fileBodyLoc (ELoc here (EVar "x")))),
+    expectEqual
+      (Some (7, 2))
+      (map startOf (fileBodyLoc (EApp (EVar "f") (ELoc there (EVar "x"))))),
+    expectEqual
+      (Some (3, 1))
+      (map
+        startOf
+        (fileBodyLoc (EApp (ELoc here (EVar "f")) (ELoc there (EVar "x"))))),
+    expectEqual None (map startOf (fileBodyLoc (EApp (EVar "f") (EVar "x")))),
+  ]
+
+test "equal source spans in two modules are two file-bound sites" = expectAll [
+  expectNotEqual (fileBoundSite "a" here) (fileBoundSite "b" here),
+  expectEqual (fileBoundSite "a" here) (fileBoundSite "a" here),
+  expectNotEqual
+    (fileBoundSite "a" here)
+    (fileBoundSite "a" (Loc "m.mdk" 3 1 3 10)),
+]
+
+test "a value's key names its module, span and shape" =
+  let located = ELoc here (EVar "f")
+  let call = EApp located (EVar "x")
+  expectAll [
+    expectEqual None (fileValueKey "m" (EVar "x")),
+    expectNotEqual (fileValueKey "m" call) (fileValueKey "n" call),
+    expectNotEqual
+      (fileValueKey "m" call)
+      (fileValueKey "m" (EApp call (EVar "y"))),
+    expectNotEqual (fileValueKey "m" call) (fileValueKey "m" (ELam [] located)),
+    expectEqual (fileValueKey "m" call) (fileValueKey "m" call),
+  ]
+
+-- The keys the module has recorded closed-row bounds under.
+boundKeys : ModuleCtx -> List String
+boundKeys m = omKeys m.mcGraph.graphRun.grants.gsBounds.value
+
+test "a located body under a closed narrow file row has its bound recorded" =
+  let m = scoped ()
+  recordFileBound m (ELoc here (EVar "x")) (EffRow [narrowRead] None)
+  expectEqual [fileBoundSite "probe" here] (boundKeys m)
+
+test "an open row, an unlocated body and a wide row record no bound" =
+  let m = scoped ()
+  recordFileBound
+    m
+    (ELoc here (EVar "x"))
+    (EffRow [narrowRead] (Some (Ref (EUnbound 830 0))))
+  recordFileBound m (EVar "x") (EffRow [narrowRead] None)
+  recordFileBound m (ELoc here (EVar "x")) (EffRow [topRead] None)
+  expectEqual [] (boundKeys m)
+
+test "a clause's bound is recorded at the arrow its arity reaches" =
+  let m = scoped ()
+  let body = ELoc here (EVar "x")
+  recordClauseFileBound m body 0 (arrowOver (EffRow [narrowRead] None))
+  let none = boundKeys m
+  recordClauseFileBound m body 1 (arrowOver (EffRow [narrowRead] None))
+  expectAll [
+    expectEqual [] none,
+    expectEqual [fileBoundSite "probe" here] (boundKeys m),
+  ]
+
+test "a file-bound value's type is recorded under its key" =
+  let m = scoped ()
+  let e = ELoc here (EVar "f")
+  recordValueFileBound m e (arrowOver (EffRow [narrowRead] None))
+  recordValueFileBound m (ELoc (Loc "m.mdk" 9 1 9 2) (EVar "g")) intM
+  expectEqual 1 (length (omKeys m.mcGraph.graphRun.grants.gsValueBounds.value))
