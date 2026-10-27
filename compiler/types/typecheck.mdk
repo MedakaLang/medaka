@@ -885,6 +885,7 @@ import types.tc_diag_text.{
   appSpineName,
   argAtomsMsgFor,
   argOnlyEffVarMsg,
+  binderNonExhaustiveMsg,
   backticked,
   bangOnBoolHelp,
   bangOnBoolMsg,
@@ -11281,12 +11282,23 @@ scheduleMatchChecks env scrutTy arms loc = match normalize scrutTy
   _ => checkMatchChecks (mctxAt loc env.teDyn.dcModule) scrutTy arms
 
 -- A `let` pattern or lambda parameter is judged as the single arm of a match
--- on its own type, at the binding.
+-- on its own type, at the binding.  The parameters of one binding are judged as
+-- one tuple pattern, so a binding with several refutable parameters warns once,
+-- not once per parameter.
 checkBinderPats : TcEnv -> List Mono -> List Pat -> Unit
-checkBinderPats env (t :: ts) (p :: ps) =
-  let _ = checkBinderPat env t p
-  checkBinderPats env ts ps
-checkBinderPats _ _ _ = ()
+checkBinderPats env [t] [p] = checkBinderPat env t p
+checkBinderPats env ts ps
+  | allList patIsVar ps = ()
+  | otherwise = checkBinderPat env (tupleMono ts) (PTuple ps)
+
+-- The variable that is the body of a binder's one arm: it marks the check as a binder's, whose
+-- warning is worded for a pattern with no match to add an arm to.
+binderMarker : String
+binderMarker = "<binder>"
+
+isBinderArms : List Arm -> Bool
+isBinderArms [Arm _ [] (EVar n)] = n == binderMarker
+isBinderArms _ = False
 
 checkBinderPat : TcEnv -> Mono -> Pat -> Unit
 checkBinderPat env ty pat =
@@ -11296,7 +11308,7 @@ checkBinderPat env ty pat =
     scheduleMatchChecks
       env
       ty
-      [Arm pat [] (ELit LUnit)]
+      [Arm pat [] (EVar binderMarker)]
       env.teDyn.dcModule.mcLoc
 
 -- A match's warnings are located at the match through its last arm.  The
@@ -11339,13 +11351,26 @@ checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
 checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchExhaustive mctx scrutTy arms =
   let rows = nonGuardedRows mctx arms
-  if useful mctx.mcCells.matchOracle.value (matchCol0Type scrutTy) rows [
-    PWild,
-  ] then
-    let (msg, help) = nonExhaustiveMsg mctx scrutTy rows
-    mctx.mcCells.matchWarnings :=
-      writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 mctx.mcLoc msg help None)
-        :: mctx.mcCells.matchWarnings.value
+  if useful
+    mctx.mcCells.matchOracle.value
+    (matchCol0Type scrutTy)
+    rows
+    [PWild] then
+    let binder = isBinderArms arms
+    let (msg, help) = nonExhaustiveMsg mctx scrutTy rows binder
+    -- A let-bound function is nested one-parameter lambdas that share the
+    -- binding's location; the first refutable parameter's warning is the one.
+    if binder
+      && anyList (warnedAt mctx.mcLoc) mctx.mcCells.matchWarnings.value then
+      ()
+    else
+      mctx.mcCells.matchWarnings :=
+        writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 mctx.mcLoc msg help None)
+          :: mctx.mcCells.matchWarnings.value
+
+warnedAt : Option Loc -> TcDiag -> Bool
+warnedAt loc (TcDiag code _ at _ _ _) =
+  code == "W-NONEXHAUSTIVE" && locKey loc /= "" && locKey at == locKey loc
 
 checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchRedundant mctx scrutTy arms =
@@ -11448,8 +11473,9 @@ armIsUnguarded (_ :: _) = False
 nonExhaustiveMsg : ModuleCtx ->
   Mono ->
   List (List Pat) ->
+  Bool ->
   (String, Option String)
-nonExhaustiveMsg mctx scrutTy rows =
+nonExhaustiveMsg mctx scrutTy rows binder =
   match (usefulWitness
     mctx.mcCells.matchOracle.value
     (matchCol0Type scrutTy)
@@ -11457,14 +11483,19 @@ nonExhaustiveMsg mctx scrutTy rows =
     1)
     Some (w :: _) =>
       let witnessStr = renderWitness w
-      let hint =
-        if witnessStr == "_" then
-          "add a `_ => ...` arm"
-        else
-          "add a `\{witnessStr} => ...` arm or a `_` wildcard"
-      let msg =
-        "Warning: non-exhaustive match\{tyOfMsg (matchCol0Type scrutTy)}: missing `\{witnessStr}`; \{hint}"
-      (msg, Some hint)
+      if binder then
+        let (msg, hint) =
+          binderNonExhaustiveMsg (matchCol0Type scrutTy) witnessStr
+        (msg, Some hint)
+      else
+        let hint =
+          if witnessStr == "_" then
+            "add a `_ => ...` arm"
+          else
+            "add a `\{witnessStr} => ...` arm or a `_` wildcard"
+        let msg =
+          "Warning: non-exhaustive match\{tyOfMsg (matchCol0Type scrutTy)}: missing `\{witnessStr}`; \{hint}"
+        (msg, Some hint)
     _ => (nonExhaustiveMatchWarning, None)
 
 -- one single-column matrix row per non-guarded arm (its desugared pattern)
