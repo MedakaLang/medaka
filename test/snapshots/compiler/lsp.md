@@ -1,5 +1,5 @@
 # META
-source_lines=2469
+source_lines=2492
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -46,14 +46,14 @@ import driver.diagnostics.{
   mkDiag,
   fileFront,
   FrontOutput(..),
-  analyzeProjectKeyed,
+  analyzeProjectKeyedSources,
   projectEntryAnalysisOr,
   GraphId,
   graphIdSame,
   stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
-import support.ordmap.{OrdMap, omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omLookup}
 import support.path.{dirOf}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
@@ -210,9 +210,7 @@ wholeDocRange src =
 
 -- Map an optional Loc to its indexed protocol range, or the whole document.
 rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = match locToLspRange index loc
-  Some range => range
-  None => JNull
+rangeOfLoc index _ (Some loc) = optionOr JNull (locToLspRange index loc)
 rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
@@ -220,9 +218,7 @@ rangeOfLoc _ fallback None = fallback
 -- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
 -- `wholeDocRange`) when there is no name `Loc`.
 jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = match locToLspRange index loc
-  Some range => range
-  None => JNull
+jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
 -- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
 -- (B.10.2b) for an expr-level range, falling back to whole-document for
@@ -230,6 +226,10 @@ jRangeOfLoc index loc = match locToLspRange index loc
 diagToJson : SourceIndex -> Json -> Diag -> Json
 diagToJson index fallback (Diag sev _ msg loc _ _) =
   jDiagnostic (severityCode sev) (rangeOfLoc index fallback loc) msg
+
+diagWithoutSource : Json -> Diag -> Json
+diagWithoutSource range (Diag sev _ msg _ _ _) =
+  jDiagnostic (severityCode sev) range msg
 
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =
@@ -249,17 +249,17 @@ docsLookup uri ((k, v) :: rest)
   | otherwise = docsLookup uri rest
 
 -- ── textDocument/formatting ─────────────────────────────────────────────────
--- Run the formatter; if the text is
--- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
--- whole document through EOF. A parse failure yields [] here: the source
--- is lexed once and `formatSourceChecked` returns the parse error instead of
--- panicking.
 fullDocRangeFmt : String -> Json
 fullDocRangeFmt src =
   match offsetToUtf16Position (indexSource src) (stringLength src)
     Some (line, col) => jRange 0 0 line col
     None => JNull
 
+-- Run the formatter; if the text is
+-- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
+-- whole document through EOF. A parse failure yields [] here: the source
+-- is lexed once and `formatSourceChecked` returns the parse error instead of
+-- panicking.
 formattingEdits : String -> List Json
 formattingEdits src = match tokenizeWithOffsetPairs src
   (toks, pairs) => match formatSourceChecked src toks pairs
@@ -409,14 +409,14 @@ variantKids : SourceIndex ->
   List (Option Loc) ->
   List Variant ->
   List Json
-variantKids _ _ _ [] = []
-variantKids index fb locs ((Variant _ (ConNamed fs True)) :: vs) =
-  let step = fieldKidsStep index fb locs (map fieldName fs)
-  fst step ++ variantKids index fb (snd step) vs
-variantKids index fb [] ((Variant vn _) :: vs) =
-  jChildLoc index vn 22 fb None :: variantKids index fb [] vs
-variantKids index fb (l :: ls) ((Variant vn _) :: vs) =
-  jChildLoc index vn 22 fb l :: variantKids index fb ls vs
+variantKids index fb locs variants = go locs variants
+  where
+    go _ [] = []
+    go spans ((Variant _ (ConNamed fs True)) :: vs) =
+      let step = fieldKidsStep index fb spans (map fieldName fs)
+      fst step ++ go (snd step) vs
+    go [] ((Variant vn _) :: vs) = jChildLoc index vn 22 fb None :: go [] vs
+    go (l :: ls) ((Variant vn _) :: vs) = jChildLoc index vn 22 fb l :: go ls vs
 
 -- One Field child (kind 8) per field name, consuming a `Loc` each; returns the
 -- kids plus the leftover `Loc`s for the next variant.
@@ -425,13 +425,15 @@ fieldKidsStep : SourceIndex ->
   List (Option Loc) ->
   List String ->
   (List Json, List (Option Loc))
-fieldKidsStep _ _ locs [] = ([], locs)
-fieldKidsStep index fb [] (fn :: fns) =
-  let rest = fieldKidsStep index fb [] fns
-  (jChildLoc index fn 8 fb None :: fst rest, snd rest)
-fieldKidsStep index fb (l :: ls) (fn :: fns) =
-  let rest = fieldKidsStep index fb ls fns
-  (jChildLoc index fn 8 fb l :: fst rest, snd rest)
+fieldKidsStep index fb locs names = go locs names
+  where
+    go spans [] = ([], spans)
+    go [] (fn :: fns) =
+      let rest = go [] fns
+      (jChildLoc index fn 8 fb None :: fst rest, snd rest)
+    go (l :: ls) (fn :: fns) =
+      let rest = go ls fns
+      (jChildLoc index fn 8 fb l :: fst rest, snd rest)
 
 -- 1:1 child symbols for a fixed-shape child list (methods, let-binds),
 -- consuming a `Loc` each in order.
@@ -527,9 +529,10 @@ documentSymbols src = match parseWithPositionsOpt src
   Some (decls, positions) =>
     let index = indexSource src
     let len = stringLength src
-    map
-      (renderSymbol index len)
-      (collapseSymbols (symbolParts index len decls (positionsDecls positions)))
+    positionsDecls positions
+      |> symbolParts index len decls
+      |> collapseSymbols
+      |> map (renderSymbol index len)
 
 wholeLineRange : SourceIndex -> Int -> Int -> Int -> Json
 wholeLineRange index len sl el = match sourcePositionToOffset index (el + 1) 0
@@ -549,19 +552,20 @@ data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) into
 -- SymRow rows, dropping non-outline decls.
 symbolParts : SourceIndex -> Int -> List Decl -> List DeclPos -> List SymRow
-symbolParts index len (d :: ds) (p :: ps) =
-  let sl = declPosLine p - 1
-  let el = declPosEndLine p
-  match (symbolPartsOfDecl
-    index
-    d
-    (wholeLineRange index len sl el)
-    (declPosChildLocs p))
-    None => symbolParts index len ds ps
-    Some (name, kind, clauseLike, kids) =>
-      SymRow name kind sl el clauseLike kids (declPosNameLoc p)
-        :: symbolParts index len ds ps
-symbolParts _ _ _ _ = []
+symbolParts index len decls positions = go decls positions
+  where
+    go (d :: ds) (p :: ps) =
+      let sl = declPosLine p - 1
+      let el = declPosEndLine p
+      match (symbolPartsOfDecl
+        index
+        d
+        (wholeLineRange index len sl el)
+        (declPosChildLocs p))
+        None => go ds ps
+        Some (name, kind, clauseLike, kids) =>
+          SymRow name kind sl el clauseLike kids (declPosNameLoc p) :: go ds ps
+    go _ _ = []
 
 -- Collapse a signature+clauses run — consecutive rows that share the EXACT same
 -- name AND are BOTH clause-like — into ONE outline symbol (#300 part 3): the
@@ -882,9 +886,9 @@ typeAtPointsWithIndex index runtimeSrc coreSrc filePath src line cols =
       cols
   let names =
     map
-      (pos => match pos
-        Some (ln, col) => identifierAtIndexed index chars ln col
-        None => None)
+      (pos => do
+        (ln, col) <- pos
+        identifierAtIndexed index chars ln col)
       positions
   if allList isNone names then
     map (_ => None) cols
@@ -1262,11 +1266,10 @@ hasExplicitSig (d :: rest) name = match innerDecl d
 columnAfterName : SourceIndex -> Array Char -> Int -> Option Int
 columnAfterName index arr line =
   let len = arrayLength arr
-  match sourcePositionToOffset index (line + 1) 0
-    None => None
-    Some lineStart =>
-      let endCol = identRunLen arr len lineStart 0
-      if endCol == 0 then None else Some endCol
+  do
+    lineStart <- sourcePositionToOffset index (line + 1) 0
+    let endCol = identRunLen arr len lineStart 0
+    if endCol == 0 then None else Some endCol
 
 -- Length of the leading identifier run starting at byte `i` (stops at EOL/EOF).
 identRunLen : Array Char -> Int -> Int -> Int -> Int
@@ -1300,9 +1303,9 @@ inlayHints runtimeSrc coreSrc uri src docs =
 -- over the decl's start line.
 inlayNamePos : SourceIndex -> Array Char -> DeclPos -> Option (Int, Int)
 inlayNamePos index arr p = match declPosNameLoc p
-  Some (Loc _ _ _ el ec) => match sourcePositionToOffset index el ec
-    Some off => offsetToUtf16Position index off
-    None => None
+  Some (Loc _ _ _ el ec) => do
+    off <- sourcePositionToOffset index el ec
+    offsetToUtf16Position index off
   None =>
     map
       (col => (declPosLine p - 1, col))
@@ -1656,9 +1659,9 @@ semToksOf : SourceIndex ->
   List Token ->
   List (Int, Int) ->
   SemCtx ->
-  List SemTok
-semToksOf _ [] _ _ = []
-semToksOf _ _ [] _ = []
+  Result String (List SemTok)
+semToksOf _ [] _ _ = Ok []
+semToksOf _ _ [] _ = Err "semantic token spans ended before the token stream"
 semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
   (roleOpt, ctx2) => match roleOpt
     None => semToksOf arr ts ps ctx2
@@ -1668,10 +1671,10 @@ semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
       else match (offsetToUtf16Position arr s, offsetToUtf16Position arr e)
         (Some (sl, sc), Some (el, ec)) =>
           if sl == el then
-            SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
+            map (SemTok sl sc (ec - sc) ty :: _) (semToksOf arr ts ps ctx2)
           else
             semToksOf arr ts ps ctx2
-        _ => semToksOf arr ts ps ctx2
+        _ => Err "semantic token endpoint is not a source boundary"
 
 {- Delta-encode the (start-ordered) SemTok list into the flat 5-int LSP array.
    prevLine/prevChar start at 0, so the first token's deltaLine is its absolute
@@ -1684,12 +1687,12 @@ encodeSemToks prevLine prevChar ((SemTok line ch len ty) :: rest) =
   dLine :: dChar :: len :: ty :: 0 :: encodeSemToks line ch rest
 
 -- The full semantic-tokens `data` array (flat ints) for a source string.
-semanticTokensData : String -> List Int
+semanticTokensData : String -> Result String (List Int)
 semanticTokensData src =
   let arr = indexSource src
   match tokenizeWithOffsetPairs src
     (toks, pairs) =>
-      encodeSemToks 0 0 (semToksOf arr toks pairs (SemCtx 0 True MExpr))
+      map (encodeSemToks 0 0) (semToksOf arr toks pairs (SemCtx 0 True MExpr))
 
 -- ── request dispatch ────────────────────────────────────────────────────────
 --
@@ -1866,8 +1869,8 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let (keyed, results) =
-    analyzeProjectKeyed
+  let (keyed, results, sources) =
+    analyzeProjectKeyedSources
       (stdlibExportsReader stdlibDir)
       True
       []
@@ -1878,7 +1881,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc
-  let _ = publishEach docs results
+  let _ = publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
@@ -1901,23 +1904,29 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
-publishEach : Docs -> List (String, List Diag) -> <IO> Unit
-publishEach _ [] = ()
-publishEach docs ((file, ds) :: rest) =
+publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
+publishEach _ _ [] = ()
+publishEach docs sources ((file, ds) :: rest) =
   let uri = uriOfPath file
-  let src = sourceForPath docs file
+  -- Disk reads must only run when neither in-memory source is available.
+  -- lint-disable-next-line rule-orelse-staircase
+  let src = match docsGet uri docs
+    Some text => Some text
+    None => match omLookup file sources
+      Some text => Some text
+      None => sourceForPath docs file
   let params = jObject [
     ("uri", JString uri),
     (
       "diagnostics",
       jArray (match src
         Some text => diagsToJson text ds
-        None => []),
+        None => map (diagWithoutSource (jRange 0 0 0 0)) ds),
     ),
   ]
   let _ =
     writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
-  publishEach docs rest
+  publishEach docs sources rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
@@ -1936,7 +1945,7 @@ selectProjectProfileFor file docs = match carryProjectProfile None file
   Err msg => match manifestPathOf file
     None => docs
     Some path =>
-      let _ = publishEach docs [
+      let _ = publishEach docs omEmpty [
         (
           path,
           [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))],
@@ -1949,7 +1958,7 @@ clearFlaggedManifest file docs = match manifestPathOf file
   None => docs
   Some path =>
     if docsFlagged path docs then
-      let _ = publishEach docs [(path, [])]
+      let _ = publishEach docs omEmpty [(path, [])]
       docsUnflag path docs
     else
       docs
@@ -2041,6 +2050,18 @@ handleDocumentSymbol idJson params docs =
       Some src => jArray (documentSymbols src)
   writeMessage (responseMsg idJson result)
 
+cursorIdentifier : String -> Json -> Option (Int, Int, String)
+cursorIdentifier src params = do
+  (line, col) <- sourceCursor src params
+  name <- identifierAt src line col
+  Some (line, col, name)
+
+projectRefIndex : String -> String -> String -> Docs -> <IO> RefIndex
+projectRefIndex runtimeSrc coreSrc rootFile docs =
+  let projectDir = findProjectRootOrSelf (dirOf rootFile)
+  let read = path => docsGet (uriOfPath path) docs
+  buildRefIndexProject read projectDir runtimeSrc coreSrc
+
 -- textDocument/definition → Location[] (singleton) or null.
 handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleDefinition runtimeSrc coreSrc idJson params docs =
@@ -2059,19 +2080,15 @@ projectDefinition : String ->
   Docs ->
   <IO> Json
 projectDefinition runtimeSrc coreSrc uri src params docs =
-  match sourceCursor src params
+  match cursorIdentifier src params
     None => JNull
-    Some (line, col) => match identifierAt src line col
-      None => JNull
-      Some _ =>
-        let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOf rootFile)
-        let read = path => docsGet (uriOfPath path) docs
-        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
-        match binderAt idx rootFile (line + 1) col
-          None => definitionResult uri src params
-          Some key =>
-            jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
+    Some (line, col, _) =>
+      let rootFile = pathOfUri uri
+      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
+      match binderAt idx rootFile (line + 1) col
+        None => definitionResult uri src params
+        Some key =>
+          jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
 
 -- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
@@ -2082,13 +2099,11 @@ projectDefinition runtimeSrc coreSrc uri src params docs =
 -- relative in the result (path-stable for a golden).
 export
 definitionResult : String -> String -> Json -> Json
-definitionResult uri src params = match sourceCursor src params
-  Some (line, col) => match identifierAt src line col
+definitionResult uri src params = match cursorIdentifier src params
+  Some (_, _, name) => match definitionRange src name
     None => JNull
-    Some name => match definitionRange src name
-      None => JNull
-      Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
-  _ => JNull
+    Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
+  None => JNull
 
 -- Resolve a set of columns using one index and one parse.
 export
@@ -2178,22 +2193,15 @@ referencesResult : String ->
   Docs ->
   <IO> Json
 referencesResult runtimeSrc coreSrc uri src params docs =
-  match sourceCursor src params
-    Some (line, col) => match identifierAt src line col
-      None => jArray []
-      Some _ =>
-        let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOf rootFile)
-        let read = path => docsGet (uriOfPath path) docs
-        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
-        -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
-        -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
-        match binderAt idx rootFile (line + 1) col
-          None => jArray []
-          Some key =>
-            jArray
-              (referenceLocations docs idx key (includeDeclarationOf params))
-    _ => jArray []
+  match cursorIdentifier src params
+    None => jArray []
+    Some (line, col, _) =>
+      let rootFile = pathOfUri uri
+      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
+      match binderAt idx rootFile (line + 1) col
+        None => jArray []
+        Some key =>
+          jArray (referenceLocations docs idx key (includeDeclarationOf params))
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
 -- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
@@ -2260,18 +2268,21 @@ locationsForPath : Docs ->
   Option SourceIndex ->
   List (String, Loc) ->
   <IO> List Json
-locationsForPath _ _ _ [] = []
-locationsForPath docs path index ((next, loc) :: rest) =
-  if next /= path then
-    locationsJson docs ((next, loc) :: rest)
-  else
-    let tail = locationsForPath docs path index rest
-    match index
-      None => tail
-      Some idx => match locToLspRange idx loc
-        None => tail
-        Some range =>
-          jObject [("uri", JString (uriOfPath path)), ("range", range)] :: tail
+locationsForPath docs path index rows = go rows
+  where
+    go [] = []
+    go ((next, loc) :: rest) =
+      if next /= path then
+        locationsJson docs ((next, loc) :: rest)
+      else
+        let tail = go rest
+        match index
+          None => tail
+          Some idx => match locToLspRange idx loc
+            None => tail
+            Some range =>
+              jObject [("uri", JString (uriOfPath path)), ("range", range)]
+                :: tail
 
 -- `params.context.includeDeclaration` (LSP `ReferenceContext`). Missing
 -- `context`/field, or a non-bool value, defaults to `True` (F6, locked).
@@ -2293,21 +2304,33 @@ handleHighlight idJson params docs =
   writeMessage (responseMsg idJson result)
 
 highlightResult : String -> Json -> Json
-highlightResult src params = match sourceCursor src params
-  Some (line, col) => match identifierAt src line col
-    None => JNull
-    Some name => jArray (highlightRanges src name)
-  _ => JNull
+highlightResult src params = match cursorIdentifier src params
+  Some (_, _, name) => jArray (highlightRanges src name)
+  None => JNull
 
 -- textDocument/semanticTokens/full → { data: [int] } (delta-encoded).
 handleSemanticTokens : Json -> Json -> Docs -> <IO> Unit
 handleSemanticTokens idJson params docs =
   let result = match requestUri params
-    None => JNull
+    None => Ok JNull
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => jObject [("data", jArray (map JInt (semanticTokensData src)))]
-  writeMessage (responseMsg idJson result)
+      None => Ok JNull
+      Some src =>
+        map
+          (tokens => jObject [("data", jArray (map JInt tokens))])
+          (semanticTokensData src)
+  match result
+    Ok value => writeMessage (responseMsg idJson value)
+    Err message =>
+      writeMessage
+        (jObject [
+          ("jsonrpc", JString "2.0"),
+          ("id", idJson),
+          (
+            "error",
+            jObject [("code", JInt (-32603)), ("message", JString message)],
+          ),
+        ])
 
 -- The `.text` of the LAST element of a contentChanges JArray (Full sync).
 lastChangeText : Json -> Option String
@@ -2474,9 +2497,9 @@ unit = ()
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
@@ -2522,12 +2545,14 @@ unit = ()
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))
-(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc")) (arm (PCon "Some" (PVar "range")) () (EVar "range")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
 (DFunDef false "rangeOfLoc" (PWild (PVar "fallback") (PCon "None")) (EVar "fallback"))
 (DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc")) (arm (PCon "Some" (PVar "range")) () (EVar "range")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
 (DTypeSig false "diagToJson" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyCon "Json")))))
 (DFunDef false "diagToJson" ((PVar "index") (PVar "fallback") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PVar "loc") PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EApp (EApp (EApp (EVar "rangeOfLoc") (EVar "index")) (EVar "fallback")) (EVar "loc"))) (EVar "msg")))
+(DTypeSig false "diagWithoutSource" (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyCon "Json"))))
+(DFunDef false "diagWithoutSource" ((PVar "range") (PCon "Diag" (PVar "sev") PWild (PVar "msg") PWild PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EVar "range")) (EVar "msg")))
 (DTypeSig false "diagsToJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "diagsToJson" ((PVar "src") (PVar "diags")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "diagToJson") (EVar "index")) (EApp (EVar "wholeDocRange") (EVar "src")))) (EVar "diags")))))
 (DTypeSig false "docsGet" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -2563,14 +2588,9 @@ unit = ()
 (DTypeSig false "jChildLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))))
 (DFunDef false "jChildLoc" ((PVar "index") (PVar "name") (PVar "kind") (PVar "fallback") (PVar "loc")) (EBlock (DoLet false false (PVar "r") (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "jRangeOfLoc") (EVar "index")) (EVar "l"))) (arm (PCon "None") () (EVar "fallback")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "r")) (EVar "r")) (EListLit)))))
 (DTypeSig false "variantKids" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Json")))))))
-(DFunDef false "variantKids" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PVar "locs") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "index")) (EVar "fb")) (EVar "locs")) (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EVar "index")) (EVar "fb")) (EApp (EVar "snd") (EVar "step"))) (EVar "vs"))))))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PList) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EVar "index")) (EVar "fb")) (EListLit)) (EVar "vs"))))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PCons (PVar "l") (PVar "ls")) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EVar "index")) (EVar "fb")) (EVar "ls")) (EVar "vs"))))
+(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PVar "locs") (PVar "variants")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "spans") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "index")) (EVar "fb")) (EVar "spans")) (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EVar "go") (EApp (EVar "snd") (EVar "step"))) (EVar "vs")))))) (clause ((PList) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "None")) (EApp (EApp (EVar "go") (EListLit)) (EVar "vs")))) (clause ((PCons (PVar "l") (PVar "ls")) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "l")) (EApp (EApp (EVar "go") (EVar "ls")) (EVar "vs")))))) (EApp (EApp (EVar "go") (EVar "locs")) (EVar "variants"))))
 (DTypeSig false "fieldKidsStep" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))))))
-(DFunDef false "fieldKidsStep" (PWild PWild (PVar "locs") (PList)) (ETuple (EListLit) (EVar "locs")))
-(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PList) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "index")) (EVar "fb")) (EListLit)) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "None")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest"))))))
-(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PCons (PVar "l") (PVar "ls")) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "index")) (EVar "fb")) (EVar "ls")) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "l")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest"))))))
+(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PVar "locs") (PVar "names")) (ELetGroup ((lgb "go" (clause ((PVar "spans") (PList)) (ETuple (EListLit) (EVar "spans"))) (clause ((PList) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "go") (EListLit)) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "None")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest")))))) (clause ((PCons (PVar "l") (PVar "ls")) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "go") (EVar "ls")) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "l")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest")))))))) (EApp (EApp (EVar "go") (EVar "locs")) (EVar "names"))))
 (DTypeSig false "zipKids" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "zipKids" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "zipKids" ((PVar "index") (PVar "fb") (PVar "kind") (PList) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "index")) (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "index")) (EVar "fb")) (EVar "kind")) (EListLit)) (EVar "nms"))))
@@ -2580,13 +2600,12 @@ unit = ()
 (DTypeSig false "implLabel" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "implLabel" ((PVar "iface")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "impl ")) (EVar "iface"))))
 (DTypeSig true "documentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len"))) (EApp (EVar "collapseSymbols") (EApp (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))))))))))
+(DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len")))))))))
 (DTypeSig false "wholeLineRange" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "wholeLineRange" ((PVar "index") (PVar "len") (PVar "sl") (PVar "el")) (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "el") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "len")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "line")) (EVar "col"))) (arm (PCon "None") () (EVar "JNull"))))))
 (DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig false "symbolParts" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "SymRow")))))))
-(DFunDef false "symbolParts" ((PVar "index") (PVar "len") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EApp (EVar "declPosEndLine") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "index")) (EVar "d")) (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EVar "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (EApp (EVar "declPosChildLocs") (EVar "p"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "ds")) (EVar "ps"))))))))
-(DFunDef false "symbolParts" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "symbolParts" ((PVar "index") (PVar "len") (PVar "decls") (PVar "positions")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EApp (EVar "declPosEndLine") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "index")) (EVar "d")) (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EVar "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (EApp (EVar "declPosChildLocs") (EVar "p"))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EVar "go") (EVar "ds")) (EVar "ps")))))))) (clause (PWild PWild) (EListLit)))) (EApp (EApp (EVar "go") (EVar "decls")) (EVar "positions"))))
 (DTypeSig false "collapseSymbols" (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow"))))
 (DFunDef false "collapseSymbols" ((PList)) (EListLit))
 (DFunDef false "collapseSymbols" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "collapseGo") (EVar "x")) (EVar "xs")))
@@ -2644,7 +2663,7 @@ unit = ()
 (DTypeSig true "typeAtPoints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))))))))
 (DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPointsWithIndex") (EApp (EVar "indexSource") (EVar "src"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EVar "cols")))
 (DTypeSig true "typeAtPointsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))))))))
-(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EVar "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EVar "index")) (EVar "chars")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
+(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EVar "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EApp (EApp (EVar "andThen") (EVar "pos")) (ELam ((PTuple (PVar "ln") (PVar "col"))) (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EVar "index")) (EVar "chars")) (EVar "ln")) (EVar "col")))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
 (DTypeSig false "typeAtPosition" (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "typeAtPosition" (PWild PWild PWild (PCon "None")) (EVar "None"))
 (DFunDef false "typeAtPosition" (PWild PWild (PCon "None") PWild) (EVar "None"))
@@ -2714,13 +2733,13 @@ unit = ()
 (DFunDef false "hasExplicitSig" ((PList) PWild) (EVar "False"))
 (DFunDef false "hasExplicitSig" ((PCons (PVar "d") (PVar "rest")) (PVar "name")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "n") PWild PWild) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "hasExplicitSig") (EVar "rest")) (EVar "name")))) (arm PWild () (EApp (EApp (EVar "hasExplicitSig") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "columnAfterName" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "columnAfterName" ((PVar "index") (PVar "arr") (PVar "line")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "lineStart")) () (EBlock (DoLet false false (PVar "endCol") (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EVar "lineStart")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "endCol") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "endCol"))))))))))
+(DFunDef false "columnAfterName" ((PVar "index") (PVar "arr") (PVar "line")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0)))) (ELam ((PVar "lineStart")) (ELet false (PVar "endCol") (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EVar "lineStart")) (ELit (LInt 0))) (EIf (EBinOp "==" (EVar "endCol") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "endCol")))))))))
 (DTypeSig false "identRunLen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "identRunLen" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "acc") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "inlayHints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json")))))))))
 (DFunDef false "inlayHints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "env")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "src"))) (EVar "decls")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EFieldAccess (EVar "env") "heSchemes")))))))
 (DTypeSig false "inlayNamePos" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "DeclPos") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "inlayNamePos" ((PVar "index") (PVar "arr") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec"))) () (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec")) (arm (PCon "Some" (PVar "off")) () (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "off"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EApp (EVar "columnAfterName") (EVar "index")) (EVar "arr")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
+(DFunDef false "inlayNamePos" ((PVar "index") (PVar "arr") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec"))) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec"))) (ELam ((PVar "off")) (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "off"))))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EApp (EVar "columnAfterName") (EVar "index")) (EVar "arr")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
 (DTypeSig false "inlayZip" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "Json")))))))))
 (DFunDef false "inlayZip" ((PVar "index") (PVar "arr") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EApp (EVar "inlayNamePos") (EVar "index")) (EVar "arr")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EVar "line")) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EVar "ppPubScheme") (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
 (DFunDef false "inlayZip" (PWild PWild PWild PWild PWild PWild) (EListLit))
@@ -2834,15 +2853,15 @@ unit = ()
 (DFunDef false "classify" ((PCon "TDedent") (PCon "SemCtx" (PVar "depth") (PVar "ls") (PVar "mode"))) (ETuple (EVar "None") (EApp (EApp (EApp (EVar "SemCtx") (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "ls")) (EVar "mode"))))
 (DFunDef false "classify" ((PCon "TNewline") (PCon "SemCtx" (PVar "depth") PWild (PVar "mode"))) (EBlock (DoLet false false (PVar "mode2") (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "MExpr") (EVar "mode"))) (DoExpr (ETuple (EVar "None") (EApp (EApp (EApp (EVar "SemCtx") (EVar "depth")) (EVar "True")) (EVar "mode2"))))))
 (DFunDef false "classify" ((PVar "tok") (PCon "SemCtx" (PVar "depth") (PVar "ls") (PVar "mode"))) (ETuple (EApp (EApp (EApp (EApp (EVar "roleOf") (EVar "tok")) (EVar "depth")) (EVar "ls")) (EVar "mode")) (EApp (EApp (EApp (EVar "SemCtx") (EVar "depth")) (EVar "False")) (EApp (EApp (EVar "nextMode") (EVar "tok")) (EVar "mode")))))
-(DTypeSig false "semToksOf" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "SemCtx") (TyApp (TyCon "List") (TyCon "SemTok")))))))
-(DFunDef false "semToksOf" (PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "semToksOf" (PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "semToksOf" ((PVar "arr") (PCons (PVar "t") (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps")) (PVar "ctx")) (EMatch (EApp (EApp (EVar "classify") (EVar "t")) (EVar "ctx")) (arm (PTuple (PVar "roleOpt") (PVar "ctx2")) () (EMatch (EVar "roleOpt") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (arm (PCon "Some" (PVar "ty")) () (EIf (EBinOp ">=" (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")) (EMatch (ETuple (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "s")) (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "e"))) (arm (PTuple (PCon "Some" (PTuple (PVar "sl") (PVar "sc"))) (PCon "Some" (PTuple (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "SemTok") (EVar "sl")) (EVar "sc")) (EBinOp "-" (EVar "ec") (EVar "sc"))) (EVar "ty")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))))))))))
+(DTypeSig false "semToksOf" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "SemCtx") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SemTok"))))))))
+(DFunDef false "semToksOf" (PWild (PList) PWild PWild) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "semToksOf" (PWild PWild (PList) PWild) (EApp (EVar "Err") (ELit (LString "semantic token spans ended before the token stream"))))
+(DFunDef false "semToksOf" ((PVar "arr") (PCons (PVar "t") (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps")) (PVar "ctx")) (EMatch (EApp (EApp (EVar "classify") (EVar "t")) (EVar "ctx")) (arm (PTuple (PVar "roleOpt") (PVar "ctx2")) () (EMatch (EVar "roleOpt") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (arm (PCon "Some" (PVar "ty")) () (EIf (EBinOp ">=" (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")) (EMatch (ETuple (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "s")) (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "e"))) (arm (PTuple (PCon "Some" (PTuple (PVar "sl") (PVar "sc"))) (PCon "Some" (PTuple (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EVar "sl") (EVar "el")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "SemTok") (EVar "sl")) (EVar "sc")) (EBinOp "-" (EVar "ec") (EVar "sc"))) (EVar "ty")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")))) (arm PWild () (EApp (EVar "Err") (ELit (LString "semantic token endpoint is not a source boundary")))))))))))
 (DTypeSig false "encodeSemToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SemTok")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "encodeSemToks" (PWild PWild (PList)) (EListLit))
 (DFunDef false "encodeSemToks" ((PVar "prevLine") (PVar "prevChar") (PCons (PCon "SemTok" (PVar "line") (PVar "ch") (PVar "len") (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dLine") (EBinOp "-" (EVar "line") (EVar "prevLine"))) (DoLet false false (PVar "dChar") (EIf (EBinOp "==" (EVar "dLine") (ELit (LInt 0))) (EBinOp "-" (EVar "ch") (EVar "prevChar")) (EVar "ch"))) (DoExpr (EBinOp "::" (EVar "dLine") (EBinOp "::" (EVar "dChar") (EBinOp "::" (EVar "len") (EBinOp "::" (EVar "ty") (EBinOp "::" (ELit (LInt 0)) (EApp (EApp (EApp (EVar "encodeSemToks") (EVar "line")) (EVar "ch")) (EVar "rest"))))))))))
-(DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
+(DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EVar "map") (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
 (DTypeSig false "initializeResultFor" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "initializeResultFor" ((PVar "serverVersion")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (EVar "serverVersion")))))))))
 (DTypeSig false "parseErrorDiags" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyApp (TyCon "List") (TyCon "Json")))))
@@ -2876,18 +2895,18 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
-(DTypeSig false "publishEach" (TyFun (TyCon "Docs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "publishEach" (PWild (PList)) (ELit LUnit))
-(DFunDef false "publishEach" ((PVar "docs") (PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "src") (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "file"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EMatch (EVar "src") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "diagsToJson") (EVar "text")) (EVar "ds"))) (arm (PCon "None") () (EListLit)))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "rest")))))
+(DTypeSig false "publishEach" (TyFun (TyCon "Docs") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "publishEach" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "publishEach" ((PVar "docs") (PVar "sources") (PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "src") (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "Some" (PVar "text")) () (EApp (EVar "Some") (EVar "text"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "file")) (EVar "sources")) (arm (PCon "Some" (PVar "text")) () (EApp (EVar "Some") (EVar "text"))) (arm (PCon "None") () (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "file"))))))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EMatch (EVar "src") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "diagsToJson") (EVar "text")) (EVar "ds"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EApp (EVar "diagWithoutSource") (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ds"))))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "rest")))))
 (DTypeSig false "publishFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs"))))))))
 (DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EVar "selectProjectProfileFor") (EApp (EVar "pathOfUri") (EVar "uri"))) (EVar "docs"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EApp (EApp (EVar "publishForSelected") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "docs2"))) (DoExpr (EApp (EApp (EApp (EVar "docsKeep") (EVar "uri")) (EVar "kept")) (EVar "docs2")))))
 (DTypeSig false "selectProjectProfileFor" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))
-(DFunDef false "selectProjectProfileFor" ((PVar "file") (PVar "docs")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "file")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "clearFlaggedManifest") (EVar "file")) (EVar "docs"))) (arm (PCon "Err" (PVar "msg")) () (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EListLit (ETuple (EVar "path") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "docsFlag") (EVar "path")) (EVar "docs")))))))))
+(DFunDef false "selectProjectProfileFor" ((PVar "file") (PVar "docs")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "file")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "clearFlaggedManifest") (EVar "file")) (EVar "docs"))) (arm (PCon "Err" (PVar "msg")) () (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "omEmpty")) (EListLit (ETuple (EVar "path") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "docsFlag") (EVar "path")) (EVar "docs")))))))))
 (DTypeSig false "clearFlaggedManifest" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))
-(DFunDef false "clearFlaggedManifest" ((PVar "file") (PVar "docs")) (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EIf (EApp (EApp (EVar "docsFlagged") (EVar "path")) (EVar "docs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EListLit (ETuple (EVar "path") (EListLit))))) (DoExpr (EApp (EApp (EVar "docsUnflag") (EVar "path")) (EVar "docs")))) (EVar "docs")))))
+(DFunDef false "clearFlaggedManifest" ((PVar "file") (PVar "docs")) (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EIf (EApp (EApp (EVar "docsFlagged") (EVar "path")) (EVar "docs")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "omEmpty")) (EListLit (ETuple (EVar "path") (EListLit))))) (DoExpr (EApp (EApp (EVar "docsUnflag") (EVar "path")) (EVar "docs")))) (EVar "docs")))))
 (DTypeSig false "docsFlagged" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyCon "Bool"))))
 (DFunDef false "docsFlagged" ((PVar "path") (PCon "Docs" PWild (PVar "flagged") PWild)) (EApp (EApp (EVar "contains") (EVar "path")) (EVar "flagged")))
 (DTypeSig false "docsFlag" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyCon "Docs"))))
@@ -2904,12 +2923,16 @@ unit = ()
 (DFunDef false "handleFormatting" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "formattingEdits") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "handleDocumentSymbol" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "documentSymbols") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DTypeSig false "cursorIdentifier" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "cursorIdentifier" ((PVar "src") (PVar "params")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params"))) (ELam ((PTuple (PVar "line") (PVar "col"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col"))) (ELam ((PVar "name")) (EApp (EVar "Some") (ETuple (EVar "line") (EVar "col") (EVar "name"))))))))
+(DTypeSig false "projectRefIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "RefIndex")))))))
+(DFunDef false "projectRefIndex" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rootFile") (PVar "docs")) (EBlock (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc")))))
 (DTypeSig false "handleDefinition" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDefinition") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "projectDefinition" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
-(DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))))
+(DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col") PWild)) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "projectRefIndex") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rootFile")) (EVar "docs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))
 (DTypeSig true "definitionResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))))) (arm PWild () (EVar "JNull"))))
+(DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple PWild PWild (PVar "name"))) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig true "definitionResultsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "definitionResultsWithIndex" ((PVar "index") (PVar "uri") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "definitionIndexed") (EVar "uri")) (EApp (EVar "arrayLength") (EVar "chars"))) (EVar "index")) (EVar "chars")) (EVar "parsed")) (EVar "line")) (EVar "col")))) (EVar "cols")))))
 (DTypeSig false "definitionIndexed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))))))
@@ -2917,7 +2940,7 @@ unit = ()
 (DTypeSig false "handleReferences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleReferences" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "referencesResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig true "referencesResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
-(DFunDef false "referencesResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EVar "referenceLocations") (EVar "docs")) (EVar "idx")) (EVar "key")) (EApp (EVar "includeDeclarationOf") (EVar "params"))))))))))) (arm PWild () (EApp (EVar "jArray") (EListLit)))))
+(DFunDef false "referencesResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col") PWild)) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "projectRefIndex") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rootFile")) (EVar "docs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EVar "referenceLocations") (EVar "docs")) (EVar "idx")) (EVar "key")) (EApp (EVar "includeDeclarationOf") (EVar "params")))))))))))
 (DTypeSig false "referenceLocations" (TyFun (TyCon "Docs") (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "referenceLocations" ((PVar "docs") (PVar "idx") (PVar "key") (PVar "includeDecl")) (EBlock (DoLet false false (PVar "uses") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key"))) (DoLet false false (PVar "all") (EIf (EVar "includeDecl") (EBinOp "++" (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key")) (EVar "uses")) (EVar "uses"))) (DoExpr (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EVar "all"))))))
 (DTypeSig false "compareUseLoc" (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyCon "Ordering"))))
@@ -2928,16 +2951,15 @@ unit = ()
 (DFunDef false "locationsJson" (PWild (PList)) (EListLit))
 (DFunDef false "locationsJson" ((PVar "docs") (PCons (PTuple (PVar "path") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "map") (EVar "indexSource")) (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "path")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "locationsForPath") (EVar "docs")) (EVar "path")) (EVar "index")) (EBinOp "::" (ETuple (EVar "path") (EVar "loc")) (EVar "rest"))))))
 (DTypeSig false "locationsForPath" (TyFun (TyCon "Docs") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json"))))))))
-(DFunDef false "locationsForPath" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "locationsForPath" ((PVar "docs") (PVar "path") (PVar "index") (PCons (PTuple (PVar "next") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "next") (EVar "path")) (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EBinOp "::" (ETuple (EVar "next") (EVar "loc")) (EVar "rest"))) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EApp (EVar "locationsForPath") (EVar "docs")) (EVar "path")) (EVar "index")) (EVar "rest"))) (DoExpr (EMatch (EVar "index") (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "idx")) (EVar "loc")) (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "range")) () (EBinOp "::" (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EVar "range")))) (EVar "tail"))))))))))
+(DFunDef false "locationsForPath" ((PVar "docs") (PVar "path") (PVar "index") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "next") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "next") (EVar "path")) (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EBinOp "::" (ETuple (EVar "next") (EVar "loc")) (EVar "rest"))) (EBlock (DoLet false false (PVar "tail") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EVar "index") (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "idx")) (EVar "loc")) (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "range")) () (EBinOp "::" (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EVar "range")))) (EVar "tail")))))))))))) (EApp (EVar "go") (EVar "rows"))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
 (DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "highlightResult" ((PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "jArray") (EApp (EApp (EVar "highlightRanges") (EVar "src")) (EVar "name")))))) (arm PWild () (EVar "JNull"))))
+(DFunDef false "highlightResult" ((PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple PWild PWild (PVar "name"))) () (EApp (EVar "jArray") (EApp (EApp (EVar "highlightRanges") (EVar "src")) (EVar "name")))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "handleSemanticTokens" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "handleSemanticTokens" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (EApp (EVar "semanticTokensData") (EVar "src")))))))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DFunDef false "handleSemanticTokens" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "JNull"))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "JNull"))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "map") (ELam ((PVar "tokens")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (EVar "tokens")))))))) (EApp (EVar "semanticTokensData") (EVar "src")))))))) (DoExpr (EMatch (EVar "result") (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "value")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "writeMessage") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EUnOp "-" (ELit (LInt 32603))))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message"))))))))))))))
 (DTypeSig false "lastChangeText" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))
@@ -2963,9 +2985,9 @@ unit = ()
 # MARK
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
@@ -3011,12 +3033,14 @@ unit = ()
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))
-(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EMatch (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc")) (arm (PCon "Some" (PVar "range")) () (EVar "range")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))
 (DFunDef false "rangeOfLoc" (PWild (PVar "fallback") (PCon "None")) (EVar "fallback"))
 (DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EMatch (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc")) (arm (PCon "Some" (PVar "range")) () (EVar "range")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))
 (DTypeSig false "diagToJson" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyCon "Json")))))
 (DFunDef false "diagToJson" ((PVar "index") (PVar "fallback") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PVar "loc") PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EApp (EApp (EApp (EVar "rangeOfLoc") (EMethodRef "index")) (EVar "fallback")) (EVar "loc"))) (EVar "msg")))
+(DTypeSig false "diagWithoutSource" (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyCon "Json"))))
+(DFunDef false "diagWithoutSource" ((PVar "range") (PCon "Diag" (PVar "sev") PWild (PVar "msg") PWild PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EVar "range")) (EVar "msg")))
 (DTypeSig false "diagsToJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "diagsToJson" ((PVar "src") (PVar "diags")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "diagToJson") (EMethodRef "index")) (EApp (EVar "wholeDocRange") (EVar "src")))) (EVar "diags")))))
 (DTypeSig false "docsGet" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -3052,14 +3076,9 @@ unit = ()
 (DTypeSig false "jChildLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))))
 (DFunDef false "jChildLoc" ((PVar "index") (PVar "name") (PVar "kind") (PVar "fallback") (PVar "loc")) (EBlock (DoLet false false (PVar "r") (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "jRangeOfLoc") (EMethodRef "index")) (EVar "l"))) (arm (PCon "None") () (EVar "fallback")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "r")) (EVar "r")) (EListLit)))))
 (DTypeSig false "variantKids" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Json")))))))
-(DFunDef false "variantKids" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PVar "locs") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EMethodRef "index")) (EVar "fb")) (EVar "locs")) (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EMethodRef "index")) (EVar "fb")) (EApp (EVar "snd") (EVar "step"))) (EVar "vs"))))))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PList) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EMethodRef "index")) (EVar "fb")) (EListLit)) (EVar "vs"))))
-(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PCons (PVar "l") (PVar "ls")) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "variantKids") (EMethodRef "index")) (EVar "fb")) (EVar "ls")) (EVar "vs"))))
+(DFunDef false "variantKids" ((PVar "index") (PVar "fb") (PVar "locs") (PVar "variants")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "spans") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EMethodRef "index")) (EVar "fb")) (EVar "spans")) (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EVar "go") (EApp (EVar "snd") (EVar "step"))) (EVar "vs")))))) (clause ((PList) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "None")) (EApp (EApp (EVar "go") (EListLit)) (EVar "vs")))) (clause ((PCons (PVar "l") (PVar "ls")) (PCons (PCon "Variant" (PVar "vn") PWild) (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "vn")) (ELit (LInt 22))) (EVar "fb")) (EVar "l")) (EApp (EApp (EVar "go") (EVar "ls")) (EVar "vs")))))) (EApp (EApp (EVar "go") (EVar "locs")) (EVar "variants"))))
 (DTypeSig false "fieldKidsStep" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))))))
-(DFunDef false "fieldKidsStep" (PWild PWild (PVar "locs") (PList)) (ETuple (EListLit) (EVar "locs")))
-(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PList) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EMethodRef "index")) (EVar "fb")) (EListLit)) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "None")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest"))))))
-(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PCons (PVar "l") (PVar "ls")) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EVar "fieldKidsStep") (EMethodRef "index")) (EVar "fb")) (EVar "ls")) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "l")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest"))))))
+(DFunDef false "fieldKidsStep" ((PVar "index") (PVar "fb") (PVar "locs") (PVar "names")) (ELetGroup ((lgb "go" (clause ((PVar "spans") (PList)) (ETuple (EListLit) (EVar "spans"))) (clause ((PList) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "go") (EListLit)) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "None")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest")))))) (clause ((PCons (PVar "l") (PVar "ls")) (PCons (PVar "fn") (PVar "fns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "go") (EVar "ls")) (EVar "fns"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "fn")) (ELit (LInt 8))) (EVar "fb")) (EVar "l")) (EApp (EVar "fst") (EVar "rest"))) (EApp (EVar "snd") (EVar "rest")))))))) (EApp (EApp (EVar "go") (EVar "locs")) (EVar "names"))))
 (DTypeSig false "zipKids" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "zipKids" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "zipKids" ((PVar "index") (PVar "fb") (PVar "kind") (PList) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EMethodRef "index")) (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EApp (EVar "zipKids") (EMethodRef "index")) (EVar "fb")) (EVar "kind")) (EListLit)) (EVar "nms"))))
@@ -3069,13 +3088,12 @@ unit = ()
 (DTypeSig false "implLabel" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "implLabel" ((PVar "iface")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "impl ")) (EVar "iface"))))
 (DTypeSig true "documentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len"))) (EApp (EVar "collapseSymbols") (EApp (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))))))))))
+(DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len")))))))))
 (DTypeSig false "wholeLineRange" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "wholeLineRange" ((PVar "index") (PVar "len") (PVar "sl") (PVar "el")) (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "el") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "len")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "line")) (EVar "col"))) (arm (PCon "None") () (EVar "JNull"))))))
 (DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig false "symbolParts" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "SymRow")))))))
-(DFunDef false "symbolParts" ((PVar "index") (PVar "len") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EApp (EVar "declPosEndLine") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "symbolPartsOfDecl") (EMethodRef "index")) (EVar "d")) (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EMethodRef "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (EApp (EVar "declPosChildLocs") (EVar "p"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "ds")) (EVar "ps"))))))))
-(DFunDef false "symbolParts" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "symbolParts" ((PVar "index") (PVar "len") (PVar "decls") (PVar "positions")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EApp (EVar "declPosEndLine") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "symbolPartsOfDecl") (EMethodRef "index")) (EVar "d")) (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EMethodRef "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (EApp (EVar "declPosChildLocs") (EVar "p"))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EVar "go") (EVar "ds")) (EVar "ps")))))))) (clause (PWild PWild) (EListLit)))) (EApp (EApp (EVar "go") (EVar "decls")) (EVar "positions"))))
 (DTypeSig false "collapseSymbols" (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow"))))
 (DFunDef false "collapseSymbols" ((PList)) (EListLit))
 (DFunDef false "collapseSymbols" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "collapseGo") (EVar "x")) (EVar "xs")))
@@ -3133,7 +3151,7 @@ unit = ()
 (DTypeSig true "typeAtPoints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))))))))
 (DFunDef false "typeAtPoints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPointsWithIndex") (EApp (EVar "indexSource") (EVar "src"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filePath")) (EVar "src")) (EVar "line")) (EVar "cols")))
 (DTypeSig true "typeAtPointsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))))))))
-(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EMethodRef "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EMatch (EVar "pos") (arm (PCon "Some" (PTuple (PVar "ln") (PVar "col"))) () (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EMethodRef "index")) (EVar "chars")) (EVar "ln")) (EVar "col"))) (arm (PCon "None") () (EVar "None"))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
+(DFunDef false "typeAtPointsWithIndex" ((PVar "index") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "filePath") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EVar "sourceCursorIndexed") (EMethodRef "index")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col")))))))) (EVar "cols"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EApp (EApp (EMethodRef "andThen") (EVar "pos")) (ELam ((PTuple (PVar "ln") (PVar "col"))) (EApp (EApp (EApp (EApp (EVar "identifierAtIndexed") (EMethodRef "index")) (EVar "chars")) (EVar "ln")) (EVar "col")))))) (EVar "positions"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isNone")) (EVar "names")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "filePath"))) (DoLet false false (PVar "docs") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "src")) (EVar "emptyDocs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "cols"))) (arm (PCon "Some" (PVar "env")) () (EBlock (DoLet false false (PVar "parsed") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "parseWithPositionsOpt") (EVar "src")))) (DoExpr (EApp (EApp (EApp (EVar "zipWith") (EApp (EApp (EVar "typeAtPosition") (EVar "parsed")) (EVar "env"))) (EVar "names")) (EVar "positions"))))))))))))
 (DTypeSig false "typeAtPosition" (TyFun (TyApp (TyCon "Option") (TyCon "Positions")) (TyFun (TyCon "HoverEnv") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "typeAtPosition" (PWild PWild PWild (PCon "None")) (EVar "None"))
 (DFunDef false "typeAtPosition" (PWild PWild (PCon "None") PWild) (EVar "None"))
@@ -3203,13 +3221,13 @@ unit = ()
 (DFunDef false "hasExplicitSig" ((PList) PWild) (EVar "False"))
 (DFunDef false "hasExplicitSig" ((PCons (PVar "d") (PVar "rest")) (PVar "name")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "n") PWild PWild) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "hasExplicitSig") (EVar "rest")) (EVar "name")))) (arm PWild () (EApp (EApp (EVar "hasExplicitSig") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "columnAfterName" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "columnAfterName" ((PVar "index") (PVar "arr") (PVar "line")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "lineStart")) () (EBlock (DoLet false false (PVar "endCol") (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EVar "lineStart")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "endCol") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "endCol"))))))))))
+(DFunDef false "columnAfterName" ((PVar "index") (PVar "arr") (PVar "line")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0)))) (ELam ((PVar "lineStart")) (ELet false (PVar "endCol") (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EVar "lineStart")) (ELit (LInt 0))) (EIf (EBinOp "==" (EVar "endCol") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "endCol")))))))))
 (DTypeSig false "identRunLen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "identRunLen" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "acc") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "inlayHints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json")))))))))
 (DFunDef false "inlayHints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "hoverEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "env")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "src"))) (EVar "decls")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EFieldAccess (EVar "env") "heSchemes")))))))
 (DTypeSig false "inlayNamePos" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "DeclPos") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "inlayNamePos" ((PVar "index") (PVar "arr") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec"))) () (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec")) (arm (PCon "Some" (PVar "off")) () (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "off"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EApp (EVar "columnAfterName") (EMethodRef "index")) (EVar "arr")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
+(DFunDef false "inlayNamePos" ((PVar "index") (PVar "arr") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec"))) (ELam ((PVar "off")) (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "off"))))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EApp (EVar "columnAfterName") (EMethodRef "index")) (EVar "arr")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
 (DTypeSig false "inlayZip" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "Json")))))))))
 (DFunDef false "inlayZip" ((PVar "index") (PVar "arr") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EMethodRef "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EMethodRef "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EMethodRef "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EApp (EVar "inlayNamePos") (EMethodRef "index")) (EVar "arr")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EMethodRef "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EVar "line")) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EVar "ppPubScheme") (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EMethodRef "index")) (EVar "arr")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
 (DFunDef false "inlayZip" (PWild PWild PWild PWild PWild PWild) (EListLit))
@@ -3323,15 +3341,15 @@ unit = ()
 (DFunDef false "classify" ((PCon "TDedent") (PCon "SemCtx" (PVar "depth") (PVar "ls") (PVar "mode"))) (ETuple (EVar "None") (EApp (EApp (EApp (EVar "SemCtx") (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "ls")) (EVar "mode"))))
 (DFunDef false "classify" ((PCon "TNewline") (PCon "SemCtx" (PVar "depth") PWild (PVar "mode"))) (EBlock (DoLet false false (PVar "mode2") (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "MExpr") (EVar "mode"))) (DoExpr (ETuple (EVar "None") (EApp (EApp (EApp (EVar "SemCtx") (EVar "depth")) (EVar "True")) (EVar "mode2"))))))
 (DFunDef false "classify" ((PVar "tok") (PCon "SemCtx" (PVar "depth") (PVar "ls") (PVar "mode"))) (ETuple (EApp (EApp (EApp (EApp (EVar "roleOf") (EVar "tok")) (EVar "depth")) (EVar "ls")) (EVar "mode")) (EApp (EApp (EApp (EVar "SemCtx") (EVar "depth")) (EVar "False")) (EApp (EApp (EVar "nextMode") (EVar "tok")) (EVar "mode")))))
-(DTypeSig false "semToksOf" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "SemCtx") (TyApp (TyCon "List") (TyCon "SemTok")))))))
-(DFunDef false "semToksOf" (PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "semToksOf" (PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "semToksOf" ((PVar "arr") (PCons (PVar "t") (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps")) (PVar "ctx")) (EMatch (EApp (EApp (EVar "classify") (EVar "t")) (EVar "ctx")) (arm (PTuple (PVar "roleOpt") (PVar "ctx2")) () (EMatch (EVar "roleOpt") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (arm (PCon "Some" (PVar "ty")) () (EIf (EBinOp ">=" (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")) (EMatch (ETuple (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "s")) (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "e"))) (arm (PTuple (PCon "Some" (PTuple (PVar "sl") (PVar "sc"))) (PCon "Some" (PTuple (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "SemTok") (EVar "sl")) (EVar "sc")) (EBinOp "-" (EVar "ec") (EVar "sc"))) (EVar "ty")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))))))))))
+(DTypeSig false "semToksOf" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "SemCtx") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SemTok"))))))))
+(DFunDef false "semToksOf" (PWild (PList) PWild PWild) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "semToksOf" (PWild PWild (PList) PWild) (EApp (EVar "Err") (ELit (LString "semantic token spans ended before the token stream"))))
+(DFunDef false "semToksOf" ((PVar "arr") (PCons (PVar "t") (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps")) (PVar "ctx")) (EMatch (EApp (EApp (EVar "classify") (EVar "t")) (EVar "ctx")) (arm (PTuple (PVar "roleOpt") (PVar "ctx2")) () (EMatch (EVar "roleOpt") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (arm (PCon "Some" (PVar "ty")) () (EIf (EBinOp ">=" (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")) (EMatch (ETuple (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "s")) (EApp (EApp (EVar "offsetToUtf16Position") (EVar "arr")) (EVar "e"))) (arm (PTuple (PCon "Some" (PTuple (PVar "sl") (PVar "sc"))) (PCon "Some" (PTuple (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EVar "sl") (EVar "el")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "SemTok") (EVar "sl")) (EVar "sc")) (EBinOp "-" (EVar "ec") (EVar "sc"))) (EVar "ty")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2"))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "ts")) (EVar "ps")) (EVar "ctx2")))) (arm PWild () (EApp (EVar "Err") (ELit (LString "semantic token endpoint is not a source boundary")))))))))))
 (DTypeSig false "encodeSemToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SemTok")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "encodeSemToks" (PWild PWild (PList)) (EListLit))
 (DFunDef false "encodeSemToks" ((PVar "prevLine") (PVar "prevChar") (PCons (PCon "SemTok" (PVar "line") (PVar "ch") (PVar "len") (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dLine") (EBinOp "-" (EVar "line") (EVar "prevLine"))) (DoLet false false (PVar "dChar") (EIf (EBinOp "==" (EVar "dLine") (ELit (LInt 0))) (EBinOp "-" (EVar "ch") (EVar "prevChar")) (EVar "ch"))) (DoExpr (EBinOp "::" (EVar "dLine") (EBinOp "::" (EVar "dChar") (EBinOp "::" (EVar "len") (EBinOp "::" (EVar "ty") (EBinOp "::" (ELit (LInt 0)) (EApp (EApp (EApp (EVar "encodeSemToks") (EVar "line")) (EVar "ch")) (EVar "rest"))))))))))
-(DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
+(DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
 (DTypeSig false "initializeResultFor" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "initializeResultFor" ((PVar "serverVersion")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (EVar "serverVersion")))))))))
 (DTypeSig false "parseErrorDiags" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyApp (TyCon "List") (TyCon "Json")))))
@@ -3365,18 +3383,18 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
-(DTypeSig false "publishEach" (TyFun (TyCon "Docs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "publishEach" (PWild (PList)) (ELit LUnit))
-(DFunDef false "publishEach" ((PVar "docs") (PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "src") (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "file"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EMatch (EVar "src") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "diagsToJson") (EVar "text")) (EVar "ds"))) (arm (PCon "None") () (EListLit)))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "rest")))))
+(DTypeSig false "publishEach" (TyFun (TyCon "Docs") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "publishEach" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "publishEach" ((PVar "docs") (PVar "sources") (PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "src") (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "Some" (PVar "text")) () (EApp (EVar "Some") (EVar "text"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "file")) (EVar "sources")) (arm (PCon "Some" (PVar "text")) () (EApp (EVar "Some") (EVar "text"))) (arm (PCon "None") () (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "file"))))))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EMatch (EVar "src") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "diagsToJson") (EVar "text")) (EVar "ds"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EApp (EVar "diagWithoutSource") (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ds"))))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "rest")))))
 (DTypeSig false "publishFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs"))))))))
 (DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EVar "selectProjectProfileFor") (EApp (EVar "pathOfUri") (EVar "uri"))) (EVar "docs"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EApp (EApp (EVar "publishForSelected") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "docs2"))) (DoExpr (EApp (EApp (EApp (EVar "docsKeep") (EVar "uri")) (EVar "kept")) (EVar "docs2")))))
 (DTypeSig false "selectProjectProfileFor" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))
-(DFunDef false "selectProjectProfileFor" ((PVar "file") (PVar "docs")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "file")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "clearFlaggedManifest") (EVar "file")) (EVar "docs"))) (arm (PCon "Err" (PVar "msg")) () (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EListLit (ETuple (EVar "path") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "docsFlag") (EVar "path")) (EVar "docs")))))))))
+(DFunDef false "selectProjectProfileFor" ((PVar "file") (PVar "docs")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "file")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "clearFlaggedManifest") (EVar "file")) (EVar "docs"))) (arm (PCon "Err" (PVar "msg")) () (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "omEmpty")) (EListLit (ETuple (EVar "path") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "docsFlag") (EVar "path")) (EVar "docs")))))))))
 (DTypeSig false "clearFlaggedManifest" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))
-(DFunDef false "clearFlaggedManifest" ((PVar "file") (PVar "docs")) (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EIf (EApp (EApp (EVar "docsFlagged") (EVar "path")) (EVar "docs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "publishEach") (EVar "docs")) (EListLit (ETuple (EVar "path") (EListLit))))) (DoExpr (EApp (EApp (EVar "docsUnflag") (EVar "path")) (EVar "docs")))) (EVar "docs")))))
+(DFunDef false "clearFlaggedManifest" ((PVar "file") (PVar "docs")) (EMatch (EApp (EVar "manifestPathOf") (EVar "file")) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "path")) () (EIf (EApp (EApp (EVar "docsFlagged") (EVar "path")) (EVar "docs")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "omEmpty")) (EListLit (ETuple (EVar "path") (EListLit))))) (DoExpr (EApp (EApp (EVar "docsUnflag") (EVar "path")) (EVar "docs")))) (EVar "docs")))))
 (DTypeSig false "docsFlagged" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyCon "Bool"))))
 (DFunDef false "docsFlagged" ((PVar "path") (PCon "Docs" PWild (PVar "flagged") PWild)) (EApp (EApp (EVar "contains") (EVar "path")) (EVar "flagged")))
 (DTypeSig false "docsFlag" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyCon "Docs"))))
@@ -3393,12 +3411,16 @@ unit = ()
 (DFunDef false "handleFormatting" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "formattingEdits") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "handleDocumentSymbol" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "documentSymbols") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DTypeSig false "cursorIdentifier" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "cursorIdentifier" ((PVar "src") (PVar "params")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params"))) (ELam ((PTuple (PVar "line") (PVar "col"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col"))) (ELam ((PVar "name")) (EApp (EVar "Some") (ETuple (EVar "line") (EVar "col") (EVar "name"))))))))
+(DTypeSig false "projectRefIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "RefIndex")))))))
+(DFunDef false "projectRefIndex" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rootFile") (PVar "docs")) (EBlock (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc")))))
 (DTypeSig false "handleDefinition" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDefinition") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "projectDefinition" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
-(DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))))
+(DFunDef false "projectDefinition" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col") PWild)) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "projectRefIndex") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rootFile")) (EVar "docs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "definitionResult") (EVar "uri")) (EVar "src")) (EVar "params"))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))))))))))
 (DTypeSig true "definitionResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))))) (arm PWild () (EVar "JNull"))))
+(DFunDef false "definitionResult" ((PVar "uri") (PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple PWild PWild (PVar "name"))) () (EMatch (EApp (EApp (EVar "definitionRange") (EVar "src")) (EVar "name")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "range")) () (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "range")) (EVar "range"))))))))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig true "definitionResultsWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "definitionResultsWithIndex" ((PVar "index") (PVar "uri") (PVar "src") (PVar "line") (PVar "cols")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "definitionIndexed") (EVar "uri")) (EApp (EVar "arrayLength") (EVar "chars"))) (EMethodRef "index")) (EVar "chars")) (EVar "parsed")) (EVar "line")) (EVar "col")))) (EVar "cols")))))
 (DTypeSig false "definitionIndexed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))))))
@@ -3406,7 +3428,7 @@ unit = ()
 (DTypeSig false "handleReferences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleReferences" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "referencesResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig true "referencesResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
-(DFunDef false "referencesResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EVar "referenceLocations") (EVar "docs")) (EVar "idx")) (EVar "key")) (EApp (EVar "includeDeclarationOf") (EVar "params"))))))))))) (arm PWild () (EApp (EVar "jArray") (EListLit)))))
+(DFunDef false "referencesResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col") PWild)) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "projectRefIndex") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rootFile")) (EVar "docs"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EVar "jArray") (EListLit))) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EApp (EVar "referenceLocations") (EVar "docs")) (EVar "idx")) (EVar "key")) (EApp (EVar "includeDeclarationOf") (EVar "params")))))))))))
 (DTypeSig false "referenceLocations" (TyFun (TyCon "Docs") (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "referenceLocations" ((PVar "docs") (PVar "idx") (PVar "key") (PVar "includeDecl")) (EBlock (DoLet false false (PVar "uses") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key"))) (DoLet false false (PVar "all") (EIf (EVar "includeDecl") (EBinOp "++" (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key")) (EVar "uses")) (EVar "uses"))) (DoExpr (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EDictApp "all"))))))
 (DTypeSig false "compareUseLoc" (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyCon "Ordering"))))
@@ -3417,16 +3439,15 @@ unit = ()
 (DFunDef false "locationsJson" (PWild (PList)) (EListLit))
 (DFunDef false "locationsJson" ((PVar "docs") (PCons (PTuple (PVar "path") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EMethodRef "map") (EVar "indexSource")) (EApp (EApp (EVar "sourceForPath") (EVar "docs")) (EVar "path")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "locationsForPath") (EVar "docs")) (EVar "path")) (EMethodRef "index")) (EBinOp "::" (ETuple (EVar "path") (EVar "loc")) (EVar "rest"))))))
 (DTypeSig false "locationsForPath" (TyFun (TyCon "Docs") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Json"))))))))
-(DFunDef false "locationsForPath" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "locationsForPath" ((PVar "docs") (PVar "path") (PVar "index") (PCons (PTuple (PVar "next") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "next") (EVar "path")) (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EBinOp "::" (ETuple (EVar "next") (EVar "loc")) (EVar "rest"))) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EApp (EVar "locationsForPath") (EVar "docs")) (EVar "path")) (EMethodRef "index")) (EVar "rest"))) (DoExpr (EMatch (EMethodRef "index") (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "idx")) (EVar "loc")) (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "range")) () (EBinOp "::" (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EVar "range")))) (EVar "tail"))))))))))
+(DFunDef false "locationsForPath" ((PVar "docs") (PVar "path") (PVar "index") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "next") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "next") (EVar "path")) (EApp (EApp (EVar "locationsJson") (EVar "docs")) (EBinOp "::" (ETuple (EVar "next") (EVar "loc")) (EVar "rest"))) (EBlock (DoLet false false (PVar "tail") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EMethodRef "index") (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "locToLspRange") (EVar "idx")) (EVar "loc")) (arm (PCon "None") () (EVar "tail")) (arm (PCon "Some" (PVar "range")) () (EBinOp "::" (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EVar "range")))) (EVar "tail")))))))))))) (EApp (EVar "go") (EVar "rows"))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
 (DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "highlightResult" ((PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "jArray") (EApp (EApp (EVar "highlightRanges") (EVar "src")) (EVar "name")))))) (arm PWild () (EVar "JNull"))))
+(DFunDef false "highlightResult" ((PVar "src") (PVar "params")) (EMatch (EApp (EApp (EVar "cursorIdentifier") (EVar "src")) (EVar "params")) (arm (PCon "Some" (PTuple PWild PWild (PVar "name"))) () (EApp (EVar "jArray") (EApp (EApp (EVar "highlightRanges") (EVar "src")) (EVar "name")))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "handleSemanticTokens" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "handleSemanticTokens" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JInt")) (EApp (EVar "semanticTokensData") (EVar "src")))))))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DFunDef false "handleSemanticTokens" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "JNull"))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "JNull"))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "tokens")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JInt")) (EVar "tokens")))))))) (EApp (EVar "semanticTokensData") (EVar "src")))))))) (DoExpr (EMatch (EVar "result") (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "value")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "writeMessage") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EUnOp "-" (ELit (LInt 32603))))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message"))))))))))))))
 (DTypeSig false "lastChangeText" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))

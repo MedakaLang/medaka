@@ -1,5 +1,5 @@
 # META
-source_lines=1979
+source_lines=1980
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -642,9 +642,10 @@ identifiersInLine text =
   map (identPair (indexSource text)) (findAll identTokenRe text)
 
 identPair : SourceIndex -> Match -> (String, Int)
+-- Identifier matches contain no newline; both regex and index use this exact text.
 identPair index m = match offsetToUtf16Position index m.start
   Some (_, col) => (m.text, col)
-  None => (m.text, m.start)
+  None => panic "identifier regex returned a non-source boundary"
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").
@@ -660,7 +661,7 @@ symbolColsInSource index line text symbol =
 identPairAt : SourceIndex -> Int -> Match -> (String, Int)
 identPairAt index start m = match offsetToUtf16Position index (start + m.start)
   Some (_, col) => (m.text, col)
-  None => (m.text, m.start)
+  None => panic "identifier regex returned a non-source boundary"
 
 symbolColsGo : List (String, Int) -> String -> List Int
 symbolColsGo [] _ = []
@@ -2092,11 +2093,11 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EVar "map") (EApp (EVar "identPair") (EApp (EVar "indexSource") (EVar "text")))) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text"))))
 (DTypeSig false "identPair" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "identPair" ((PVar "index") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EFieldAccess (EVar "m") "start")) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))))
+(DFunDef false "identPair" ((PVar "index") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EFieldAccess (EVar "m") "start")) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "identifier regex returned a non-source boundary"))))))
 (DTypeSig false "symbolColsInSource" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "symbolColsInSource" ((PVar "index") (PVar "line") (PVar "text") (PVar "symbol")) (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "start")) () (EApp (EApp (EVar "symbolColsGo") (EApp (EApp (EVar "map") (EApp (EApp (EVar "identPairAt") (EVar "index")) (EVar "start"))) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text")))) (EVar "symbol")))))
 (DTypeSig false "identPairAt" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "identPairAt" ((PVar "index") (PVar "start") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EBinOp "+" (EVar "start") (EFieldAccess (EVar "m") "start"))) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))))
+(DFunDef false "identPairAt" ((PVar "index") (PVar "start") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EBinOp "+" (EVar "start") (EFieldAccess (EVar "m") "start"))) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "identifier regex returned a non-source boundary"))))))
 (DTypeSig false "symbolColsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "symbolColsGo" ((PList) PWild) (EListLit))
 (DFunDef false "symbolColsGo" ((PCons (PTuple (PVar "name") (PVar "col")) (PVar "rest")) (PVar "symbol")) (EIf (EBinOp "==" (EVar "name") (EVar "symbol")) (EBinOp "::" (EVar "col") (EApp (EApp (EVar "symbolColsGo") (EVar "rest")) (EVar "symbol"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "symbolColsGo") (EVar "rest")) (EVar "symbol")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2365,11 +2366,11 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EMethodRef "map") (EApp (EVar "identPair") (EApp (EVar "indexSource") (EVar "text")))) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text"))))
 (DTypeSig false "identPair" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "identPair" ((PVar "index") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EFieldAccess (EVar "m") "start")) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))))
+(DFunDef false "identPair" ((PVar "index") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EFieldAccess (EVar "m") "start")) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "identifier regex returned a non-source boundary"))))))
 (DTypeSig false "symbolColsInSource" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "symbolColsInSource" ((PVar "index") (PVar "line") (PVar "text") (PVar "symbol")) (EMatch (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "start")) () (EApp (EApp (EVar "symbolColsGo") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "identPairAt") (EMethodRef "index")) (EVar "start"))) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text")))) (EVar "symbol")))))
 (DTypeSig false "identPairAt" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "identPairAt" ((PVar "index") (PVar "start") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EBinOp "+" (EVar "start") (EFieldAccess (EVar "m") "start"))) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))))
+(DFunDef false "identPairAt" ((PVar "index") (PVar "start") (PVar "m")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EBinOp "+" (EVar "start") (EFieldAccess (EVar "m") "start"))) (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (ETuple (EFieldAccess (EVar "m") "text") (EVar "col"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "identifier regex returned a non-source boundary"))))))
 (DTypeSig false "symbolColsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "symbolColsGo" ((PList) PWild) (EListLit))
 (DFunDef false "symbolColsGo" ((PCons (PTuple (PVar "name") (PVar "col")) (PVar "rest")) (PVar "symbol")) (EIf (EBinOp "==" (EVar "name") (EVar "symbol")) (EBinOp "::" (EVar "col") (EApp (EApp (EVar "symbolColsGo") (EVar "rest")) (EVar "symbol"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "symbolColsGo") (EVar "rest")) (EVar "symbol")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

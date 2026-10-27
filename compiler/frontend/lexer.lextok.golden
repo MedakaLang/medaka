@@ -19503,6 +19503,60 @@ IDENT "line2"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "isLineBreakAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isLineBreakAt"
+IDENT "src"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+LT
+IDENT "arrayLength"
+IDENT "src"
+AND
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\n"
+OR
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\r"
+AND
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+GEQ
+IDENT "arrayLength"
+IDENT "src"
+OR
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "src"
+NEQ
+CHAR "\n"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "advanceLine"
 COLON
 UPPER "Array"
@@ -19550,54 +19604,9 @@ IDENT "p"
 RPAREN
 NEWLINE
 PIPE
-IDENT "arrayGetUnsafe"
-IDENT "p"
+IDENT "isLineBreakAt"
 IDENT "src"
-EQ_EQ
-CHAR "\r"
-AND
-LPAREN
 IDENT "p"
-PLUS
-INT 1
-GEQ
-IDENT "arrayLength"
-IDENT "src"
-OR
-IDENT "arrayGetUnsafe"
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-IDENT "src"
-NEQ
-CHAR "\n"
-RPAREN
-EQUAL
-INDENT
-IDENT "advanceLine"
-IDENT "src"
-IDENT "target"
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-LPAREN
-IDENT "line"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-PIPE
-IDENT "arrayGetUnsafe"
-IDENT "p"
-IDENT "src"
-EQ_EQ
-CHAR "\n"
 EQUAL
 IDENT "advanceLine"
 IDENT "src"
@@ -19731,59 +19740,9 @@ IDENT "lineStart"
 RPAREN
 NEWLINE
 PIPE
-IDENT "at"
+IDENT "isLineBreakAt"
 IDENT "src"
 IDENT "p"
-EQ_EQ
-CHAR "\r"
-AND
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-GEQ
-IDENT "arrayLength"
-IDENT "src"
-OR
-IDENT "at"
-IDENT "src"
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-NEQ
-CHAR "\n"
-RPAREN
-EQUAL
-INDENT
-IDENT "posLineColFrom"
-IDENT "src"
-IDENT "target"
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-LPAREN
-IDENT "line"
-PLUS
-INT 1
-RPAREN
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-PIPE
-IDENT "at"
-IDENT "src"
-IDENT "p"
-EQ_EQ
-CHAR "\n"
 EQUAL
 IDENT "posLineColFrom"
 IDENT "src"

@@ -42,14 +42,14 @@ import driver.diagnostics.{
   mkDiag,
   fileFront,
   FrontOutput(..),
-  analyzeProjectKeyed,
+  analyzeProjectKeyedSources,
   projectEntryAnalysisOr,
   GraphId,
   graphIdSame,
   stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
-import support.ordmap.{OrdMap, omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omLookup}
 import support.path.{dirOf}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
@@ -206,9 +206,7 @@ wholeDocRange src =
 
 -- Map an optional Loc to its indexed protocol range, or the whole document.
 rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = match locToLspRange index loc
-  Some range => range
-  None => JNull
+rangeOfLoc index _ (Some loc) = optionOr JNull (locToLspRange index loc)
 rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
@@ -216,9 +214,7 @@ rangeOfLoc _ fallback None = fallback
 -- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
 -- `wholeDocRange`) when there is no name `Loc`.
 jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = match locToLspRange index loc
-  Some range => range
-  None => JNull
+jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
 -- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
 -- (B.10.2b) for an expr-level range, falling back to whole-document for
@@ -226,6 +222,10 @@ jRangeOfLoc index loc = match locToLspRange index loc
 diagToJson : SourceIndex -> Json -> Diag -> Json
 diagToJson index fallback (Diag sev _ msg loc _ _) =
   jDiagnostic (severityCode sev) (rangeOfLoc index fallback loc) msg
+
+diagWithoutSource : Json -> Diag -> Json
+diagWithoutSource range (Diag sev _ msg _ _ _) =
+  jDiagnostic (severityCode sev) range msg
 
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =
@@ -245,17 +245,17 @@ docsLookup uri ((k, v) :: rest)
   | otherwise = docsLookup uri rest
 
 -- ── textDocument/formatting ─────────────────────────────────────────────────
--- Run the formatter; if the text is
--- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
--- whole document through EOF. A parse failure yields [] here: the source
--- is lexed once and `formatSourceChecked` returns the parse error instead of
--- panicking.
 fullDocRangeFmt : String -> Json
 fullDocRangeFmt src =
   match offsetToUtf16Position (indexSource src) (stringLength src)
     Some (line, col) => jRange 0 0 line col
     None => JNull
 
+-- Run the formatter; if the text is
+-- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
+-- whole document through EOF. A parse failure yields [] here: the source
+-- is lexed once and `formatSourceChecked` returns the parse error instead of
+-- panicking.
 formattingEdits : String -> List Json
 formattingEdits src = match tokenizeWithOffsetPairs src
   (toks, pairs) => match formatSourceChecked src toks pairs
@@ -405,14 +405,14 @@ variantKids : SourceIndex ->
   List (Option Loc) ->
   List Variant ->
   List Json
-variantKids _ _ _ [] = []
-variantKids index fb locs ((Variant _ (ConNamed fs True)) :: vs) =
-  let step = fieldKidsStep index fb locs (map fieldName fs)
-  fst step ++ variantKids index fb (snd step) vs
-variantKids index fb [] ((Variant vn _) :: vs) =
-  jChildLoc index vn 22 fb None :: variantKids index fb [] vs
-variantKids index fb (l :: ls) ((Variant vn _) :: vs) =
-  jChildLoc index vn 22 fb l :: variantKids index fb ls vs
+variantKids index fb locs variants = go locs variants
+  where
+    go _ [] = []
+    go spans ((Variant _ (ConNamed fs True)) :: vs) =
+      let step = fieldKidsStep index fb spans (map fieldName fs)
+      fst step ++ go (snd step) vs
+    go [] ((Variant vn _) :: vs) = jChildLoc index vn 22 fb None :: go [] vs
+    go (l :: ls) ((Variant vn _) :: vs) = jChildLoc index vn 22 fb l :: go ls vs
 
 -- One Field child (kind 8) per field name, consuming a `Loc` each; returns the
 -- kids plus the leftover `Loc`s for the next variant.
@@ -421,13 +421,15 @@ fieldKidsStep : SourceIndex ->
   List (Option Loc) ->
   List String ->
   (List Json, List (Option Loc))
-fieldKidsStep _ _ locs [] = ([], locs)
-fieldKidsStep index fb [] (fn :: fns) =
-  let rest = fieldKidsStep index fb [] fns
-  (jChildLoc index fn 8 fb None :: fst rest, snd rest)
-fieldKidsStep index fb (l :: ls) (fn :: fns) =
-  let rest = fieldKidsStep index fb ls fns
-  (jChildLoc index fn 8 fb l :: fst rest, snd rest)
+fieldKidsStep index fb locs names = go locs names
+  where
+    go spans [] = ([], spans)
+    go [] (fn :: fns) =
+      let rest = go [] fns
+      (jChildLoc index fn 8 fb None :: fst rest, snd rest)
+    go (l :: ls) (fn :: fns) =
+      let rest = go ls fns
+      (jChildLoc index fn 8 fb l :: fst rest, snd rest)
 
 -- 1:1 child symbols for a fixed-shape child list (methods, let-binds),
 -- consuming a `Loc` each in order.
@@ -523,9 +525,10 @@ documentSymbols src = match parseWithPositionsOpt src
   Some (decls, positions) =>
     let index = indexSource src
     let len = stringLength src
-    map
-      (renderSymbol index len)
-      (collapseSymbols (symbolParts index len decls (positionsDecls positions)))
+    positionsDecls positions
+      |> symbolParts index len decls
+      |> collapseSymbols
+      |> map (renderSymbol index len)
 
 wholeLineRange : SourceIndex -> Int -> Int -> Int -> Json
 wholeLineRange index len sl el = match sourcePositionToOffset index (el + 1) 0
@@ -545,19 +548,20 @@ data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) into
 -- SymRow rows, dropping non-outline decls.
 symbolParts : SourceIndex -> Int -> List Decl -> List DeclPos -> List SymRow
-symbolParts index len (d :: ds) (p :: ps) =
-  let sl = declPosLine p - 1
-  let el = declPosEndLine p
-  match (symbolPartsOfDecl
-    index
-    d
-    (wholeLineRange index len sl el)
-    (declPosChildLocs p))
-    None => symbolParts index len ds ps
-    Some (name, kind, clauseLike, kids) =>
-      SymRow name kind sl el clauseLike kids (declPosNameLoc p)
-        :: symbolParts index len ds ps
-symbolParts _ _ _ _ = []
+symbolParts index len decls positions = go decls positions
+  where
+    go (d :: ds) (p :: ps) =
+      let sl = declPosLine p - 1
+      let el = declPosEndLine p
+      match (symbolPartsOfDecl
+        index
+        d
+        (wholeLineRange index len sl el)
+        (declPosChildLocs p))
+        None => go ds ps
+        Some (name, kind, clauseLike, kids) =>
+          SymRow name kind sl el clauseLike kids (declPosNameLoc p) :: go ds ps
+    go _ _ = []
 
 -- Collapse a signature+clauses run — consecutive rows that share the EXACT same
 -- name AND are BOTH clause-like — into ONE outline symbol (#300 part 3): the
@@ -878,9 +882,9 @@ typeAtPointsWithIndex index runtimeSrc coreSrc filePath src line cols =
       cols
   let names =
     map
-      (pos => match pos
-        Some (ln, col) => identifierAtIndexed index chars ln col
-        None => None)
+      (pos => do
+        (ln, col) <- pos
+        identifierAtIndexed index chars ln col)
       positions
   if allList isNone names then
     map (_ => None) cols
@@ -1258,11 +1262,10 @@ hasExplicitSig (d :: rest) name = match innerDecl d
 columnAfterName : SourceIndex -> Array Char -> Int -> Option Int
 columnAfterName index arr line =
   let len = arrayLength arr
-  match sourcePositionToOffset index (line + 1) 0
-    None => None
-    Some lineStart =>
-      let endCol = identRunLen arr len lineStart 0
-      if endCol == 0 then None else Some endCol
+  do
+    lineStart <- sourcePositionToOffset index (line + 1) 0
+    let endCol = identRunLen arr len lineStart 0
+    if endCol == 0 then None else Some endCol
 
 -- Length of the leading identifier run starting at byte `i` (stops at EOL/EOF).
 identRunLen : Array Char -> Int -> Int -> Int -> Int
@@ -1296,9 +1299,9 @@ inlayHints runtimeSrc coreSrc uri src docs =
 -- over the decl's start line.
 inlayNamePos : SourceIndex -> Array Char -> DeclPos -> Option (Int, Int)
 inlayNamePos index arr p = match declPosNameLoc p
-  Some (Loc _ _ _ el ec) => match sourcePositionToOffset index el ec
-    Some off => offsetToUtf16Position index off
-    None => None
+  Some (Loc _ _ _ el ec) => do
+    off <- sourcePositionToOffset index el ec
+    offsetToUtf16Position index off
   None =>
     map
       (col => (declPosLine p - 1, col))
@@ -1652,9 +1655,9 @@ semToksOf : SourceIndex ->
   List Token ->
   List (Int, Int) ->
   SemCtx ->
-  List SemTok
-semToksOf _ [] _ _ = []
-semToksOf _ _ [] _ = []
+  Result String (List SemTok)
+semToksOf _ [] _ _ = Ok []
+semToksOf _ _ [] _ = Err "semantic token spans ended before the token stream"
 semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
   (roleOpt, ctx2) => match roleOpt
     None => semToksOf arr ts ps ctx2
@@ -1664,10 +1667,10 @@ semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
       else match (offsetToUtf16Position arr s, offsetToUtf16Position arr e)
         (Some (sl, sc), Some (el, ec)) =>
           if sl == el then
-            SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
+            map (SemTok sl sc (ec - sc) ty :: _) (semToksOf arr ts ps ctx2)
           else
             semToksOf arr ts ps ctx2
-        _ => semToksOf arr ts ps ctx2
+        _ => Err "semantic token endpoint is not a source boundary"
 
 {- Delta-encode the (start-ordered) SemTok list into the flat 5-int LSP array.
    prevLine/prevChar start at 0, so the first token's deltaLine is its absolute
@@ -1680,12 +1683,12 @@ encodeSemToks prevLine prevChar ((SemTok line ch len ty) :: rest) =
   dLine :: dChar :: len :: ty :: 0 :: encodeSemToks line ch rest
 
 -- The full semantic-tokens `data` array (flat ints) for a source string.
-semanticTokensData : String -> List Int
+semanticTokensData : String -> Result String (List Int)
 semanticTokensData src =
   let arr = indexSource src
   match tokenizeWithOffsetPairs src
     (toks, pairs) =>
-      encodeSemToks 0 0 (semToksOf arr toks pairs (SemCtx 0 True MExpr))
+      map (encodeSemToks 0 0) (semToksOf arr toks pairs (SemCtx 0 True MExpr))
 
 -- ── request dispatch ────────────────────────────────────────────────────────
 --
@@ -1862,8 +1865,8 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let (keyed, results) =
-    analyzeProjectKeyed
+  let (keyed, results, sources) =
+    analyzeProjectKeyedSources
       (stdlibExportsReader stdlibDir)
       True
       []
@@ -1874,7 +1877,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc
-  let _ = publishEach docs results
+  let _ = publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
@@ -1897,23 +1900,29 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
-publishEach : Docs -> List (String, List Diag) -> <IO> Unit
-publishEach _ [] = ()
-publishEach docs ((file, ds) :: rest) =
+publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
+publishEach _ _ [] = ()
+publishEach docs sources ((file, ds) :: rest) =
   let uri = uriOfPath file
-  let src = sourceForPath docs file
+  -- Disk reads must only run when neither in-memory source is available.
+  -- lint-disable-next-line rule-orelse-staircase
+  let src = match docsGet uri docs
+    Some text => Some text
+    None => match omLookup file sources
+      Some text => Some text
+      None => sourceForPath docs file
   let params = jObject [
     ("uri", JString uri),
     (
       "diagnostics",
       jArray (match src
         Some text => diagsToJson text ds
-        None => []),
+        None => map (diagWithoutSource (jRange 0 0 0 0)) ds),
     ),
   ]
   let _ =
     writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
-  publishEach docs rest
+  publishEach docs sources rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
@@ -1932,7 +1941,7 @@ selectProjectProfileFor file docs = match carryProjectProfile None file
   Err msg => match manifestPathOf file
     None => docs
     Some path =>
-      let _ = publishEach docs [
+      let _ = publishEach docs omEmpty [
         (
           path,
           [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))],
@@ -1945,7 +1954,7 @@ clearFlaggedManifest file docs = match manifestPathOf file
   None => docs
   Some path =>
     if docsFlagged path docs then
-      let _ = publishEach docs [(path, [])]
+      let _ = publishEach docs omEmpty [(path, [])]
       docsUnflag path docs
     else
       docs
@@ -2037,6 +2046,18 @@ handleDocumentSymbol idJson params docs =
       Some src => jArray (documentSymbols src)
   writeMessage (responseMsg idJson result)
 
+cursorIdentifier : String -> Json -> Option (Int, Int, String)
+cursorIdentifier src params = do
+  (line, col) <- sourceCursor src params
+  name <- identifierAt src line col
+  Some (line, col, name)
+
+projectRefIndex : String -> String -> String -> Docs -> <IO> RefIndex
+projectRefIndex runtimeSrc coreSrc rootFile docs =
+  let projectDir = findProjectRootOrSelf (dirOf rootFile)
+  let read = path => docsGet (uriOfPath path) docs
+  buildRefIndexProject read projectDir runtimeSrc coreSrc
+
 -- textDocument/definition → Location[] (singleton) or null.
 handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleDefinition runtimeSrc coreSrc idJson params docs =
@@ -2055,19 +2076,15 @@ projectDefinition : String ->
   Docs ->
   <IO> Json
 projectDefinition runtimeSrc coreSrc uri src params docs =
-  match sourceCursor src params
+  match cursorIdentifier src params
     None => JNull
-    Some (line, col) => match identifierAt src line col
-      None => JNull
-      Some _ =>
-        let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOf rootFile)
-        let read = path => docsGet (uriOfPath path) docs
-        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
-        match binderAt idx rootFile (line + 1) col
-          None => definitionResult uri src params
-          Some key =>
-            jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
+    Some (line, col, _) =>
+      let rootFile = pathOfUri uri
+      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
+      match binderAt idx rootFile (line + 1) col
+        None => definitionResult uri src params
+        Some key =>
+          jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
 
 -- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
@@ -2078,13 +2095,11 @@ projectDefinition runtimeSrc coreSrc uri src params docs =
 -- relative in the result (path-stable for a golden).
 export
 definitionResult : String -> String -> Json -> Json
-definitionResult uri src params = match sourceCursor src params
-  Some (line, col) => match identifierAt src line col
+definitionResult uri src params = match cursorIdentifier src params
+  Some (_, _, name) => match definitionRange src name
     None => JNull
-    Some name => match definitionRange src name
-      None => JNull
-      Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
-  _ => JNull
+    Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
+  None => JNull
 
 -- Resolve a set of columns using one index and one parse.
 export
@@ -2174,22 +2189,15 @@ referencesResult : String ->
   Docs ->
   <IO> Json
 referencesResult runtimeSrc coreSrc uri src params docs =
-  match sourceCursor src params
-    Some (line, col) => match identifierAt src line col
-      None => jArray []
-      Some _ =>
-        let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOf rootFile)
-        let read = path => docsGet (uriOfPath path) docs
-        let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
-        -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
-        -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
-        match binderAt idx rootFile (line + 1) col
-          None => jArray []
-          Some key =>
-            jArray
-              (referenceLocations docs idx key (includeDeclarationOf params))
-    _ => jArray []
+  match cursorIdentifier src params
+    None => jArray []
+    Some (line, col, _) =>
+      let rootFile = pathOfUri uri
+      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
+      match binderAt idx rootFile (line + 1) col
+        None => jArray []
+        Some key =>
+          jArray (referenceLocations docs idx key (includeDeclarationOf params))
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
 -- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
@@ -2256,18 +2264,21 @@ locationsForPath : Docs ->
   Option SourceIndex ->
   List (String, Loc) ->
   <IO> List Json
-locationsForPath _ _ _ [] = []
-locationsForPath docs path index ((next, loc) :: rest) =
-  if next /= path then
-    locationsJson docs ((next, loc) :: rest)
-  else
-    let tail = locationsForPath docs path index rest
-    match index
-      None => tail
-      Some idx => match locToLspRange idx loc
-        None => tail
-        Some range =>
-          jObject [("uri", JString (uriOfPath path)), ("range", range)] :: tail
+locationsForPath docs path index rows = go rows
+  where
+    go [] = []
+    go ((next, loc) :: rest) =
+      if next /= path then
+        locationsJson docs ((next, loc) :: rest)
+      else
+        let tail = go rest
+        match index
+          None => tail
+          Some idx => match locToLspRange idx loc
+            None => tail
+            Some range =>
+              jObject [("uri", JString (uriOfPath path)), ("range", range)]
+                :: tail
 
 -- `params.context.includeDeclaration` (LSP `ReferenceContext`). Missing
 -- `context`/field, or a non-bool value, defaults to `True` (F6, locked).
@@ -2289,21 +2300,33 @@ handleHighlight idJson params docs =
   writeMessage (responseMsg idJson result)
 
 highlightResult : String -> Json -> Json
-highlightResult src params = match sourceCursor src params
-  Some (line, col) => match identifierAt src line col
-    None => JNull
-    Some name => jArray (highlightRanges src name)
-  _ => JNull
+highlightResult src params = match cursorIdentifier src params
+  Some (_, _, name) => jArray (highlightRanges src name)
+  None => JNull
 
 -- textDocument/semanticTokens/full → { data: [int] } (delta-encoded).
 handleSemanticTokens : Json -> Json -> Docs -> <IO> Unit
 handleSemanticTokens idJson params docs =
   let result = match requestUri params
-    None => JNull
+    None => Ok JNull
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => jObject [("data", jArray (map JInt (semanticTokensData src)))]
-  writeMessage (responseMsg idJson result)
+      None => Ok JNull
+      Some src =>
+        map
+          (tokens => jObject [("data", jArray (map JInt tokens))])
+          (semanticTokensData src)
+  match result
+    Ok value => writeMessage (responseMsg idJson value)
+    Err message =>
+      writeMessage
+        (jObject [
+          ("jsonrpc", JString "2.0"),
+          ("id", idJson),
+          (
+            "error",
+            jObject [("code", JInt (-32603)), ("message", JString message)],
+          ),
+        ])
 
 -- The `.text` of the LAST element of a contentChanges JArray (Full sync).
 lastChangeText : Json -> Option String

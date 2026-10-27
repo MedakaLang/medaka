@@ -227,18 +227,21 @@ coordinateCall id name args =
 coordinateFile : String -> Json
 coordinateFile path = jObject [("file", JString path)]
 
-coordinateResponse : String -> String
-coordinateResponse line = match parse line
-  Ok obj => match get "result" obj
-    Some result => match get "content" result
-      Some (JArray content) => match toList content
-        first :: _ => match get "text" first
-          Some (JString text) => text
-          _ => ""
-        [] => ""
-      _ => ""
-    _ => ""
-  _ => ""
+coordinateResponse : String -> Option String
+coordinateResponse line = do
+  obj <- match parse line
+    Ok value => Some value
+    Err _ => None
+  result <- get "result" obj
+  content <- get "content" result
+  first <- match content
+    JArray items => match toList items
+      item :: _ => Some item
+      [] => None
+    _ => None
+  match get "text" first
+    Some (JString text) => Some text
+    _ => None
 
 coordinateRun : String -> <Exec, IO, FileRead> Expectation
 coordinateRun dir =
@@ -311,7 +314,7 @@ bad = )
     (Ok _, Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
       Err e => fail e
       Ok (code, out, _) => match map coordinateResponse (split "\n" out)
-        first :: ambiguous :: missing :: ty :: firstError :: secondError :: diag :: symbols :: eof :: fmt :: absent :: _ => expectEach
+        (Some first) :: (Some ambiguous) :: (Some missing) :: (Some ty) :: (Some firstError) :: (Some secondError) :: (Some diag) :: (Some symbols) :: (Some eof) :: (Some fmt) :: (Some absent) :: _ => expectEach
           [
             ("exit", expectEqual 0 code),
             (
@@ -408,23 +411,24 @@ main = f 2
     (Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
       Err e => fail e
       Ok (code, out, _) => match map coordinateResponse (split "\n" out)
-        local :: defs :: global :: malformed :: _ => expectEach [
-          ("exit", expectEqual 0 code),
-          (
-            "local shadow",
-            expectTextContainsAll
-              ["col 2: x : a", "col 7: x : a", "col 14: x : a"]
-              local,
-          ),
-          (
-            "definitions",
-            expectTextContainsAll
-              ["\"col\":2", "\"col\":7", "\"col\":14", "\"character\":1"]
-              defs,
-          ),
-          ("global", expectEqual "x : Bool" global),
-          ("malformed", expectTextContainsAll ["no symbol"] malformed),
-        ]
+        (Some local) :: (Some defs) :: (Some global) :: (Some malformed) :: _ => expectEach
+          [
+            ("exit", expectEqual 0 code),
+            (
+              "local shadow",
+              expectTextContainsAll
+                ["col 2: x : a", "col 7: x : a", "col 14: x : a"]
+                local,
+            ),
+            (
+              "definitions",
+              expectTextContainsAll
+                ["\"col\":2", "\"col\":7", "\"col\":14", "\"character\":1"]
+                defs,
+            ),
+            ("global", expectEqual "x : Bool" global),
+            ("malformed", expectTextContainsAll ["no symbol"] malformed),
+          ]
         _ => fail "scope responses missing"
     _ => fail "scope fixture write failed"
 

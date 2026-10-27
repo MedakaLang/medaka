@@ -638,9 +638,10 @@ identifiersInLine text =
   map (identPair (indexSource text)) (findAll identTokenRe text)
 
 identPair : SourceIndex -> Match -> (String, Int)
+-- Identifier matches contain no newline; both regex and index use this exact text.
 identPair index m = match offsetToUtf16Position index m.start
   Some (_, col) => (m.text, col)
-  None => (m.text, m.start)
+  None => panic "identifier regex returned a non-source boundary"
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").
@@ -656,7 +657,7 @@ symbolColsInSource index line text symbol =
 identPairAt : SourceIndex -> Int -> Match -> (String, Int)
 identPairAt index start m = match offsetToUtf16Position index (start + m.start)
   Some (_, col) => (m.text, col)
-  None => (m.text, m.start)
+  None => panic "identifier regex returned a non-source boundary"
 
 symbolColsGo : List (String, Int) -> String -> List Int
 symbolColsGo [] _ = []
