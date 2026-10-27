@@ -454,6 +454,9 @@ inlang-frontend-resolve-test:
 ## compiler/frontend/parser_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): the unrendered-failure text and
 ## the furthest-failure choice would otherwise never run.
+inlang-frontend-lexer-test:
+	./medaka test compiler/frontend/lexer_test.mdk
+
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
 

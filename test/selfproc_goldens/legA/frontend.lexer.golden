@@ -59,7 +59,6 @@ digitsEnd : Array Char -> Int -> Int -> Int
 dotContinuesAccess : Array Char -> Int -> Int -> Bool
 dropCharsToStr : Array Char -> Int -> Int -> String
 dropFrame : List BracketFrame -> List BracketFrame
-dropTripleInterpMark : String -> String
 elseFilter : List (Token, Int) -> List (Token, Int)
 elseFilterPairs : List (Token, Int, Int) -> List (Token, Int, Int)
 elseFilterToks : List Token -> List Token
@@ -87,7 +86,6 @@ flushSepToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> 
 frameHasLive : List BracketFrame -> Bool
 handleNewline : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 hasBindLine : List RawTok -> Bool
-hasTripleInterpMark : String -> Bool
 hasTripleInterpOpen : List RawTok -> Bool
 identEnd : Array Char -> Int -> Int -> Int
 identToken : Array Char -> Int -> Int -> Token
@@ -221,7 +219,6 @@ tokenize : String -> List Token
 tokenizeWithLines : String -> (List Token, List Int)
 tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))
 tokenizeWithOffsets : String -> (List Token, List Int)
-tripleInterpMark : String
 uHexEnd : Array Char -> Int -> Int -> Int
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscCode : Array Char -> Int -> Int -> Option Int
