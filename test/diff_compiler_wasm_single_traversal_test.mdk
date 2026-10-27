@@ -263,26 +263,27 @@ runWat path wat want trap = match writeFile (path ++ ".wat") wat
       ]
       if expectationTag validated == "Fail" then
         validated
-      else
-        let argv = [
-          "-e",
-          "alarm 90; exec @ARGV",
-          "node",
-          underRoot "test/wasm/run.js",
-          path ++ ".wasm",
-        ]
-        if trap == "" then
-          expectAll [
-            expectSpawnOkLine "perl" argv want,
-            match boundedVerbSeconds 90 "node" [
-              underRoot "test/wasm/run.js",
-              path ++ ".wasm",
+      else match boundedVerbSeconds 90 "node" [
+        underRoot "test/wasm/run.js",
+        path ++ ".wasm",
+      ]
+        Err e => fail e
+        Ok (exitCode, out, diagnostic) =>
+          if trap == "" then
+            expectEqual (0, want ++ "\n", "") (exitCode, out, diagnostic)
+          else
+            expectAll [
+              expectEqual 1 exitCode,
+              expectEqual "" out,
+              expectTextContainsAll [trap] diagnostic,
+              expectFalse
+                (contains
+                  (if trap == "E-DIV-ZERO" then
+                    "E-INT-OVERFLOW"
+                  else
+                    "E-DIV-ZERO")
+                  diagnostic),
             ]
-              Err e => fail e
-              Ok actual => expectEqual (0, want ++ "\n", "") actual,
-          ]
-        else
-          expectSpawnFailsAll "perl" argv [trap]
 
 valueRow : String -> String -> ValueCase -> <IO, Exec, FileWrite> Expectation
 valueRow dir route (ValueCase name src want) =
@@ -391,23 +392,6 @@ trapRow dir route name src needle =
       Ok (code, wat, err) => expectAll [
         expectEqual (0, "") (code, err),
         runWat path wat "" needle,
-        match boundedVerbSeconds 90 "node" [
-          underRoot "test/wasm/run.js",
-          path ++ ".wasm",
-        ]
-          Err e => fail e
-          Ok (exitCode, out, diagnostic) => expectAll [
-            expectEqual 1 exitCode,
-            expectEqual "" out,
-            expectTextContainsAll [needle] diagnostic,
-            expectFalse
-              (contains
-                (if needle == "E-DIV-ZERO" then
-                  "E-INT-OVERFLOW"
-                else
-                  "E-DIV-ZERO")
-                diagnostic),
-          ],
       ]
 
 baseline : String -> <IO, Exec, FileWrite> Expectation
