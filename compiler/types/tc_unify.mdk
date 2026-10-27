@@ -5,9 +5,9 @@
 -- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
 -- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
--- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
--- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
--- message text is `tc_diag_text`'s.
+-- `captureScope`, `closeScope`, `obligationSiteHere`); and the messages of these failures that need
+-- checker context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3).
+-- Context-free message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
 -- 6.6-6.8.
@@ -76,7 +76,9 @@ import types.tc_mono.{
   tyvarId,
   xmodOblArgId,
 }
-import types.tc_state.{dynAtIfSome, wAll, wPush, wRestore, wSnapshot}
+import types.tc_state.{
+  dynAtIfSome, wAll, wPush, wRestore, wSnapshot, currentScopeStore
+}
 import types.tc_env.{domainHasPatterns, tyTabKey}
 import types.tc_diag.{
   firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
@@ -950,6 +952,14 @@ recordAbsorptions mctx (a :: rest) cell =
 export
 captureScope : ModuleCtx -> Unit -> ScopeId
 captureScope mctx _ = Scopes.captureScopeCursor mctx.mcCells.currentScope.value
+
+export
+closeScope : ModuleCtx -> Unit -> Unit
+closeScope mctx _ =
+  mctx.mcCells.currentScope :=
+    Scopes.closeScopeCursor
+      (currentScopeStore mctx.mcGraph ())
+      mctx.mcCells.currentScope.value
 
 tyvarLevel : Ref Tyvar -> Int
 tyvarLevel cell = match !cell

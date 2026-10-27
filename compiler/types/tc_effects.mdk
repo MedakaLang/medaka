@@ -1,7 +1,8 @@
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
--- summary failures, rigidity, index-only variables), grant and authority recording, and file-bound
--- values (authority bounds at binding boundaries: recording, flow and settle checks); wires the
--- `effect_*` leaves into inference.
+-- summary failures, rigidity, index-only variables), grant and authority recording (including the
+-- authority an argument carries into its application, `argumentAuthority`), and file-bound values
+-- (authority bounds at binding boundaries: recording, flow and settle checks); wires the `effect_*`
+-- leaves into inference.
 --
 -- Spec: EFFECTS section 2.3, section 5, section 6.2-6.9, section 8.
 --
@@ -57,6 +58,8 @@ import types.tc_mono.{
   anyContainsI,
   effVarTailIds,
   hasDupI,
+  isPreludeOrigin,
+  tconBuiltin,
 }
 import types.tc_diag_text.{
   aliasesHeadRowMsg,
@@ -81,6 +84,10 @@ import types.tc_env.{
   methodArgs,
   removeAllS,
   tyTabKey,
+  envVarType,
+  envAlphaLets,
+  lookupLocalFlag,
+  lookupStandaloneValue,
 }
 import types.tc_diag.{
   pushTypeError,
@@ -138,6 +145,7 @@ import types.repr.{
   normalize,
   ppEachShared,
   ppMonosShared,
+  IfaceRef(..),
 }
 import types.effect_bindings.{BindingSummary(..), newBindingSummary}
 import frontend.ast.{
@@ -154,6 +162,7 @@ import frontend.ast.{
   firstTyLoc,
   lookupTab,
   orElseLoc,
+  Lit(..),
 }
 import map.{Map(..)}
 import support.ordmap.{
@@ -183,6 +192,9 @@ import types.runtime_grants.{fileGrantExterns}
 import types.effect_solver as EffectSolver
 import map as IdMap
 import types.scopes.{ScopeOwner(..)}
+import types.effect_infer.{alphaOf, typeAuthority}
+import types.effect_domain.{Param(..)}
+import types.tc_scope.{methodEntryHere}
 
 -- The site a binding performed a label at that the report is about: the
 -- first, in source order, whose authority does not lie within the bound
@@ -1460,6 +1472,103 @@ recordClauseFileBound mctx body arity ty
         recordClauseFileBound mctx body (arity - 1) result
     TQual inner _ => recordClauseFileBound mctx body arity inner
     _ => ()
+
+export
+argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
+argumentAuthority env top (Some e) xt =
+  let prelude = displayIsPrelude env
+  let q = alphaOf top (envVarType env) prelude (envAlphaLets env) e xt
+  noteArgumentShape env top prelude q e xt
+  q
+argumentAuthority env top None xt = typeAuthority top xt
+
+-- Record, for a report of a bound this argument fails (`boundFailureMsg`),
+-- the authority variables it extends on the right, and those it would reach
+-- through an interpolated part were `display` the prelude's.
+noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
+noteArgumentShape env top prelude q e xt =
+  let lets = envAlphaLets env
+  match extensionBase e
+    Some base =>
+      markBinders
+        env.teDyn.dcModule.mcCells.extendedBindersRef
+        (authVars
+          (alphaOf
+            top
+            (envVarType env)
+            prelude
+            lets
+            base
+            (tconBuiltin "String")))
+    None => ()
+  if prelude then
+    ()
+  else
+    let seen = fold (m c => IdMap.set (authvarId c) () m) Tip (authVars q)
+    markBinders
+      env.teDyn.dcModule.mcCells.displayHiddenBindersRef
+      (filterList
+        (c => not (IdMap.has (authvarId c) seen))
+        (flatMap
+          (x => authVars (alphaOf top (envVarType env) prelude lets x xt))
+          (displayOperands e)))
+
+-- The operand a concatenation extends on the right: its leftmost part, past
+-- the empty literal an interpolation begins with.
+extensionBase : Expr -> Option Expr
+extensionBase (ELoc _ e) = extensionBase e
+extensionBase (e@(EBinOp op _ _ _))
+  | op == "++" = Some (leftmostPart e)
+extensionBase _ = None
+
+leftmostPart : Expr -> Expr
+leftmostPart (ELoc _ e) = leftmostPart e
+leftmostPart (e@(EBinOp op a b _))
+  | op == "++" = if isEmptyStringLit a then leftmostPart b else leftmostPart a
+  | otherwise = e
+leftmostPart e = e
+
+-- The operands of the `display` applications a concatenation's parts are,
+-- the parts an interpolation converts.
+displayOperands : Expr -> List Expr
+displayOperands (ELoc _ e) = displayOperands e
+displayOperands (EBinOp op a b _)
+  | op == "++" = displayOperands a ++ displayOperands b
+displayOperands (EApp f x) = if isDisplayHead f then [x] else []
+displayOperands _ = []
+
+isDisplayHead : Expr -> Bool
+isDisplayHead (ELoc _ f) = isDisplayHead f
+isDisplayHead (EVar x) = x == "display"
+isDisplayHead (EVarId x _) = x == "display"
+isDisplayHead (EVarAt x _) = x == "display"
+isDisplayHead (EDictAt x _) = x == "display"
+isDisplayHead (EMethodAt x _ _) = x == "display"
+isDisplayHead _ = False
+
+isEmptyStringLit : Expr -> Bool
+isEmptyStringLit (ELoc _ e) = isEmptyStringLit e
+isEmptyStringLit (ELit (LString s)) = s == ""
+isEmptyStringLit _ = False
+
+-- Whether `display` in [env] is the prelude `Display` method, the one an
+-- interpolated part applies: no local binder, no standalone this module
+-- defines or imports, and the method's interface is the prelude's.
+displayIsPrelude : TcEnv -> Bool
+displayIsPrelude env =
+  not (lookupLocalFlag env "display")
+    && isNone (lookupStandaloneValue env "display")
+    && not
+      (omHasKey
+        "display"
+        env.teDyn.dcModule.mcCells.definerShadowNamesRef.value)
+    && (match methodEntryHere env.teDyn.dcModule "display"
+      Some (iface, _, _, _) => isPreludeDisplayIface iface
+      None => False)
+
+isPreludeDisplayIface : IfaceRef -> Bool
+isPreludeDisplayIface iface =
+  iface.irName == "Display" && isPreludeOrigin iface.irOrigin
 
 -- #803 (S0, silent wrongness): the impl-body effect-LAUNDER check.  Sound rule, per
 -- arrow of the method's DECLARED type down to its final return:

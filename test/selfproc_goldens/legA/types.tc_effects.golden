@@ -1,5 +1,6 @@
 appSpineArgCount : Expr -> Int
 argPerformableOccs : ModuleCtx -> List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
+argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
 beginEffectContract : ModuleCtx -> EffRow -> Mono -> (Map Int Unit, Map Int Unit)
 beginEffectSummaryScope : ModuleCtx -> Unit -> Unit
@@ -29,6 +30,8 @@ declaredArgEffNames : ModuleCtx -> Ty -> List String
 declaredEffectTail : Ty -> List String
 declaredEffects : GraphCtx -> Ty -> List Atom
 declaredEffectsOpen : ModuleCtx -> Ty -> Bool
+displayIsPrelude : TcEnv -> Bool
+displayOperands : Expr -> List Expr
 eagerIndexOnlyVars : List String -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
 effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> List Int -> Bool
 effVarChargedOccs : GraphCtx -> Ty -> List (String, List Atom)
@@ -37,6 +40,7 @@ effVarOccEscape : GraphCtx -> String -> List Atom -> List (String, List Atom) ->
 effectSiteOf : ModuleCtx -> String -> Option String -> Option Authority -> Option Loc
 evOrdinal : EvId -> Int
 expandReturnSpine : ModuleCtx -> Ty -> Ty
+extensionBase : Expr -> Option Expr
 externCallee : String -> GrantCallee
 failureBound : SummaryFailure ObligationSite -> Option Authority
 fileBodyLoc : Expr -> Option Loc
@@ -59,10 +63,14 @@ grantOrder : Scheme -> List Int
 grantsEnabled : GraphCtx -> Unit -> Bool
 hasFileBoundValue : Mono -> Bool
 indexOnlyEffVars : ModuleCtx -> List (String, List Kind) -> Ty -> List String
+isDisplayHead : Expr -> Bool
+isEmptyStringLit : Expr -> Bool
+isPreludeDisplayIface : IfaceRef -> Bool
 krowSlotOccs : ModuleCtx -> List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotVarOccs : ModuleCtx -> List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 launderEscapeFromLog : GraphCtx -> List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : GraphCtx -> EffRow -> List AbsorptionEvent -> List Atom
+leftmostPart : Expr -> Expr
 localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
 markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markSourceless : GraphCtx -> List Int -> Unit
@@ -75,6 +83,7 @@ methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
 methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
 methodRet : Ty -> Ty
 narrowFileAtom : Atom -> Bool
+noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 notePerformSite : TcEnv -> EffRow -> Unit
 occsOfTails : GraphCtx -> List String -> List EffAtomTy -> List (String, List Atom)
 pairRowCells : Mono -> Mono -> List (Int, Int)

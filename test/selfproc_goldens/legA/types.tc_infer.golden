@@ -7,7 +7,6 @@ appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineHeadLoc : Expr -> Option Loc
 appendOp : DynCtx -> Mono -> Mono -> Mono
 applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
-argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
 argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
 armIsUnguarded : List Guard -> Bool
@@ -30,23 +29,18 @@ checkWideLiterals : ModuleCtx -> List (Mono, String, Int, Int, Bool, Option Loc)
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
 clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
-closeScope : ModuleCtx -> Unit -> Unit
 composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
 consOp : DynCtx -> Mono -> Mono -> Mono
 declareQuantified : ModuleCtx -> Scheme -> Unit
 declareRigidVars : ModuleCtx -> List String -> Unit
 derefOp : DynCtx -> Mono -> Mono
-displayIsPrelude : TcEnv -> Bool
-displayOperands : Expr -> List Expr
 doChainIsDeferred : Expr -> Bool
 eqCompareOp : DynCtx -> Mono -> Mono -> Mono
 exemptInPlaceIndexMutHeads : List String
-extensionBase : Expr -> Option Expr
 finishValueEffectsKeeping : DynCtx -> List (Bool, Mono) -> List (Int, AuthResidual)
 forgetLocalAbs : GraphCtx -> String -> Unit
 funDomain : ModuleCtx -> Mono -> Mono
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
-headAnnotTy : ModuleCtx -> Ty -> Mono
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
@@ -119,22 +113,17 @@ inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
 isBinderArms : List Arm -> Bool
 isConPat : Pat -> Bool
-isDisplayHead : Expr -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
-isEmptyStringLit : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isOmittedElse : Expr -> Bool
-isPreludeDisplayIface : IfaceRef -> Bool
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
-leftmostPart : Expr -> Expr
 localRole : Bool -> BindingRole
 matchWarningLoc : Option Loc -> List Arm -> Option Loc
 matchWarningsNow : ModuleCtx -> Bool
 negateOp : ModuleCtx -> Mono -> Mono
 nonExhaustiveMsg : ModuleCtx -> Mono -> List (List Pat) -> Bool -> (String, Option String)
 nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
-noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 numArithOp : DynCtx -> Mono -> Mono -> Mono
 openLocalScope : ModuleCtx -> String -> ScopeId

@@ -19,6 +19,7 @@ boundFailureMsg : ModuleCtx -> String -> Option String -> Authority -> String ->
 calleeArrow : DynCtx -> Mono -> (Mono, EffRow, Mono)
 captureScope : ModuleCtx -> Unit -> ScopeId
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
+closeScope : ModuleCtx -> Unit -> Unit
 closedRowEqCheck : DynCtx -> List Atom -> List Atom -> Unit
 collectAuthAllowance : ModuleCtx -> List Authority -> Authority
 collectValueAllowance : DynCtx -> List EffRow -> EffRow

@@ -39,7 +39,6 @@ import types.tc_types.{
   ScopedMember,
 }
 import types.tc_mono.{
-  applyParams,
   authRoots,
   authRowRoots,
   containerParamScalarArg,
@@ -51,7 +50,6 @@ import types.tc_mono.{
   funArity,
   headTyconMono,
   headTyconNameMono,
-  isPreludeOrigin,
   joinCellOf,
   litType,
   matchCol0Type,
@@ -64,9 +62,7 @@ import types.tc_mono.{
   schemeIds,
   schemeMono,
   tconBuiltin,
-  tconFrom,
   tupleMono,
-  tyAppSpine,
 }
 import types.tc_diag_text.{
   appSpineName,
@@ -108,18 +104,14 @@ import types.tc_state.{
   wWindow,
 }
 import types.tc_env.{
-  envAlphaLets,
-  envVarType,
   extendLocalVar,
   extendLocalVars,
   funClausePair,
-  lookupLocalFlag,
   lookupMethodRow,
   lookupRecordByName,
   lookupStandaloneValue,
   lookupVar,
   seedAlphaLets,
-  tyTabKey,
 }
 import types.tc_diag.{pushTypeError, pushTypeErrorHelpFixAt, recordTypeError}
 import types.tc_scope.{
@@ -134,7 +126,6 @@ import types.tc_unify.{
   exitLevel,
   forceInstantiation,
   freshVar,
-  freshVars,
   instantiateMethodTracked,
   instantiateValueTracked,
   joinValueTypes,
@@ -158,9 +149,14 @@ import types.tc_unify.{
   valueJoinOps,
   wantAuthority,
   zipBindFrom,
+  closeScope,
 }
 import types.tc_decls.{
-  astTypeFreshTbl, instantiateSigTracked, sigToSchemeTvs, sigToSchemeTvsIn
+  astTypeFreshTbl,
+  instantiateSigTracked,
+  sigToSchemeTvs,
+  sigToSchemeTvsIn,
+  headAnnotTy,
 }
 import types.tc_solve.{
   goalsMark,
@@ -216,7 +212,6 @@ import types.tc_effects.{
   freshEffectSummary,
   grantOnlyBindingId,
   localBindingSummary,
-  markBinders,
   notePerformSite,
   recordClauseFileBound,
   recordEffectBody,
@@ -226,6 +221,7 @@ import types.tc_effects.{
   registerLocalAbsIf,
   registerLocalGroupAbs,
   spineHeadEv,
+  argumentAuthority,
 }
 import types.tc_occurrence.{
   bindingDeclaredAt,
@@ -324,7 +320,6 @@ import frontend.ast.{
   isI64Head,
   isU64Head,
   letBindName,
-  lookupTab,
   orElseLoc,
 }
 import types.effect_rows.{
@@ -332,7 +327,6 @@ import types.effect_rows.{
 }
 import types.repr.{
   AuthResidual(..),
-  IfaceRef(..),
   Mono(..),
   Scheme(..),
   Tyvar(..),
@@ -340,7 +334,7 @@ import types.repr.{
   ppMono,
 }
 import types.effect_authority.{
-  Authority(..), authDomainTop, authvarId, authVars
+  authDomainTop,
 }
 import types.effect_bindings.{
   BindingSummary(..), bodyArrows, bodyRowAt, newBindingSummary
@@ -357,14 +351,19 @@ import support.ordmap.{
   omSize,
   OrdMap,
 }
-import types.effect_domain.{Param(..)}
 import types.evidence.{ScopeId(..)}
 import types.publish.{TcDiag(..)}
 import map.{Map(..)}
 import support.util.{
-  allList, anyList, contains, filterList, isEmptyL, joinWith, listLen, zipL
+  allList,
+  anyList,
+  contains,
+  isEmptyL,
+  joinWith,
+  listLen,
+  zipL,
 }
-import types.effect_infer.{alphaOf, captureEffects, typeAuthority}
+import types.effect_infer.{captureEffects}
 import frontend.exhaust.{
   desugarPat,
   patHasRange,
@@ -403,14 +402,6 @@ finishValueEffectsKeeping dyn generalizing =
     (scopeRolesOf members)
     (fold (acc mono => effectRoots mono acc) Tip monos)
     (fold (acc mono => borrowedEffectCells dyn.dcModule mono acc) Tip monos)
-
-export
-closeScope : ModuleCtx -> Unit -> Unit
-closeScope mctx _ =
-  mctx.mcCells.currentScope :=
-    Scopes.closeScopeCursor
-      (currentScopeStore mctx.mcGraph ())
-      mctx.mcCells.currentScope.value
 
 -- ── expression inference ──────────────────────────────────────────────────
 export
@@ -2493,102 +2484,6 @@ checkedInto env e expected actual =
       expected
     _ => actual
 
-argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
-argumentAuthority env top (Some e) xt =
-  let prelude = displayIsPrelude env
-  let q = alphaOf top (envVarType env) prelude (envAlphaLets env) e xt
-  noteArgumentShape env top prelude q e xt
-  q
-argumentAuthority env top None xt = typeAuthority top xt
-
--- Record, for a report of a bound this argument fails (`boundFailureMsg`),
--- the authority variables it extends on the right, and those it would reach
--- through an interpolated part were `display` the prelude's.
-noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
-noteArgumentShape env top prelude q e xt =
-  let lets = envAlphaLets env
-  match extensionBase e
-    Some base =>
-      markBinders
-        env.teDyn.dcModule.mcCells.extendedBindersRef
-        (authVars
-          (alphaOf
-            top
-            (envVarType env)
-            prelude
-            lets
-            base
-            (tconBuiltin "String")))
-    None => ()
-  if prelude then
-    ()
-  else
-    let seen = fold (m c => IdMap.set (authvarId c) () m) Tip (authVars q)
-    markBinders
-      env.teDyn.dcModule.mcCells.displayHiddenBindersRef
-      (filterList
-        (c => not (IdMap.has (authvarId c) seen))
-        (flatMap
-          (x => authVars (alphaOf top (envVarType env) prelude lets x xt))
-          (displayOperands e)))
-
--- The operand a concatenation extends on the right: its leftmost part, past
--- the empty literal an interpolation begins with.
-extensionBase : Expr -> Option Expr
-extensionBase (ELoc _ e) = extensionBase e
-extensionBase (e@(EBinOp op _ _ _))
-  | op == "++" = Some (leftmostPart e)
-extensionBase _ = None
-
-leftmostPart : Expr -> Expr
-leftmostPart (ELoc _ e) = leftmostPart e
-leftmostPart (e@(EBinOp op a b _))
-  | op == "++" = if isEmptyStringLit a then leftmostPart b else leftmostPart a
-  | otherwise = e
-leftmostPart e = e
-
--- The operands of the `display` applications a concatenation's parts are,
--- the parts an interpolation converts.
-displayOperands : Expr -> List Expr
-displayOperands (ELoc _ e) = displayOperands e
-displayOperands (EBinOp op a b _)
-  | op == "++" = displayOperands a ++ displayOperands b
-displayOperands (EApp f x) = if isDisplayHead f then [x] else []
-displayOperands _ = []
-
-isDisplayHead : Expr -> Bool
-isDisplayHead (ELoc _ f) = isDisplayHead f
-isDisplayHead (EVar x) = x == "display"
-isDisplayHead (EVarId x _) = x == "display"
-isDisplayHead (EVarAt x _) = x == "display"
-isDisplayHead (EDictAt x _) = x == "display"
-isDisplayHead (EMethodAt x _ _) = x == "display"
-isDisplayHead _ = False
-
-isEmptyStringLit : Expr -> Bool
-isEmptyStringLit (ELoc _ e) = isEmptyStringLit e
-isEmptyStringLit (ELit (LString s)) = s == ""
-isEmptyStringLit _ = False
-
--- Whether `display` in [env] is the prelude `Display` method, the one an
--- interpolated part applies: no local binder, no standalone this module
--- defines or imports, and the method's interface is the prelude's.
-displayIsPrelude : TcEnv -> Bool
-displayIsPrelude env =
-  not (lookupLocalFlag env "display")
-    && isNone (lookupStandaloneValue env "display")
-    && not
-      (omHasKey
-        "display"
-        env.teDyn.dcModule.mcCells.definerShadowNamesRef.value)
-    && (match methodEntryHere env.teDyn.dcModule "display"
-      Some (iface, _, _, _) => isPreludeDisplayIface iface
-      None => False)
-
-isPreludeDisplayIface : IfaceRef -> Bool
-isPreludeDisplayIface iface =
-  iface.irName == "Display" && isPreludeOrigin iface.irOrigin
-
 -- The argument node of an application, when the callee's syntax is an
 -- application at all; every other node is not one and has no argument to
 -- abstract (the catch-all is the projection's negative answer, not an
@@ -2980,20 +2875,6 @@ inferHeadAnnot env e ty =
   let annot = headAnnotTy env.teDyn.dcModule ty
   unifyIn env.teDyn t annot
   t
-
--- The head-pin's target type: if the annotation's head is a TyCon with a known
--- declared arity (from `dataParamKindsRef`), rebuild it at that arity with fresh
--- vars (so an empty literal's wrong-arity pin is corrected); otherwise fall back
--- to the literal annotation type.
-headAnnotTy : ModuleCtx -> Ty -> Mono
-headAnnotTy mctx ty = match tyAppSpine ty
-  -- OCCURRENCE MINT (#1110): same source as `fromAstTypeE`'s — the identity of
-  -- the annotation head being rebuilt at its declared arity.
-  (TyCon { tyConName = n, tyConOrigin = o }, _) =>
-    match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
-      Some kinds => applyParams (tconFrom o n) (freshVars mctx (listLen kinds))
-      None => fst (astTypeFreshTbl mctx ty)
-  _ => fst (astTypeFreshTbl mctx ty)
 
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =

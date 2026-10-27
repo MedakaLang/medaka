@@ -710,6 +710,7 @@ import types.tc_unify.{
   unifyIn,
   unifyInto,
   widenOpenedFor,
+  closeScope,
 }
 import types.tc_decls_variance.{
   seedParamPolarityFixpointScoped,
@@ -971,7 +972,6 @@ import types.tc_infer.{
   appArgLoc,
   checkMatchChecks,
   checkWideLiterals,
-  closeScope,
   declareRigidVars,
   infer,
   inferBindingChecked,

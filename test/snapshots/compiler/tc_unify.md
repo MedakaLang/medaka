@@ -1,5 +1,5 @@
 # META
-source_lines=2964
+source_lines=2974
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -9,9 +9,9 @@ stages=DESUGAR,MARK
 -- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
 -- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
--- `captureScope`, `obligationSiteHere`); and the messages of these failures that need checker
--- context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3). Context-free
--- message text is `tc_diag_text`'s.
+-- `captureScope`, `closeScope`, `obligationSiteHere`); and the messages of these failures that need
+-- checker context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3).
+-- Context-free message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
 -- 6.6-6.8.
@@ -80,7 +80,9 @@ import types.tc_mono.{
   tyvarId,
   xmodOblArgId,
 }
-import types.tc_state.{dynAtIfSome, wAll, wPush, wRestore, wSnapshot}
+import types.tc_state.{
+  dynAtIfSome, wAll, wPush, wRestore, wSnapshot, currentScopeStore
+}
 import types.tc_env.{domainHasPatterns, tyTabKey}
 import types.tc_diag.{
   firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
@@ -954,6 +956,14 @@ recordAbsorptions mctx (a :: rest) cell =
 export
 captureScope : ModuleCtx -> Unit -> ScopeId
 captureScope mctx _ = Scopes.captureScopeCursor mctx.mcCells.currentScope.value
+
+export
+closeScope : ModuleCtx -> Unit -> Unit
+closeScope mctx _ =
+  mctx.mcCells.currentScope :=
+    Scopes.closeScopeCursor
+      (currentScopeStore mctx.mcGraph ())
+      mctx.mcCells.currentScope.value
 
 tyvarLevel : Ref Tyvar -> Int
 tyvarLevel cell = match !cell
@@ -2969,7 +2979,7 @@ zipBindFrom dyn _ _ = ()
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "CSlot" true) (mem "DynCtx" true) (mem "JoinContext" true) (mem "Kind" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "ObligationSite" true) (mem "OblProjection" true) (mem "PendingJoin" true) (mem "Polarity" true) (mem "Predicate" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DoCtx" false) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PredicateSlot" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "currentScopeStore" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
@@ -3125,6 +3135,8 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "recordAbsorptions" ((PVar "mctx") (PCons (PVar "a") (PVar "rest")) (PVar "cell")) (EBlock (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "absorptions")) (ERecordCreate "AbsorptionEvent" ((fa "atom" (EVar "a")) (fa "cell" (EVar "cell")) (fa "loc" (EFieldAccess (EVar "mctx") "mcLoc")))))) (DoExpr (EApp (EApp (EApp (EVar "recordAbsorptions") (EVar "mctx")) (EVar "rest")) (EVar "cell")))))
 (DTypeSig true "captureScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "ScopeId"))))
 (DFunDef false "captureScope" ((PVar "mctx") PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value")))
+(DTypeSig true "closeScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
+(DFunDef false "closeScope" ((PVar "mctx") PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EApp (EVar "Scopes.closeScopeCursor") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value"))))
 (DTypeSig false "tyvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Int")))
 (DFunDef false "tyvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild (PVar "lvl")) () (EVar "lvl")) (arm (PCon "Link" PWild) () (ELit (LInt 0)))))
 (DTypeSig false "occursAdjust" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
@@ -3516,7 +3528,7 @@ zipBindFrom dyn _ _ = ()
 # MARK
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "CSlot" true) (mem "DynCtx" true) (mem "JoinContext" true) (mem "Kind" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "ObligationSite" true) (mem "OblProjection" true) (mem "PendingJoin" true) (mem "Polarity" true) (mem "Predicate" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DoCtx" false) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PredicateSlot" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "currentScopeStore" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
@@ -3672,6 +3684,8 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "recordAbsorptions" ((PVar "mctx") (PCons (PVar "a") (PVar "rest")) (PVar "cell")) (EBlock (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "absorptions")) (ERecordCreate "AbsorptionEvent" ((fa "atom" (EVar "a")) (fa "cell" (EVar "cell")) (fa "loc" (EFieldAccess (EVar "mctx") "mcLoc")))))) (DoExpr (EApp (EApp (EApp (EVar "recordAbsorptions") (EVar "mctx")) (EVar "rest")) (EVar "cell")))))
 (DTypeSig true "captureScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "ScopeId"))))
 (DFunDef false "captureScope" ((PVar "mctx") PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value")))
+(DTypeSig true "closeScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
+(DFunDef false "closeScope" ((PVar "mctx") PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EApp (EVar "Scopes.closeScopeCursor") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value"))))
 (DTypeSig false "tyvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Int")))
 (DFunDef false "tyvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild (PVar "lvl")) () (EVar "lvl")) (arm (PCon "Link" PWild) () (ELit (LInt 0)))))
 (DTypeSig false "occursAdjust" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))

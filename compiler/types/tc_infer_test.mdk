@@ -39,7 +39,6 @@ import types.tc_infer.{
   appArgLoc,
   checkMatchChecks,
   checkWideLiterals,
-  closeScope,
   declareRigidVars,
   infer,
   inferBindingChecked,
@@ -54,7 +53,7 @@ import types.tc_effects.{beginEffectSummaryScope, freshEffectSummary}
 import types.tc_mono.{monoScheme, tconBuiltin, tconFrom}
 import types.tc_shadow.{methodCellOf}
 import types.tc_state.{wAll}
-import types.tc_unify.{captureScope, freshVar}
+import types.tc_unify.{captureScope, freshVar, closeScope}
 import types.tc_test_support.{
   at,
   boolM,
