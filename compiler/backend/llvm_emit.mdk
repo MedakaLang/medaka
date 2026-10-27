@@ -2649,6 +2649,24 @@ emitStrCharExtern e env "stringSlice" args = match emitArgs e env args
         "  \{r} = call i64 @mdk_string_slice(i64 \{lo}, i64 \{hi}, i64 \{s})"
     (r, LTStr)
   _ => panic "llvm: stringSlice takes three arguments"
+emitStrCharExtern e env "stringCodepointAtByte" args = match emitArgs e env args
+  [s, b] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_string_codepoint_at_byte(i64 \{s}, i64 \{b})"
+    (r, LTInt)
+  _ => panic "llvm: stringCodepointAtByte takes two arguments"
+emitStrCharExtern e env "stringSliceBytes" args = match emitArgs e env args
+  [lo, hi, s] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_string_slice_bytes(i64 \{lo}, i64 \{hi}, i64 \{s})"
+    (r, LTStr)
+  _ => panic "llvm: stringSliceBytes takes three arguments"
 -- UTF-8 codec: stringToUtf8Bytes -> Array Int ($arr-shaped, LTCon); stringFromUtf8Bytes -> String.
 emitStrCharExtern e env "stringToUtf8Bytes" args = match emitArgs e env args
   [s] =>
