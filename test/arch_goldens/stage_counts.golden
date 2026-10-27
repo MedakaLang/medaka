@@ -69,6 +69,7 @@ lint_probe.exhaust.oracle	1
 lint_probe.lex.pairs	52
 lint_probe.lint.comments	1
 lint_probe.parse.positions	52
+lint_probe.parse.prescan	52
 lint_probe.read.source	1
 check_bad.exit	1
 check_bad.desugar	1
@@ -236,7 +237,9 @@ build_json_hello.typecheck.module	1
 repl_one_line.exit	0
 repl_one_line.desugar	1
 repl_one_line.exhaust.oracle	2
-repl_one_line.lex.tokenize	2
+repl_one_line.lex.pairs	1
+repl_one_line.lex.tokenize	1
+repl_one_line.parse.prescan	1
 repl_one_line.typecheck.drive	1
 repl_one_line.typecheck.module	1
 test_doc_eval.exit	0
@@ -359,8 +362,7 @@ lsp.d_hover.exit	0
 lsp.d_hover.desugar	2
 lsp.d_hover.exhaust.guards	2
 lsp.d_hover.exhaust.oracle	5
-lsp.d_hover.lex.offsets	1
-lsp.d_hover.lex.pairs	3
+lsp.d_hover.lex.pairs	4
 lsp.d_hover.load.cached	2
 lsp.d_hover.parse.positions	1
 lsp.d_hover.parse.prescan	3
@@ -372,8 +374,7 @@ lsp.e_leaf_edit.exit	0
 lsp.e_leaf_edit.desugar	6
 lsp.e_leaf_edit.exhaust.guards	5
 lsp.e_leaf_edit.exhaust.oracle	11
-lsp.e_leaf_edit.lex.offsets	1
-lsp.e_leaf_edit.lex.pairs	7
+lsp.e_leaf_edit.lex.pairs	8
 lsp.e_leaf_edit.load.cached	2
 lsp.e_leaf_edit.parse.positions	1
 lsp.e_leaf_edit.parse.prescan	7

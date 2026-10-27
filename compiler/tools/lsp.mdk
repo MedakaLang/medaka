@@ -1,3 +1,10 @@
+import tools.lsp_diagnostics.{
+  diagnosticJsonOr, diagnosticWithRange, parseDiagnosticJson,
+  parseDiagnosticActions, snapshotJson
+}
+import tools.source_snapshot.{SourceSnapshot, makeSnapshot}
+import frontend.parse_diagnostic.{diagnosticCode, diagnosticLoc}
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- lint-disable-file rule-duplicate-body
 -- (A handful of small pure cursor/env helpers here — identifierAt/
 --  prefixBefore/lookupSchemeL/jHover/… — are intentionally mirrored in
@@ -35,6 +42,7 @@ import json.{
   get,
   asString,
   asInt,
+  asArray,
 }
 import driver.diagnostics.{
   Diag,
@@ -61,9 +69,7 @@ import frontend.parser.{
   ParseError,
   parseResult,
   parseLocatedResult,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
   parseWithPositions,
   parseWithPositionsOpt,
   positionsDecls,
@@ -122,7 +128,7 @@ import frontend.ast.{
 -- hover, completion and inlay to answer from (`Kept`).
 
 public export data Docs =
-  Docs (List (String, String)) (List String) (List (String, Kept))
+  Docs (List (String, String)) (List String) (List (String, Kept)) (List (String, Option Int)) (List (String, Int)) Int
 
 -- What the last publish of a buffer kept, with the buffer source it analyzed.
 -- A single-document publish keeps the env its drive gave.  A project publish
@@ -138,30 +144,59 @@ export data Kept =
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
 emptyDocs : Docs
-emptyDocs = Docs [] [] []
+emptyDocs = Docs [] [] [] [] [] 0
 
 export
 docsPut : String -> String -> Docs -> Docs
-docsPut uri src (Docs xs flagged kept) =
-  Docs ((uri, src) :: docsRemove uri xs) flagged kept
+docsPut uri src (Docs xs flagged kept versions generations next) =
+  Docs
+    ((uri, src) :: docsRemove uri xs)
+    flagged
+    kept
+    versions
+    ((uri, next) :: docsRemove uri generations)
+    (next + 1)
 
 -- Replace what `uri`'s publish kept; `None` drops the previous entry.
 docsKeep : String -> Option Kept -> Docs -> Docs
-docsKeep uri k (Docs xs flagged kept) =
+docsKeep uri k (Docs xs flagged kept versions generations next) =
   let rest = docsRemove uri kept
   let kept2 = match k
     Some v => (uri, v) :: rest
     None => rest
-  Docs xs flagged kept2
+  Docs xs flagged kept2 versions generations next
 
 docsKept : String -> Docs -> Option Kept
-docsKept uri (Docs _ _ kept) = docsLookup uri kept
+docsKept uri (Docs _ _ kept _ _ _) = docsLookup uri kept
 
 docsRemove : String -> List (String, a) -> List (String, a)
 docsRemove _ [] = []
 docsRemove uri ((k, v) :: rest)
   | k == uri = docsRemove uri rest
   | otherwise = (k, v) :: docsRemove uri rest
+
+docsVersion : String -> Docs -> Option Int
+docsVersion uri (Docs _ _ _ versions _ _) =
+  optionOr None (docsLookup uri versions)
+
+docsSetVersion : String -> Option Int -> Docs -> Docs
+docsSetVersion uri version (Docs xs flagged kept versions generations next) =
+  Docs
+    xs
+    flagged
+    kept
+    ((uri, version) :: docsRemove uri versions)
+    generations
+    next
+
+docsSnapshot : String -> Docs -> Option SourceSnapshot
+docsSnapshot uri docs = match docs
+  Docs _ _ _ _ generations _ => match docsLookup uri generations
+    Some generation =>
+      map
+        (makeSnapshot uri (docsVersion uri docs) generation)
+        (docsGet uri docs)
+    None => None
 
 -- ── JSON helpers ────────────────────────────────────────────────────────────
 
@@ -174,29 +209,6 @@ jRange : Int -> Int -> Int -> Int -> Json
 jRange sl sc el ec =
   jObject [("start", jPosition sl sc), ("end", jPosition el ec)]
 
--- A single LSP Diagnostic object.  severity: 1=Error, 2=Warning (LSP spec).
-jDiagnostic : Int -> Json -> String -> Json
-jDiagnostic sev range msg = jObject [
-  ("range", range),
-  ("severity", JInt sev),
-  ("source", JString "medaka"),
-  ("message", JString msg),
-]
-
-severityCode : Severity -> Int
-severityCode SevError = 1
-severityCode SevWarning = 2
-
--- ── diagnostics → LSP (expr-level) ──────────────────────────────────────────
---
--- B.10.2b: type-error Diags now carry the ELoc span captured at the push site
--- (`Some Loc`), so they map to an expr-level LSP range:
--- a 1-based `Loc` line maps to a
--- 0-based LSP line and UTF-16 column.  Resolve / guard /
--- match diagnostics carry `None` (the compiler pipeline doesn't locate them) and
--- fall back to the whole-document range.  Parse errors keep using parseResult's
--- located line/col (below).
-
 -- Loc-less diagnostics retain their whole-line range.
 wholeDocRange : String -> Json
 wholeDocRange src =
@@ -204,39 +216,19 @@ wholeDocRange src =
     Some (line, _) => jRange 0 0 line 0
     None => JNull
 
--- Map an optional Loc to its indexed protocol range, or the whole document.
-rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = jRangeOfLoc index loc
-rangeOfLoc _ fallback None = fallback
-
--- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
--- `rangeOfLoc`'s `Some` arm, factored out for the #331 decl-NAME-span callers
--- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
--- `wholeDocRange`) when there is no name `Loc`.
 jRangeOfLoc : SourceIndex -> Loc -> Json
 jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
-
--- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
--- (B.10.2b) for an expr-level range, falling back to whole-document for
--- loc-less diagnostics.
-diagToJson : SourceIndex -> Json -> Diag -> Json
-diagToJson index fallback (Diag sev _ msg loc _ _) =
-  jDiagnostic (severityCode sev) (rangeOfLoc index fallback loc) msg
-
-diagWithoutSource : Json -> Diag -> Json
-diagWithoutSource range (Diag sev _ msg _ _ _) =
-  jDiagnostic (severityCode sev) range msg
 
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =
   let index = indexSource src
-  map (diagToJson index (wholeDocRange src)) diags
+  map (diagnosticJsonOr index (wholeDocRange src)) diags
 
 -- ── document store accessor (request handlers) ──────────────────────────────
 -- Look up an open document's source by uri.  Request handlers (formatting/
 -- documentSymbol/definition/highlight) read the buffer the client last sent.
 docsGet : String -> Docs -> Option String
-docsGet uri (Docs xs _ _) = docsLookup uri xs
+docsGet uri (Docs xs _ _ _ _ _) = docsLookup uri xs
 
 docsLookup : String -> List (String, a) -> Option a
 docsLookup _ [] = None
@@ -1710,6 +1702,7 @@ initializeResultFor serverVersion = jObject [
     "capabilities",
     jObject [
       ("textDocumentSync", JInt 1),
+      ("codeActionProvider", JBool True),
       ("documentFormattingProvider", JBool True),
       ("documentSymbolProvider", JBool True),
       ("definitionProvider", JBool True),
@@ -1727,18 +1720,16 @@ initializeResultFor serverVersion = jObject [
   ),
 ]
 
--- The single located diagnostic for an unparseable buffer.  The parser's line
--- is 1-based and col 0-based; LSP wants 0-based lines.
-parseErrorDiags : String -> ParseError -> List Json
-parseErrorDiags src e =
-  let index = indexSource src
-  let ln = parseErrorLine e
-  let col = parseErrorCol e
-  let end = match sourcePositionToOffset index ln (col + 1)
-    Some _ => col + 1
-    None => col
-  let r = jRangeOfLoc index (Loc "" ln col ln end)
-  [jDiagnostic 1 r (parseErrorMessage e)]
+parseErrorDiags : SourceSnapshot -> String -> ParseError -> List Json
+parseErrorDiags snapshot src e =
+  let diagnostic = parseErrorDiagnostic e
+  [
+    parseDiagnosticJson
+      snapshot
+      (wholeDocRange src)
+      (parseDiagnosticToDiag "" diagnostic)
+      diagnostic,
+  ]
 
 publishDiagnosticsList : String -> List Json -> <IO> Unit
 publishDiagnosticsList uri diags =
@@ -1900,6 +1891,11 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
+hasParseDiagnosticFix : Diag -> Bool
+hasParseDiagnosticFix (Diag _ code _ _ _ (Some _)) =
+  startsWith "P-" code || startsWith "L-" code
+hasParseDiagnosticFix _ = False
+
 publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
 publishEach _ _ [] = ()
 publishEach docs sources ((file, ds) :: rest) =
@@ -1916,8 +1912,23 @@ publishEach docs sources ((file, ds) :: rest) =
     (
       "diagnostics",
       jArray (match src
-        Some text => diagsToJson text ds
-        None => map (diagWithoutSource (jRange 0 0 0 0)) ds),
+        Some text =>
+          if not (any hasParseDiagnosticFix ds) then
+            diagsToJson text ds
+          else match docsSnapshot uri docs
+            Some snapshot => match parseLocatedResult text
+              Err e =>
+                map
+                  (d =>
+                    parseDiagnosticJson
+                      snapshot
+                      (wholeDocRange text)
+                      d
+                      (parseErrorDiagnostic e))
+                  ds
+              Ok _ => diagsToJson text ds
+            None => diagsToJson text ds
+        None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
     ),
   ]
   let _ =
@@ -1960,17 +1971,18 @@ clearFlaggedManifest file docs = match manifestPathOf file
       docs
 
 docsFlagged : String -> Docs -> Bool
-docsFlagged path (Docs _ flagged _) = contains path flagged
+docsFlagged path (Docs _ flagged _ _ _ _) = contains path flagged
 
 docsFlag : String -> Docs -> Docs
-docsFlag path (Docs xs flagged kept) =
+docsFlag path (Docs xs flagged kept versions generations next) =
   if contains path flagged then
-    Docs xs flagged kept
+    Docs xs flagged kept versions generations next
   else
-    Docs xs (path :: flagged) kept
+    Docs xs (path :: flagged) kept versions generations next
 
 docsUnflag : String -> Docs -> Docs
-docsUnflag path (Docs xs flagged kept) = Docs xs (filter (/= path) flagged) kept
+docsUnflag path (Docs xs flagged kept versions generations next) =
+  Docs xs (filter (/= path) flagged) kept versions generations next
 
 publishForSelected : String ->
   String ->
@@ -1981,7 +1993,10 @@ publishForSelected : String ->
 publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
     Err e =>
-      let _ = publishDiagnosticsList uri (parseErrorDiags text e)
+      match docsSnapshot uri docs
+        Some snapshot =>
+          publishDiagnosticsList uri (parseErrorDiags snapshot text e)
+        None => publishDiagnosticsList uri []
       None
     Ok decls =>
       if anyImport decls then
@@ -2008,7 +2023,8 @@ handleDidOpen runtimeSrc coreSrc params docs =
     Some uri => match fieldStr "text" (fieldOr "textDocument" params)
       None => docs
       Some text =>
-        let docs2 = docsPut uri text docs
+        let version = asInt (fieldOr "version" (fieldOr "textDocument" params))
+        let docs2 = docsSetVersion uri version (docsPut uri text docs)
         publishFor runtimeSrc coreSrc uri text docs2
 
 handleDidChange : String -> String -> Json -> Docs -> <IO> Docs
@@ -2018,8 +2034,57 @@ handleDidChange runtimeSrc coreSrc params docs =
     Some uri => match lastChangeText (fieldOr "contentChanges" params)
       None => docs
       Some text =>
-        let docs2 = docsPut uri text docs
+        let version = asInt (fieldOr "version" (fieldOr "textDocument" params))
+        let docs2 = docsSetVersion uri version (docsPut uri text docs)
         publishFor runtimeSrc coreSrc uri text docs2
+
+samePosition : Json -> Json -> Bool
+samePosition a b =
+  asInt (fieldOr "line" a) == asInt (fieldOr "line" b)
+    && asInt (fieldOr "character" a) == asInt (fieldOr "character" b)
+    && asInt (fieldOr "line" a) /= None
+    && asInt (fieldOr "character" a) /= None
+
+sameRange : Json -> Json -> Bool
+sameRange a b =
+  samePosition (fieldOr "start" a) (fieldOr "start" b)
+    && samePosition (fieldOr "end" a) (fieldOr "end" b)
+
+actionDiagnosticMatches : SourceSnapshot -> String -> Json -> Json -> Bool
+actionDiagnosticMatches snapshot code range diagnostic =
+  let expected = snapshotJson snapshot
+  let actual = fieldOr "data" diagnostic
+  fieldStr "uri" actual == fieldStr "uri" expected
+    && asInt (fieldOr "generation" actual)
+      == asInt (fieldOr "generation" expected)
+    && fieldOr "code" diagnostic == JString code
+    && sameRange (fieldOr "range" diagnostic) range
+
+handleCodeAction : Json -> Json -> Docs -> <IO> Unit
+handleCodeAction id params docs =
+  let result = match requestUri params
+    None => []
+    Some uri => match (docsGet uri docs, docsSnapshot uri docs)
+      (Some text, Some snapshot) => match parseLocatedResult text
+        Err e =>
+          let pd = parseErrorDiagnostic e
+          let range =
+            optionOr JNull (locToLspRange (indexSource text) (diagnosticLoc pd))
+          let context = fieldOr "context" params
+          let diagnostics =
+            fieldOr "diagnostics" context
+              |> asArray
+              |> map toList
+              |> optionOr []
+          if any
+            (actionDiagnosticMatches snapshot (diagnosticCode pd) range)
+            diagnostics then
+            parseDiagnosticActions snapshot [pd]
+          else
+            []
+        Ok _ => []
+      _ => []
+  writeMessage (responseMsg id (jArray result))
 
 -- ── B.10.3 request handlers ─────────────────────────────────────────────────
 -- Each looks the doc up in the store and writes a JSON-RPC response.  A missing
@@ -2378,6 +2443,22 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
     else if meth == "textDocument/didChange" then
       let docs2 = handleDidChange runtimeSrc coreSrc (fieldOr "params" msg) docs
       Step docs2 True
+    else if meth == "textDocument/didClose" then
+      let uri = fieldStr "uri" (fieldOr "textDocument" (fieldOr "params" msg))
+      let docs2 = match (uri, docs)
+        (Some u, Docs xs flagged kept versions generations next) =>
+          Docs
+            (docsRemove u xs)
+            flagged
+            (docsRemove u kept)
+            (docsRemove u versions)
+            (docsRemove u generations)
+            next
+        _ => docs
+      Step docs2 True
+    else if meth == "textDocument/codeAction" then
+      let _ = handleCodeAction (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
     else if meth == "textDocument/formatting" then
       let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
       Step docs True

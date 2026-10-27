@@ -1,0 +1,284 @@
+import frontend.ast.{Loc(..)}
+import support.source_index.{SourceIndex, offsetToSourcePosition}
+
+public export data EditApplicability =
+  | MachineApplicable
+  | HumanOnly
+  deriving (Eq)
+
+public export data ParseEdit = ParseEdit Loc String String EditApplicability
+
+public export data ParseDiagnostic =
+  ParseDiagnostic ParseDiagnosticKind Loc (List ParseEdit)
+
+public export data UnicodeProblem =
+  | UnicodeUnterminated
+  | UnicodeSeparator
+  | UnicodeEmpty
+  | UnicodeExpectedDigit String
+  | UnicodeExpectedClose String
+  | UnicodeSurrogate String
+  | UnicodeOutOfRange String
+  deriving (Eq)
+
+public export data ParseDiagnosticKind =
+  | UnterminatedString
+  | UnterminatedComment
+  | UnterminatedChar
+  | EmptyChar
+  | IntegerOverflow
+  | PositiveIntOverflow
+  | FloatOverflow
+  | HsLambda
+  | HsDollar
+  | UnexpectedEnd
+  | UnexpectedEndExpected String
+  | BadNeq
+  | HsCase
+  | MatchWith
+  | NoPow
+  | HsSignature
+  | BlockComment
+  | BraceBlock
+  | Semicolon
+  | MatchGuardBar
+  | EquationGuardIf
+  | GenericParse String
+  | InvalidEscape String Bool
+  | BadUnicodeEscape UnicodeProblem
+  | BareUnicodeEscape String String
+  | LongChar String
+  | UnexpectedCharacter String
+  | WidePattern String
+  | MalformedRadix String String String
+  | MalformedFloat String String Bool
+  | ForeignKeyword String
+  | MissingWhere String
+  | WhereSameLine String
+  | BlockEndsBinding String
+  | ReservedKeyword String
+  | PublicDataOnly Bool
+  deriving (Eq)
+
+export
+diagnosticCode : ParseDiagnostic -> String
+diagnosticCode (ParseDiagnostic kind _ _) = problemCode kind
+
+problemCode : ParseDiagnosticKind -> String
+problemCode UnterminatedString = "L-UNTERMINATED-STRING"
+problemCode UnterminatedComment = "L-UNTERMINATED-COMMENT"
+problemCode UnterminatedChar = "L-BAD-CHAR-LITERAL"
+problemCode EmptyChar = "L-BAD-CHAR-LITERAL"
+problemCode IntegerOverflow = "L-INT-OVERFLOW"
+problemCode PositiveIntOverflow = "L-INT-OVERFLOW"
+problemCode FloatOverflow = "L-FLOAT-OVERFLOW"
+problemCode HsLambda = "L-HS-LAMBDA"
+problemCode HsDollar = "L-HS-DOLLAR"
+problemCode UnexpectedEnd = "P-UNEXPECTED-EOF"
+problemCode (UnexpectedEndExpected _) = "P-UNEXPECTED-EOF"
+problemCode BadNeq = "P-BAD-NEQ"
+problemCode HsCase = "P-HS-CASE"
+problemCode MatchWith = "P-OCAML-MATCH-WITH"
+problemCode NoPow = "P-NO-POW-OPERATOR"
+problemCode HsSignature = "P-HS-SIG"
+problemCode BlockComment = "L-BLOCKCOMMENT"
+problemCode BraceBlock = "P-BRACE-BLOCK"
+problemCode Semicolon = "L-SEMICOLON"
+problemCode MatchGuardBar = "P-GUARD-BAR-IN-MATCH"
+problemCode EquationGuardIf = "P-GUARD-IF-IN-EQUATION"
+problemCode (GenericParse _) = "P-PARSE"
+problemCode (InvalidEscape _ _) = "L-BAD-ESCAPE"
+problemCode (BadUnicodeEscape _) = "L-BAD-UNICODE-ESCAPE"
+problemCode (BareUnicodeEscape _ _) = "L-BARE-UNICODE-ESCAPE"
+problemCode (LongChar _) = "L-BAD-CHAR-LITERAL"
+problemCode (UnexpectedCharacter _) = "L-BAD-CHAR"
+problemCode (WidePattern _) = "L-INT-OVERFLOW"
+problemCode (MalformedRadix _ _ _) = "L-MALFORMED-RADIX"
+problemCode (MalformedFloat _ _ _) = "L-MALFORMED-FLOAT"
+problemCode (MissingWhere _) = "P-MISSING-WHERE"
+problemCode (WhereSameLine _) = "P-WHERE-BODY-SAME-LINE"
+problemCode (BlockEndsBinding _) = "P-DO-ENDS-IN-BINDING"
+problemCode (ReservedKeyword _) = "P-RESERVED-KEYWORD"
+problemCode (PublicDataOnly _) = "P-PARSE"
+problemCode (ForeignKeyword word)
+  | word == "def" = "P-DEF-KEYWORD"
+  | word == "for" || word == "while" = "P-FOR-WHILE"
+  | otherwise = "P-PARSE"
+
+export
+diagnosticLoc : ParseDiagnostic -> Loc
+diagnosticLoc (ParseDiagnostic _ loc _) = loc
+
+export
+diagnosticEdits : ParseDiagnostic -> List ParseEdit
+diagnosticEdits (ParseDiagnostic _ _ edits) = edits
+
+export
+renderParseDiagnostic : ParseDiagnostic -> String
+renderParseDiagnostic (ParseDiagnostic kind _ _) = renderParseProblem kind
+
+export
+renderParseProblem : ParseDiagnosticKind -> String
+renderParseProblem UnterminatedString = "unterminated string literal"
+renderParseProblem UnterminatedComment = "unterminated block comment"
+renderParseProblem UnterminatedChar = "unterminated character literal"
+renderParseProblem EmptyChar =
+  "character literal is empty; a character is exactly one codepoint, such as `'a'`"
+renderParseProblem IntegerOverflow =
+  "integer literal too large for U64 (max 2^64 - 1)"
+renderParseProblem PositiveIntOverflow =
+  "integer literal too large for Int (max 4611686018427387903)"
+renderParseProblem FloatOverflow =
+  "float literal out of range (overflows to infinity)"
+renderParseProblem HsLambda = "Medaka has no `\\x -> e` lambdas; write `x => e`"
+renderParseProblem HsDollar = "Medaka has no `$`; write `f (g x)`"
+renderParseProblem UnexpectedEnd = "unexpected end of input"
+renderParseProblem BadNeq = "unexpected `!=`; did you mean `/=`?"
+renderParseProblem HsCase =
+  "Medaka has no `case ... of`; write `match e` with indented `pattern => body` arms"
+renderParseProblem MatchWith =
+  "Medaka has no `match ... with`; write `match e` with indented `pattern => body` arms"
+renderParseProblem NoPow = "Medaka has no `**`; write `pow x y`"
+renderParseProblem HsSignature =
+  "`::` is the list cons operator; write `f : T` for a type signature"
+renderParseProblem BlockComment =
+  "Medaka has no `/* ... */` comments; write `{- ... -}` or `--`"
+renderParseProblem BraceBlock =
+  "Medaka has no `{ ... }` blocks; indent the body after `then` and `else`"
+renderParseProblem Semicolon =
+  "Medaka has no statement terminator `;`; write each statement on its own line"
+renderParseProblem MatchGuardBar =
+  "a match-arm guard uses `if`, not `|`; write `pat if cond => body`"
+renderParseProblem EquationGuardIf =
+  "an equation guard uses `|`, not `if`; write `| cond = body`"
+renderParseProblem (UnexpectedEndExpected expected) =
+  "unexpected end of input; expected \{expected}"
+renderParseProblem (GenericParse msg) = msg
+renderParseProblem (InvalidEscape spelling inChar) =
+  let quote = if inChar then "\\'" else "\\\""
+  "invalid escape sequence `\{spelling}`; valid escapes are \\n \\t \\r \\0 \\\\ \{quote} \\u{...}"
+renderParseProblem (BadUnicodeEscape problem) = renderUnicodeProblem problem
+renderParseProblem (BareUnicodeEscape old new) =
+  "bare unicode escape `\{old}` is not valid; did you mean `\{new}`?"
+renderParseProblem (LongChar text) =
+  "character literal `'\{text}'` has more than one codepoint; write a `\"...\"` string for text"
+renderParseProblem (UnexpectedCharacter text) = "unexpected character `\{text}`"
+renderParseProblem (WidePattern lx) =
+  "integer literal too large for a pattern: `\{lx}` exceeds Int; match it in a guard instead, `x if x == \{lx}`"
+renderParseProblem (MalformedRadix bad prefix digits)
+  | stringLength digits == 0 =
+    "malformed radix literal `\{bad}`: no digits follow the \{prefix} prefix; an underscore may only separate digits"
+  | otherwise =
+    "malformed radix literal `\{bad}`: an underscore cannot follow the \{prefix} prefix; write `\{prefix}\{digits}`"
+renderParseProblem (MalformedFloat bad good leading) =
+  let side = if leading then "precede" else "follow"
+  "malformed float literal `\{bad}`: a digit must \{side} the decimal point; write `\{good}`"
+renderParseProblem (ForeignKeyword word) = foreignKeywordMessage word
+renderParseProblem (MissingWhere header) =
+  let members = if header == "impl" then "methods" else "members"
+  "missing `where` on this `\{header}` header; end the header with `where` and indent the \{members} below it"
+renderParseProblem (WhereSameLine header) =
+  let member = if header == "impl" then "method" else "member"
+  "a `where` block must start on the next line; move this \{member} onto its own line, indented below the `\{header}` header"
+renderParseProblem (BlockEndsBinding word) =
+  "a `\{word}` block must end in an expression, not a binding; add the expression whose value the block should have"
+renderParseProblem (ReservedKeyword name) =
+  "`\{name}` is a reserved keyword and cannot name a variable or pattern; rename it to `\{name}_`"
+renderParseProblem (PublicDataOnly True) =
+  "`public` applies only to `data` declarations with constructors; write `export extern`"
+renderParseProblem (PublicDataOnly False) =
+  "`public` applies only to `data` declarations; write plain `export`"
+
+foreignKeywordMessage : String -> String
+foreignKeywordMessage "def" = "Medaka has no `def`; write `f x = ...`"
+foreignKeywordMessage "while" =
+  "Medaka has no `while`; write a recursive function"
+foreignKeywordMessage "elif" = "Medaka has no `elif`; write `else if`"
+foreignKeywordMessage "class" =
+  "Medaka has no `class`; write a `data` type or an `interface`"
+foreignKeywordMessage "try" =
+  "Medaka has no `try`; return errors as `Result` values"
+foreignKeywordMessage "except" =
+  "Medaka has no `except`; return errors as `Result` values"
+foreignKeywordMessage "finally" =
+  "Medaka has no `finally`; return errors as `Result` values"
+foreignKeywordMessage _ =
+  "Medaka has no `for` loops; use `map` or `fold` over the list"
+
+renderUnicodeProblem : UnicodeProblem -> String
+renderUnicodeProblem UnicodeUnterminated =
+  "unicode escape is not terminated; the file ends before its closing `}`"
+renderUnicodeProblem UnicodeSeparator =
+  "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
+renderUnicodeProblem UnicodeEmpty =
+  "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
+renderUnicodeProblem (UnicodeExpectedDigit found) =
+  "unicode escape expects a hex digit after `\\u{` but found `\{found}`"
+renderUnicodeProblem (UnicodeExpectedClose found) =
+  "unicode escape expects `}` after its hex digits but found `\{found}`"
+renderUnicodeProblem (UnicodeSurrogate text) =
+  "unicode escape `\{text}` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
+renderUnicodeProblem (UnicodeOutOfRange text) =
+  "unicode escape `\{text}` is out of range; a codepoint is at most 10FFFF"
+
+export
+diagnosticHelp : ParseDiagnostic -> Option String
+diagnosticHelp (ParseDiagnostic kind _ _) = problemHelp kind
+
+problemHelp : ParseDiagnosticKind -> Option String
+problemHelp HsSignature = Some "replace `::` with `:`"
+problemHelp BadNeq = Some "replace `!=` with `/=`"
+problemHelp PositiveIntOverflow =
+  Some
+    "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
+problemHelp (BareUnicodeEscape _ _) =
+  Some "write the unicode escape braced, `\\u{XXXX}`"
+problemHelp (MalformedRadix _ _ _) =
+  Some "the digit separator `_` may only appear between digits"
+problemHelp (MalformedFloat _ _ _) =
+  Some "a float literal needs a digit on both sides of the decimal point"
+problemHelp (ReservedKeyword w) =
+  Some "rename it to `\{w}_`; any reserved word plus `_` is a valid identifier"
+problemHelp (PublicDataOnly _) =
+  Some "drop `public`; a function or value is exported with plain `export`"
+problemHelp (MissingWhere _) =
+  Some
+    "end the header with `where`; without it the next line is read as another type argument"
+problemHelp (BlockEndsBinding _) =
+  Some
+    "end the block with the expression whose value it should have, such as `pure x`"
+problemHelp (WhereSameLine _) =
+  Some
+    "`where` opens a block only when it ends the line; move the member to the next line"
+problemHelp MatchGuardBar = Some "replace `|` with `if`"
+problemHelp EquationGuardIf = Some "replace `if` with `|`"
+problemHelp _ = None
+
+-- Offsets are codepoints, and both ends are resolved against the same index.
+export
+locateParseProblem : SourceIndex ->
+  Int ->
+  Int ->
+  ParseDiagnosticKind ->
+  ParseDiagnostic
+locateParseProblem index start end kind =
+  let (sl, sc) = optionOr (1, 0) (offsetToSourcePosition index start)
+  let (el, ec) = optionOr (sl, sc) (offsetToSourcePosition index end)
+  let loc = Loc "" sl sc el ec
+  ParseDiagnostic kind loc (problemEdits kind loc)
+
+replacementEdit : Loc -> String -> String -> List ParseEdit
+replacementEdit loc old new = [ParseEdit loc old new MachineApplicable]
+
+problemEdits : ParseDiagnosticKind -> Loc -> List ParseEdit
+problemEdits BadNeq loc = replacementEdit loc "!=" "/="
+problemEdits HsSignature loc = replacementEdit loc "::" ":"
+problemEdits (BareUnicodeEscape old new) loc = replacementEdit loc old new
+problemEdits (MalformedRadix bad prefix digits) loc =
+  if digits == "" then [] else replacementEdit loc bad (prefix ++ digits)
+problemEdits (MalformedFloat bad good _) loc = replacementEdit loc bad good
+problemEdits (ReservedKeyword name) loc = replacementEdit loc name (name ++ "_")
+problemEdits (PublicDataOnly _) loc = replacementEdit loc "public" ""
+problemEdits MatchGuardBar loc = replacementEdit loc "|" "if"
+problemEdits EquationGuardIf loc = replacementEdit loc "if" "|"
+problemEdits _ _ = []

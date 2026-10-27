@@ -1,5 +1,5 @@
 # META
-source_lines=7222
+source_lines=7263
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -71,15 +71,20 @@ import frontend.ast.{
 }
 import frontend.desugar.{mapChildren}
 import frontend.parser.{
-  Positions,
+  Positions(..),
   DeclPos,
   positionsDecls,
   declPosLine,
   declPosEndLine,
   parseWithPositions,
-  parseWithPositionsLocated,
+  parseResultPairs,
+  parseWithPositionsOptPairs,
+  prescanErrorPairs,
+  ParseError,
 }
-import driver.diagnostics.{Severity(..), Diag(..), ppSeverity, readFileSafe}
+import driver.diagnostics.{
+  Severity(..), Diag(..), ppSeverity, readFileSafe, parseErrDiag
+}
 import support.util.{
   escStr,
   contains,
@@ -133,9 +138,11 @@ import regex.{
 import ir.sexp.{exprSexp, patSexp}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
+import support.stage_count.{stageBump}
 import frontend.lexer.{
   Comment,
   collectComments,
+  tokenizeWithOffsetPairs,
   commentLine,
   commentCol,
   commentText,
@@ -760,7 +767,7 @@ crossRuleNameOf r = r.name
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
 -- `idx` is the stdlib reference index, built ONCE by the IO caller (see
--- `buildStdlibIndex`) and handed to every rule; a caller with no stdlib to read
+-- `buildStdlibIndexResult`) and handed to every rule; a caller with no stdlib to read
 -- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
 export
 lintProgram : StdlibIndex ->
@@ -954,7 +961,7 @@ stdlibAmbiguousNames idx =
 -- `StdlibIndex` argument — is in the active `--only`/`--disable` set. Mirrors
 -- `ruleActiveFixable`'s only/disable semantics (the `enabled`/fixer checks
 -- that helper also makes don't apply here: the registry always enables this
--- rule). A caller uses this to decide whether `buildStdlibIndex` is worth
+-- rule). A caller uses this to decide whether `buildStdlibIndexResult` is worth
 -- its cost at all.
 export
 stdlibIndexNeeded : List String -> List String -> Bool
@@ -967,10 +974,18 @@ stdlibIndexNeeded only disable =
 -- gate this behind `stdlibIndexNeeded` first — when no active rule reads the
 -- index, `emptyStdlibIndex` costs nothing and every rule's `check` behaves
 -- identically (see `emptyStdlibIndex`'s own doc).
+public export data StdlibIndexError = StdlibIndexError {
+  path : String,
+  source : String,
+  diagnostic : Diag,
+}
+
 export
-buildStdlibIndex : <IO> StdlibIndex
-buildStdlibIndex =
-  StdlibIndex (groupStdlibSigs (stdlibSigTriples lintStdlibDir))
+buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResult =
+  map
+    (triples => StdlibIndex (groupStdlibSigs triples))
+    (stdlibSigTriplesResult lintStdlibDir)
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -988,7 +1003,7 @@ exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 
 -- ── cache-staleness guard for `--cache` ─────────────────────────────────────
 -- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
--- `--cache`'s key never sees: `buildStdlibIndex` parses the STDLIB SOURCE TREE
+-- `--cache`'s key never sees: `buildStdlibIndexResult` parses the stdlib source tree
 -- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
 -- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
 -- UNCHANGED compiler/sqlite file, so a cached shard for that file would
@@ -1023,10 +1038,44 @@ stdlibFingerprintGo dir (n :: rest) =
 -- degradation path, silent by design (lint printing compiler-internal chatter to
 -- stdout would break every caller that diffs its output, exactly as
 -- `lintCacheCtx` argues for `--cache`).
-stdlibSigTriples : String -> <IO> List (String, String, Ty)
-stdlibSigTriples dir = match stdlibMemberPaths dir
-  None => []
-  Some paths => flatMap (stdlibFileSigs dir) paths
+stdlibSigTriplesResult : String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigTriplesResult dir = match stdlibMemberPaths dir
+  None => Ok []
+  Some paths => stdlibSigsGo dir paths
+
+export
+lintParseSource : String -> Result ParseError (List Decl, Positions)
+lintParseSource src =
+  let (tokens, offsets) = tokenizeWithOffsetPairs src
+  match prescanErrorPairs src tokens offsets
+    Some e => Err e
+    None =>
+      let _ = stageBump "parse.positions"
+      match parseWithPositionsOptPairs src tokens offsets
+        Some parsed => Ok parsed
+        None =>
+          map
+            (_ => parseWithPositions src)
+            (parseResultPairs src tokens offsets)
+
+stdlibSigsGo : String ->
+  List String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigsGo _ [] = Ok []
+stdlibSigsGo dir (relPath :: rest) =
+  let path = "\{dir}/\{relPath}"
+  let src = readFileSafe path
+  match lintParseSource src
+    Err e => Err StdlibIndexError {
+      path = path,
+      source = src,
+      diagnostic = parseErrDiag path e,
+    }
+    Ok (decls, _) =>
+      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
+      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
+      map (sigs ++ _) (stdlibSigsGo dir rest)
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
 -- Appending rather than overwriting is the whole point: `setInPlace` alone
@@ -1066,16 +1115,6 @@ memberPathsGo dir prefix (n :: rest) =
       Err _ => []
       Ok sub => memberPathsGo dir "\{prefix}\{n}/" sub
   here ++ memberPathsGo dir prefix rest
-
--- One stdlib file's exported signatures, stamped with the module name the rest
--- of the compiler uses for it (the import id — `list`, `crypto.hmac`, …).
--- `readFileSafe` yields "" on any read error and "" parses to [], so an
--- unreadable member drops out of the index instead of failing the whole build.
-stdlibFileSigs : String -> String -> <IO> List (String, String, Ty)
-stdlibFileSigs dir relPath =
-  let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
-  let (decls, _) = parseWithPositions (readFileSafe "\{dir}/\{relPath}")
-  flatMap (d => stampModule modName (exportedSigPair d)) decls
 
 stampModule : String -> List (String, Ty) -> List (String, String, Ty)
 stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
@@ -1480,8 +1519,8 @@ findingToDiag f =
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
--- target.  Uses `parseWithPositionsLocated` (#649) so a `Finding` at a nested
--- sub-expression (`exprRuleFindings`) carries THAT expression's own location,
+-- target. A `Finding` at a nested sub-expression (`exprRuleFindings`)
+-- carries THAT expression's own location,
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s
@@ -1497,14 +1536,16 @@ lintFileDiagTripleParsed : StdlibIndex ->
   <IO> (String, String, List Diag, Positions, List Decl)
 lintFileDiagTripleParsed idx disable only deny path =
   let src = readFileSafe path
-  let (decls, pos) = parseWithPositionsLocated src
-  let facts = mkFileFacts src decls pos
-  let allFindings =
-    applySuppressionsDirs
-      (factDirectives facts)
-      (lintProgramFacts idx (selectRules only disable) path facts pos decls)
-  let findings = applyFindingFilters disable only deny allFindings
-  (path, src, map findingToDiag findings, pos, decls)
+  match lintParseSource src
+    Err e => (path, src, [parseErrDiag path e], Positions [] [] 0 [], [])
+    Ok (decls, pos) =>
+      let facts = mkFileFacts src decls pos
+      let allFindings =
+        applySuppressionsDirs
+          (factDirectives facts)
+          (lintProgramFacts idx (selectRules only disable) path facts pos decls)
+      let findings = applyFindingFilters disable only deny allFindings
+      (path, src, map findingToDiag findings, pos, decls)
 
 -- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
 -- caller that does not need the cross-file tier's inputs still wants.
@@ -7227,8 +7268,8 @@ preludeShadowFinding name loc = Finding {
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseResultPairs" false) (mem "parseWithPositionsOptPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "last" false))))
@@ -7240,7 +7281,8 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Private "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig false "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
@@ -7434,8 +7476,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
-(DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
-(DFunDef false "buildStdlibIndex" () (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EApp (EVar "stdlibSigTriples") (EVar "lintStdlibDir")))))
+(DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
+(DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "map") (ELam ((PVar "triples")) (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -7445,8 +7488,13 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "stdlibFingerprintGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "stdlibFingerprintGo" (PWild (PList)) (ELit (LString "")))
 (DFunDef false "stdlibFingerprintGo" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "h") (EApp (EVar "hashString") (EApp (EVar "readFileSafe") (EVar "path")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString ";"))) (EApp (EVar "display") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "dir")) (EVar "rest")))) (ELit (LString ""))))))
-(DTypeSig false "stdlibSigTriples" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibSigTriples" ((PVar "dir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "dir")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "paths")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "stdlibFileSigs") (EVar "dir"))) (EVar "paths")))))
+(DTypeSig false "stdlibSigTriplesResult" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")))))))
+(DFunDef false "stdlibSigTriplesResult" ((PVar "dir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "dir")) (arm (PCon "None") () (EApp (EVar "Ok") (EListLit))) (arm (PCon "Some" (PVar "paths")) () (EApp (EApp (EVar "stdlibSigsGo") (EVar "dir")) (EVar "paths")))))
+(DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
+(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
+(DTypeSig false "stdlibSigsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))))
+(DFunDef false "stdlibSigsGo" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "stdlibSigsGo" ((PVar "dir") (PCons (PVar "relPath") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "relPath"))) (ELit (LString "")))) (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ERecordCreate "StdlibIndexError" ((fa "path" (EVar "path")) (fa "source" (EVar "src")) (fa "diagnostic" (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "relPath"))))) (DoLet false false (PVar "sigs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "stampModule") (EVar "modName")) (EApp (EVar "exportedSigPair") (EVar "d"))))) (EVar "decls"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "sigs") (EVar "_s")))) (EApp (EApp (EVar "stdlibSigsGo") (EVar "dir")) (EVar "rest"))))))))))
 (DTypeSig false "groupStdlibSigs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "groupStdlibSigs" ((PVar "triples")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "triples")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupStdlibSigsInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "Unit"))))
@@ -7457,8 +7505,6 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "memberPathsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "memberPathsGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "memberPathsGo" ((PVar "dir") (PVar "prefix") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "n")) (EListLit) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "n")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (EMatch (EApp (EVar "listDir") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "sub")) () (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "/")))) (EVar "sub"))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
-(DTypeSig false "stdlibFileSigs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")))))))
-(DFunDef false "stdlibFileSigs" ((PVar "dir") (PVar "relPath")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "relPath"))))) (DoLet false false (PTuple (PVar "decls") PWild) (EApp (EVar "parseWithPositions") (EApp (EVar "readFileSafe") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "relPath"))) (ELit (LString "")))))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "stampModule") (EVar "modName")) (EApp (EVar "exportedSigPair") (EVar "d"))))) (EVar "decls")))))
 (DTypeSig false "stampModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
@@ -7567,7 +7613,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "path") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit)) (EListLit))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
 (DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -9312,8 +9358,8 @@ preludeShadowFinding name loc = Finding {
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseResultPairs" false) (mem "parseWithPositionsOptPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "last" false))))
@@ -9325,7 +9371,8 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Private "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig false "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
@@ -9519,8 +9566,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
-(DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
-(DFunDef false "buildStdlibIndex" () (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EApp (EVar "stdlibSigTriples") (EVar "lintStdlibDir")))))
+(DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
+(DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "triples")) (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -9530,8 +9578,13 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "stdlibFingerprintGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "stdlibFingerprintGo" (PWild (PList)) (ELit (LString "")))
 (DFunDef false "stdlibFingerprintGo" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "h") (EApp (EVar "hashString") (EApp (EVar "readFileSafe") (EVar "path")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString ";"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "dir")) (EVar "rest")))) (ELit (LString ""))))))
-(DTypeSig false "stdlibSigTriples" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibSigTriples" ((PVar "dir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "dir")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "paths")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "stdlibFileSigs") (EVar "dir"))) (EVar "paths")))))
+(DTypeSig false "stdlibSigTriplesResult" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")))))))
+(DFunDef false "stdlibSigTriplesResult" ((PVar "dir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "dir")) (arm (PCon "None") () (EApp (EVar "Ok") (EListLit))) (arm (PCon "Some" (PVar "paths")) () (EApp (EApp (EVar "stdlibSigsGo") (EVar "dir")) (EVar "paths")))))
+(DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
+(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
+(DTypeSig false "stdlibSigsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))))
+(DFunDef false "stdlibSigsGo" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "stdlibSigsGo" ((PVar "dir") (PCons (PVar "relPath") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "relPath"))) (ELit (LString "")))) (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ERecordCreate "StdlibIndexError" ((fa "path" (EVar "path")) (fa "source" (EVar "src")) (fa "diagnostic" (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "relPath"))))) (DoLet false false (PVar "sigs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "stampModule") (EVar "modName")) (EApp (EVar "exportedSigPair") (EVar "d"))))) (EVar "decls"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "sigs") (EVar "_s")))) (EApp (EApp (EVar "stdlibSigsGo") (EVar "dir")) (EVar "rest"))))))))))
 (DTypeSig false "groupStdlibSigs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "groupStdlibSigs" ((PVar "triples")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "triples")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupStdlibSigsInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "Unit"))))
@@ -9542,8 +9595,6 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "memberPathsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "memberPathsGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "memberPathsGo" ((PVar "dir") (PVar "prefix") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "n")) (EListLit) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "n")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (EMatch (EApp (EVar "listDir") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "sub")) () (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "/")))) (EMethodRef "sub"))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
-(DTypeSig false "stdlibFileSigs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")))))))
-(DFunDef false "stdlibFileSigs" ((PVar "dir") (PVar "relPath")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "relPath"))))) (DoLet false false (PTuple (PVar "decls") PWild) (EApp (EVar "parseWithPositions") (EApp (EVar "readFileSafe") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "relPath"))) (ELit (LString "")))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "stampModule") (EVar "modName")) (EApp (EVar "exportedSigPair") (EVar "d"))))) (EVar "decls")))))
 (DTypeSig false "stampModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
@@ -9652,7 +9703,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "path") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit)) (EListLit))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
 (DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))

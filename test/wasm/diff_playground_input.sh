@@ -29,6 +29,20 @@ check_wat() {
 command -v wasm-tools >/dev/null 2>&1 || bad "wasm-tools unavailable"
 command -v node >/dev/null 2>&1 || bad "node unavailable"
 bash "$ROOT/playground/build_playground_wasm.sh" >"$WORK/build.out" 2>"$WORK/build.err" || bad "fresh playground build failed"
+# Scanner dispatch-TMC keeps prelude tokenization within the browser stack.
+cat > "$WORK/scanner.mdk" <<'EOF'
+import frontend.lexer.{tokenize}
+main = length (tokenize "main = 42")
+EOF
+checks=$((checks + 1))
+if "$MODULES" "$RUNTIME" "$CORE" "$WORK/scanner.mdk" "$WORK" "$ROOT/compiler" "$ROOT/stdlib" >"$WORK/scanner.wat" 2>"$WORK/scanner.err"; then
+  for property in 'group:frontend_lexer__scan' '(func $frontend_lexer__scan__disploop' 'return_call $frontend_lexer__scan__disploop'; do
+    grep -qF "$property" "$WORK/scanner.wat" || bad "scanner lost bounded-stack property: $property"
+  done
+else
+  bad "scanner emission failed"
+  cat "$WORK/scanner.err"
+fi
 check_playground_sibling() {
   suite="$1"
   for arm in eval native; do
@@ -385,5 +399,6 @@ check_liftoff_stack async-overlap "$ROOT/test/async_fixtures/overlap_sleeps.mdk"
 check_liftoff_stack async-defer "$ROOT/test/visitor_battery/64_async_defer.mdk" 0 ""
 check_liftoff_stack async-do "$ROOT/test/visitor_battery/49_async.mdk" 1 T-DO-NOT-MONAD
 check_liftoff_stack async-do-panic "$ROOT/test/visitor_battery/65_async_do_panic.mdk" 1 T-NO-IMPL
+check_liftoff_stack int-control "$ROOT/test/wasm/fixtures/lit_int.mdk" 0 ""
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]

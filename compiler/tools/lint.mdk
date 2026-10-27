@@ -67,15 +67,20 @@ import frontend.ast.{
 }
 import frontend.desugar.{mapChildren}
 import frontend.parser.{
-  Positions,
+  Positions(..),
   DeclPos,
   positionsDecls,
   declPosLine,
   declPosEndLine,
   parseWithPositions,
-  parseWithPositionsLocated,
+  parseResultPairs,
+  parseWithPositionsOptPairs,
+  prescanErrorPairs,
+  ParseError,
 }
-import driver.diagnostics.{Severity(..), Diag(..), ppSeverity, readFileSafe}
+import driver.diagnostics.{
+  Severity(..), Diag(..), ppSeverity, readFileSafe, parseErrDiag
+}
 import support.util.{
   escStr,
   contains,
@@ -129,9 +134,11 @@ import regex.{
 import ir.sexp.{exprSexp, patSexp}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
+import support.stage_count.{stageBump}
 import frontend.lexer.{
   Comment,
   collectComments,
+  tokenizeWithOffsetPairs,
   commentLine,
   commentCol,
   commentText,
@@ -756,7 +763,7 @@ crossRuleNameOf r = r.name
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
 -- `idx` is the stdlib reference index, built ONCE by the IO caller (see
--- `buildStdlibIndex`) and handed to every rule; a caller with no stdlib to read
+-- `buildStdlibIndexResult`) and handed to every rule; a caller with no stdlib to read
 -- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
 export
 lintProgram : StdlibIndex ->
@@ -950,7 +957,7 @@ stdlibAmbiguousNames idx =
 -- `StdlibIndex` argument — is in the active `--only`/`--disable` set. Mirrors
 -- `ruleActiveFixable`'s only/disable semantics (the `enabled`/fixer checks
 -- that helper also makes don't apply here: the registry always enables this
--- rule). A caller uses this to decide whether `buildStdlibIndex` is worth
+-- rule). A caller uses this to decide whether `buildStdlibIndexResult` is worth
 -- its cost at all.
 export
 stdlibIndexNeeded : List String -> List String -> Bool
@@ -963,10 +970,18 @@ stdlibIndexNeeded only disable =
 -- gate this behind `stdlibIndexNeeded` first — when no active rule reads the
 -- index, `emptyStdlibIndex` costs nothing and every rule's `check` behaves
 -- identically (see `emptyStdlibIndex`'s own doc).
+public export data StdlibIndexError = StdlibIndexError {
+  path : String,
+  source : String,
+  diagnostic : Diag,
+}
+
 export
-buildStdlibIndex : <IO> StdlibIndex
-buildStdlibIndex =
-  StdlibIndex (groupStdlibSigs (stdlibSigTriples lintStdlibDir))
+buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResult =
+  map
+    (triples => StdlibIndex (groupStdlibSigs triples))
+    (stdlibSigTriplesResult lintStdlibDir)
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -984,7 +999,7 @@ exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 
 -- ── cache-staleness guard for `--cache` ─────────────────────────────────────
 -- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
--- `--cache`'s key never sees: `buildStdlibIndex` parses the STDLIB SOURCE TREE
+-- `--cache`'s key never sees: `buildStdlibIndexResult` parses the stdlib source tree
 -- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
 -- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
 -- UNCHANGED compiler/sqlite file, so a cached shard for that file would
@@ -1019,10 +1034,44 @@ stdlibFingerprintGo dir (n :: rest) =
 -- degradation path, silent by design (lint printing compiler-internal chatter to
 -- stdout would break every caller that diffs its output, exactly as
 -- `lintCacheCtx` argues for `--cache`).
-stdlibSigTriples : String -> <IO> List (String, String, Ty)
-stdlibSigTriples dir = match stdlibMemberPaths dir
-  None => []
-  Some paths => flatMap (stdlibFileSigs dir) paths
+stdlibSigTriplesResult : String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigTriplesResult dir = match stdlibMemberPaths dir
+  None => Ok []
+  Some paths => stdlibSigsGo dir paths
+
+export
+lintParseSource : String -> Result ParseError (List Decl, Positions)
+lintParseSource src =
+  let (tokens, offsets) = tokenizeWithOffsetPairs src
+  match prescanErrorPairs src tokens offsets
+    Some e => Err e
+    None =>
+      let _ = stageBump "parse.positions"
+      match parseWithPositionsOptPairs src tokens offsets
+        Some parsed => Ok parsed
+        None =>
+          map
+            (_ => parseWithPositions src)
+            (parseResultPairs src tokens offsets)
+
+stdlibSigsGo : String ->
+  List String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigsGo _ [] = Ok []
+stdlibSigsGo dir (relPath :: rest) =
+  let path = "\{dir}/\{relPath}"
+  let src = readFileSafe path
+  match lintParseSource src
+    Err e => Err StdlibIndexError {
+      path = path,
+      source = src,
+      diagnostic = parseErrDiag path e,
+    }
+    Ok (decls, _) =>
+      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
+      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
+      map (sigs ++ _) (stdlibSigsGo dir rest)
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
 -- Appending rather than overwriting is the whole point: `setInPlace` alone
@@ -1062,16 +1111,6 @@ memberPathsGo dir prefix (n :: rest) =
       Err _ => []
       Ok sub => memberPathsGo dir "\{prefix}\{n}/" sub
   here ++ memberPathsGo dir prefix rest
-
--- One stdlib file's exported signatures, stamped with the module name the rest
--- of the compiler uses for it (the import id — `list`, `crypto.hmac`, …).
--- `readFileSafe` yields "" on any read error and "" parses to [], so an
--- unreadable member drops out of the index instead of failing the whole build.
-stdlibFileSigs : String -> String -> <IO> List (String, String, Ty)
-stdlibFileSigs dir relPath =
-  let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
-  let (decls, _) = parseWithPositions (readFileSafe "\{dir}/\{relPath}")
-  flatMap (d => stampModule modName (exportedSigPair d)) decls
 
 stampModule : String -> List (String, Ty) -> List (String, String, Ty)
 stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
@@ -1476,8 +1515,8 @@ findingToDiag f =
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
--- target.  Uses `parseWithPositionsLocated` (#649) so a `Finding` at a nested
--- sub-expression (`exprRuleFindings`) carries THAT expression's own location,
+-- target. A `Finding` at a nested sub-expression (`exprRuleFindings`)
+-- carries THAT expression's own location,
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s
@@ -1493,14 +1532,16 @@ lintFileDiagTripleParsed : StdlibIndex ->
   <IO> (String, String, List Diag, Positions, List Decl)
 lintFileDiagTripleParsed idx disable only deny path =
   let src = readFileSafe path
-  let (decls, pos) = parseWithPositionsLocated src
-  let facts = mkFileFacts src decls pos
-  let allFindings =
-    applySuppressionsDirs
-      (factDirectives facts)
-      (lintProgramFacts idx (selectRules only disable) path facts pos decls)
-  let findings = applyFindingFilters disable only deny allFindings
-  (path, src, map findingToDiag findings, pos, decls)
+  match lintParseSource src
+    Err e => (path, src, [parseErrDiag path e], Positions [] [] 0 [], [])
+    Ok (decls, pos) =>
+      let facts = mkFileFacts src decls pos
+      let allFindings =
+        applySuppressionsDirs
+          (factDirectives facts)
+          (lintProgramFacts idx (selectRules only disable) path facts pos decls)
+      let findings = applyFindingFilters disable only deny allFindings
+      (path, src, map findingToDiag findings, pos, decls)
 
 -- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
 -- caller that does not need the cross-file tier's inputs still wants.

@@ -1,0 +1,30 @@
+import list.{findMap}
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
+  diagnosticLoc, diagnosticHelp, diagnosticEdits, renderParseDiagnostic
+}
+import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+
+withPath : String -> Loc -> Loc
+withPath path (Loc _ sl sc el ec) = Loc path sl sc el ec
+
+machineFix : String -> List ParseEdit -> Option Fix
+machineFix path edits =
+  findMap
+    (edit => match edit
+      ParseEdit loc _ replacement MachineApplicable =>
+        Some (Fix (withPath path loc) replacement)
+      _ => None)
+    edits
+
+export
+parseDiagnosticToDiag : String -> ParseDiagnostic -> Diag
+parseDiagnosticToDiag path diagnostic =
+  Diag
+    SevError
+    (diagnosticCode diagnostic)
+    (renderParseDiagnostic diagnostic)
+    (Some (withPath path (diagnosticLoc diagnostic)))
+    (diagnosticHelp diagnostic)
+    (machineFix path (diagnosticEdits diagnostic))

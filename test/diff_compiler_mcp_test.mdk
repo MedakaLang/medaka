@@ -298,6 +298,10 @@ coordinateRun dir =
       "medaka_fmt"
       (jObject [("source", JString "main = (\"😀\", )\n")]),
     coordinateCall
+      12
+      "medaka_check"
+      (jObject [("source", JString "main = (\"😀\", 1 != 2)\n")]),
+    coordinateCall
       11
       "medaka_check"
       (coordinateFile (stringConcat [dir, "/missing.mdk"])),
@@ -315,9 +319,18 @@ bad = )
     (Ok _, Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
       Err e => fail e
       Ok (code, out, _) => match map coordinateResponse (split "\n" out)
-        (Some first) :: (Some ambiguous) :: (Some missing) :: (Some ty) :: (Some firstError) :: (Some secondError) :: (Some diag) :: (Some symbols) :: (Some eof) :: (Some fmt) :: (Some absent) :: _ => expectEach
+        (Some first) :: (Some ambiguous) :: (Some missing) :: (Some ty) :: (Some firstError) :: (Some secondError) :: (Some diag) :: (Some symbols) :: (Some eof) :: (Some fmt) :: (Some parseDiag) :: (Some absent) :: _ => expectEach
           [
             ("exit", expectEqual 0 code),
+            (
+              "parse identity and UTF-16 range",
+              expectTextContainsAll
+                [
+                  "P-BAD-NEQ", "\"character\":16", "\"character\":18",
+                  "replace `!=` with `/=`"
+                ]
+                parseDiag,
+            ),
             (
               "EOF clamp",
               expectTextContainsAll ["\"character\":11,\"line\":0"] eof,
