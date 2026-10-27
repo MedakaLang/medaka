@@ -1,5 +1,5 @@
 # META
-source_lines=1279
+source_lines=1280
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer_records: the helpers the record arms call: field-owner resolution, field-shape
@@ -8,7 +8,8 @@ stages=DESUGAR,MARK
 -- `inferFieldAccess`, `inferValueField`, `inferRecordUpdate*`) and their field-assignment helpers
 -- (`unifyFieldAssignIdx`, `unifyFieldAssignsIdx`) are members of the `tc_infer` recursion.
 --
--- Spec: language-design Data Types, Product Types (record construction, access, update).
+-- Spec: language-design Data Types, Sum Types (Variants with Named Fields), Product Types (record
+-- construction, access, update).
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.

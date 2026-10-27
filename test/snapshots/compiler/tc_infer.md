@@ -3,12 +3,12 @@ source_lines=3495
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
--- match and arms, blocks, the shadow-application arms and the record arms), signature
--- pre-unification, exhaustiveness and wide-literal checks at their sites; the record arms' helpers
--- are `tc_infer_records`.
+-- match and arms, blocks, the shadow-application arms, the record arms, and the operator arms with
+-- their typing rules (`inferBinop`, `inferUnop`)), signature pre-unification, exhaustiveness and
+-- wide-literal checks at their sites; the record arms' helpers are `tc_infer_records`.
 --
 -- Spec: DICT section 4 (the elaboration judgment); HM-CORE section 3-section 5 (owed, #2555);
--- SHADOW section 1.1; EFFECTS section 3.
+-- SHADOW section 1 (S2, S4-S7), section 1.1; S2-DECL (d); EFFECTS section 3.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
