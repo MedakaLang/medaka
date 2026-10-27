@@ -450,7 +450,7 @@ test "a variable written twice decodes to one cell" =
   let pair = TFun (TVar cell) (EffRow [] None) (TVar cell)
   match monoOfSExp (monoSExp pair)
     Ok (TFun (TVar a) _ (TVar b)) =>
-      let _ = a := Unbound 9 1
+      a := Unbound 9 1
       expectEqual "(tv 9 1)" (renderSExp (monoSExp (TVar b)))
     _ => fail "the arrow did not decode to an arrow of two variables"
 
@@ -1222,7 +1222,7 @@ test "one decoded record keeps one cell per variable" =
     RecordInfo [4] [] (TVar cell) [("xs", xs)] (omInsert "xs" xs omEmpty)
   match recordInfoOfSExp (recordInfoSExp record)
     Ok (RecordInfo _ _ (TVar c) fields index) =>
-      let _ = c := Unbound 9 1
+      c := Unbound 9 1
       expectEqual
         [
           "(app (con List builtin) (tv 9 1))",
@@ -1245,7 +1245,7 @@ test "a population's payloads decode to cells of their own" =
       flatMap snd (M.entries (spRows back)),
     )
       ([RecordInfo _ _ (TApp _ (TVar c)) _ _], [(_, _, rowRecord)]) =>
-        let _ = c := Unbound 40 1
+        c := Unbound 40 1
         expectEqual
           "(app (app (con Wrap (module m)) (tv 11 1)) (tv 12 1))"
           (renderSExp (monoSExp (resultOf rowRecord)))

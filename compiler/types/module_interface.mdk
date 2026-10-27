@@ -375,13 +375,13 @@ applyModuleTrees g t =
   let gs = r.grants
   let las = r.localAbs
   r.evTable := t.mtEvidence ++ r.evTable.value
-  let _ = each (setGrantIds gs.gsTopIds) t.mtTopIds
-  let _ = each (row => forgetLocalRows las gs (fst row)) t.mtLocalIds
+  each (setGrantIds gs.gsTopIds) t.mtTopIds
+  each (row => forgetLocalRows las gs (fst row)) t.mtLocalIds
   las.lasBinders :=
     omFromPairs
       (map (row => (fst row, map zonkLocalAbs (snd row))) t.mtLocalAbs)
       las.lasBinders.value
-  let _ = each (setGrantIds gs.gsLocalIds) t.mtLocalIds
+  each (setGrantIds gs.gsLocalIds) t.mtLocalIds
   gs.gsMethods :=
     fold
       (acc row => match snd row
@@ -393,7 +393,7 @@ applyModuleTrees g t =
   gs.gsBounds := omFromPairs t.mtBounds gs.gsBounds.value
   gs.gsValueBounds := omFromPairs t.mtValueBounds gs.gsValueBounds.value
   g.promotionHarvestRef := dedup (g.promotionHarvestRef.value ++ t.mtPromoted)
-  let _ = match t.mtMain
+  match t.mtMain
     Some p => g.mainSchemeRef := Some (thawScheme p)
     None => ()
   t.mtMarked

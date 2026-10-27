@@ -61,7 +61,7 @@ walkLocated visit at e =
   let here = match e
     ELoc l _ => Some l
     _ => at
-  let _ = visit here e
+  visit here e
   let _ = mapChildren (c => keep c (walkLocated visit here c)) e
   ()
 
@@ -88,7 +88,7 @@ mainBinding (_ :: rest) = mainBinding rest
 bodyEnd : (Int, Int) -> Expr -> (Int, Int)
 bodyEnd start body =
   let last = Ref start
-  let _ = walkLocated (visitEnd last) None body
+  walkLocated (visitEnd last) None body
   !last
 
 visitEnd : Ref (Int, Int) -> Option Loc -> Expr -> Unit
@@ -120,7 +120,7 @@ before (l1, c1) (l2, c2) = l1 < l2 || l1 == l2 && c1 <= c2
 (DFunDef false "visitVar" ((PVar "name") (PVar "found") (PVar "at") (PCon "EVar" (PVar "x"))) (EMatch (EUnOp "!" (EVar "found")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "x") (EVar "name")) (EApp (EApp (EVar "setRef") (EVar "found")) (EVar "at")) (ELit LUnit))) (arm (PCon "Some" PWild) () (ELit LUnit))))
 (DFunDef false "visitVar" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "walkLocated" (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
-(DFunDef false "walkLocated" ((PVar "visit") (PVar "at") (PVar "e")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "e") (arm (PCon "ELoc" (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "at")))) (DoLet false false PWild (EApp (EApp (EVar "visit") (EVar "here")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "c")) (EApp (EApp (EVar "keep") (EVar "c")) (EApp (EApp (EApp (EVar "walkLocated") (EVar "visit")) (EVar "here")) (EVar "c"))))) (EVar "e"))) (DoExpr (ELit LUnit))))
+(DFunDef false "walkLocated" ((PVar "visit") (PVar "at") (PVar "e")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "e") (arm (PCon "ELoc" (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "at")))) (DoExpr (EApp (EApp (EVar "visit") (EVar "here")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "c")) (EApp (EApp (EVar "keep") (EVar "c")) (EApp (EApp (EApp (EVar "walkLocated") (EVar "visit")) (EVar "here")) (EVar "c"))))) (EVar "e"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "keep" (TyFun (TyCon "Expr") (TyFun (TyCon "Unit") (TyCon "Expr"))))
 (DFunDef false "keep" ((PVar "e") PWild) (EVar "e"))
 (DTypeSig true "inMainBinding" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
@@ -132,7 +132,7 @@ before (l1, c1) (l2, c2) = l1 < l2 || l1 == l2 && c1 <= c2
 (DFunDef false "mainBinding" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PList) (PVar "body") (PVar "site") PWild) PWild)) (EApp (EVar "Some") (ETuple (EVar "site") (EVar "body"))))
 (DFunDef false "mainBinding" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainBinding") (EVar "rest")))
 (DTypeSig false "bodyEnd" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "bodyEnd" ((PVar "start") (PVar "body")) (EBlock (DoLet false false (PVar "last") (EApp (EVar "Ref") (EVar "start"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkLocated") (EApp (EVar "visitEnd") (EVar "last"))) (EVar "None")) (EVar "body"))) (DoExpr (EUnOp "!" (EVar "last")))))
+(DFunDef false "bodyEnd" ((PVar "start") (PVar "body")) (EBlock (DoLet false false (PVar "last") (EApp (EVar "Ref") (EVar "start"))) (DoExpr (EApp (EApp (EApp (EVar "walkLocated") (EApp (EVar "visitEnd") (EVar "last"))) (EVar "None")) (EVar "body"))) (DoExpr (EUnOp "!" (EVar "last")))))
 (DTypeSig false "visitEnd" (TyFun (TyApp (TyCon "Ref") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
 (DFunDef false "visitEnd" ((PVar "last") PWild (PCon "ELoc" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) PWild)) (EIf (EApp (EApp (EVar "before") (EUnOp "!" (EVar "last"))) (ETuple (EVar "el") (EVar "ec"))) (EApp (EApp (EVar "setRef") (EVar "last")) (ETuple (EVar "el") (EVar "ec"))) (ELit LUnit)))
 (DFunDef false "visitEnd" (PWild PWild PWild) (ELit LUnit))
@@ -160,7 +160,7 @@ before (l1, c1) (l2, c2) = l1 < l2 || l1 == l2 && c1 <= c2
 (DFunDef false "visitVar" ((PVar "name") (PVar "found") (PVar "at") (PCon "EVar" (PVar "x"))) (EMatch (EUnOp "!" (EVar "found")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "x") (EVar "name")) (EApp (EApp (EVar "setRef") (EVar "found")) (EVar "at")) (ELit LUnit))) (arm (PCon "Some" PWild) () (ELit LUnit))))
 (DFunDef false "visitVar" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "walkLocated" (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
-(DFunDef false "walkLocated" ((PVar "visit") (PVar "at") (PVar "e")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "e") (arm (PCon "ELoc" (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "at")))) (DoLet false false PWild (EApp (EApp (EVar "visit") (EVar "here")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "c")) (EApp (EApp (EVar "keep") (EVar "c")) (EApp (EApp (EApp (EVar "walkLocated") (EVar "visit")) (EVar "here")) (EVar "c"))))) (EVar "e"))) (DoExpr (ELit LUnit))))
+(DFunDef false "walkLocated" ((PVar "visit") (PVar "at") (PVar "e")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "e") (arm (PCon "ELoc" (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "at")))) (DoExpr (EApp (EApp (EVar "visit") (EVar "here")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "c")) (EApp (EApp (EVar "keep") (EVar "c")) (EApp (EApp (EApp (EVar "walkLocated") (EVar "visit")) (EVar "here")) (EVar "c"))))) (EVar "e"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "keep" (TyFun (TyCon "Expr") (TyFun (TyCon "Unit") (TyCon "Expr"))))
 (DFunDef false "keep" ((PVar "e") PWild) (EVar "e"))
 (DTypeSig true "inMainBinding" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
@@ -172,7 +172,7 @@ before (l1, c1) (l2, c2) = l1 < l2 || l1 == l2 && c1 <= c2
 (DFunDef false "mainBinding" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PList) (PVar "body") (PVar "site") PWild) PWild)) (EApp (EVar "Some") (ETuple (EVar "site") (EVar "body"))))
 (DFunDef false "mainBinding" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainBinding") (EVar "rest")))
 (DTypeSig false "bodyEnd" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "bodyEnd" ((PVar "start") (PVar "body")) (EBlock (DoLet false false (PVar "last") (EApp (EVar "Ref") (EVar "start"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkLocated") (EApp (EVar "visitEnd") (EVar "last"))) (EVar "None")) (EVar "body"))) (DoExpr (EUnOp "!" (EVar "last")))))
+(DFunDef false "bodyEnd" ((PVar "start") (PVar "body")) (EBlock (DoLet false false (PVar "last") (EApp (EVar "Ref") (EVar "start"))) (DoExpr (EApp (EApp (EApp (EVar "walkLocated") (EApp (EVar "visitEnd") (EVar "last"))) (EVar "None")) (EVar "body"))) (DoExpr (EUnOp "!" (EVar "last")))))
 (DTypeSig false "visitEnd" (TyFun (TyApp (TyCon "Ref") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
 (DFunDef false "visitEnd" ((PVar "last") PWild (PCon "ELoc" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) PWild)) (EIf (EApp (EApp (EVar "before") (EUnOp "!" (EVar "last"))) (ETuple (EVar "el") (EVar "ec"))) (EApp (EApp (EVar "setRef") (EVar "last")) (ETuple (EVar "el") (EVar "ec"))) (ELit LUnit)))
 (DFunDef false "visitEnd" (PWild PWild PWild) (ELit LUnit))

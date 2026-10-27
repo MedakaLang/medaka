@@ -101,13 +101,13 @@ referencedRows : List Decl -> List EvEntry -> List EvEntry
 referencedRows decls rows =
   let size = evidenceHighWater rows
   let marks = arrayMake size False
-  let _ = markReferenced marks (evidenceFaults (Some (decls, [])) [])
+  markReferenced marks (evidenceFaults (Some (decls, [])) [])
   filter (isMarked marks) rows
 
 markReferenced : Array Bool -> List EvidenceFault -> Unit
 markReferenced _ [] = ()
 markReferenced marks ((MissingEntry _ i _) :: rest) =
-  let _ = if i >= 0 && i < arrayLength marks then arraySetUnsafe i True marks
+  if i >= 0 && i < arrayLength marks then arraySetUnsafe i True marks
   markReferenced marks rest
 markReferenced marks (_ :: rest) = markReferenced marks rest
 
@@ -228,7 +228,7 @@ readRuntimeType cur = match runtimeTypeFromName (cursorAtom cur)
 
 readBinder : SexpCursor -> BinderRow
 readBinder cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let bid = readBinderId cur
   let name = cursorAtom cur
   let ty = readRuntimeType cur
@@ -237,7 +237,7 @@ readBinder cur =
     [t] => Some t
     _ => cursorFail cur None
   let signed = readBool cur
-  let _ = cursorClose cur
+  cursorClose cur
   BinderRow {
     brId = bid,
     brName = name,
@@ -347,7 +347,7 @@ rowsProblem seen counter ((EvEntry (EvId _ i) _) :: rest)
   | i >= counter = Some "an evidence row is at or above the evidence counter"
   | arrayGetUnsafe i seen = Some "two evidence rows share one ordinal"
   | otherwise =
-    let _ = arraySetUnsafe i True seen
+    arraySetUnsafe i True seen
     rowsProblem seen counter rest
 
 -- Whether a tree site of module `""` names an ordinal at or above the counter.
@@ -553,8 +553,8 @@ binderSpan decls =
   let note =
     bid => match bid
       BinderId _ i if i >= 0 =>
-        let _ = if lo.value < 0 || i < lo.value then lo := i
-        let _ = if i > hi.value then hi := i
+        if lo.value < 0 || i < lo.value then lo := i
+        if i > hi.value then hi := i
         count := count.value + 1
         bid
       _ => bid
@@ -588,11 +588,10 @@ binderRunIs run decls
       bid => match bid
         BinderId _ i if i >= 0 =>
           let j = i - base
-          let _ =
-            if j < 0 || j >= count || arrayGetUnsafe j seen then
-              ok := False
-            else
-              arraySetUnsafe j True seen
+          if j < 0 || j >= count || arrayGetUnsafe j seen then
+            ok := False
+          else
+            arraySetUnsafe j True seen
           taken := taken.value + 1
           bid
         _ => bid
@@ -633,7 +632,7 @@ seedPreludeElab generation pe =
   match evidenceRowsProblem pe.peEvCounter pe.peEvidence
     Some _ => ()
     None =>
-      let _ = setPreludeEvidence pe.peEvCounter pe.peEvidence
+      setPreludeEvidence pe.peEvCounter pe.peEvidence
       preludeElabCacheRef := Some (generation, pe, False)
 
 export
