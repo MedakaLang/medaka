@@ -655,6 +655,16 @@ class = "history"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_shadow.mdk"
+class = "history"
+count = 6
+
+[[entry]]
+file = "compiler/types/tc_shadow.mdk"
+class = "draft"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_state.mdk"
 class = "history"
 count = 1
@@ -682,7 +692,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 47
+count = 41
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -697,12 +707,12 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 184
+count = 161
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 10
+count = 9
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -712,7 +722,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 172
+count = 155
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

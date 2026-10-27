@@ -110,6 +110,7 @@ import types.typecheck.{
   cellGoalInnerAliasing,
   cellStoreMisses,
   chainArgs,
+  checkModulesChainReportFor,
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
   checkModulesEntryFullReportK,
@@ -125,7 +126,9 @@ import types.typecheck.{
   driveInputsFor,
   elaborateModules,
   elaborateModulesGraph,
+  elaborateOne,
   elaborateOneFacts,
+  isLiveSpan,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnTemplatePresenceProbe,
@@ -133,11 +136,6 @@ import types.typecheck.{
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
-  checkModulesChainReportFor,
-  elaborateOne,
-  isLiveSpan,
-  stampMethodArities,
-  stampRoutes,
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
@@ -155,6 +153,7 @@ import types.tc_solve.{
   methodReturnMemoCurrentViews,
   spanKeys,
 }
+import types.tc_shadow.{stampMethodArities, stampRoutes}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,

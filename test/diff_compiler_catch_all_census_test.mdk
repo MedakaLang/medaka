@@ -55,6 +55,7 @@ loadAll = do
   tcSolveEntail <- readFile (underRoot "compiler/types/tc_solve_entail.mdk")
   tcSolve <- readFile (underRoot "compiler/types/tc_solve.mdk")
   tcSolveCheck <- readFile (underRoot "compiler/types/tc_solve_check.mdk")
+  tcShadow <- readFile (underRoot "compiler/types/tc_shadow.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
   ck <- readFile (underRoot "compiler/types/chain_key.mdk")
   ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
@@ -62,7 +63,7 @@ loadAll = do
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
   Ok (
     astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{rp}\n\{ck}\n\{ec}",
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{rp}\n\{ck}\n\{ec}",
     siteLedger,
     declLedger,
   )
