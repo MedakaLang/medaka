@@ -193,7 +193,7 @@ mangleUnits : List Decl ->
   (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
-  let _ = symbolInjectivityGuard (entryUnitMid allUnits) allUnits
+  symbolInjectivityGuard (entryUnitMid allUnits) allUnits
   renameUnits externSymbolName [] coreDecls modules
 
 -- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
@@ -287,7 +287,7 @@ mangleUnitsEv : EvTable ->
 mangleUnitsEv table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
-  let _ = symbolInjectivityGuard entryMid allUnits
+  symbolInjectivityGuard entryMid allUnits
   let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
     withPreludeDefs
@@ -580,16 +580,14 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- is a latent silent mis-link waiting for the edit that makes it live.
 symbolInjectivityGuard : String -> List (String, List Decl) -> Unit
 symbolInjectivityGuard entryMid allUnits =
-  let _ =
-    checkSymbolsInjective
-      "function"
-      (flatMap (unitFnSymbolPairs entryMid) allUnits)
-      omEmpty
-  let _ =
-    checkSymbolsInjective
-      "constructor"
-      (flatMap unitCtorSymbolPairs allUnits)
-      omEmpty
+  checkSymbolsInjective
+    "function"
+    (flatMap (unitFnSymbolPairs entryMid) allUnits)
+    omEmpty
+  checkSymbolsInjective
+    "constructor"
+    (flatMap unitCtorSymbolPairs allUnits)
+    omEmpty
   ()
 
 -- (emitted symbol, pre-image label) for the top-level FUNCTIONS this unit defines

@@ -134,7 +134,7 @@ export
 setPreludeEvidence : Int -> EvTable -> Unit
 setPreludeEvidence counter rows =
   let arr = arrayMake counter None
-  let _ = fillEvidence (EvIndex (arrayFromList [EvRun 0 arr])) rows
+  fillEvidence (EvIndex (arrayFromList [EvRun 0 arr])) rows
   preludeEvidenceRef := Some arr
 
 -- The index of [entries]; two entries under one ordinal panic (`fillEvidence`).
@@ -162,7 +162,7 @@ entriesAboveSegment entries = match !preludeEvidenceRef
 filledIndexOf : EvTable -> EvIndex
 filledIndexOf entries =
   let index = emptyIndexFor entries
-  let _ = fillEvidence index entries
+  fillEvidence index entries
   index
 
 -- An index with a slot for every ordinal of [entries]' runs and nothing filled;
@@ -231,7 +231,7 @@ claimSlot : EvIndex -> EvEntry -> Bool
 claimSlot idx (e@(EvEntry (EvId m i) _)) = match runFor idx m i
   EvRun lo arr => match arrayGetUnsafe (i - lo) arr
     None =>
-      let _ = arraySetUnsafe (i - lo) (Some e) arr
+      arraySetUnsafe (i - lo) (Some e) arr
       True
     Some _ => False
 

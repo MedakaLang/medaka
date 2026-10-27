@@ -566,7 +566,7 @@ registerMethodDictSlots : GraphCtx ->
   Unit
 registerMethodDictSlots gctx _ _ [] _ = ()
 registerMethodDictSlots gctx scope slot (id :: rest) subst =
-  let _ = registerOneMethodDict gctx scope slot id subst
+  registerOneMethodDict gctx scope slot id subst
   registerMethodDictSlots gctx scope (slot + 1) rest subst
 
 registerOneMethodDict : GraphCtx ->
@@ -638,7 +638,7 @@ registerImplMethodDictsGo : GraphCtx ->
   Unit
 registerImplMethodDictsGo gctx _ _ [] _ = ()
 registerImplMethodDictsGo gctx scope slot (vname :: rest) tvMap =
-  let _ = registerImplMethodDictOne gctx scope slot vname tvMap
+  registerImplMethodDictOne gctx scope slot vname tvMap
   registerImplMethodDictsGo gctx scope (slot + 1) rest tvMap
 
 registerImplMethodDictOne : GraphCtx ->
@@ -922,7 +922,7 @@ registerSlotPredGivens : GraphCtx ->
   Unit
 registerSlotPredGivens gctx _ _ [] = ()
 registerSlotPredGivens gctx scope slot (s :: srest) =
-  let _ = registerFunPredGiven gctx s (Scopes.binderAt scope slot)
+  registerFunPredGiven gctx s (Scopes.binderAt scope slot)
   registerSlotPredGivens gctx scope (slot + 1) srest
 
 export
@@ -930,7 +930,7 @@ registerFunPredGiven : GraphCtx -> PredicateSlot -> EvidenceBinderId -> Unit
 registerFunPredGiven gctx slot binder
   | slot.psIface.irName == "" = ()
   | otherwise =
-    let _ = pushGiven gctx GMPredicate DirectGiven slot binder
+    pushGiven gctx GMPredicate DirectGiven slot binder
     registerFunPredGivenSlots gctx (predicateSlotKnownSupers gctx slot) binder
 
 -- A signature slot's supers share its dict parameter: the dictionary it receives
@@ -942,7 +942,7 @@ registerFunPredGivenSlots : GraphCtx ->
   Unit
 registerFunPredGivenSlots gctx [] _ = ()
 registerFunPredGivenSlots gctx ((slot, path) :: rest) binder =
-  let _ = pushGiven gctx GMPredicate (ProjectedGiven binder path) slot binder
+  pushGiven gctx GMPredicate (ProjectedGiven binder path) slot binder
   registerFunPredGivenSlots gctx rest binder
 
 -- A dictionary supplied for one predicate also supplies every transitive
@@ -1036,5 +1036,5 @@ registerActiveDictVars : GraphCtx ->
   Unit
 registerActiveDictVars gctx _ _ [] = ()
 registerActiveDictVars gctx scope slot (s :: rest) =
-  let _ = registerEachActive gctx s.psBoundIds (Scopes.binderAt scope slot)
+  registerEachActive gctx s.psBoundIds (Scopes.binderAt scope slot)
   registerActiveDictVars gctx scope (slot + 1) rest

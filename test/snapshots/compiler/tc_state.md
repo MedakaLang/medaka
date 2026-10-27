@@ -497,7 +497,7 @@ export
 wPushAll : Windowed a -> List a -> Unit
 wPushAll _ [] = ()
 wPushAll w (x :: rest) =
-  let _ = wPush w x
+  wPush w x
   wPushAll w rest
 
 -- the empty shadow-dict stamp: an unconstrained standalone, or a route that resolves to
@@ -1222,7 +1222,7 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "wRestore" ((PVar "w") (PVar "snap")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EApp (EVar "fst") (EVar "snap")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EApp (EVar "snd") (EVar "snap"))))))
 (DTypeSig true "wPushAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "wPushAll" (PWild (PList)) (ELit LUnit))
-(DFunDef false "wPushAll" ((PVar "w") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wPush") (EVar "w")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "wPushAll") (EVar "w")) (EVar "rest")))))
+(DFunDef false "wPushAll" ((PVar "w") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "wPush") (EVar "w")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "wPushAll") (EVar "w")) (EVar "rest")))))
 (DTypeSig true "emptyShadowDicts" (TyCon "ShadowDicts"))
 (DFunDef false "emptyShadowDicts" () (ERecordCreate "ShadowDicts" ((fa "sdMonos" (EListLit)) (fa "sdIfaces" (EListLit)) (fa "sdArgVecs" (EListLit)))))
 (DTypeSig false "freshCrossRun" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "CrossRun")))
@@ -1381,7 +1381,7 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "wRestore" ((PVar "w") (PVar "snap")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EApp (EVar "fst") (EVar "snap")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EApp (EVar "snd") (EVar "snap"))))))
 (DTypeSig true "wPushAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "wPushAll" (PWild (PList)) (ELit LUnit))
-(DFunDef false "wPushAll" ((PVar "w") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wPush") (EVar "w")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "wPushAll") (EVar "w")) (EVar "rest")))))
+(DFunDef false "wPushAll" ((PVar "w") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "wPush") (EVar "w")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "wPushAll") (EVar "w")) (EVar "rest")))))
 (DTypeSig true "emptyShadowDicts" (TyCon "ShadowDicts"))
 (DFunDef false "emptyShadowDicts" () (ERecordCreate "ShadowDicts" ((fa "sdMonos" (EListLit)) (fa "sdIfaces" (EListLit)) (fa "sdArgVecs" (EListLit)))))
 (DTypeSig false "freshCrossRun" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "CrossRun")))

@@ -277,7 +277,7 @@ tyvarsAt generation join =
 test "a listed join hits its section; an unlisted join and another generation miss" =
   let pi = sampleInterface ()
   let other = { pi | piTyvarNext = 99 }
-  let _ = seedPreludeInterface (3, 4) [([[]], pi), ([ioNet], other)]
+  seedPreludeInterface (3, 4) [([[]], pi), ([ioNet], other)]
   expectAll [
     expectEqual (Some 41) (tyvarsAt (3, 4) []),
     expectEqual (Some 99) (tyvarsAt (3, 4) ioNet),
@@ -373,7 +373,7 @@ test "the owning invocation declaration basis is copied on freeze and read" =
       c := Link (TCon "Bool" OriginBuiltin)
     _ => ()
   let before = schemeText detached
-  let _ = mutate detached
+  mutate detached
   expectEach [
     ("source changed", expectEqual ["Int"] (schemeText original)),
     (

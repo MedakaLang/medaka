@@ -126,17 +126,16 @@ test "the faults come back duplicates first, then sites in tree order" =
 test "the prelude's segment answers the ordinals below its counter" =
   let segment = filter (e => ordinal e < 3) clean
   let own = filter (e => ordinal e >= 3) clean
-  let _ = setPreludeEvidence 3 segment
+  setPreludeEvidence 3 segment
   let covered = evidenceFaults trees clean
   let held = evidenceFaults trees own
-  let _ =
-    setPreludeEvidence
-      3
-      (map
-        (e => if ordinal e == 1 then EvEntry (EvId "n" 1) (EvMany []) else e)
-        segment)
+  setPreludeEvidence
+    3
+    (map
+      (e => if ordinal e == 1 then EvEntry (EvId "n" 1) (EvMany []) else e)
+      segment)
   let foreign = evidenceFaults trees own
-  let _ = setPreludeEvidence 0 []
+  setPreludeEvidence 0 []
   expectEach [
     ("a table holding the segment's rows passes", expectEqual [] covered),
     ("a table without them passes", expectEqual [] held),

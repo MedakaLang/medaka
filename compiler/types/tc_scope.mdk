@@ -766,12 +766,11 @@ aliasMethodKeyApply mctx g (k :: rest) tab =
     [] => tab
     [_] => aliasMethodKeyEntry mctx k hits tab
     _ =>
-      let _ =
-        pushTypeErrorOnceAt
-          mctx
-          "T-AMBIGUOUS-ALIAS-METHOD"
-          (aliasRowLastLoc hits)
-          (aliasAmbiguityMsg k hits)
+      pushTypeErrorOnceAt
+        mctx
+        "T-AMBIGUOUS-ALIAS-METHOD"
+        (aliasRowLastLoc hits)
+        (aliasAmbiguityMsg k hits)
       tab
   aliasMethodKeyApply mctx g rest tab2
 
@@ -1325,7 +1324,7 @@ overrideScopedRecords : ModuleCtx ->
   Unit
 overrideScopedRecords mctx _ _ [] = ()
 overrideScopedRecords mctx prog cands (n :: rest) =
-  let _ = match omLookup n cands
+  match omLookup n cands
     None => ()
     Some cs => match scopedRecordEntry mctx.mcGraph prog n cs
       None => ()
@@ -1680,10 +1679,10 @@ export
 reportAmbiguousImportsIn : ModuleCtx -> OrdMap Unit -> List Decl -> Unit
 reportAmbiguousImportsIn mctx _ [] = ()
 reportAmbiguousImportsIn mctx occ ((DAttrib _ d) :: rest) =
-  let _ = reportAmbiguousImportsIn mctx occ [d]
+  reportAmbiguousImportsIn mctx occ [d]
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ ((DUse _ path loc) :: rest) =
-  let _ = reportAmbiguousImport mctx occ (useModId path) path loc
+  reportAmbiguousImport mctx occ (useModId path) path loc
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ (_ :: rest) =
   reportAmbiguousImportsIn mctx occ rest
@@ -1733,14 +1732,13 @@ pushAmbiguousImports : ModuleCtx ->
   Unit
 pushAmbiguousImports mctx _ _ [] = ()
 pushAmbiguousImports mctx depId loc ((n, mids) :: rest) =
-  let _ =
-    pushTypeErrorHelpFixAt
-      mctx
-      "T-AMBIGUOUS-REEXPORT"
-      (Some loc)
-      (ambigReexportMsg n depId mids)
-      (ambigReexportHelp n depId mids)
-      None
+  pushTypeErrorHelpFixAt
+    mctx
+    "T-AMBIGUOUS-REEXPORT"
+    (Some loc)
+    (ambigReexportMsg n depId mids)
+    (ambigReexportHelp n depId mids)
+    None
   pushAmbiguousImports mctx depId loc rest
 
 export

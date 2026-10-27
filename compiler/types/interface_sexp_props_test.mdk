@@ -371,9 +371,9 @@ hitsAgree : Int -> List (List Atom, PreludeInterface) -> Expectation
 hitsAgree n drives =
   let key = (6401, n)
   let saved = currentPreludeInterface ()
-  let _ = seedPreludeInterface key (cacheOfSections (mergeSections drives))
+  seedPreludeInterface key (cacheOfSections (mergeSections drives))
   let hits = map (d => map textOfInterface (preludeCacheHit key (fst d))) drives
-  let _ = seedPreludeInterface key saved
+  seedPreludeInterface key saved
   expectEqual (map (d => Some (textOfInterface (snd d))) drives) hits
 
 test "an interface that depends on the IO join gets a section per distinct text" =

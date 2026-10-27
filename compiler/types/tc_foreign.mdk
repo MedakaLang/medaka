@@ -203,11 +203,10 @@ ffiCheckExternsCrossable mctx True ds = ffiCheckExternsGo mctx (externDecls ds)
 ffiCheckExternsGo : ModuleCtx -> List Decl -> Unit
 ffiCheckExternsGo mctx [] = ()
 ffiCheckExternsGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  let _ =
-    if ffiIsBuiltinExternName mctx.mcGraph n then
-      ()
-    else
-      ffiCheckExternSig mctx n (firstTyLoc ty) ty
+  if ffiIsBuiltinExternName mctx.mcGraph n then
+    ()
+  else
+    ffiCheckExternSig mctx n (firstTyLoc ty) ty
   ffiCheckExternsGo mctx rest
 ffiCheckExternsGo mctx (_ :: rest) = ffiCheckExternsGo mctx rest
 
@@ -305,7 +304,7 @@ ffiCheckExternsShadow mctx True ds = ffiCheckShadowGo mctx (externDecls ds)
 ffiCheckShadowGo : ModuleCtx -> List Decl -> Unit
 ffiCheckShadowGo mctx [] = ()
 ffiCheckShadowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  let _ = match omLookup n mctx.mcGraph.builtinExternNamesRef.value
+  match omLookup n mctx.mcGraph.builtinExternNamesRef.value
     Some (cat, _) => match ffiSigInstance mctx cat ty
       Some _ => ()
       None =>
@@ -627,7 +626,7 @@ ffiCheckExternsCatalogRow mctx True ds =
 ffiCheckCatalogRowGo : ModuleCtx -> List Decl -> Unit
 ffiCheckCatalogRowGo mctx [] = ()
 ffiCheckCatalogRowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  let _ = match omLookup n mctx.mcGraph.builtinExternNamesRef.value
+  match omLookup n mctx.mcGraph.builtinExternNamesRef.value
     Some (cat, catNames) => match ffiSigInstance mctx cat ty
       Some sub =>
         let aliases = mctx.mcCells.aliasTableRef.value
@@ -666,15 +665,14 @@ ffiCheckSpineRow : ModuleCtx ->
   Unit
 ffiCheckSpineRow mctx n ty catNames sub arrow cat decl =
   let tails = ffiExpandTails sub (snd cat)
-  let _ =
-    ffiCheckCatalogRowOne
-      mctx
-      n
-      ty
-      arrow
-      (ffiInstRow catNames sub (fst cat) ++ fst tails)
-      catNames
-      (fst decl)
+  ffiCheckCatalogRowOne
+    mctx
+    n
+    ty
+    arrow
+    (ffiInstRow catNames sub (fst cat) ++ fst tails)
+    catNames
+    (fst decl)
   match filterList (v => not (contains v (snd decl))) (snd tails)
     [] => ()
     missing =>
@@ -841,7 +839,7 @@ ffiCheckExternSig : ModuleCtx -> String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig mctx n fb ty = match expandAliasHeadTy mctx ty
   TyConstrained _ inner => ffiCheckExternSig mctx n fb inner
   TyFun a r =>
-    let _ = ffiCheckExternPos mctx n fb a
+    ffiCheckExternPos mctx n fb a
     ffiCheckExternSig mctx n fb r
   TyEffect _ _ inner => ffiCheckExternSig mctx n fb inner
   t => ffiCheckExternPos mctx n fb t

@@ -493,7 +493,7 @@ export
 wPushAll : Windowed a -> List a -> Unit
 wPushAll _ [] = ()
 wPushAll w (x :: rest) =
-  let _ = wPush w x
+  wPush w x
   wPushAll w rest
 
 -- the empty shadow-dict stamp: an unconstrained standalone, or a route that resolves to

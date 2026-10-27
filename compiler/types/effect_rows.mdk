@@ -384,7 +384,7 @@ rowFlatGo : List EffRow ->
   (List Atom, List (Ref Effvar))
 rowFlatGo [] _ chunks cells = (finishChunks chunks, reverseL cells)
 rowFlatGo ((EffRow labels tail) :: pending) seen chunks cells =
-  let _ = opBump ()
+  opBump ()
   let chunks2 = addLabels labels chunks
   match tail
     None => rowFlatGo pending seen chunks2 cells

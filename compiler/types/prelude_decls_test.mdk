@@ -123,7 +123,7 @@ relocationAt shift rsrc csrc =
     Ok written => match readDeclsFile (encodeDeclsFile testKey written)
       Err f => fail "the file did not read: \{why (Err f)}"
       Ok (_, pd) =>
-        let _ = advance shift
+        advance shift
         let fresh = freshTree csrc
         let span = binderSpan fresh
         let first = optionOr 0 (map (run => run.brFirst) span)
@@ -154,7 +154,7 @@ test "a tree whose binders are not one run is not written" = match sources ()
   None => fail "could not read the prelude"
   Some (_, csrc) =>
     let a = freshTree csrc
-    let _ = advance 5
+    advance 5
     let b = freshTree csrc
     expectAll [
       labelFail
