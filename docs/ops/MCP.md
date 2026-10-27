@@ -34,7 +34,9 @@ Full argument schemas are self-described over `tools/list`; this is the
 one-line version (positions use 0-based lines and UTF-16 code-unit columns,
 matching the default LSP encoding). This corrects the earlier codepoint-column
 behavior after astral characters; numeric columns from that behavior must be
-updated. The `symbol` addressing option avoids counting columns.
+updated. The `symbol` addressing option avoids counting columns. LF, CRLF, and lone
+CR end lines; positions must be valid boundaries through EOF, and a column
+inside an astral character's UTF-16 surrogate pair is invalid.
 Parse-error positions from `medaka_symbols` also use 0-based lines; older
 versions returned the parser's 1-based line for that error response.
 

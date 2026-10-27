@@ -1341,6 +1341,37 @@ drive msgs =
       ]
       (findings, out)
 
+test "inlay positions remain stable with astral source" =
+  let uri = "file:///unicode-inlay.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "first = (\"😀\", 123)\nsecond = first\n",
+    rpc 3 "textDocument/inlayHint" (inlayParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "hints",
+        expectEqual
+          (Some
+            (jArray [
+              jObject [
+                ("position", jObject [("line", JInt 0), ("character", JInt 5)]),
+                ("label", JString ": (String, Int)"),
+                ("paddingLeft", JBool True),
+              ],
+              jObject [
+                ("position", jObject [("line", JInt 1), ("character", JInt 6)]),
+                ("label", JString ": (String, Int)"),
+                ("paddingLeft", JBool True),
+              ],
+            ]))
+          (resultTo 3 objs),
+      ),
+    ]
+
 test "semantic token positions use UTF-16" =
   let uri = "file:///unicode.mdk"
   let (errors, out) = drive [
