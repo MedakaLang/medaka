@@ -1,5 +1,5 @@
 # META
-source_lines=3670
+source_lines=3675
 stages=DESUGAR,MARK
 # SOURCE
 import driver.main_autoprint.{executedMainInputs}
@@ -78,14 +78,18 @@ import types.publish.{
   noEntryTables
 }
 import types.typecheck.{
+  TcDiag(..),
+  chainFullKey,
+  checkModulesChainReportFor,
+  checkModulesEntryFullReportK,
+  checkModulesPartialK,
   driveInputsFor,
-  checkModulesEntryFullReportK, entrySplit, schemeLines,
-  checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
-  entryOwnSchemes, dropModSchemes, ModDiags,
-  TcDiag(..), tcMsg,
-  -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
-  -- typechecker because S1's `nameable in M` operand does; see its own comment.
-  importedStandaloneShadows, importedStandaloneShadowsIn,
+  dropModSchemes,
+  entryOwnSchemes,
+  entrySplit,
+  ModDiags,
+  schemeLines,
+  tcMsg,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
@@ -133,6 +137,7 @@ import support.util.{
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
+import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
@@ -3687,7 +3692,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkModulesEntryFullReportK" false) (mem "entrySplit" false) (mem "schemeLines" false) (mem "checkModulesChainReportFor" false) (mem "chainFullKey" false) (mem "checkModulesPartialK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entryOwnSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -3698,6 +3703,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
@@ -4205,7 +4211,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkModulesEntryFullReportK" false) (mem "entrySplit" false) (mem "schemeLines" false) (mem "checkModulesChainReportFor" false) (mem "chainFullKey" false) (mem "checkModulesPartialK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entryOwnSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -4216,6 +4222,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
