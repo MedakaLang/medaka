@@ -1,5 +1,5 @@
 # META
-source_lines=2390
+source_lines=2476
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -467,6 +467,19 @@ arrToListGo : Array a -> Int -> List a -> List a
 arrToListGo arr i acc =
   if i < 0 then acc else arrToListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
 
+arrFoldUntilGo : (b -> a -> <e> ControlFlow b) ->
+  Array a ->
+  Int ->
+  Int ->
+  b ->
+  <e> b
+arrFoldUntilGo f arr i n acc =
+  if i >= n then
+    acc
+  else match f acc (arrayGetUnsafe i arr)
+    Continue acc' => arrFoldUntilGo f arr (i + 1) n acc'
+    Break r => r
+
 arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
 arrFoldGo f arr i n acc =
   if i >= n then
@@ -486,6 +499,7 @@ export impl Mappable Array where
 
 export impl Foldable Array where
   fold f z arr = arrFoldGo f arr 0 (arrayLength arr) z
+  foldUntil f z arr = arrFoldUntilGo f arr 0 (arrayLength arr) z
   foldRight f z arr = arrFoldRightGo f arr (arrayLength arr - 1) z
   toList arr = arrToListGo arr (arrayLength arr - 1) []
   isEmpty arr = arrayLength arr == 0
@@ -1248,17 +1262,14 @@ runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
-  andThen xs f = concatRev (revAcc xs []) []
+  andThen xs f = splice [] xs
     where
-      -- Tail-recursive reverse (core has no `reverse`; that lives in `list.mdk`).
-      revAcc [] acc = acc
-      revAcc (x :: rest) acc = revAcc rest (x :: acc)
-      -- `concatRev` folds `f x ++ acc` over the REVERSED input, rebuilding
-      -- `f a ++ f b ++ f c` by `++` associativity.  Its recursive call is the
-      -- whole body (tail ⇒ no stack growth — depth was previously the outer-list
-      -- length under the non-tail `f x ++ andThen xs f`); the `++` is iterative.
-      concatRev [] acc = acc
-      concatRev (x :: rest) acc = concatRev rest (f x ++ acc)
+      -- One self-recursive function so the `::` arm is tail-modulo-cons (stack
+      -- safe for long inputs and long inner lists); `f` runs once per element,
+      -- left to right, when the previous inner list is exhausted.
+      splice [] [] = []
+      splice [] (x :: rest) = splice (f x) rest
+      splice (y :: ys) rest = y :: splice ys rest
 
 export impl Thenable Option where
   andThen None _ = None
@@ -1275,22 +1286,33 @@ export impl Thenable (Result e) where
    concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
    associative.
 
+   `orElseWith a k` is `orElse a (k ())`, except that for `Option` the
+   fallback `k` runs only when `a` failed.
+
    > orElse None (Some 2)
    Some 2
    > orElse [1, 2] [3]
+   [1, 2, 3]
+   > orElseWith None (u => Some 2)
+   Some 2
+   > orElseWith [1, 2] (u => [3])
    [1, 2, 3] -}
 export interface Alternative f requires Applicative f where
   noMatch : f a
   orElse : f a -> f a -> f a
+  orElseWith : f a -> (Unit -> <e> f a) -> <e> f a
 
 export impl Alternative List where
   noMatch = []
   orElse xs ys = xs ++ ys
+  orElseWith xs k = xs ++ k ()
 
 export impl Alternative Option where
   noMatch = None
   orElse (Some x) _ = Some x
   orElse None b = b
+  orElseWith (Some x) _ = Some x
+  orElseWith None k = k ()
 
 -- > isSome (orElse (Some 1) (Some 2))
 -- True
@@ -1349,26 +1371,43 @@ export impl Bimappable (,) where
 
 -- # Containers
 
+{- | The step result of `foldUntil`: `Continue` carries the accumulator
+   onward, `Break` ends the fold with its payload as the final result.
+
+   > foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+   3 -}
+-- `Result` would read as failure: `Break` is a successful early exit, not an error.
+-- lint-disable-next-line rule-clone-type
+public export data ControlFlow b = Continue b | Break b
+
 {- | Containers whose elements can be reduced to a single value.
 
    `fold` is a strict left fold. `foldRight` is the right fold, which
    preserves element order in the result and is the one to use when the
    step builds a structure. An instance defines `fold`, `foldRight`, and
-   `toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
-   instance may override where a faster version exists.
+   `toList`; `foldMap`, `foldUntil`, `length`, and `isEmpty` have defaults,
+   which an instance may override where a faster version exists.
+
+   `foldUntil` is a left fold that can stop early: the step returns
+   `Continue acc` to go on or `Break r` to finish with `r`, leaving the
+   remaining elements unvisited.
 
    > fold (acc x => acc + x) 0 [1, 2, 3]
    6
    > length (Some 5)
-   1 -}
+   1
+   > foldUntil (acc x => if x > 2 then Break x else Continue acc) 0 [1, 2, 3, 4]
+   3 -}
 export interface Foldable t where
   fold : (b -> a -> <e> b) -> b -> t a -> <e> b
   foldRight : (a -> b -> <e> b) -> b -> t a -> <e> b
   foldMap : Monoid m => (a -> <e> m) -> t a -> <e> m
+  foldUntil : (b -> a -> <e> ControlFlow b) -> b -> t a -> <e> b
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
   foldMap f = fold (acc x => acc ++ f x) empty
+  foldUntil f z t = foldUntilList f z (toList t)
   length t = fold (acc _ => acc + 1) 0 t
   isEmpty t = match toList t
     [] => True
@@ -1566,11 +1605,18 @@ listFoldMapGo : Monoid m => m -> List m -> m
 listFoldMapGo acc [] = acc
 listFoldMapGo acc (y :: ys) = listFoldMapGo (append y acc) ys
 
+foldUntilList : (b -> a -> <e> ControlFlow b) -> b -> List a -> <e> b
+foldUntilList _ acc [] = acc
+foldUntilList f acc (x :: xs) = match f acc x
+  Continue acc' => foldUntilList f acc' xs
+  Break r => r
+
 -- `length` goes through the strict left fold; `1 + length xs` would
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
   fold _ acc [] = acc
   fold f acc (x :: xs) = fold f (f acc x) xs
+  foldUntil = foldUntilList
   foldRight _ acc [] = acc
   foldRight f acc (x :: xs) = f x (foldRight f acc xs)
   toList = identity
@@ -1660,9 +1706,17 @@ export impl Traversable (Result e) where
 
 -- # Folding
 
--- These are generic over any `Foldable` and do not short-circuit, because
--- `fold` itself doesn't.  Container-specific versions in `list.mdk`,
--- `array.mdk`, etc. can short-circuit where it matters.
+-- `any`, `all`, `elem` and `find` stop at the first decisive element via
+-- `foldUntil`.  The `Continue` results of a miss are shared constants so a
+-- miss allocates nothing per element.
+anyMiss : ControlFlow Bool
+anyMiss = Continue False
+
+allMiss : ControlFlow Bool
+allMiss = Continue True
+
+findMiss : ControlFlow (Option a)
+findMiss = Continue None
 
 {- | Whether at least one element satisfies `f`.
 
@@ -1670,7 +1724,7 @@ export impl Traversable (Result e) where
    True -}
 export
 any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-any f = fold (acc x => acc || f x) False
+any f = foldUntil (_ x => if f x then Break True else anyMiss) False
 
 -- > any (x => x > 10) [1, 2, 3]
 -- False
@@ -1685,22 +1739,15 @@ any f = fold (acc x => acc || f x) False
    True -}
 export
 all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
-all f = fold (acc x => acc && f x) True
+all f = foldUntil (_ x => if f x then allMiss else Break False) True
 
--- Latches the first hit via an as-pattern so later elements don't overwrite
--- the answer.
 {- | The first element satisfying `f`, or `None`.
 
    > find (x => x > 1) [1, 2, 3]
    Some 2 -}
 export
 find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
-find f = fold g None
-  where
-    g (acc@(Some _)) _ = acc
-    g None x
-      | f x = Some x
-      | otherwise = None
+find f = foldUntil (_ x => if f x then Break (Some x) else findMiss) None
 
 {- | The number of elements satisfying `f`.
 
@@ -1736,7 +1783,7 @@ product xs = fold (*) (fromInt 1) xs
    True -}
 export
 elem : (Foldable t, Eq a) => a -> t a -> Bool
-elem a = fold (acc x => acc || x == a) False
+elem a = foldUntil (_ x => if x == a then Break True else anyMiss) False
 
 -- | Whether the value does not occur in the container.
 export
@@ -1843,6 +1890,20 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
+{- | The value inside a `Some`, or the result of calling `k ()` for `None`.
+
+   The fallback runs only when there is no value, so it can be expensive or
+   effectful.
+
+   > optionOrElse (u => 0) (Some 42)
+   42
+   > optionOrElse (u => 0) None
+   0 -}
+export
+optionOrElse : (Unit -> <e> a) -> Option a -> <e> a
+optionOrElse _ (Some a) = a
+optionOrElse k None = k ()
+
 {- | The value inside a `Some`, or a panic with `context` as its message
    for `None`.
 
@@ -1915,6 +1976,20 @@ resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
 
+{- | The value inside an `Ok`, or the result of applying `k` to the error of
+   an `Err`.
+
+   The fallback runs only for an `Err`.
+
+   > resultOrElse stringLength (Ok 42)
+   42
+   > resultOrElse stringLength (Err "boom")
+   4 -}
+export
+resultOrElse : (err -> <e> a) -> Result err a -> <e> a
+resultOrElse _ (Ok a) = a
+resultOrElse k (Err e) = k e
+
 {- | The value inside an `Ok`, or a panic for `Err` whose message is
    `context`, a colon, and the error.
 
@@ -1928,6 +2003,17 @@ export
 resultOrPanic : Display e => String -> Result e a -> a
 resultOrPanic _ (Ok a) = a
 resultOrPanic context (Err e) = panic "\{context}: \{e}"
+
+{- | Discards a `Result`, value and error alike, and returns `()`.
+
+   For a failure that is acceptable, where `reason` states at the call site
+   why. There is no form without `reason`, and no `Option` twin.
+
+   > bestEffort "the file may already be gone" (Err "ENOENT" : Result String Int)
+   () -}
+export
+bestEffort : String -> Result e a -> Unit
+bestEffort _ _ = ()
 
 {- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
    `Ok`.
@@ -2464,12 +2550,14 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "la") (EApp (EVar "arrayLength") (EVar "a"))) (DoLet false false (PVar "lb") (EApp (EVar "arrayLength") (EVar "b"))) (DoLet false true (PVar "go") (ELam ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "la")) (EApp (EApp (EVar "compare") (EVar "la")) (EVar "lb")) (EIf (EBinOp ">=" (EVar "i") (EVar "lb")) (EVar "Gt") (EMatch (EApp (EApp (EVar "compare") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (arm (PCon "Eq") () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PVar "r") () (EVar "r"))))))) (DoExpr (EApp (EVar "go") (ELit (LInt 0))))))))
 (DTypeSig false "arrToListGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arrToListGo" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc")))))
+(DTypeSig false "arrFoldUntilGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))))))
+(DFunDef false "arrFoldUntilGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EMatch (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "Continue" (PVar "acc'")) () (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldUntilGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "acc'"))) (arm (PCon "Break" (PVar "r")) () (EVar "r")))))
 (DTypeSig false "arrFoldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "arrFoldGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DTypeSig false "arrFoldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))))))
 (DFunDef false "arrFoldRightGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc")))))
 (DImpl true "Mappable" ((TyCon "Array")) () ((im "map" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))))
-(DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
+(DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldUntil" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldUntilGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "append" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "la") (EApp (EVar "arrayLength") (EVar "a"))) (DoLet false false (PVar "lb") (EApp (EVar "arrayLength") (EVar "b"))) (DoExpr (EIf (EBinOp "==" (EVar "la") (ELit (LInt 0))) (EApp (EVar "arrayCopy") (EVar "b")) (EIf (EBinOp "==" (EVar "lb") (ELit (LInt 0))) (EApp (EVar "arrayCopy") (EVar "a")) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EVar "la") (EVar "lb"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "a")) (ELit (LInt 0))) (EVar "out")) (ELit (LInt 0))) (EVar "la"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "b")) (ELit (LInt 0))) (EVar "out")) (EVar "la")) (EVar "lb"))) (DoExpr (EVar "out"))))))))))
 (DImpl true "Monoid" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "empty" () (EArrayLit))))
 (DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "x")))))))
@@ -2603,19 +2691,20 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EVar "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EVar "x")) (ELam (PWild) (EApp (EVar "runEach") (EVar "xs")))))
-(DImpl true "Thenable" ((TyCon "List")) () ((im "andThen" ((PList) PWild) (EListLit)) (im "andThen" ((PVar "xs") (PVar "f")) (ELetGroup ((lgb "revAcc" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "revAcc") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "acc"))))) (lgb "concatRev" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "concatRev") (EVar "rest")) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EVar "acc")))))) (EApp (EApp (EVar "concatRev") (EApp (EApp (EVar "revAcc") (EVar "xs")) (EListLit))) (EListLit))))))
+(DImpl true "Thenable" ((TyCon "List")) () ((im "andThen" ((PList) PWild) (EListLit)) (im "andThen" ((PVar "xs") (PVar "f")) (ELetGroup ((lgb "splice" (clause ((PList) (PList)) (EListLit)) (clause ((PList) (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "splice") (EApp (EVar "f") (EVar "x"))) (EVar "rest"))) (clause ((PCons (PVar "y") (PVar "ys")) (PVar "rest")) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "splice") (EVar "ys")) (EVar "rest")))))) (EApp (EApp (EVar "splice") (EListLit)) (EVar "xs"))))))
 (DImpl true "Thenable" ((TyCon "Option")) () ((im "andThen" ((PCon "None") PWild) (EVar "None")) (im "andThen" ((PCon "Some" (PVar "a")) (PVar "f")) (EApp (EVar "f") (EVar "a")))))
 (DImpl true "Thenable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "andThen" ((PCon "Err" (PVar "e")) PWild) (EApp (EVar "Err") (EVar "e"))) (im "andThen" ((PCon "Ok" (PVar "a")) (PVar "f")) (EApp (EVar "f") (EVar "a")))))
-(DInterface true false "Alternative" ("f") ((super "Applicative" ("f"))) ((imethod "noMatch" (TyApp (TyVar "f") (TyVar "a")) None) (imethod "orElse" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))) None)))
-(DImpl true "Alternative" ((TyCon "List")) () ((im "noMatch" () (EListLit)) (im "orElse" ((PVar "xs") (PVar "ys")) (EBinOp "++" (EVar "xs") (EVar "ys")))))
-(DImpl true "Alternative" ((TyCon "Option")) () ((im "noMatch" () (EVar "None")) (im "orElse" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElse" ((PCon "None") (PVar "b")) (EVar "b"))))
+(DInterface true false "Alternative" ("f") ((super "Applicative" ("f"))) ((imethod "noMatch" (TyApp (TyVar "f") (TyVar "a")) None) (imethod "orElse" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))) None) (imethod "orElseWith" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a")))) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a"))))) None)))
+(DImpl true "Alternative" ((TyCon "List")) () ((im "noMatch" () (EListLit)) (im "orElse" ((PVar "xs") (PVar "ys")) (EBinOp "++" (EVar "xs") (EVar "ys"))) (im "orElseWith" ((PVar "xs") (PVar "k")) (EBinOp "++" (EVar "xs") (EApp (EVar "k") (ELit LUnit))))))
+(DImpl true "Alternative" ((TyCon "Option")) () ((im "noMatch" () (EVar "None")) (im "orElse" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElse" ((PCon "None") (PVar "b")) (EVar "b")) (im "orElseWith" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElseWith" ((PCon "None") (PVar "k")) (EApp (EVar "k") (ELit LUnit)))))
 (DTypeSig true "guard" (TyConstrained ((cstr "Alternative" (TyVar "f"))) (TyFun (TyCon "Bool") (TyApp (TyVar "f") (TyCon "Unit")))))
 (DFunDef false "guard" ((PCon "True")) (EApp (EVar "pure") (ELit LUnit)))
 (DFunDef false "guard" ((PCon "False")) (EVar "noMatch"))
 (DInterface true false "Bimappable" ("p") () ((imethod "bimap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "c"))) (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "d"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "c")) (TyVar "d")))))) None) (imethod "mapFirst" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "c"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "c")) (TyVar "b"))))) (mdef ((PVar "f")) (EApp (EApp (EVar "bimap") (EVar "f")) (EVar "identity")))) (imethod "mapSecond" (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "d"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "d"))))) (mdef ((PVar "g")) (EApp (EApp (EVar "bimap") (EVar "identity")) (EVar "g"))))))
 (DImpl true "Bimappable" ((TyCon "Result")) () ((im "bimap" ((PVar "f") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EApp (EVar "f") (EVar "e")))) (im "bimap" (PWild (PVar "g") (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EApp (EVar "g") (EVar "a"))))))
 (DImpl true "Bimappable" ((TyCon "__tuple2__")) () ((im "bimap" ((PVar "f") (PVar "g") (PTuple (PVar "x") (PVar "y"))) (ETuple (EApp (EVar "f") (EVar "x")) (EApp (EVar "g") (EVar "y"))))))
-(DInterface true false "Foldable" ("t") () ((imethod "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldMap" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "m"))))) (mdef ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "empty")))) (imethod "toList" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))) None) (imethod "isEmpty" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")) (mdef ((PVar "t")) (EMatch (EApp (EVar "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "length" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Int")) (mdef ((PVar "t")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t"))))))
+(DData Public "ControlFlow" ("b") ((variant "Continue" (ConPos (TyVar "b"))) (variant "Break" (ConPos (TyVar "b")))) ())
+(DInterface true false "Foldable" ("t") () ((imethod "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldMap" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "m"))))) (mdef ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "empty")))) (imethod "foldUntil" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) (mdef ((PVar "f") (PVar "z") (PVar "t")) (EApp (EApp (EApp (EVar "foldUntilList") (EVar "f")) (EVar "z")) (EApp (EVar "toList") (EVar "t"))))) (imethod "toList" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))) None) (imethod "isEmpty" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")) (mdef ((PVar "t")) (EMatch (EApp (EVar "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "length" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Int")) (mdef ((PVar "t")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t"))))))
 (DInterface true false "Filterable" ("f") ((super "Mappable" ("f"))) ((imethod "filterMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "b")))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "b"))))) None) (imethod "filter" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a"))))) (mdef ((PVar "p")) (EApp (EVar "filterMap") (ELam ((PVar "x")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EVar "None"))))))))
 (DInterface true false "FromEntries" ("c" "e") () ((imethod "fromEntries" (TyFun (TyApp (TyCon "List") (TyVar "e")) (TyVar "c")) None)))
 (DInterface true false "Index" ("c" "k" "v") () ((imethod "index" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyVar "v"))) None)))
@@ -2650,19 +2739,28 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig false "listFoldMapGo" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyVar "m") (TyFun (TyApp (TyCon "List") (TyVar "m")) (TyVar "m")))))
 (DFunDef false "listFoldMapGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "listFoldMapGo" ((PVar "acc") (PCons (PVar "y") (PVar "ys"))) (EApp (EApp (EVar "listFoldMapGo") (EApp (EApp (EVar "append") (EVar "y")) (EVar "acc"))) (EVar "ys")))
-(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EVar "listFoldMapGo") (EVar "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
+(DTypeSig false "foldUntilList" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
+(DFunDef false "foldUntilList" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "foldUntilList" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x")) (arm (PCon "Continue" (PVar "acc'")) () (EApp (EApp (EApp (EVar "foldUntilList") (EVar "f")) (EVar "acc'")) (EVar "xs"))) (arm (PCon "Break" (PVar "r")) () (EVar "r"))))
+(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldUntil" () (EVar "foldUntilList")) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EVar "listFoldMapGo") (EVar "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x")))))
 (DImpl true "Foldable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "fold" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "Err" PWild)) (EListLit)) (im "toList" ((PCon "Ok" (PVar "x"))) (EListLit (EVar "x")))))
 (DInterface true false "Traversable" ("t") ((super "Mappable" ("t")) (super "Foldable" ("t"))) ((imethod "traverse" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b")))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "b"))))))) None) (imethod "sequence" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "a"))))) (mdef ((PVar "ta")) (EApp (EApp (EVar "traverse") (EVar "identity")) (EVar "ta"))))))
 (DImpl true "Traversable" ((TyCon "List")) () ((im "traverse" ((PVar "f") (PVar "xs")) (EMatch (EVar "xs") (arm (PList) () (EApp (EVar "pure") (EListLit))) (arm (PCons (PVar "x") (PVar "rest")) () (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EVar "traverse") (EVar "f")) (EVar "rest"))))))))))
 (DImpl true "Traversable" ((TyCon "Option")) () ((im "traverse" ((PVar "f") (PVar "opt")) (EMatch (EVar "opt") (arm (PCon "None") () (EApp (EVar "pure") (EVar "None"))) (arm (PCon "Some" (PVar "x")) () (EApp (EApp (EVar "map") (EVar "Some")) (EApp (EVar "f") (EVar "x"))))))))
 (DImpl true "Traversable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "traverse" ((PVar "f") (PVar "res")) (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "pure") (EApp (EVar "Err") (EVar "e")))) (arm (PCon "Ok" (PVar "x")) () (EApp (EApp (EVar "map") (EVar "Ok")) (EApp (EVar "f") (EVar "x"))))))))
+(DTypeSig false "anyMiss" (TyApp (TyCon "ControlFlow") (TyCon "Bool")))
+(DFunDef false "anyMiss" () (EApp (EVar "Continue") (EVar "False")))
+(DTypeSig false "allMiss" (TyApp (TyCon "ControlFlow") (TyCon "Bool")))
+(DFunDef false "allMiss" () (EApp (EVar "Continue") (EVar "True")))
+(DTypeSig false "findMiss" (TyApp (TyCon "ControlFlow") (TyApp (TyCon "Option") (TyVar "a"))))
+(DFunDef false "findMiss" () (EApp (EVar "Continue") (EVar "None")))
 (DTypeSig true "any" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Bool"))))))
-(DFunDef false "any" ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "||" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "False")))
+(DFunDef false "any" ((PVar "f")) (EApp (EApp (EVar "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Break") (EVar "True")) (EVar "anyMiss")))) (EVar "False")))
 (DTypeSig true "all" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Bool"))))))
-(DFunDef false "all" ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "&&" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "True")))
+(DFunDef false "all" ((PVar "f")) (EApp (EApp (EVar "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EVar "allMiss") (EApp (EVar "Break") (EVar "False"))))) (EVar "True")))
 (DTypeSig true "find" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "a")))))))
-(DFunDef false "find" ((PVar "f")) (ELetGroup ((lgb "g" (clause ((PAs "acc" (PCon "Some" PWild)) PWild) (EVar "acc")) (clause ((PCon "None") (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "fold") (EVar "g")) (EVar "None"))))
+(DFunDef false "find" ((PVar "f")) (EApp (EApp (EVar "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Break") (EApp (EVar "Some") (EVar "x"))) (EVar "findMiss")))) (EVar "None")))
 (DTypeSig true "count" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Int"))))))
 (DFunDef false "count" ((PVar "f")) (ELetGroup ((lgb "g" (clause ((PVar "acc") (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EBinOp "+" (EVar "acc") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "fold") (EVar "g")) (ELit (LInt 0)))))
 (DTypeSig true "sum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Num" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyVar "a"))))
@@ -2670,7 +2768,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "product" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Num" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "product" ((PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "*" (EVar "_a") (EVar "_b")))) (EApp (EVar "fromInt") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "elem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
-(DFunDef false "elem" ((PVar "a")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "||" (EVar "acc") (EBinOp "==" (EVar "x") (EVar "a"))))) (EVar "False")))
+(DFunDef false "elem" ((PVar "a")) (EApp (EApp (EVar "foldUntil") (ELam (PWild (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "a")) (EApp (EVar "Break") (EVar "True")) (EVar "anyMiss")))) (EVar "False")))
 (DTypeSig true "notElem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "notElem" ((PVar "a") (PVar "xs")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "a")) (EVar "xs"))))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
@@ -2700,6 +2798,9 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOrElse" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "a")))))
+(DFunDef false "optionOrElse" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOrElse" ((PVar "k") (PCon "None")) (EApp (EVar "k") (ELit LUnit)))
 (DTypeSig true "optionOrPanic" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOrPanic" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOrPanic" ((PVar "context") (PCon "None")) (EApp (EVar "panic") (EVar "context")))
@@ -2721,9 +2822,14 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
 (DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOrElse" (TyFun (TyFun (TyVar "err") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "err")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a")))))
+(DFunDef false "resultOrElse" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOrElse" ((PVar "k") (PCon "Err" (PVar "e"))) (EApp (EVar "k") (EVar "e")))
 (DTypeSig true "resultOrPanic" (TyConstrained ((cstr "Display" (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a")))))
 (DFunDef false "resultOrPanic" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOrPanic" ((PVar "context") (PCon "Err" (PVar "e"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "context"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))))
+(DTypeSig true "bestEffort" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "bestEffort" (PWild PWild) (ELit LUnit))
 (DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
 (DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
 (DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))
@@ -2896,12 +3002,14 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "la") (EApp (EVar "arrayLength") (EVar "a"))) (DoLet false false (PVar "lb") (EApp (EVar "arrayLength") (EVar "b"))) (DoLet false true (PVar "go") (ELam ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "la")) (EApp (EApp (EMethodRef "compare") (EVar "la")) (EVar "lb")) (EIf (EBinOp ">=" (EVar "i") (EVar "lb")) (EVar "Gt") (EMatch (EApp (EApp (EMethodRef "compare") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (arm (PCon "Eq") () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PVar "r") () (EVar "r"))))))) (DoExpr (EApp (EVar "go") (ELit (LInt 0))))))))
 (DTypeSig false "arrToListGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arrToListGo" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc")))))
+(DTypeSig false "arrFoldUntilGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))))))
+(DFunDef false "arrFoldUntilGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EMatch (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "Continue" (PVar "acc'")) () (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldUntilGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "acc'"))) (arm (PCon "Break" (PVar "r")) () (EVar "r")))))
 (DTypeSig false "arrFoldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "arrFoldGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DTypeSig false "arrFoldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))))))
 (DFunDef false "arrFoldRightGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc")))))
 (DImpl true "Mappable" ((TyCon "Array")) () ((im "map" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))))
-(DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
+(DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldUntil" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "arrFoldUntilGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "arrFoldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "arrToListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "append" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "la") (EApp (EVar "arrayLength") (EVar "a"))) (DoLet false false (PVar "lb") (EApp (EVar "arrayLength") (EVar "b"))) (DoExpr (EIf (EBinOp "==" (EVar "la") (ELit (LInt 0))) (EApp (EVar "arrayCopy") (EVar "b")) (EIf (EBinOp "==" (EVar "lb") (ELit (LInt 0))) (EApp (EVar "arrayCopy") (EVar "a")) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EVar "la") (EVar "lb"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "a")) (ELit (LInt 0))) (EVar "out")) (ELit (LInt 0))) (EVar "la"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "b")) (ELit (LInt 0))) (EVar "out")) (EVar "la")) (EVar "lb"))) (DoExpr (EVar "out"))))))))))
 (DImpl true "Monoid" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "empty" () (EArrayLit))))
 (DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "x")))))))
@@ -3035,19 +3143,20 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EVar "x")) (ELam (PWild) (EApp (EDictApp "runEach") (EVar "xs")))))
-(DImpl true "Thenable" ((TyCon "List")) () ((im "andThen" ((PList) PWild) (EListLit)) (im "andThen" ((PVar "xs") (PVar "f")) (ELetGroup ((lgb "revAcc" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "revAcc") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "acc"))))) (lgb "concatRev" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "concatRev") (EVar "rest")) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EVar "acc")))))) (EApp (EApp (EVar "concatRev") (EApp (EApp (EVar "revAcc") (EVar "xs")) (EListLit))) (EListLit))))))
+(DImpl true "Thenable" ((TyCon "List")) () ((im "andThen" ((PList) PWild) (EListLit)) (im "andThen" ((PVar "xs") (PVar "f")) (ELetGroup ((lgb "splice" (clause ((PList) (PList)) (EListLit)) (clause ((PList) (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "splice") (EApp (EVar "f") (EVar "x"))) (EVar "rest"))) (clause ((PCons (PVar "y") (PVar "ys")) (PVar "rest")) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "splice") (EVar "ys")) (EVar "rest")))))) (EApp (EApp (EVar "splice") (EListLit)) (EVar "xs"))))))
 (DImpl true "Thenable" ((TyCon "Option")) () ((im "andThen" ((PCon "None") PWild) (EVar "None")) (im "andThen" ((PCon "Some" (PVar "a")) (PVar "f")) (EApp (EVar "f") (EVar "a")))))
 (DImpl true "Thenable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "andThen" ((PCon "Err" (PVar "e")) PWild) (EApp (EVar "Err") (EVar "e"))) (im "andThen" ((PCon "Ok" (PVar "a")) (PVar "f")) (EApp (EVar "f") (EVar "a")))))
-(DInterface true false "Alternative" ("f") ((super "Applicative" ("f"))) ((imethod "noMatch" (TyApp (TyVar "f") (TyVar "a")) None) (imethod "orElse" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))) None)))
-(DImpl true "Alternative" ((TyCon "List")) () ((im "noMatch" () (EListLit)) (im "orElse" ((PVar "xs") (PVar "ys")) (EBinOp "++" (EVar "xs") (EVar "ys")))))
-(DImpl true "Alternative" ((TyCon "Option")) () ((im "noMatch" () (EVar "None")) (im "orElse" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElse" ((PCon "None") (PVar "b")) (EVar "b"))))
+(DInterface true false "Alternative" ("f") ((super "Applicative" ("f"))) ((imethod "noMatch" (TyApp (TyVar "f") (TyVar "a")) None) (imethod "orElse" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))) None) (imethod "orElseWith" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a")))) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a"))))) None)))
+(DImpl true "Alternative" ((TyCon "List")) () ((im "noMatch" () (EListLit)) (im "orElse" ((PVar "xs") (PVar "ys")) (EBinOp "++" (EVar "xs") (EVar "ys"))) (im "orElseWith" ((PVar "xs") (PVar "k")) (EBinOp "++" (EVar "xs") (EApp (EVar "k") (ELit LUnit))))))
+(DImpl true "Alternative" ((TyCon "Option")) () ((im "noMatch" () (EVar "None")) (im "orElse" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElse" ((PCon "None") (PVar "b")) (EVar "b")) (im "orElseWith" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElseWith" ((PCon "None") (PVar "k")) (EApp (EVar "k") (ELit LUnit)))))
 (DTypeSig true "guard" (TyConstrained ((cstr "Alternative" (TyVar "f"))) (TyFun (TyCon "Bool") (TyApp (TyVar "f") (TyCon "Unit")))))
 (DFunDef false "guard" ((PCon "True")) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "guard" ((PCon "False")) (EMethodRef "noMatch"))
 (DInterface true false "Bimappable" ("p") () ((imethod "bimap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "c"))) (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "d"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "c")) (TyVar "d")))))) None) (imethod "mapFirst" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "c"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "c")) (TyVar "b"))))) (mdef ((PVar "f")) (EApp (EApp (EMethodRef "bimap") (EVar "f")) (EVar "identity")))) (imethod "mapSecond" (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "d"))) (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "d"))))) (mdef ((PVar "g")) (EApp (EApp (EMethodRef "bimap") (EVar "identity")) (EVar "g"))))))
 (DImpl true "Bimappable" ((TyCon "Result")) () ((im "bimap" ((PVar "f") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EApp (EVar "f") (EVar "e")))) (im "bimap" (PWild (PVar "g") (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EApp (EVar "g") (EVar "a"))))))
 (DImpl true "Bimappable" ((TyCon "__tuple2__")) () ((im "bimap" ((PVar "f") (PVar "g") (PTuple (PVar "x") (PVar "y"))) (ETuple (EApp (EVar "f") (EVar "x")) (EApp (EVar "g") (EVar "y"))))))
-(DInterface true false "Foldable" ("t") () ((imethod "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldMap" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "m"))))) (mdef ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EMethodRef "empty")))) (imethod "toList" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))) None) (imethod "isEmpty" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")) (mdef ((PVar "t")) (EMatch (EApp (EMethodRef "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "length" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Int")) (mdef ((PVar "t")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t"))))))
+(DData Public "ControlFlow" ("b") ((variant "Continue" (ConPos (TyVar "b"))) (variant "Break" (ConPos (TyVar "b")))) ())
+(DInterface true false "Foldable" ("t") () ((imethod "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) None) (imethod "foldMap" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "m"))))) (mdef ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EMethodRef "empty")))) (imethod "foldUntil" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))) (mdef ((PVar "f") (PVar "z") (PVar "t")) (EApp (EApp (EApp (EVar "foldUntilList") (EVar "f")) (EVar "z")) (EApp (EMethodRef "toList") (EVar "t"))))) (imethod "toList" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))) None) (imethod "isEmpty" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")) (mdef ((PVar "t")) (EMatch (EApp (EMethodRef "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "length" (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Int")) (mdef ((PVar "t")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t"))))))
 (DInterface true false "Filterable" ("f") ((super "Mappable" ("f"))) ((imethod "filterMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "b")))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "b"))))) None) (imethod "filter" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "f") (TyVar "a"))))) (mdef ((PVar "p")) (EApp (EMethodRef "filterMap") (ELam ((PVar "x")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EVar "None"))))))))
 (DInterface true false "FromEntries" ("c" "e") () ((imethod "fromEntries" (TyFun (TyApp (TyCon "List") (TyVar "e")) (TyVar "c")) None)))
 (DInterface true false "Index" ("c" "k" "v") () ((imethod "index" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyVar "v"))) None)))
@@ -3082,19 +3191,28 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig false "listFoldMapGo" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyVar "m") (TyFun (TyApp (TyCon "List") (TyVar "m")) (TyVar "m")))))
 (DFunDef false "listFoldMapGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "listFoldMapGo" ((PVar "acc") (PCons (PVar "y") (PVar "ys"))) (EApp (EApp (EDictApp "listFoldMapGo") (EApp (EApp (EMethodRef "append") (EVar "y")) (EVar "acc"))) (EVar "ys")))
-(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EDictApp "listFoldMapGo") (EMethodRef "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
+(DTypeSig false "foldUntilList" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "ControlFlow") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
+(DFunDef false "foldUntilList" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "foldUntilList" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x")) (arm (PCon "Continue" (PVar "acc'")) () (EApp (EApp (EApp (EVar "foldUntilList") (EVar "f")) (EVar "acc'")) (EVar "xs"))) (arm (PCon "Break" (PVar "r")) () (EVar "r"))))
+(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldUntil" () (EVar "foldUntilList")) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EDictApp "listFoldMapGo") (EMethodRef "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x")))))
 (DImpl true "Foldable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "fold" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "Err" PWild)) (EListLit)) (im "toList" ((PCon "Ok" (PVar "x"))) (EListLit (EVar "x")))))
 (DInterface true false "Traversable" ("t") ((super "Mappable" ("t")) (super "Foldable" ("t"))) ((imethod "traverse" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b")))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "b"))))))) None) (imethod "sequence" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "a"))))) (mdef ((PVar "ta")) (EApp (EApp (EMethodRef "traverse") (EVar "identity")) (EVar "ta"))))))
 (DImpl true "Traversable" ((TyCon "List")) () ((im "traverse" ((PVar "f") (PVar "xs")) (EMatch (EVar "xs") (arm (PList) () (EApp (EMethodRef "pure") (EListLit))) (arm (PCons (PVar "x") (PVar "rest")) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EMethodRef "traverse") (EVar "f")) (EVar "rest"))))))))))
 (DImpl true "Traversable" ((TyCon "Option")) () ((im "traverse" ((PVar "f") (PVar "opt")) (EMatch (EVar "opt") (arm (PCon "None") () (EApp (EMethodRef "pure") (EVar "None"))) (arm (PCon "Some" (PVar "x")) () (EApp (EApp (EMethodRef "map") (EVar "Some")) (EApp (EVar "f") (EVar "x"))))))))
 (DImpl true "Traversable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "traverse" ((PVar "f") (PVar "res")) (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EMethodRef "pure") (EApp (EVar "Err") (EVar "e")))) (arm (PCon "Ok" (PVar "x")) () (EApp (EApp (EMethodRef "map") (EVar "Ok")) (EApp (EVar "f") (EVar "x"))))))))
+(DTypeSig false "anyMiss" (TyApp (TyCon "ControlFlow") (TyCon "Bool")))
+(DFunDef false "anyMiss" () (EApp (EVar "Continue") (EVar "False")))
+(DTypeSig false "allMiss" (TyApp (TyCon "ControlFlow") (TyCon "Bool")))
+(DFunDef false "allMiss" () (EApp (EVar "Continue") (EVar "True")))
+(DTypeSig false "findMiss" (TyApp (TyCon "ControlFlow") (TyApp (TyCon "Option") (TyVar "a"))))
+(DFunDef false "findMiss" () (EApp (EVar "Continue") (EVar "None")))
 (DTypeSig true "any" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Bool"))))))
-(DFunDef false "any" ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "||" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "False")))
+(DFunDef false "any" ((PVar "f")) (EApp (EApp (EMethodRef "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Break") (EVar "True")) (EVar "anyMiss")))) (EVar "False")))
 (DTypeSig true "all" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Bool"))))))
-(DFunDef false "all" ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "&&" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "True")))
+(DFunDef false "all" ((PVar "f")) (EApp (EApp (EMethodRef "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EVar "allMiss") (EApp (EVar "Break") (EVar "False"))))) (EVar "True")))
 (DTypeSig true "find" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "a")))))))
-(DFunDef false "find" ((PVar "f")) (ELetGroup ((lgb "g" (clause ((PAs "acc" (PCon "Some" PWild)) PWild) (EVar "acc")) (clause ((PCon "None") (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EMethodRef "fold") (EVar "g")) (EVar "None"))))
+(DFunDef false "find" ((PVar "f")) (EApp (EApp (EMethodRef "foldUntil") (ELam (PWild (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EApp (EVar "Break") (EApp (EVar "Some") (EVar "x"))) (EVar "findMiss")))) (EVar "None")))
 (DTypeSig true "count" (TyConstrained ((cstr "Foldable" (TyVar "t"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Int"))))))
 (DFunDef false "count" ((PVar "f")) (ELetGroup ((lgb "g" (clause ((PVar "acc") (PVar "x")) (EIf (EApp (EVar "f") (EVar "x")) (EBinOp "+" (EVar "acc") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EMethodRef "fold") (EVar "g")) (ELit (LInt 0)))))
 (DTypeSig true "sum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Num" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyVar "a"))))
@@ -3102,7 +3220,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "product" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Num" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "product" ((PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "*" (EVar "_a") (EVar "_b")))) (EApp (EMethodRef "fromInt") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "elem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
-(DFunDef false "elem" ((PVar "a")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "||" (EVar "acc") (EBinOp "==" (EVar "x") (EVar "a"))))) (EVar "False")))
+(DFunDef false "elem" ((PVar "a")) (EApp (EApp (EMethodRef "foldUntil") (ELam (PWild (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "a")) (EApp (EVar "Break") (EVar "True")) (EVar "anyMiss")))) (EVar "False")))
 (DTypeSig true "notElem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "notElem" ((PVar "a") (PVar "xs")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "a")) (EVar "xs"))))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
@@ -3132,6 +3250,9 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOrElse" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "a")))))
+(DFunDef false "optionOrElse" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOrElse" ((PVar "k") (PCon "None")) (EApp (EVar "k") (ELit LUnit)))
 (DTypeSig true "optionOrPanic" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOrPanic" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOrPanic" ((PVar "context") (PCon "None")) (EApp (EVar "panic") (EVar "context")))
@@ -3153,9 +3274,14 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
 (DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOrElse" (TyFun (TyFun (TyVar "err") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "err")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a")))))
+(DFunDef false "resultOrElse" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOrElse" ((PVar "k") (PCon "Err" (PVar "e"))) (EApp (EVar "k") (EVar "e")))
 (DTypeSig true "resultOrPanic" (TyConstrained ((cstr "Display" (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a")))))
 (DFunDef false "resultOrPanic" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOrPanic" ((PVar "context") (PCon "Err" (PVar "e"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "context"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))))
+(DTypeSig true "bestEffort" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "bestEffort" (PWild PWild) (ELit LUnit))
 (DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
 (DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
 (DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))

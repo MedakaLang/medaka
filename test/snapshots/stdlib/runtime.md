@@ -1,5 +1,5 @@
 # META
-source_lines=1044
+source_lines=1053
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -966,6 +966,15 @@ extern stringByteLength : String -> Int
 export
 extern stringSlice : Int -> Int -> String -> String
 
+-- The codepoint starting at a byte offset, packed as `codepoint * 8 + width`
+-- (width in bytes). The offset must be inside the string and on a codepoint
+-- boundary; `string.nextChar` is the caller.
+extern stringCodepointAtByte : String -> Int -> Int
+
+-- The bytes `[lo, hi)` of a string. Panics unless both offsets are in range,
+-- ordered, and on codepoint boundaries; `string.sliceBetween` is the caller.
+extern stringSliceBytes : Int -> Int -> String -> String
+
 -- | The strings joined end to end.
 extern stringConcat : List String -> String
 
@@ -1238,6 +1247,8 @@ extern stringToLower : String -> String
 (DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DExtern false "stringCodepointAtByte" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "stringSliceBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DExtern true "stringStartsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1450,6 +1461,8 @@ extern stringToLower : String -> String
 (DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DExtern false "stringCodepointAtByte" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "stringSliceBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DExtern true "stringStartsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

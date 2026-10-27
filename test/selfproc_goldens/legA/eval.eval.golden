@@ -425,6 +425,7 @@ pSqrt : Value a -> <a> Value a
 pStashRunStdout : Value a -> <a> Value a
 pStatFile : Value a -> <FileRead | a> Value a
 pStringByteLength : Value a -> <a> Value a
+pStringCodepointAtByte : Value a -> Value a -> <a> Value a
 pStringCompare : Value a -> Value a -> <a> Value a
 pStringConcat : Value a -> <a> Value a
 pStringCountOccurrences : Value a -> Value a -> <a> Value a
@@ -437,6 +438,7 @@ pStringLastIndexOf : Value a -> Value a -> <a> Value a
 pStringLength : Value a -> <a> Value a
 pStringReverse : Value a -> <a> Value a
 pStringSlice : Value a -> Value a -> Value a -> <a> Value a
+pStringSliceBytes : Value a -> Value a -> Value a -> <a> Value a
 pStringStartsWith : Value a -> Value a -> <a> Value a
 pStringToChars : Value a -> <a> Value a
 pStringToFloat : Value a -> <a> Value a
