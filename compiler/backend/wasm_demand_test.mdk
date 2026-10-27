@@ -1,6 +1,7 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
-  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp
+  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp,
+  envEmpty
 }
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import backend.emit_target.{Backend(..)}
@@ -408,6 +409,6 @@ test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   let (_, cp) = prepared "main = 42"
   let context = wasmTypeContext omEmpty cp
   expectAll [
-    expectEqual RTValue (returnStamp context [] "putStrLn"),
-    expectEqual RTValue (cexprStamp context [] (CVar "pi" AGlobal)),
+    expectEqual RTValue (returnStamp context envEmpty "putStrLn"),
+    expectEqual RTValue (cexprStamp context envEmpty (CVar "pi" AGlobal)),
   ]

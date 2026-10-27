@@ -27,7 +27,7 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
-  omFromPairs, omDelete
+  omFromPairs, omDelete, omRestrict
 }
 import support.util.{
   reverseL, filterList, listLen, contains, startsWith, isEmptyL, isNonEmptyL,
@@ -466,7 +466,11 @@ isPlainParam _ = False
 
 clauseUsesClosures : OrdMap Unit -> List (String, Int) -> CClause -> Bool
 clauseUsesClosures fnNames ctorArs (CClause pats body) =
-  exprUsesClosures fnNames ctorArs (flatMap patVars pats) body
+  exprUsesClosures
+    fnNames
+    ctorArs
+    (envExtendUnstamped (flatMap patVars pats) envEmpty)
+    body
 
 -- a CLam anywhere; an application whose head is not a saturated known-fn/ctor call;
 -- a bare CVar referencing a top-level fn in NON-call (value) position.
@@ -476,16 +480,12 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
 -- `contains f0 env`-first guard, else a shadowing-local call (`applyEq eq x y = eq x y`
 -- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
 -- the closure types are never emitted though emit uses them (parse/validate failure).
-exprUsesClosures : OrdMap Unit ->
-  List (String, Int) ->
-  List String ->
-  CExpr ->
-  Bool
+exprUsesClosures : OrdMap Unit -> List (String, Int) -> Env -> CExpr -> Bool
 exprUsesClosures fnNames ctorArs locals (CLam _ _) = True
 exprUsesClosures fnNames ctorArs locals (app@(CApp _ _ _)) =
   appUsesClosures fnNames ctorArs locals app
 exprUsesClosures fnNames ctorArs locals (CVar x _) =
-  not (contains x locals) && fnMemberIndexW fnNames x
+  not (envHas x locals) && fnMemberIndexW fnNames x
 exprUsesClosures fnNames ctorArs locals (CLit _) = False
 exprUsesClosures fnNames ctorArs locals (CBinPrim _ l r _ _) =
   exprUsesClosures fnNames ctorArs locals l
@@ -498,7 +498,11 @@ exprUsesClosures fnNames ctorArs locals (CIf c t f) =
     || exprUsesClosures fnNames ctorArs locals f
 exprUsesClosures fnNames ctorArs locals (CLet _ pat a b) =
   exprUsesClosures fnNames ctorArs locals a
-    || exprUsesClosures fnNames ctorArs (patVars pat ++ locals) b
+    || exprUsesClosures
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      b
 exprUsesClosures fnNames ctorArs locals (CBlock stmts) =
   blockUsesClosures fnNames ctorArs locals stmts
 exprUsesClosures fnNames ctorArs locals (CDecision scrut arms _) =
@@ -512,13 +516,17 @@ exprUsesClosures fnNames ctorArs locals _ = False
 -- thread let-bound names through a block so a later statement's shadowing local is seen.
 blockUsesClosures : OrdMap Unit ->
   List (String, Int) ->
-  List String ->
+  Env ->
   List CStmt ->
   Bool
 blockUsesClosures _ _ _ [] = False
 blockUsesClosures fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
   exprUsesClosures fnNames ctorArs locals e
-    || blockUsesClosures fnNames ctorArs (patVars pat ++ locals) rest
+    || blockUsesClosures
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      rest
 blockUsesClosures fnNames ctorArs locals ((CSExpr e) :: rest) =
   exprUsesClosures fnNames ctorArs locals e
     || blockUsesClosures fnNames ctorArs locals rest
@@ -529,17 +537,13 @@ blockUsesClosures fnNames ctorArs locals (_ :: rest) =
 -- top-level fn (exact arity) or a ctor application.  Over/under application of a
 -- known fn, or a non-variable / non-fn / non-ctor head, is a closure use.  The args
 -- are also scanned (a saturated call passing a lambda is still a closure use).
-appUsesClosures : OrdMap Unit ->
-  List (String, Int) ->
-  List String ->
-  CExpr ->
-  Bool
+appUsesClosures : OrdMap Unit -> List (String, Int) -> Env -> CExpr -> Bool
 appUsesClosures fnNames ctorArs locals app =
   let (hd, args, mode) = appParts app
   let argsClos = anyList (exprUsesClosures fnNames ctorArs locals) args
   match hd
     CVar f _ =>
-      if contains f locals then
+      if envHas f locals then
         True  -- a shadowing local/param head → indirect (closure) call
       else if fnMemberIndexW fnNames f then
         not (isExactCall mode) || argsClos
@@ -647,25 +651,66 @@ wasmTypeContext ctorFields (CProgram groups ctorArs _ _ _ facts) =
 runtimeKeyD : WasmTypeContext -> String -> String
 runtimeKeyD ctx symbol = optionOr "" (externRuntimeKey ctx.externFacts symbol)
 
--- the env entry that says the local `x` is the binder with ordinal [bid]'s
+-- The lexical scope of a function body: each visible local name mapped to what it
+-- denotes.  An indexed map rather than a list, so a variable read costs one lookup
+-- however many locals precede it.  An inner binding of a name replaces the outer
+-- one in the inner scope only: the outer scope keeps its own map, so leaving the
+-- inner scope restores the outer binding without any explicit unwinding.
+export type Env = OrdMap EnvRef
+
+-- what a name denotes inside `env`
+public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+
 export
-envMark : String -> BinderId -> String
-envMark x bid = "\{x}@\{intToString (binderOrdinal bid)}"
+envEmpty : Env
+envEmpty = omEmpty
 
 -- [env] extended with the stamped binder [x]
 export
-envBind : String -> BinderId -> List String -> List String
-envBind x bid env = x :: envMark x bid :: env
+envBind : String -> BinderId -> Env -> Env
+envBind x bid env =
+  omInsert x (LocalBinder (intToString (binderOrdinal bid))) env
 
--- the env entries of a function's plain parameters, in order
+-- [env] extended with [x] as a local no binder row describes: a compiler-minted
+-- local, or a lifted body's synthetic parameter
 export
-paramEnv : List Pat -> List String
-paramEnv pats = flatMap paramEntries pats
+envBindUnstamped : String -> Env -> Env
+envBindUnstamped x env = omInsert x LocalUnstamped env
 
 export
-paramEntries : Pat -> List String
-paramEntries (PVar x _ bid) = [x, envMark x bid]
-paramEntries _ = ["_"]
+envHas : String -> Env -> Bool
+envHas = omHasKey
+
+export
+envLookup : String -> Env -> EnvRef
+envLookup x env = optionOr NotLocal (omLookup x env)
+
+-- [base] extended with a function's plain parameters; a wildcard or a
+-- destructuring parameter binds nothing here (its variables are bound by the
+-- clause's pattern code)
+export
+paramEnvOver : List Pat -> Env -> Env
+paramEnvOver pats base = fold (acc p => paramBind p acc) base pats
+
+export
+paramEnv : List Pat -> Env
+paramEnv pats = paramEnvOver pats envEmpty
+
+export
+paramBind : Pat -> Env -> Env
+paramBind (PVar x _ bid) env = envBind x bid env
+paramBind _ env = env
+
+-- the part of [env] a lifted body captures: the binders behind [names], stamps kept
+export
+envRestrict : List String -> Env -> Env
+envRestrict = omRestrict
+
+-- [env] with each of [names] bound as an unstamped local where it is not bound yet
+export
+envExtendUnstamped : List String -> Env -> Env
+envExtendUnstamped names env =
+  fold (acc x => if envHas x acc then acc else envBindUnstamped x acc) env names
 
 -- every variable a pattern binds, with its id
 export
@@ -680,44 +725,9 @@ patBinders _ = []
 
 -- [env] extended with every variable [pat] binds
 export
-envBindPat : Pat -> List String -> List String
+envBindPat : Pat -> Env -> Env
 envBindPat pat env =
   fold (acc b => envBind (fst b) (snd b) acc) env (patBinders pat)
-
--- the entries of [env] that name the binders behind [names], for a lifted body
--- that captures them
-export
-envMarksOf : List String -> List String -> List String
-envMarksOf names env = flatMap (x => envMarkOf x env) names
-
--- [names] as env entries, each followed by its entry in [marks] when it has one
-export
-envWithMarks : List String -> List String -> List String
-envWithMarks names marks =
-  flatMap (x => x :: filterList (startsWith "\{x}@") marks) names
-
-export
-envMarkOf : String -> List String -> List String
-envMarkOf x env = match envLookup x env
-  LocalBinder ord => ["\{x}@\{ord}"]
-  _ => []
-
--- what a name denotes inside `env`
-public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
-
-export
-envLookup : String -> List String -> EnvRef
-envLookup _ [] = NotLocal
-envLookup x (e :: rest) =
-  if e == x then match rest
-    m :: _ =>
-      if startsWith "\{x}@" m then
-        LocalBinder (stringSlice (stringLength x + 1) (stringLength m) m)
-      else
-        LocalUnstamped
-    [] => LocalUnstamped
-  else
-    envLookup x rest
 
 stampRowOf : WasmTypeContext -> String -> Option BinderRow
 stampRowOf prog ord = omLookup ord prog.rows
@@ -725,7 +735,7 @@ stampRowOf prog ord = omLookup ord prog.rows
 -- the stamp row of the binder a reference to [x] reaches: its local binder when
 -- [x] is bound in [env], else the top-level binding of that name
 export
-varRow : WasmTypeContext -> List String -> String -> Option BinderRow
+varRow : WasmTypeContext -> Env -> String -> Option BinderRow
 varRow prog env x = match envLookup x env
   LocalBinder ord => stampRowOf prog ord
   LocalUnstamped => None
@@ -733,7 +743,7 @@ varRow prog env x = match envLookup x env
 
 -- what a reference to [x] holds; RTValue where no row states it
 export
-varStamp : WasmTypeContext -> List String -> String -> RuntimeType
+varStamp : WasmTypeContext -> Env -> String -> RuntimeType
 varStamp prog env x = match varRow prog env x
   Some row => row.brType
   None => RTValue
@@ -742,11 +752,11 @@ varStamp prog env x = match varRow prog env x
 -- extern (a name no binder in the program has) the result type its declaration in
 -- `stdlib/runtime.mdk` gives
 export
-returnStamp : WasmTypeContext -> List String -> String -> RuntimeType
+returnStamp : WasmTypeContext -> Env -> String -> RuntimeType
 returnStamp prog env fn = match varRow prog env fn
   Some row => optionOr RTValue row.brReturns
   None =>
-    if contains fn env
+    if envHas fn env
       || omHasKey fn prog.fnNames
       || omHasKey fn prog.valNames then
       RTValue
@@ -795,7 +805,7 @@ externResultStamp fn =
 -- stamped scalar tag (or its operands'), and a saturated call its callee's
 -- return stamp.  RTValue where nothing states it.
 export
-cexprStamp : WasmTypeContext -> List String -> CExpr -> RuntimeType
+cexprStamp : WasmTypeContext -> Env -> CExpr -> RuntimeType
 cexprStamp _ _ (CLit l) = litRuntimeType l
 cexprStamp _ _ (CVar "True" _) = RTBool
 cexprStamp _ _ (CVar "False" _) = RTBool
@@ -846,12 +856,7 @@ appendStamp _ b = b
 
 -- the arithmetic result of two operands: the typechecker's scalar tag where it
 -- states one, else a Float operand makes a Float result
-arithStamp : WasmTypeContext ->
-  List String ->
-  String ->
-  CExpr ->
-  CExpr ->
-  RuntimeType
+arithStamp : WasmTypeContext -> Env -> String -> CExpr -> CExpr -> RuntimeType
 arithStamp prog env tag l r =
   if tag == "Float" then
     RTFloat
@@ -870,26 +875,21 @@ stampOrElse RTValue b = b
 stampOrElse a _ = a
 
 export
-envBindGroup : CBind -> List String -> List String
+envBindGroup : CBind -> Env -> Env
 envBindGroup (CBind name _ _ bid) env = envBind name bid env
 
 export
-envBindGroups : List CBind -> List String -> List String
+envBindGroups : List CBind -> Env -> Env
 envBindGroups binds env = fold (acc g => envBindGroup g acc) env binds
 
--- the env entry naming a let-group member's binder
-export
-groupBindMark : CBind -> String
-groupBindMark (CBind name _ _ bid) = envMark name bid
-
-blockStamp : WasmTypeContext -> List String -> List CStmt -> RuntimeType
+blockStamp : WasmTypeContext -> Env -> List CStmt -> RuntimeType
 blockStamp _ _ [] = RTValue
 blockStamp prog env [CSExpr e] = cexprStamp prog env e
 blockStamp prog env ((CSLet _ pat _) :: rest) =
   blockStamp prog (envBindPat pat env) rest
 blockStamp prog env (_ :: rest) = blockStamp prog env rest
 
-armsStamp : WasmTypeContext -> List String -> List CArm -> RuntimeType
+armsStamp : WasmTypeContext -> Env -> List CArm -> RuntimeType
 armsStamp _ _ [] = RTValue
 armsStamp prog env ((CArm pat _ body) :: rest) =
   stampOrElse
@@ -897,11 +897,11 @@ armsStamp prog env ((CArm pat _ body) :: rest) =
     (armsStamp prog env rest)
 
 export
-isPolyNumBinop : WasmTypeContext -> List String -> CExpr -> CExpr -> Bool
+isPolyNumBinop : WasmTypeContext -> Env -> CExpr -> CExpr -> Bool
 isPolyNumBinop prog env l r =
   isPolyNumOperand prog env l || isPolyNumOperand prog env r
 
-isPolyNumOperand : WasmTypeContext -> List String -> CExpr -> Bool
+isPolyNumOperand : WasmTypeContext -> Env -> CExpr -> Bool
 isPolyNumOperand prog env (CVar x _) = match varRow prog env x
   Some row => row.brType == RTValue
   None => False
@@ -1055,7 +1055,7 @@ planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
   let roots = need emptyHelpers "ioRuntimeLines"
   let roots =
     if refMode then sourceRoots source str clos hostKeys js roots else roots
-  let roots = fold (hBind ctx refMode str []) roots groups
+  let roots = fold (hBind ctx refMode str envEmpty) roots groups
   let roots = fold (hImpl ctx refMode str) roots impls
   let roots = if refMode then implFailureRoots roots impls else roots
   let roots =
@@ -1075,7 +1075,7 @@ planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
         (hasUse source UseI64)
         (fold
           (hImpl ctx True str)
-          (fold (hBind ctx True str []) closed groups)
+          (fold (hBind ctx True str envEmpty) closed groups)
           impls)
   let renderClos = clos || omHasKey "closApplyLines" closed.helpers
   let representation = representationOf source str closed
@@ -1242,7 +1242,7 @@ censusWasmDemand plan = { plan |
 export
 selectWasmBin : WasmTypeContext ->
   Bool ->
-  List String ->
+  Env ->
   String ->
   CExpr ->
   CExpr ->
@@ -1272,7 +1272,7 @@ selectWasmBin ctx str env op l r tag =
 hBind : WasmTypeContext ->
   Bool ->
   Bool ->
-  List String ->
+  Env ->
   HelperAcc ->
   CBind ->
   HelperAcc
@@ -1290,7 +1290,7 @@ hBind ctx refMode str env acc (CBind name clauses loc _) =
 hClause : WasmTypeContext ->
   Bool ->
   Bool ->
-  List String ->
+  Env ->
   HelperAcc ->
   CClause ->
   HelperAcc
@@ -1306,9 +1306,9 @@ hClause ctx refMode str env acc (CClause pats body) =
 hImpl : WasmTypeContext -> Bool -> Bool -> HelperAcc -> CImplEntry -> HelperAcc
 hImpl ctx refMode str acc (CImplEntry _ _ _ body) = match body
   CImplTagged _ _ _ _ _ pats b =>
-    hClause ctx refMode str [] acc (CClause pats b)
+    hClause ctx refMode str envEmpty acc (CClause pats b)
   CImplDefault _ _ _ _ _ pats b =>
-    hClause ctx refMode str [] acc (CClause pats b)
+    hClause ctx refMode str envEmpty acc (CClause pats b)
 
 implFailureRoots : HelperAcc -> List CImplEntry -> HelperAcc
 implFailureRoots acc entries =
@@ -1369,7 +1369,7 @@ hExpr : WasmTypeContext ->
   Bool ->
   Bool ->
   HelperAcc ->
-  List String ->
+  Env ->
   CExpr ->
   HelperAcc
 hExpr ctx refMode str acc env (CBinPrim op l r tag _) =
@@ -1421,7 +1421,7 @@ hExpr ctx refMode str acc env (app@(CApp f args _)) =
 hExpr ctx refMode str acc env (CVar name _) =
   let acc =
     if refMode
-      && not (contains name env)
+      && not (envHas name env)
       && (omHasKey name ctx.fnNames || externNeedsClosure ctx name) then
       need acc "closApplyLines"
     else
@@ -1539,7 +1539,7 @@ hStmts : WasmTypeContext ->
   Bool ->
   Bool ->
   HelperAcc ->
-  List String ->
+  Env ->
   List CStmt ->
   HelperAcc
 hStmts _ _ _ acc _ [] = acc
@@ -1578,13 +1578,7 @@ hStmts ctx refMode str acc env ((CSExpr x) :: rest) =
 hStmts ctx refMode str acc env ((CSAssign _ x) :: rest) =
   hStmts ctx refMode str (hExpr ctx refMode str acc env x) env rest
 
-hArm : WasmTypeContext ->
-  Bool ->
-  Bool ->
-  List String ->
-  HelperAcc ->
-  CArm ->
-  HelperAcc
+hArm : WasmTypeContext -> Bool -> Bool -> Env -> HelperAcc -> CArm -> HelperAcc
 hArm ctx refMode str env acc (CArm pat guards b) =
   let (acc, inner) =
     fold
@@ -1674,11 +1668,11 @@ printRoots ctx outcome groups acc =
   let body = filterMap mainBodyD groups
   match body
     e :: _ =>
-      let own = varStamp ctx [] "main"
+      let own = varStamp ctx envEmpty "main"
       let stamp = match outcome
         Some fact if fact.entryMainIsUnit => RTUnit
         Some fact if fact.entryMainIsFloat => RTFloat
-        _ => if own == RTValue then cexprStamp ctx [] e else own
+        _ => if own == RTValue then cexprStamp ctx envEmpty e else own
       if stamp == RTFloat then
         needMany acc ["floatRuntimeLines", "ioStrRuntimeLines"]
       else if stamp == RTChar then

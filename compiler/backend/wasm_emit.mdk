@@ -4,8 +4,9 @@ import backend.wasm_repr.{
 }
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
-  selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, envMark,
-  paramEntries, envMarksOf, envWithMarks, appHead, isPlainParam, isValBind
+  selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, Env,
+  envEmpty, envHas, envBindUnstamped, envRestrict, envExtendUnstamped,
+  paramEnvOver, appHead, isPlainParam, isValBind
 }
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
@@ -908,7 +909,7 @@ selectedJsImport prog name = match omLookup name (progEmit prog).externFacts
 -- A user extern applied: with all its arguments, the arguments and then its
 -- wrapper (`jsffiWrapperLines`); otherwise its eta closure, applied.
 emitFfiAppW : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   String ->
@@ -1268,14 +1269,14 @@ gapOptE emit reason = match emit.gapMode
   WGapRecord => let _ = noteGapW emit reason in None
   WGapStrict => gap reason
 
-gapL2 : WasmEmit -> String -> (List String, List String)
+gapL2 : WasmEmit -> String -> (List String, Env)
 gapL2 emit reason = match emit.gapMode
-  WGapRecord => let _ = noteGapW emit reason in ([], [])
+  WGapRecord => let _ = noteGapW emit reason in ([], envEmpty)
   WGapStrict => gap reason
 
-gapL3 : WasmEmit -> String -> (List String, List String, List String)
+gapL3 : WasmEmit -> String -> (List String, List String, Env)
 gapL3 emit reason = match emit.gapMode
-  WGapRecord => let _ = noteGapW emit reason in ([], [], [])
+  WGapRecord => let _ = noteGapW emit reason in ([], [], envEmpty)
   WGapStrict => gap reason
 
 gapLP : Prog -> String -> List String
@@ -1299,10 +1300,10 @@ gapSP prog reason = gapS (progEmit prog) reason
 gapSIntP : Prog -> String -> (String, Int)
 gapSIntP prog reason = gapSInt (progEmit prog) reason
 
-gapL2P : Prog -> String -> (List String, List String)
+gapL2P : Prog -> String -> (List String, Env)
 gapL2P prog reason = gapL2 (progEmit prog) reason
 
-gapL3P : Prog -> String -> (List String, List String, List String)
+gapL3P : Prog -> String -> (List String, List String, Env)
 gapL3P prog reason = gapL3 (progEmit prog) reason
 
 -- ── W7 collection state ──────────────────────────────────────────────────────
@@ -1824,13 +1825,7 @@ fileBoundW app = match flattenApp app []
 -- In a tail position it pushes a frame only when no equal bound of the mode is
 -- active, as medaka_rt.c mdk_with_file_bound does, and says whether it did: a
 -- re-entered bound leaves the body's tail call a tail call.
-fileBoundEnterW : Prog ->
-  List String ->
-  Int ->
-  CExpr ->
-  Int ->
-  Bool ->
-  List String
+fileBoundEnterW : Prog -> Env -> Int -> CExpr -> Int -> Bool -> List String
 fileBoundEnterW prog env d g mode keep =
   emitRefExpr prog env d g
     ++ [
@@ -2095,7 +2090,7 @@ rawReprW WBool = WBool64
 rawReprW WUnit = WUnit64
 rawReprW _ = WInt63
 
-localTargetW : Prog -> List String -> String -> String
+localTargetW : Prog -> Env -> String -> String
 localTargetW prog env name =
   if rawProgramW prog then match WD.envLookup name env
     WD.LocalBinder ord => match omLookup ord (progFnCtx prog).localSlots.value
@@ -2207,7 +2202,7 @@ intChkName "/" = "div"
 intChkName op = panic ("wasm: no checked Int operator '" ++ op ++ "'")
 
 -- `uNTruncate x` in ref mode: unbox, keep the head's low bits, rebox.
-emitTruncateRef : Prog -> List String -> Int -> String -> CExpr -> List String
+emitTruncateRef : Prog -> Env -> Int -> String -> CExpr -> List String
 emitTruncateRef prog env d head a = match fixedWidthMask head
   Some mask =>
     emitRefExpr prog env d a
@@ -2613,7 +2608,7 @@ foldMaxDepth (e :: rest) = maxI (maxRefDepth e) (foldMaxDepth rest)
 
 emitRefValInit : Prog -> CBind -> List String
 emitRefValInit prog (CBind name [CClause [] body] _ _) =
-  let instrs = emitRefExpr prog [] 0 body
+  let instrs = emitRefExpr prog envEmpty 0 body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
 
@@ -2642,7 +2637,7 @@ emitRefForceFn : Prog -> CBind -> List String
 emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let g = gname name
   let w7Outer = w7ScopeOpen (progEmit prog)
-  let instrs = emitRefExpr prog [] 0 body
+  let instrs = emitRefExpr prog envEmpty 0 body
   let bodyLocals = dedupKeep (collectExprLocals body)
   let maxDepth = maxRefDepth body
   let scratch = scratchLocals maxDepth
@@ -2701,7 +2696,7 @@ emitRefForceFn prog _ = gapLP prog "value binding must be a nullary clause"
 emitRefMain : Prog -> EmitPlan -> List CBind -> List String
 emitRefMain prog plan groups = match findMain (progEmit prog) groups
   Some body =>
-    let value = emitValueW prog [] 0 body
+    let value = emitValueW prog envEmpty 0 body
     let instrs = valueLines value
     if rawProgramW prog then
       indent instrs
@@ -2747,18 +2742,19 @@ emitBoxedMainW prog plan groups body instrs =
 mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
 mainBodyIsUnit prog _ (CApp f _ _) = match appHead f
   CVar fn _ =>
-    isUnitExtern (runtimeNameW prog fn) || returnStamp prog [] fn == RTUnit
+    isUnitExtern (runtimeNameW prog fn)
+      || returnStamp prog envEmpty fn == RTUnit
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict carrying the routes; recover the bare name.
-  CDict fn _ => returnStamp prog [] fn == RTUnit
+  CDict fn _ => returnStamp prog envEmpty fn == RTUnit
   _ => False
 mainBodyIsUnit prog cafs (CVar fn _) =
-  if returnStamp prog [] fn == RTUnit then
+  if returnStamp prog envEmpty fn == RTUnit then
     True
   else match omLookup fn cafs
     Some body => mainBodyIsUnit prog (omDelete fn cafs) body
     None => False
-mainBodyIsUnit prog _ (CDict fn _) = returnStamp prog [] fn == RTUnit
+mainBodyIsUnit prog _ (CDict fn _) = returnStamp prog envEmpty fn == RTUnit
 mainBodyIsUnit prog cafs (CLet _ pat _ b) =
   mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
@@ -2811,14 +2807,14 @@ shadowCafs (x :: xs) cafs = shadowCafs xs (omDelete x cafs)
 
 -- The stamp of `main` itself: the type of the value it holds.
 mainStamp : Prog -> RuntimeType
-mainStamp prog = varStamp prog [] "main"
+mainStamp prog = varStamp prog envEmpty "main"
 
 -- What `main`'s result prints as: its own stamp where that is a printable
 -- scalar, else the stamp the body states for itself.
 mainPrintStamp : Prog -> CExpr -> RuntimeType
 mainPrintStamp prog body =
   let own = mainStamp prog
-  if isPrintableScalarStamp own then own else cexprStamp prog [] body
+  if isPrintableScalarStamp own then own else cexprStamp prog envEmpty body
 
 isPrintableScalarStamp : RuntimeType -> Bool
 isPrintableScalarStamp RTInt = True
@@ -3041,14 +3037,14 @@ emitClausesRef : Prog ->
   List CClause ->
   List String
 emitClausesRef prog name params arity clauses =
-  emitClausesRefEnv prog [] name params arity clauses
+  emitClausesRefEnv prog envEmpty name params arity clauses
 
 -- W9: env-seeded clause emission — `baseEnv` names (a CLetGroup's sibling closures +
 -- captured outer vars, bound as locals before the body) are in scope in every clause
 -- body in addition to the clause's own param bindings.  The non-letgroup path passes
 -- baseEnv=[] (emitClausesRef).
 emitClausesRefEnv : Prog ->
-  List String ->
+  Env ->
   String ->
   List String ->
   Int ->
@@ -3061,7 +3057,7 @@ emitClausesRefEnv : Prog ->
 emitClausesRefEnv prog baseEnv name params arity (clauses@[CClause pats body]) =
   if allPlainParams pats && not (exprHasFallthrough body) then
     let aliases = bindParamAliases prog pats params
-    let env = paramEnv pats ++ baseEnv
+    let env = paramEnvOver pats baseEnv
     aliases ++ emitRefTail prog env arity body
   else
     emitClauseChainRefEnv prog baseEnv name params arity clauses
@@ -3095,7 +3091,7 @@ allPlainParams pats = not (anyList (p => not (isPlainParam p)) pats)
 -- through to the next clause.  The last clause's failure is `unreachable` (a
 -- well-typed exhaustive fn won't reach it).
 emitClauseChainRefEnv : Prog ->
-  List String ->
+  Env ->
   String ->
   List String ->
   Int ->
@@ -3113,7 +3109,7 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
     (progFnCtx prog).site
 
 emitClauseChainGo : Prog ->
-  List String ->
+  Env ->
   String ->
   List String ->
   Int ->
@@ -3151,11 +3147,11 @@ emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i
 -- clause.  PLit param → compare the i31 against the constant.  PCon param → test
 -- the discriminant + bind fields.  PVar → bind to a local.  PWild → nothing.
 clausePatCodeEnv : Prog ->
-  List String ->
+  Env ->
   List Pat ->
   List String ->
   String ->
-  (List String, List String, List String)
+  (List String, List String, Env)
 clausePatCodeEnv prog baseEnv pats params clLabel =
   clausePatGo prog (zipPats pats params) clLabel [] [] baseEnv
 
@@ -3164,8 +3160,8 @@ clausePatGo : Prog ->
   String ->
   List String ->
   List String ->
-  List String ->
-  (List String, List String, List String)
+  Env ->
+  (List String, List String, Env)
 clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
 clausePatGo prog ((pat, a) :: rest) clLabel tAcc bAcc env =
   let occ = ["local.get $" ++ gname a]
@@ -3177,8 +3173,8 @@ patTestBind : Prog ->
   Pat ->
   List String ->
   String ->
-  List String ->
-  (List String, List String, List String)
+  Env ->
+  (List String, List String, Env)
 patTestBind prog PWild occ clLabel env = ([], [], env)
 patTestBind prog (PVar x _ bid) occ clLabel env =
   ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
@@ -3334,8 +3330,8 @@ patTestBindList : Prog ->
   List Pat ->
   List String ->
   String ->
-  List String ->
-  (List String, List String, List String)
+  Env ->
+  (List String, List String, Env)
 patTestBindList _ [] occ clLabel env = (
   discrimReadOf occ "List" ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
   [],
@@ -3357,9 +3353,9 @@ patTestBindTuple : Prog ->
   List Pat ->
   List String ->
   String ->
-  List String ->
+  Env ->
   Int ->
-  (List String, List String, List String)
+  (List String, List String, Env)
 patTestBindTuple _ _ [] _ _ env _ = ([], [], env)
 patTestBindTuple prog tc (p :: rest) occ clLabel env i =
   let fieldSnip =
@@ -3380,9 +3376,9 @@ patTestBindCon : Prog ->
   List Pat ->
   List String ->
   String ->
-  List String ->
+  Env ->
   Int ->
-  (List String, List String, List String)
+  (List String, List String, Env)
 patTestBindCon _ _ [] _ _ env _ = ([], [], env)
 patTestBindCon prog c (p :: rest) occ clLabel env i =
   let fieldSnip =
@@ -3477,7 +3473,7 @@ localDeclRef l = "(local $" ++ gname l ++ " (ref eq))"
 -- dict witnesses, prepended to the args (in methRoutes++implRoutes order, matching
 -- llvm_emit's dictWordsOf (methRoutes ++ implRoutes)).
 emitMethodRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   String ->
@@ -3537,7 +3533,7 @@ emitMethodRef prog env d name iface siteArity (route@(RProj r path)) _ methRoute
     ++ ["local.set $" ++ gname local]
     ++ emitMethodDispatchRef
       prog
-      (local :: env)
+      (envBindUnstamped local env)
       d
       name
       iface
@@ -3593,7 +3589,7 @@ missesArity _ = False
 
 -- the RKey direct call itself, for a site supplying exactly the value arity.
 emitMethodRKeyCallRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   String ->
@@ -3685,7 +3681,7 @@ armDictCountW ent nMeth =
 -- For a value the chain runs inside a result block and each arm `br`s out with its
 -- value; for a tail call each arm `return_call`s and no block is needed.
 emitMethodDispatchRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   String ->
@@ -3896,9 +3892,9 @@ takeRoutesW n (r :: rest) = r :: takeRoutesW (n - 1) rest
 -- (a one-level `RKey k []` dict — tag = i31.get_s) OR a $dictcell (a nested `RKey k [reqs]`
 -- dict — tag = struct.get 0).  Type-test once and read the tag from the matching shape;
 -- both arms leave one i32 on the stack.  The param is a leading $dict_* local, always in env.
-readDictParam : Prog -> List String -> String -> List String
+readDictParam : Prog -> Env -> String -> List String
 readDictParam prog env dpar =
-  if contains dpar env then
+  if envHas dpar env then
     ["local.get $" ++ gname dpar, "ref.test (ref i31)", "if (result i32)"]
       ++ indent ["local.get $" ++ gname dpar, "ref.cast (ref i31)", "i31.get_s"]
       ++ ["else"]
@@ -3914,7 +3910,7 @@ readDictParam prog env dpar =
 -- materialize a Route as its leading dict witness instruction(s): a concrete RKey →
 -- the i31 of hashName(tag); a forwarded RDict/RDictFwd → re-push the in-scope dict
 -- param.  Nested `requires` (RKey with non-empty reqs) are out of the minimal slice.
-routeWitness : Prog -> List String -> Int -> Route -> List String
+routeWitness : Prog -> Env -> Int -> Route -> List String
 routeWitness _ _ _ (RKey tag [] []) =
   ["i32.const " ++ intToString (dictTag tag), "ref.i31"]
 -- W5 (nested requires-dict): build a $dictcell — push the tag, recursively build each
@@ -3936,12 +3932,12 @@ routeWitness prog env d (RKey tag reqs sups) =
 routeWitness prog env d (RProj r path) =
   routeWitness prog env d r ++ flatMap superFieldW path
 routeWitness prog env _ (RDict dpar) =
-  if contains dpar env then
+  if envHas dpar env then
     ["local.get $" ++ gname dpar]
   else
     gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
 routeWitness prog env _ (RDictFwd dpar) =
-  if contains dpar env then
+  if envHas dpar env then
     ["local.get $" ++ gname dpar]
   else
     gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
@@ -3972,7 +3968,7 @@ superFieldW i = [
 -- dict witnesses (one per `=>` constraint, in route order) to the args, then call
 -- the lifted $name (whose leading params are the $dict_* the dict-pass injected).
 emitDictRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List Route ->
@@ -3981,7 +3977,7 @@ emitDictRef : Prog ->
   CallEndW ->
   List String
 emitDictRef prog env d name routes args mode end =
-  if contains name env then
+  if envHas name env then
     emitLocalDictRef prog env d name routes args end
   else if progFnMemberW prog name then
     -- P2 (over/under-application, #729): the direct `call` is only legal when the
@@ -4005,7 +4001,7 @@ emitDictRef prog env d name routes args mode end =
 -- A dictionary-abstracted LOCAL binding is a closure whose leading parameters are
 -- its dictionaries: apply it to the dict witnesses, then the arguments.
 emitLocalDictRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List Route ->
@@ -4045,7 +4041,7 @@ emitLocalDictRef prog env d name routes args end =
 -- CMethod value: arity k = the method's declared USER arity; a nullary method (k <= 0)
 -- is a plain value — keep the immediate saturated dispatch.
 emitMethodValueRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   String ->
@@ -4093,14 +4089,9 @@ methodValueArityW _ _ = 0
 -- CDict value: value arity v = the define's parameters − route count.  A nullary
 -- value arity (the constrained fn takes no value args) degenerates to the saturated
 -- dict call.
-emitDictValueRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List Route ->
-  List String
+emitDictValueRef : Prog -> Env -> Int -> String -> List Route -> List String
 emitDictValueRef prog env d name routes =
-  if contains name env then
+  if envHas name env then
     emitLocalDictRef prog env d name routes [] CallValueW
   else if progFnMemberW prog name then
     let valArity = optionOr 0 (definedArityW prog (CDict name routes))
@@ -4420,7 +4411,7 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
 -- live stash locals never collide.  The function header declares `$__rf0..` up to
 -- the body's max depth (`maxRefDepth`).  No mutable counter needed → re-derivable.
 
-emitRefExpr : Prog -> List String -> Int -> CExpr -> List String
+emitRefExpr : Prog -> Env -> Int -> CExpr -> List String
 emitRefExpr prog env d expr = valueLines (emitValueW prog env d expr)
 
 refOnlyValueW : Prog -> CExpr -> (Unit -> List String) -> WasmValue
@@ -4432,7 +4423,7 @@ refOnlyValueW prog expr body =
   else
     WasmValue WBoxEq (body ())
 
-emitValueW : Prog -> List String -> Int -> CExpr -> WasmValue
+emitValueW : Prog -> Env -> Int -> CExpr -> WasmValue
 emitValueW prog env d (CLit l) =
   if rawProgramW prog then
     let (lines, ty) = emitLitI32 (progEmit prog) l
@@ -4660,10 +4651,10 @@ dropPrefix : String -> String -> String
 dropPrefix s p = stringSlice (stringLength p) (stringLength s) s
 
 -- a variable: local/global → get (already (ref eq)); a nullary ctor → its i31 tag;
-emitVarRef : Prog -> List String -> Int -> String -> List String
+emitVarRef : Prog -> Env -> Int -> String -> List String
 emitVarRef prog env d x =
   if rawProgramW prog then
-    if contains x env then
+    if envHas x env then
       ["local.get " ++ localTargetW prog env x]
     else if omHasKey x (indexValNamesW (progIndex prog)) then
       ["global.get $" ++ gname x]
@@ -4685,14 +4676,14 @@ emitVarRef prog env d x =
   else
     emitVarRefBoxed prog env d x
 
-emitVarRefBoxed : Prog -> List String -> Int -> String -> List String
+emitVarRefBoxed : Prog -> Env -> Int -> String -> List String
 emitVarRefBoxed prog env d x = match emitFtSentinel x
   Some instrs => instrs
   None => emitVarRefPlain prog env d x
 
-emitVarRefPlain : Prog -> List String -> Int -> String -> List String
+emitVarRefPlain : Prog -> Env -> Int -> String -> List String
 emitVarRefPlain prog env d x =
-  if contains x env then
+  if envHas x env then
     ["local.get $" ++ gname x]
   else if progValMemberW prog x then
     -- #561 PR-B: a LAZY value global (dispatch-reaching / cyclic) is forced on first use —
@@ -4840,10 +4831,19 @@ emitExternEtaDefine prog lamName name arity =
   let key = runtimeNameW prog name
   let family = externFamilyW (progEmit prog) key
   let call = match family
-    Some WasmStr => emitStrExternRef prog params 0 key argVars
-    Some WasmArray => emitArrayExternRef prog params 0 key argVars
-    Some WasmByteBlock => emitByteBlockExternRef prog params 0 key argVars
-    _ => emitLeafExternRef prog params 0 key argVars
+    Some WasmStr =>
+      emitStrExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
+    Some WasmArray =>
+      emitArrayExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
+    Some WasmByteBlock =>
+      emitByteBlockExternRef
+        prog
+        (envExtendUnstamped params envEmpty)
+        0
+        key
+        argVars
+    _ =>
+      emitLeafExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
   let _ = w7ScopeClose (progEmit prog) w7Outer
   let arrayScratch = match family
     Some WasmArray => arrayEtaScratchLocals
@@ -4883,7 +4883,8 @@ emitCtorEtaDefine prog lamName ctor arity =
   let params = synthParams arity
   let argPrologue = flatMap argLoadAt (zipIdx params 0)
   let argVars = map (p => CVar p AGlobal) params
-  let body = emitCtorConstruct prog params 0 ctor argVars
+  let body =
+    emitCtorConstruct prog (envExtendUnstamped params envEmpty) 0 ctor argVars
   let localLines = map (l => localDeclRef l) params
   [
       "  (func "
@@ -4897,7 +4898,7 @@ emitCtorEtaDefine prog lamName ctor arity =
 -- arithmetic / comparison: unbox both operands from i31 to i32, do the i32 op, then
 -- re-box (arithmetic → i31 int; comparison → i31 0/1 bool).
 emitBinRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -4966,7 +4967,7 @@ emitBinRef prog env d op l r tag site =
 -- first, `fixedWidthWrapW`); comparisons yield an i31 Bool.  A `U32` above 2^30
 -- boxes into `$boxint` like any other large Int.
 emitIntBinRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -5020,7 +5021,7 @@ emitIntBinRef prog env d op l r tag site =
 -- 2^64 for free; `/`/`%` take the Int path's divisor guard; a comparison yields
 -- the i31 Bool the Int path does.
 emitU64BinRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -5048,7 +5049,7 @@ unboxU64W = ["ref.cast (ref $u64)", "struct.get $u64 0"]
 -- way; `/` goes through `$mdk_i64_div`, since `i64.div_s` traps on
 -- `minBound / -1`, and `i64.rem_s` already answers 0 there.
 emitI64BinRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -5074,13 +5075,7 @@ unboxI64W : List String
 unboxI64W = ["ref.cast (ref $i64)", "struct.get $i64 0"]
 
 -- a binary `U64` kernel: both payloads, one i64 instruction (or helper call), reboxed.
-emitU64KernelRef : Prog ->
-  List String ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  String ->
-  List String
+emitU64KernelRef : Prog -> Env -> Int -> CExpr -> CExpr -> String -> List String
 emitU64KernelRef prog env d a b instr =
   emitRefExpr prog env d a
     ++ unboxU64W
@@ -5089,13 +5084,7 @@ emitU64KernelRef prog env d a b instr =
     ++ [instr, "struct.new $u64"]
 
 -- a `U64` shift: the payload and the Int amount, through the range-checked helper.
-emitU64ShiftRef : Prog ->
-  List String ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  String ->
-  List String
+emitU64ShiftRef : Prog -> Env -> Int -> CExpr -> CExpr -> String -> List String
 emitU64ShiftRef prog env d a k helper =
   emitRefExpr prog env d a
     ++ unboxU64W
@@ -5184,7 +5173,7 @@ siteLocInstrs emit site =
 
 -- the located-trap runtime of the module: the table of site files, the location
 -- writer, and the shared non-exhaustive-match trap if one is called.
-siteExprInstrs : Prog -> List String -> Int -> CExpr -> List String
+siteExprInstrs : Prog -> Env -> Int -> CExpr -> List String
 siteExprInstrs prog env d (CLit (LInt 0)) = []
 siteExprInstrs prog env d (e@(CApp _ _ _)) = match flattenApp e []
   (CVar v _, [CLit (LString f), CLit (LInt line), CLit (LInt col)]) =>
@@ -5197,7 +5186,7 @@ siteExprInstrs prog env d (e@(CApp _ _ _)) = match flattenApp e []
   _ => siteDynInstrs prog env d e
 siteExprInstrs prog env d e = siteDynInstrs prog env d e
 
-siteDynInstrs : Prog -> List String -> Int -> CExpr -> List String
+siteDynInstrs : Prog -> Env -> Int -> CExpr -> List String
 siteDynInstrs prog env d e =
   let _ = noteSiteRt (progEmit prog)
   emitRefExpr prog env d e ++ ["call $mdk_unbox_int", "call $mdk_write_err_loc"]
@@ -5322,13 +5311,7 @@ emitDivZeroGuard emit op dloc site =
 -- layer-9: emit a runtime-shape-dispatched comparison.  `==`/`/=` go through
 -- $mdk_value_eq (-> i31 Bool); ordering ops call $mdk_value_cmp (-> plain i32 -1/0/1)
 -- then i32-compare the result against 0 for the requested op, re-boxing the Bool i31.
-emitValueCmpRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  CExpr ->
-  CExpr ->
-  List String
+emitValueCmpRef : Prog -> Env -> Int -> String -> CExpr -> CExpr -> List String
 emitValueCmpRef prog env d op l r =
   let lv = emitRefExpr prog env d l
   let rv = emitRefExpr prog env d r
@@ -5358,7 +5341,7 @@ emitValueCmpRef prog env d op l r =
 -- independent of the per-operator arith flags, since this branch never touches
 -- $mdk_value_add/sub/mul/div/mod).
 emitValueCmpNumRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -5396,13 +5379,7 @@ valueRelName op = panic ("wasm: unsupported value ordering op " ++ op)
 -- W8b: emit a Float binop.  Arith (+,-,*,/) → unbox both, f64 op, rebox.  `%` has no
 -- f64 instruction, so it calls $mdk_float_rem (exact power-of-two-reduction fmod == LLVM frem).
 -- Comparison (==,/=,<,>,<=,>=) → unbox both, f64 compare → i31 Bool.
-emitFloatBinRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  CExpr ->
-  CExpr ->
-  List String
+emitFloatBinRef : Prog -> Env -> Int -> String -> CExpr -> CExpr -> List String
 emitFloatBinRef prog env d op l r =
   let lf =
     emitRefExpr prog env d l ++ ["ref.cast (ref $float)", "struct.get $float 0"]
@@ -5436,42 +5413,39 @@ wasmFloatCmp op = panic ("wasm W8b: not a Float compare op '" ++ op ++ "'")
 -- runtime type (`DeclFacts.factBinders`), found through the binder's `BinderId`
 -- ordinal.  A reference is a name, and the names in `env` are unique only among
 -- NESTED binders (`uniqueBinders`): two sibling arms may bind `x` at different
--- types.  So `env` carries, beside each stamped binder's name, an entry naming
--- the binder (`envBind`), scoped exactly as the name is, and a reference
--- resolves through the nearest entry.  A fact is never stored under a name.
+-- types.  So `env` maps each name to the binder it currently denotes
+-- (`envBind`), scoped exactly as the name is: an inner binding replaces the
+-- outer one in its own scope only.  A fact is never stored under a name.
 
 -- [env] extended with the stamped binder [x]
-envBind : String -> BinderId -> List String -> List String
-envBind x bid env = x :: envMark x bid :: env
+envBind : String -> BinderId -> Env -> Env
+envBind = WD.envBind
 
--- the env entries of a function's plain parameters, in order
-paramEnv : List Pat -> List String
-paramEnv pats = flatMap paramEntries pats
+-- the env of a function's plain parameters
+paramEnv : List Pat -> Env
+paramEnv = WD.paramEnv
 
-varStamp : Prog -> List String -> String -> RuntimeType
+varStamp : Prog -> Env -> String -> RuntimeType
 varStamp prog = WD.varStamp (progIndex prog).typeContext
 
-returnStamp : Prog -> List String -> String -> RuntimeType
+returnStamp : Prog -> Env -> String -> RuntimeType
 returnStamp prog = WD.returnStamp (progIndex prog).typeContext
 
-cexprStamp : Prog -> List String -> CExpr -> RuntimeType
+cexprStamp : Prog -> Env -> CExpr -> RuntimeType
 cexprStamp prog = WD.cexprStamp (progIndex prog).typeContext
 
-envBindGroups : List CBind -> List String -> List String
+envBindGroups : List CBind -> Env -> Env
 envBindGroups = WD.envBindGroups
 
-groupBindMark : CBind -> String
-groupBindMark = WD.groupBindMark
-
 -- is [e] statically a Float?
-cexprIsFloat : Prog -> List String -> CExpr -> Bool
+cexprIsFloat : Prog -> Env -> CExpr -> Bool
 cexprIsFloat prog env e = cexprStamp prog env e == RTFloat
 
 -- A binop operand whose type is known only at run time: a variable stamped
 -- `RTValue` (a `Num a` parameter, or any binder the typechecker left generic).
 -- It routes to the runtime value-dispatch helpers, never the inline Int path
 -- (which would trap `illegal cast` on a boxed $float).
-emitUnRef : Prog -> List String -> Int -> String -> CExpr -> List String
+emitUnRef : Prog -> Env -> Int -> String -> CExpr -> List String
 emitUnRef prog env d "-" x =
   -- W8b: unary `-` on a Float negates the f64 (f64.neg), reboxing; else integer negate.
   if not (rawProgramW prog) && cexprIsFloat prog env x then
@@ -5502,12 +5476,7 @@ emitUnRef prog _ _ op _ =
 -- RHS uses, so it never collides), then bind each sub-pattern by field extraction
 -- (reusing bindPatRef, the same machinery match-arm leaves use).  Returns the
 -- stash+bind instructions and the env extended with the bound vars.
-emitDestructureLet : Prog ->
-  List String ->
-  Int ->
-  Pat ->
-  CExpr ->
-  (List String, List String)
+emitDestructureLet : Prog -> Env -> Int -> Pat -> CExpr -> (List String, Env)
 emitDestructureLet prog env d pat e1 =
   let de = maxIndexAt e1 d + 1
   let sv = scratchLocal de
@@ -5518,12 +5487,12 @@ emitDestructureLet prog env d pat e1 =
 -- Binding emission is shared by value and tail descent; the caller keeps the
 -- body's position and passes the extended lexical environment.
 emitLetBindingW : Prog ->
-  List String ->
+  Env ->
   Int ->
   Bool ->
   Pat ->
   CExpr ->
-  (List String, List String)
+  (List String, Env)
 emitLetBindingW prog env d False (PVar x _ bid) e1 =
   let rhs = emitRefExpr prog env d e1
   let _ = mintLocalW prog bid
@@ -5555,7 +5524,7 @@ emitLetBindingW prog env _ _ _ _ = (
   env,
 )
 
-emitBlockRef : Prog -> List String -> Int -> List CStmt -> WasmValue
+emitBlockRef : Prog -> Env -> Int -> List CStmt -> WasmValue
 emitBlockRef prog env d [CSExpr ex] = emitValueW prog env d ex
 emitBlockRef prog env d ((CSExpr ex) :: rest) =
   let prefix = emitRefExpr prog env d ex ++ ["drop"]
@@ -5577,12 +5546,12 @@ emitBlockRef prog _ _ _ =
       "ref-mode: unsupported block statement"))
 
 emitBlockBindingW : Prog ->
-  List String ->
+  Env ->
   Int ->
   Bool ->
   Pat ->
   CExpr ->
-  (List String, List String)
+  (List String, Env)
 emitBlockBindingW prog env d _ pat ex = match (pat, ex)
   (PVar x _ bid, CLam pats body) =>
     if rawProgramW prog then
@@ -5592,7 +5561,7 @@ emitBlockBindingW prog env d _ pat ex = match (pat, ex)
   _ => emitLetBindingW prog env d False pat ex
 
 emitDirectRawCallW : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   List CExpr ->
@@ -5618,7 +5587,7 @@ emitDirectRawCallW prog _ _ _ _ _ =
 -- application of a known fn; an indirect call whose head is a closure value: a local
 -- param, a let-bound closure, a returned closure, an immediately-applied lambda) →
 -- build an args array + `call $__mdk_apply` (the universal arity-dispatched apply).
-emitAppRef : Prog -> List String -> Int -> CExpr -> List String
+emitAppRef : Prog -> Env -> Int -> CExpr -> List String
 emitAppRef prog env d app =
   let (hd, args, mode) = appParts app
   if rawProgramW prog then
@@ -5639,7 +5608,7 @@ emitAppRef prog env d app =
         -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
         -- form is handled by emitVarRef; this catches the applied form guard chains make.
         ftSentinelInstrs f0
-      else if contains f0 env then
+      else if envHas f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named
         -- ctor / known top-level fn / extern: it is a runtime closure VALUE, so applying it
         -- is an INDIRECT call, never a direct `call $fn` / ctor.new.  Without this, a HOF
@@ -5647,7 +5616,7 @@ emitAppRef prog env d app =
         -- `map`) that ALSO collides with a top-level fn name fell to the function-name arm →
         -- a direct `call $<toplevel>` over the WRONG callee (silent miscompile: the top-level
         -- fn ran instead of the param), while `medaka run` and the LLVM build were always
-        -- correct.  Mirrors emitVarRefPlain's `contains x env`-first priority for the bare
+        -- correct.  Mirrors emitVarRefPlain's `envHas x env`-first priority for the bare
         -- VALUE reference, and the LLVM emitApp E24 `isLocal`-first guard.
         emitIndirectApp prog env d hd args CallValueW
       else if isCtor prog f then
@@ -5702,12 +5671,7 @@ emitAppRef prog env d app =
 -- `flushStdout` : no-op (byte writes are unbuffered through the host import); Unit.
 -- `charToStr`/`stringConcat` are W6b (charToStr needs a codepoint→$str runtime;
 -- stringConcat takes a `List String`, which needs W7 list support).
-emitStrExternRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List CExpr ->
-  List String
+emitStrExternRef : Prog -> Env -> Int -> String -> List CExpr -> List String
 emitStrExternRef prog env d "intToString" [a] =
   emitRefExpr prog env d a ++ ["call $mdk_unbox_int", "call $mdk_int_to_str"]
 emitStrExternRef prog env d "intToString" _ =
@@ -5919,7 +5883,7 @@ emitStrExternRef prog _ _ name _ =
 -- `Ref x`     : allocate a fresh 1-field mutable $refbox, storing x as (ref eq).
 -- `setRef r v` : overwrite field 0 of r's $refbox; result is Unit (i31 0).
 -- `.value`    : struct.get the mutable field 0; handled in emitFieldAccessRef.
-emitRefBoxNew : Prog -> List String -> Int -> List CExpr -> List String
+emitRefBoxNew : Prog -> Env -> Int -> List CExpr -> List String
 emitRefBoxNew prog env d [x] =
   emitRefExpr prog env d x ++ ["struct.new $refbox"]
 emitRefBoxNew prog env d _ =
@@ -5927,7 +5891,7 @@ emitRefBoxNew prog env d _ =
 
 -- `setRef r v` : struct.set $refbox 0 ; returns Unit.
 -- WAT stack order for struct.set is [structref, value] (ref on top first).
-emitRefBoxSet : Prog -> List String -> Int -> List CExpr -> List String
+emitRefBoxSet : Prog -> Env -> Int -> List CExpr -> List String
 emitRefBoxSet prog env d [r, v] =
   emitRefExpr prog env d r
     ++ ["ref.cast (ref $refbox)"]
@@ -5941,12 +5905,7 @@ emitRefBoxSet prog env d _ =
 -- (masked to 2^30-1, non-negative).  randomFloat / hashFloat are DEFERRED (W8b —
 -- they need Float boxing + the float formatter (shortest-round-trip since #57, NOT
 -- %.12g — see wasm_preamble.mdk's W8b Float section); see the gap arms).
-emitLeafExternRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List CExpr ->
-  List String
+emitLeafExternRef : Prog -> Env -> Int -> String -> List CExpr -> List String
 -- #179: randomInt lo hi — the draw (and lo/hi) can exceed ±2^30, so BOTH args unbox
 -- through the i31/$boxint seam ($mdk_unbox_int → i64) and the i64 result reboxes via
 -- $mdk_box_int.  Casting args + result to a bare `ref.i31` instead traps
@@ -6546,7 +6505,7 @@ emitLeafExternRef prog _ _ name _ =
 
 -- #101: unbox a boxed $float argument to a raw f64 on the WAT stack.  Shared by every
 -- libm math arm above (unary opcode, host-import transcendental, and binary).
-floatArgW : Prog -> List String -> Int -> CExpr -> List String
+floatArgW : Prog -> Env -> Int -> CExpr -> List String
 floatArgW prog env d a =
   emitRefExpr prog env d a ++ ["ref.cast (ref $float)", "struct.get $float 0"]
 
@@ -6560,12 +6519,7 @@ floatArgW prog env d a =
 --   arrayCopy      arr               → array.new (len) + array.copy
 --   arraySetUnsafe idx val arr       → array.set; result Unit (i31 0)
 --   arrayFromList  list              → alloc (length list), loop-fill from cons cells
-emitArrayExternRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List CExpr ->
-  List String
+emitArrayExternRef : Prog -> Env -> Int -> String -> List CExpr -> List String
 emitArrayExternRef prog env d "arrayLength" [a] =
   emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "array.len", "ref.i31"]
 emitArrayExternRef prog env d "arrayLength" _ =
@@ -6842,7 +6796,7 @@ emitArrayExternRef prog _ _ name _ =
 --   byteBlockWriteStdout  b            → $mdk_bb_write_stdout
 --   sha256Native          b            → $mdk_sha256
 emitByteBlockExternRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List CExpr ->
@@ -6938,7 +6892,7 @@ emitByteBlockExternRef prog _ _ name _ =
 -- traps on an Int outside the i31 range; native has no boxed Int at all, so a
 -- block index, length, or stored byte built from a large Int would diverge rather
 -- than agree.  Route through $mdk_unbox_int (i31 OR $boxint) and narrow.
-bbIntArg : Prog -> List String -> Int -> CExpr -> List String
+bbIntArg : Prog -> Env -> Int -> CExpr -> List String
 bbIntArg prog env d e =
   emitRefExpr prog env d e ++ ["call $mdk_unbox_int", "i32.wrap_i64"]
 
@@ -6989,7 +6943,7 @@ b2fByteRead arrL offL bitsL i = [
 -- needed here — unlike LLVM, whose call sites take a lifted define, wasm reads arity
 -- from the VALUE.  Over-application is unreachable for a well-typed program but falls
 -- out of the same path safely.  SATURATED stays `emitCtorConstruct`, byte-identical.
-emitCtorApp : Prog -> List String -> Int -> String -> List CExpr -> List String
+emitCtorApp : Prog -> Env -> Int -> String -> List CExpr -> List String
 emitCtorApp prog env d ctor args =
   if listLen args == ctorArity prog ctor then
     emitCtorConstruct prog env d ctor args
@@ -7003,7 +6957,7 @@ emitCtorApp prog env d ctor args =
 -- (exact / under→PAP / over→saturate+reapply).  This makes over/under/exact uniform
 -- and reads arity from the value (never a name-keyed table), per WASMGC-DESIGN §11.
 emitIndirectApp : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   List CExpr ->
@@ -7031,7 +6985,7 @@ endValueW CallTailW = ["return"]
 -- build an $argarr holding the emitted args, in order.  `array.new_fixed` takes the
 -- element values from the stack — so emit all args (each leaves a (ref eq)) then one
 -- array.new_fixed of the right length.  Zero args → an empty array.
-emitArgsArray : Prog -> List String -> Int -> List CExpr -> List String
+emitArgsArray : Prog -> Env -> Int -> List CExpr -> List String
 emitArgsArray prog env d args =
   let n = listLen args
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
@@ -7089,7 +7043,7 @@ wTrmcDctorL = "$__tmc_dctor"
 -- "never tail a host import" rule is vacuously satisfied this slice.
 -- `arity` = the enclosing fn's param count (unused today; kept for symmetry with
 -- the LLVM self-call walk).
-emitRefTail : Prog -> List String -> Int -> CExpr -> List String
+emitRefTail : Prog -> Env -> Int -> CExpr -> List String
 emitRefTail prog env arity e = match (progFnCtx prog).trmc
   WTrmcOn self sarity pslots ctorSet _ loopLbl exitLbl =>
     -- TMC active: descend the structural tail wrappers (if/let/block/decision) with the
@@ -7115,7 +7069,7 @@ emitRefTail prog env arity e = match (progFnCtx prog).trmc
 -- a group member → ordinary return_call (the dest threads through untouched); any
 -- other leaf (base, e.g. `[]`) → close the dest + return $g_tmc_head.
 emitWDispLeaf : Prog ->
-  List String ->
+  Env ->
   String ->
   String ->
   Int ->
@@ -7159,7 +7113,7 @@ emitWDispLeaf prog env root loopLbl rootArity members other =
 -- it); anything else → a base value — dest-close.  (An unsaturated or non-member call
 -- here cannot thread the dest, so it must terminate the spine as a value.)
 emitWDispTailOrBase : Prog ->
-  List String ->
+  Env ->
   String ->
   List String ->
   String ->
@@ -7173,7 +7127,7 @@ emitWDispTailOrBase prog env root members f e = match appParts e
       emitWDispBase prog env root e
 
 -- the ordinary tail descent (TMC-inactive, or the wrapper arms while TMC is active).
-emitRefTailWrap : Prog -> List String -> Int -> CExpr -> List String
+emitRefTailWrap : Prog -> Env -> Int -> CExpr -> List String
 emitRefTailWrap prog env arity (CIf c t f) =
   let ci = emitRefExpr prog env 0 c ++ conditionW prog
   let ti = emitRefTail prog env arity t
@@ -7227,7 +7181,7 @@ isWTrmcWrapper _ = False
 -- bare saturated plain self-call recomputes its args + loops (iterate-on-shorter-list);
 -- any other leaf is the BASE — store it into the current destination + exit.
 emitWasmTrmcLeaf : Prog ->
-  List String ->
+  Env ->
   SelfRef ->
   Int ->
   List String ->
@@ -7275,7 +7229,7 @@ emitWasmTrmcLeaf prog env self arity pslots ctorSet loopLbl exitLbl e =
 -- placeholder (never dereferenced — it is overwritten by the next iteration's struct.set,
 -- or stays as the cell's tail which the BASE leaf fills before exit).
 emitWasmTrmcCtor : Prog ->
-  List String ->
+  Env ->
   SelfRef ->
   Int ->
   List String ->
@@ -7391,7 +7345,7 @@ wTrmcCtorIndex ((n, _) :: rest) ctorName k =
 -- plain saturated self-call leaf (no cell): recompute args into temps + store into the
 -- param slots + br.  Leaves the destination UNCHANGED (the next iter fills the same slot).
 emitWasmTrmcTailCall : Prog ->
-  List String ->
+  Env ->
   List String ->
   String ->
   CExpr ->
@@ -7408,7 +7362,7 @@ emitWasmTrmcTailCall prog env pslots loopLbl e =
 -- base/other leaf: a value with NO self-call.  Store it into the current destination's
 -- recursive slot (or directly into $__tmc_head if no cell was ever built), then br to exit
 -- where the function returns $__tmc_head.  Uses $__tmc_first to choose.
-emitWasmTrmcBase : Prog -> List String -> String -> CExpr -> List String
+emitWasmTrmcBase : Prog -> Env -> String -> CExpr -> List String
 emitWasmTrmcBase prog env exitLbl e =
   let valInstrs = emitRefExpr prog env 0 e
   -- if no cell was built, the whole result IS this value → head := value.
@@ -7427,10 +7381,10 @@ emitWasmTrmcBase prog env exitLbl e =
     WTrmcOff => valInstrs ++ ["return"]
 
 -- recompute each self-call arg into its temp local ($__tmc_t<base+k>), left-to-right.
-wTrmcEmitArgsToTemps : Prog -> List String -> List CExpr -> Int -> List String
+wTrmcEmitArgsToTemps : Prog -> Env -> List CExpr -> Int -> List String
 wTrmcEmitArgsToTemps prog env args base = wTrmcArgsGo prog env args base 0
 
-wTrmcArgsGo : Prog -> List String -> List CExpr -> Int -> Int -> List String
+wTrmcArgsGo : Prog -> Env -> List CExpr -> Int -> Int -> List String
 wTrmcArgsGo _ _ [] _ _ = []
 wTrmcArgsGo prog env (a :: rest) base k =
   emitRefExpr prog env 0 a
@@ -7664,7 +7618,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
       else
         emitClauseChainGo
           tprog
-          []
+          envEmpty
           lblRoot
           params
           arity
@@ -7674,7 +7628,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
     _ =>
       emitClauseChainGo
         tprog
-        []
+        envEmpty
         lblRoot
         params
         arity
@@ -7944,7 +7898,7 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
 -- the root, the member fn itself otherwise).  NO struct.new holds the recursion →
 -- the leaf frame dies.
 emitWDispSpineCons : Prog ->
-  List String ->
+  Env ->
   String ->
   String ->
   List CExpr ->
@@ -7956,7 +7910,7 @@ emitWDispSpineCons prog env root target heads args =
     ++ ["return_call $" ++ gname target]
 
 -- one Cons cell of a spine-cons leaf: build, link, advance.
-emitWDispCell : Prog -> List String -> String -> CExpr -> List String
+emitWDispCell : Prog -> Env -> String -> CExpr -> List String
 emitWDispCell prog env root head =
   let cellStruct = "C_Cons"
   -- #712/S0: this is the built-in list `::` spine — pin the reserved Cons ordinal,
@@ -7993,7 +7947,7 @@ emitWDispCell prog env root head =
 -- the root's BASE leaf (case 1): close the dest with the real value of the base (the
 -- spine's terminator, e.g. `[]` = Nil), then return $g_tmc_head.  If no cell was ever
 -- built ($g_tmc_first still 1) the whole result IS the base value.
-emitWDispBase : Prog -> List String -> String -> CExpr -> List String
+emitWDispBase : Prog -> Env -> String -> CExpr -> List String
 emitWDispBase prog env root e =
   let valInstrs = emitRefExpr prog env 0 e
   let cellStruct = "C_Cons"
@@ -8013,7 +7967,7 @@ emitWDispBase prog env root e =
 -- control, not calls, and keep their own lowering.  An application the lowering
 -- flagged as the tail call (`isTailCall`) replaces this function's frame
 -- (`emitTailCallW`); any other is computed and returned.
-emitAppTail : Prog -> List String -> Int -> CExpr -> List String
+emitAppTail : Prog -> Env -> Int -> CExpr -> List String
 emitAppTail prog env arity app =
   let (hd, args, _) = appParts app
   if rawProgramW prog then
@@ -8044,7 +7998,7 @@ emitAppTail prog env arity app =
         emitFlaggedAppW prog env app
     _ => emitFlaggedAppW prog env app
 
-emitFlaggedAppW : Prog -> List String -> CExpr -> List String
+emitFlaggedAppW : Prog -> Env -> CExpr -> List String
 emitFlaggedAppW prog env app =
   if isTailCall app then
     emitTailCallW prog env app
@@ -8055,18 +8009,18 @@ emitFlaggedAppW prog env app =
 -- constructor, `Ref`/`setRef` and an extern compute a value and return it.  An
 -- indirect call returns through `$__mdk_apply`, which `return_call_ref`s the
 -- closure's code, so every shape is constant-stack.
-emitTailCallW : Prog -> List String -> CExpr -> List String
+emitTailCallW : Prog -> Env -> CExpr -> List String
 emitTailCallW prog env app =
   let (hd, args, mode) = appParts app
   match hd
     CVar f0 _ =>
       let f = canonFn prog f0
-      if contains f0 env then
+      if envHas f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name shadows any same-named ctor / known top-level
         -- fn / extern — applying it is an INDIRECT tail call (`return_call $__mdk_apply`), never a
         -- direct `return_call $<toplevel>`.  Same guard as emitAppRef's CVar arm; without it a
         -- method-named HOF param colliding with a top-level fn (`pickEq eq x y = eq x y`) tail-
-        -- called the WRONG callee.  Mirrors emitVarRefPlain's `contains x env`-first priority.
+        -- called the WRONG callee.  Mirrors emitVarRefPlain's `envHas x env`-first priority.
 
         emitIndirectApp prog env 0 hd args CallTailW
       else if isCtor prog f then
@@ -8111,7 +8065,7 @@ emitTailCallW prog env app =
 -- a block in tail position: the last CSExpr is the tail; everything before is a
 -- statement (effect/let).  (W4 blocks in tail position only appear via desugared
 -- sequencing; the last expr is the result.)
-emitBlockTail : Prog -> List String -> Int -> List CStmt -> List String
+emitBlockTail : Prog -> Env -> Int -> List CStmt -> List String
 emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
 emitBlockTail prog env arity ((CSExpr ex) :: rest) =
   emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
@@ -8136,7 +8090,7 @@ else
 -- emission.  `decLabel` is unused for tail arms (they `return`/`return_call`), but
 -- the tree walker still threads it; we pass a dead label that is never branched to.
 emitDecisionTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   List CArm ->
@@ -8155,7 +8109,7 @@ emitDecisionTail prog env arity scrut arms tree =
 -- NOT need a result block (each path returns).  Reuses the same br_table tower shape
 -- with the slot bodies tail-emitting their arms.
 emitTreeTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8176,7 +8130,7 @@ emitTreeTail prog env arity d root occs arms (CTSwitch branches dft) =
 
 -- Like emitLeafRef, for an arm body in TAIL POSITION (emitRefTail path).
 emitLeafTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   List String ->
   List CArm ->
@@ -8194,7 +8148,7 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
 -- arm reaches THIS site too (`f n = match n` is a tail match), so the range test has to
 -- exist on both engines or the two disagree.
 emitGuardArmTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8218,7 +8172,7 @@ emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
   None => gapLP prog "ref-mode: tail guarded arm index out of range"
 
 emitSwitchTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8243,7 +8197,7 @@ emitSwitchTail prog env arity d root (foc :: rest) arms (branches@((CTBranch h _
 -- constructor switch (tail): stash focus, br_table on the discriminant; each slot
 -- tail-emits its arm (which return_calls / returns), so we need no result block.
 emitConSwitchTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8280,7 +8234,7 @@ emitConSwitchTail prog env arity d root foc rest arms branches dft =
 -- innermost `end`.  The table targets `$sw<sd>_k` slots; the default slot is the last
 -- `end`'s fall-through into the default subtree.
 emitBrTableTowerTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8320,7 +8274,7 @@ emitBrTableTowerTail prog env arity d root svRead rest arms branches dft ty sd n
       (nOrd - 1)
 
 towerBodiesTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8367,7 +8321,7 @@ towerBodiesTail prog env arity d root svRead rest arms branches dft ty sd k =
         (k - 1)
 
 emitOrdinalSlotTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8401,7 +8355,7 @@ emitOrdinalSlotTail prog env arity d root svRead rest arms branches ty sd k =
 
 -- `idt` (trailing) is the chain's own INDENT depth — see emitLitSwitchRef (#381).
 emitLitSwitchTail : Prog ->
-  List String ->
+  Env ->
   Int ->
   Int ->
   List String ->
@@ -8477,7 +8431,7 @@ emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
 -- code = `ref.func $mdk_lamN`, arity = the lambda's param count, env = the captured
 -- values emitted from the current env.  Arity lives IN THE STRUCT (§11) so apply
 -- never consults a name-keyed table.
-emitClosure : Prog -> List String -> Int -> List Pat -> CExpr -> List String
+emitClosure : Prog -> Env -> Int -> List Pat -> CExpr -> List String
 emitClosure prog env d pats body =
   let n = freshLamId (progEmit prog)
   let lamName = "$mdk_lam" ++ intToString n
@@ -8486,12 +8440,12 @@ emitClosure prog env d pats body =
   -- subtracts, so the captures are computed over the real bound names.
   let boundVars = flatMap patVars pats
   let captured =
-    filterList (c => contains c env) (dedupKeep (freeVarsExpr boundVars body))
+    filterList (c => envHas c env) (dedupKeep (freeVarsExpr boundVars body))
   let _ = noteFuncRef (progEmit prog) lamName
   let _ =
     addLifted
       (progEmit prog)
-      (emitLamDefine prog lamName pats captured (envMarksOf captured env) body)
+      (emitLamDefine prog lamName pats captured (envRestrict captured env) body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   -- S-4: with NO captures every operand is constant, so hoist the struct to a module
   -- global (wConstClos) instead of rebuilding it on each evaluation of the `CLam`.
@@ -8513,7 +8467,7 @@ emitLamDefine : Prog ->
   String ->
   List Pat ->
   List String ->
-  List String ->
+  Env ->
   CExpr ->
   List String
 emitLamDefine prog lamName pats captured capMarks body =
@@ -8528,7 +8482,7 @@ emitLamDefine prog lamName pats captured capMarks body =
   let (paramBinds, bodyEnv0) =
     bindParamPats
       prog
-      (envWithMarks (captured ++ synthPs) capMarks)
+      (envExtendUnstamped (captured ++ synthPs) capMarks)
       (zipPatsP pats synthPs)
   let bodyEnv = bodyEnv0
   let patBoundVars = flatMap patVars pats
@@ -8566,10 +8520,7 @@ emitLamDefine prog lamName pats captured capMarks body =
 -- bind a list of (pattern, synthetic-local-name) lambda params: for each, run
 -- bindPatRef against `local.get $<synth>` (the pattern is irrefutable — the type
 -- proves the shape, like a destructuring let).  Threads the env left-to-right.
-bindParamPats : Prog ->
-  List String ->
-  List (Pat, String) ->
-  (List String, List String)
+bindParamPats : Prog -> Env -> List (Pat, String) -> (List String, Env)
 bindParamPats _ env [] = ([], env)
 bindParamPats prog env ((p, a) :: rest) =
   let (binds, env2) = bindPatRef prog env p ["local.get $" ++ gname a]
@@ -8642,7 +8593,7 @@ argLoadAt (p, i) = [
 -- Returns the use-site rebuild instrs; the caller binds `go` (`x::env`) for the rest
 -- of the block.  Peer of the native emitter's `emitRecLam` route in emitBlock.
 emitSelfRecLocalBind : Prog ->
-  List String ->
+  Env ->
   String ->
   BinderId ->
   List Pat ->
@@ -8653,9 +8604,9 @@ emitSelfRecLocalBind prog env x bid pats body =
   let bind = CBind x [CClause pats body] noDeclLoc bid
   let groupCaps =
     filterList
-      (c => contains c env)
+      (c => envHas c env)
       (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
-  let marks = envMark x bid :: envMarksOf groupCaps env
+  let marks = envBind x bid (envRestrict groupCaps env)
   let _ = emitLgLifted prog gid [x] groupCaps marks [bind] bind
   -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
   -- capture-free `go` reaches the hoisted-global branch.  Self-reference is not a
@@ -8665,9 +8616,9 @@ emitSelfRecLocalBind prog env x bid pats body =
 -- A let-group: its members, then `body` emitted by `emitBody` with every member
 -- bound (`emitLetWith`'s contract).
 emitLetGroupWith : Prog ->
-  List String ->
+  Env ->
   Int ->
-  (List String -> CExpr -> List String) ->
+  (Env -> CExpr -> List String) ->
   List CBind ->
   CExpr ->
   List String
@@ -8686,7 +8637,7 @@ emitLetGroupWith prog env d emitBody binds body =
   else
     let freeCaps =
       filterList
-        (c => contains c env)
+        (c => envHas c env)
         (dedupKeep
           (filterList
             (notIn (names ++ valNames ++ allParams))
@@ -8694,7 +8645,7 @@ emitLetGroupWith prog env d emitBody binds body =
     -- the group's value bindings are shared by every member, so they ride along as caps.
     let groupCaps = freeCaps ++ valNames
     -- emit each lifted top-level fn (drained into the module like other lifted lams).
-    let marks = map groupBindMark binds ++ envMarksOf freeCaps env
+    let marks = envBindGroups binds (envRestrict freeCaps env)
     let _ =
       forEachU
         (b => emitLgLifted prog gid names groupCaps marks fnBinds b)
@@ -8763,7 +8714,7 @@ isLgValBind _ = False
 
 -- P1: evaluate each value binding's rhs into its local, threading the bound names
 -- through the env so a later value binding can reference an earlier one.
-emitLgValBinds : Prog -> List String -> Int -> List CBind -> List String
+emitLgValBinds : Prog -> Env -> Int -> List CBind -> List String
 emitLgValBinds _ _ _ [] = []
 emitLgValBinds prog env d ((CBind name [CClause [] rhs] _ bid) :: rest) =
   emitRefExpr prog env d rhs
@@ -8785,7 +8736,7 @@ emitLgLifted : Prog ->
   Int ->
   List String ->
   List String ->
-  List String ->
+  Env ->
   List CBind ->
   CBind ->
   Unit
@@ -8808,7 +8759,7 @@ emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _)
   let bodyLines =
     emitClausesRefEnv
       memberProg
-      (envWithMarks (names ++ groupCaps) marks)
+      (envExtendUnstamped (names ++ groupCaps) marks)
       name
       params
       arity
@@ -8967,12 +8918,7 @@ freeVarsField bound (CField _ _ e) = freeVarsExpr bound e
 -- structural-collapse caution is about STRUCTS (handled by the per-ctor struct type
 -- + explicit i32 tag field), not i31 immediates.  A PAYLOAD ctor → `struct.new
 -- $S_ctor` with the per-type dense ordinal as i32 field 0, then the (ref eq) fields.
-emitCtorConstruct : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List CExpr ->
-  List String
+emitCtorConstruct : Prog -> Env -> Int -> String -> List CExpr -> List String
 emitCtorConstruct prog env d ctor args =
   let arity = ctorArity prog ctor
   if arity == 0 then
@@ -8989,7 +8935,7 @@ emitCtorConstruct prog env d ctor args =
 -- a tuple: a single-shape struct `$C_Tup<n>` (tag-0 field + n (ref eq) fields).
 -- Reuses the W3 ctor construction shape (a leading i32 tag = ordinal 0) so the match
 -- machinery (discrimReadOf → struct field-0) drives HTuple uniformly.
-emitTupleRef : Prog -> List String -> Int -> List CExpr -> List String
+emitTupleRef : Prog -> Env -> Int -> List CExpr -> List String
 emitTupleRef prog env d es =
   let n = listLen es
   let argInstrs = flatMap (a => emitRefExpr prog env d a) es
@@ -9011,7 +8957,7 @@ emitTupleRef prog env d es =
 -- built-in Nil i31 terminator, then N `struct.new $C_Cons` closers — exactly the
 -- flattening of the old right-nested `struct.new (Cons hd tl)` spine.  Each `flatMap`
 -- chunk / `replicate` cell is constant-length, so total assembly is O(n).
-emitListRef : Prog -> List String -> Int -> List CExpr -> List String
+emitListRef : Prog -> Env -> Int -> List CExpr -> List String
 emitListRef prog env d es =
   let prefixes = flatMap (x => ["i32.const 0"] ++ emitRefExpr prog env d x) es
   let nilTerm =
@@ -9022,13 +8968,7 @@ emitListRef prog env d es =
 -- a range list [lo..hi] / [lo..=hi]: a back-to-front counted loop building the cons
 -- spine in a scratch accumulator local.  The accumulator + counter reuse the
 -- depth-keyed scratch locals ($__rl_acc<d> / $__rl_i<d>) declared in the header.
-emitRangeListRef : Prog ->
-  List String ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  List String
+emitRangeListRef : Prog -> Env -> Int -> CExpr -> CExpr -> Bool -> List String
 -- The bounds unbox to i64 ($mdk_unbox_int), so a bound outside ±2^30 works, and
 -- the count is raw i64 arithmetic on two 63-bit values: `hi + 1` at intMaxBound is
 -- 2^62, which i64 holds, so `[lo..=intMaxBound]` neither traps nor comes out empty.
@@ -9066,20 +9006,14 @@ emitRangeListRef prog env d lo hi incl =
     ++ ["local.get " ++ accL]
 
 -- an array literal: array.new_fixed over the emitted element values.
-emitArrayCreateRef : Prog -> List String -> Int -> List CExpr -> List String
+emitArrayCreateRef : Prog -> Env -> Int -> List CExpr -> List String
 emitArrayCreateRef prog env d es =
   let argInstrs = flatMap (a => emitRefExpr prog env d a) es
   argInstrs ++ ["array.new_fixed $arr " ++ intToString (listLen es)]
 
 -- a range array [lo..hi] / [lo..=hi]: allocate `count` slots, fill with a counted
 -- loop (peer to llvm_emit.emitRangeArray's alloca-counter loop).
-emitRangeArrayRef : Prog ->
-  List String ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  List String
+emitRangeArrayRef : Prog -> Env -> Int -> CExpr -> CExpr -> Bool -> List String
 emitRangeArrayRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ ["call $mdk_unbox_int"]
   let hiI = emitRefExpr prog env d hi ++ ["call $mdk_unbox_int"]
@@ -9150,7 +9084,7 @@ emitRangeArrayRef prog env d lo hi incl =
 -- CIndex arr i: bounds-check (i<0 or i>=len → trap, matching native @mdk_oob), then
 -- array.get.  The trap is `unreachable` (WasmGC has no host-trap call here; an OOB
 -- access aborting the module mirrors the native abort).
-emitIndexRef : Prog -> List String -> Int -> CExpr -> CExpr -> List String
+emitIndexRef : Prog -> Env -> Int -> CExpr -> CExpr -> List String
 emitIndexRef prog env d a i =
   let sfx = intToString d
   let arrL = w7Local (progEmit prog) "__ixarr" sfx
@@ -9214,7 +9148,7 @@ emitIndexRef prog env d a i =
 -- interpreter `runtime error [E-` as n/a.)
 -- The ABORT CONDITION — which is what soundness turns on — is identical on all three.
 emitSliceRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   CExpr ->
@@ -9296,12 +9230,7 @@ emitSliceRef prog env d a lo hi incl =
 -- a named-field record construction: CRecord carries fields in DECLARED order
 -- (lowering preserves it), so emit positionally — identical to a positional ctor
 -- struct.new (the ctor IS a W3 user ctor with a $C_<name> struct already declared).
-emitRecordRef : Prog ->
-  List String ->
-  Int ->
-  String ->
-  List CField ->
-  List String
+emitRecordRef : Prog -> Env -> Int -> String -> List CField -> List String
 emitRecordRef prog env d name fields =
   let tagField = ["i32.const " ++ intToString (ctorOrdinal prog name)]
   let argInstrs = flatMap (f => emitRefExpr prog env d (cFieldExpr f)) fields
@@ -9312,7 +9241,7 @@ emitRecordRef prog env d name fields =
 -- `value` is always a `Ref` read (the typechecker refuses `.value` on a record),
 -- whatever ordinal it carries, as in llvm_emit's `emitFieldAccess`.
 emitFieldAccessRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   String ->
@@ -9340,7 +9269,7 @@ emitFieldAccessRef prog env d ex label recName ord =
 -- functional update `{ base | f = v … }`: copy the base's struct, overriding the
 -- fields at the stamped ordinals.
 emitRecordUpdateRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -9351,7 +9280,7 @@ emitRecordUpdateRef prog env d recName base fields =
 
 -- named-field variant update `Con { base | f = v … }`: same copy, ctor known.
 emitVariantUpdateRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -9367,7 +9296,7 @@ emitVariantUpdateRef prog env d con base fields =
 -- update nested in an override (`{ r | f = { r.f | g = v } }`) stashes its own base
 -- in `$__rub<d+1>` instead of overwriting this one.
 emitUpdateCopy : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   CExpr ->
@@ -9388,7 +9317,7 @@ emitUpdateCopy prog env d ctor base fields =
     ++ ["struct.new $" ++ ctorStructName ctor]
 
 oneUpdateField : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   String ->
@@ -9430,7 +9359,7 @@ findUpdateExpr idx ((CField _ o ex) :: rest) =
 -- tree at depth `d+1` (nested matches/switches get fresh, non-colliding locals +
 -- labels).  `decLabel` is `$dec<d>` — the target every arm body branches to.
 emitDecisionRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   CExpr ->
   List CArm ->
@@ -9453,7 +9382,7 @@ emitDecisionRef prog env d scrut arms tree =
 -- exactly one (ref eq) for `decLabel`'s block to yield (via `br decLabel`), except
 -- the default tail of a switch tower which falls through with the value on the stack.
 emitTreeRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9475,7 +9404,7 @@ emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
 emitLeafRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9500,7 +9429,7 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
 -- Mirrors llvm_emit's emitGuardedArm/`emitRefutArm`.  `root` is the scrutinee
 -- `local.get` (occ0), which satisfies patTestBind's re-runnable-read contract.
 emitGuardArmRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9551,11 +9480,11 @@ guardStashLocal = "__gbind"
 -- landing in the fail subtree — the same fall-through the CGBool path always used.
 -- Peer of the native emitter's `emitGuardChain`.  Returns (code, env').
 emitGuardChainRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List CGuard ->
-  (List String, List String)
+  (List String, Env)
 emitGuardChainRef _ env _ _ [] = ([], env)
 emitGuardChainRef prog env d gLabel ((CGBool g) :: rest) =
   let unbox = ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
@@ -9573,7 +9502,7 @@ emitGuardChainRef prog env d gLabel ((CGBind p ex) :: rest) =
 -- heads → discriminant + br_table on the dense per-type ordinal.  Int-literal heads
 -- → compare immediates.  HUnit is irrefutable (drop focus, descend).
 emitSwitchRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9603,7 +9532,7 @@ emitSwitchRef prog env d decLabel root (foc :: rest) arms (branches@((CTBranch h
 -- read its discriminant, and `br_table` on the dense per-type ordinal.  Recurses
 -- into branch subtrees at depth d+1.
 emitConSwitchRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9672,7 +9601,7 @@ discrimReadOf svRead ty =
 --   end             ;; end $swd<sd>
 --   <default subtree>          (falls through with its value on the stack)
 emitBrTableTower : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9713,7 +9642,7 @@ emitBrTableTower prog env d decLabel root svRead rest arms branches dft ty sd nO
 -- emit, innermost-first (ordinal n-1 down to 0): `end` of $sw<sd>_k then ordinal k's
 -- arm; finally `end` of $swd<sd> then the default subtree (yields the block value).
 towerBodies : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9763,7 +9692,7 @@ towerBodies prog env d decLabel root svRead rest arms branches dft ty sd k =
 -- fields (ref.cast to the ctor struct + struct.get i+1) as new leading occurrences,
 -- emit its subtree.  Absent → fall to $swd<sd> (the default).
 emitOrdinalSlot : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9802,7 +9731,7 @@ emitOrdinalSlot prog env d decLabel root svRead rest arms branches ty sd k =
 -- else-chain `idt + 1`, instead of wrapping the recursion in `indent` and re-copying
 -- every line below it once per level (#381).  Callers start the chain at 0.
 emitLitSwitchRef : Prog ->
-  List String ->
+  Env ->
   Int ->
   String ->
   List String ->
@@ -9924,11 +9853,7 @@ emitLitSwitchRef prog _ _ _ _ _ _ _ _ _ _ =
 -- bind a pattern's PVars against the value the snippet `v` produces, emitting struct
 -- field extractions.  Returns (instructions that stash bound vars into their locals,
 -- extended env).  Mirrors the LLVM bindPattern but stashes into named locals.
-bindPatRef : Prog ->
-  List String ->
-  Pat ->
-  List String ->
-  (List String, List String)
+bindPatRef : Prog -> Env -> Pat -> List String -> (List String, Env)
 bindPatRef prog env PWild v = ([], env)
 bindPatRef prog env (PLit _) v = ([], env)
 bindPatRef prog env (PVar x _ bid) v =
@@ -9959,11 +9884,7 @@ bindPatRef prog env other v =
 -- bind a fixed-length list pattern `[p0, p1, …]`: p0 = head of v, the rest match the
 -- tail recursively (descending Cons cells; the final empty list / Nil is irrefutable
 -- here — the decision tree already proved the length).
-bindListPat : Prog ->
-  List String ->
-  List Pat ->
-  List String ->
-  (List String, List String)
+bindListPat : Prog -> Env -> List Pat -> List String -> (List String, Env)
 bindListPat _ env [] _ = ([], env)
 bindListPat prog env (p :: ps) v =
   let hSnip = v ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
@@ -9974,12 +9895,12 @@ bindListPat prog env (p :: ps) v =
 
 -- bind a tuple pattern's fields: field i+1 of $C_Tup<n> (after the i32 tag).
 bindTupleFields : Prog ->
-  List String ->
+  Env ->
   String ->
   List Pat ->
   List String ->
   Int ->
-  (List String, List String)
+  (List String, Env)
 bindTupleFields _ env _ [] _ _ = ([], env)
 bindTupleFields prog env tc (p :: rest) v i =
   let fieldSnippet =
@@ -9995,20 +9916,20 @@ bindTupleFields prog env tc (p :: rest) v i =
 -- bind a constructor pattern's fields: for each field i, extract via ref.cast +
 -- struct.get (field i+1, after the i32 tag), then recurse into the sub-pattern.
 bindConFields : Prog ->
-  List String ->
+  Env ->
   String ->
   List Pat ->
   List String ->
-  (List String, List String)
+  (List String, Env)
 bindConFields prog env c args v = bindConFieldsGo prog env c args v 0
 
 bindConFieldsGo : Prog ->
-  List String ->
+  Env ->
   String ->
   List Pat ->
   List String ->
   Int ->
-  (List String, List String)
+  (List String, Env)
 bindConFieldsGo _ env _ [] _ _ = ([], env)
 bindConFieldsGo prog env c (p :: rest) v i =
   let fieldSnippet =
