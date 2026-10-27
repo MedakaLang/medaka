@@ -718,7 +718,7 @@ scanStrEsc src len p startQ depth id acc e
 -- string part after an interpolation's `}` closes (`\{`→INTERP_MID, `"`→INTERP_END)
 scanInterpCont : Array Char -> Int -> Int -> Int -> String -> List RawTok
 scanInterpCont src len p depth acc
-  | p >= len = RTok (TInterpEnd acc) p p :: scan src len p depth 0
+  | p >= len = lexErrorTok p p UnterminatedString
   | isQuote (at src p) =
     RTok (TInterpEnd acc) p (p + 1) :: scan src len (p + 1) depth 0
   | isBackslash (at src p) && p + 1 < len && at src (p + 1) == '{' =
@@ -787,9 +787,7 @@ scanTriple : Array Char ->
   String ->
   List RawTok
 scanTriple src len p startQ depth id leadingNl acc
-  | p >= len =
-    RTok (TString (maybeStrip leadingNl acc)) startQ p
-      :: scan src len p depth id
+  | p >= len = lexErrorTok p p UnterminatedString
   | isTripleAt src len p =
     RTok (TString (maybeStrip leadingNl acc)) startQ (p + 3)
       :: scan src len (p + 3) depth id
@@ -881,7 +879,7 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
 -- jointly, correctly, from this and every sibling segment's true raw text.
 scanInterpTripleCont : Array Char -> Int -> Int -> Int -> String -> List RawTok
 scanInterpTripleCont src len p depth acc
-  | p >= len = RTok (TInterpEnd acc) p p :: scan src len p depth 0
+  | p >= len = lexErrorTok p p UnterminatedString
   | isTripleAt src len p =
     RTok (TInterpEnd acc) p (p + 3) :: scan src len (p + 3) depth 0
   | isBackslash (at src p) && p + 1 < len && at src (p + 1) == '{' =

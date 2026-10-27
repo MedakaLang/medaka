@@ -238,3 +238,26 @@ test "token descriptions and constructors" = expectEach [
     expectEqual ("EOF", "end of input") (tokenToString TEof, describeToken TEof),
   ),
 ]
+
+test "unterminated string continuations produce terminal errors" =
+  expectEach
+    (map
+      ((label, source) =>
+        let (tokens, spans) = tokenizeWithOffsetPairs source
+        let errors =
+          filterMap
+            ((token, span) => match token
+              TLexError UnterminatedString => Some span
+              _ => None)
+            (zip tokens spans)
+        (
+          label,
+          expectEqual [(stringLength source, stringLength source)] errors,
+        ))
+      [
+        ("plain", "\"oops"),
+        ("triple", "\"\"\"oops"),
+        ("interpolation", "\"a\\{1}tail"),
+        ("triple interpolation", "\"\"\"a\\{1}tail"),
+        ("escaped quote tail", "\"\"\"a\\\"\"\""),
+      ])

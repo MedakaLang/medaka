@@ -1350,3 +1350,35 @@ test "run keeps the unknown-module message for a bare name with no file" =
     1
     (_ err => startsWith "unknown module: nosuchmod" err)
     "unknown module"
+
+stringEofCases : List (String, String)
+stringEofCases = [
+  ("triple.mdk", "main = \"\"\"oops\nafter = 2\n"),
+  ("interp.mdk", "main = \"a\\{1}tail\nafter = 2\n"),
+  ("triple_interp.mdk", "main = \"\"\"a\\{1}tail\nafter = 2\n"),
+]
+
+stringEofRun : <Exec, FileWrite, IO> Expectation
+stringEofRun = match scratchDir
+  Err e => fail "could not make scratch directory: \{e}"
+  Ok dir => match writeAll dir stringEofCases
+    Err e => fail "could not write string EOF cases: \{e}"
+    Ok () =>
+      let result =
+        expectEach
+          (flatMap
+            ((name, _) =>
+              map
+                ((verb, args) => (
+                  name ++ verb,
+                  expectSpawnFailsAll medakaBin (verb
+                    :: args ++ ["\{dir}/\{name}"]) [
+                    "unterminated string literal",
+                  ],
+                ))
+                [("check", []), ("run", []), ("build", [])])
+            stringEofCases)
+      let _ = runVerb "rm" ["-rf", dir]
+      result
+
+test "unterminated string EOF fails strict CLI verbs" = stringEofRun

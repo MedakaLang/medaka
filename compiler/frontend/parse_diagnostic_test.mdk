@@ -215,3 +215,23 @@ f x
     ),
     ("recoverable", expectSource "f x = = 1" "P-PARSE" (1, 6, 1, 7) []),
   ]
+
+test "unterminated string EOF location uses original Unicode and CRLF" = expectEach
+  [
+    (
+      "triple",
+      expectSource "x = \"\"\"😀\r\nend" "L-UNTERMINATED-STRING" (2, 3, 2, 3) [],
+    ),
+    (
+      "plain interpolation",
+      expectSource "x = \"😀\\{1}tail" "L-UNTERMINATED-STRING" (1, 14, 1, 14) [],
+    ),
+    (
+      "triple interpolation",
+      expectSource
+        "x = \"\"\"😀\\{1}\r\ntail"
+        "L-UNTERMINATED-STRING"
+        (2, 4, 2, 4)
+        [],
+    ),
+  ]
