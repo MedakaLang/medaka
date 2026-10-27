@@ -1,5 +1,5 @@
 # META
-source_lines=5561
+source_lines=5560
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3291,8 +3291,7 @@ startOrNext l next = if isNoLoc l then exprStartLoc next else l
 -- `cjAllToJsonWith`, which is `cjAllToJson` plus C4's envelope notices),
 -- so the envelope ({"files":[{"file":...,"diagnostics":[{code,kind,message,
 -- range,severity,source}]}]}) is byte-shape-identical to a compile-time
--- diagnostic. `cjRangeOfLoc` ignores its `src` argument (range comes purely
--- from the Loc), so passing "" needs no source-text threading.
+-- diagnostic. With no source text, the serializer preserves Loc coordinates.
 export
 runtimePanic : String -> String -> a
 runtimePanic code msg = match !currentEvalLoc
