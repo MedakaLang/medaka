@@ -4107,10 +4107,13 @@ pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)
 pStringSlice _ _ _ = panic "stringSlice: bad operands"
 
 pStringCodepointAtByte : Value e -> Value e -> <e> Value e
-pStringCodepointAtByte _ _ = panic "stringCodepointAtByte: not yet wired"
+pStringCodepointAtByte (VString s) (VInt b) = VInt (stringCodepointAtByte s b)
+pStringCodepointAtByte _ _ = panic "stringCodepointAtByte: bad operands"
 
 pStringSliceBytes : Value e -> Value e -> Value e -> <e> Value e
-pStringSliceBytes _ _ _ = panic "stringSliceBytes: not yet wired"
+pStringSliceBytes (VInt lo) (VInt hi) (VString s) =
+  VString (stringSliceBytes lo hi s)
+pStringSliceBytes _ _ _ = panic "stringSliceBytes: bad operands"
 
 -- indexErrorAt idx: the coded E-INDEX-OOB abort an Index/IndexMut impl raises,
 -- carrying the offending index.  Kept as a NAMED helper rather than an inline

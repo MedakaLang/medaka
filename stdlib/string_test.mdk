@@ -4,10 +4,11 @@
 -- byte offset would show.
 
 import string.{
-  byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
-  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
-  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, byteLength, center, countOccurrences, drop, endsWith, fromChars,
+  indexOf, join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll,
+  reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
+  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -883,3 +884,59 @@ test "charToStr of a three-byte char" =
 
 test "charToStr of a four-byte char" =
   expectEqual ("😀", 1) (strAndLen (charToStr '😀'))
+
+-- # Cursors
+
+-- The codepoints a cursor walk visits.
+cursorCodes : StrCursor -> List Int
+cursorCodes c = match nextChar c
+  None => []
+  Some (ch, rest) => charCode ch :: cursorCodes rest
+
+-- The cursor after `n` steps; the start cursor's own position past the end.
+advance : Int -> StrCursor -> StrCursor
+advance 0 c = c
+advance n c = match nextChar c
+  None => c
+  Some (_, rest) => advance (n - 1) rest
+
+-- The walk's characters joined back into a string.
+cursorRebuild : StrCursor -> String
+cursorRebuild c = match nextChar c
+  None => ""
+  Some (ch, rest) => charToStr ch ++ cursorRebuild rest
+
+test "nextChar walks ASCII" =
+  expectEqual [97, 98, 99] (cursorCodes (startCursor "abc"))
+
+test "nextChar walks 1-, 2-, 3- and 4-byte codepoints" =
+  expectEqual [97, 233, 26085, 128512] (cursorCodes (startCursor "aé日😀"))
+
+test "nextChar on the empty string is None" =
+  expectEqual 0 (length (cursorCodes (startCursor "")))
+
+test "nextChar at the end of the string is None" =
+  expectTrue (isNone (nextChar (advance 4 (startCursor "aé日😀"))))
+
+test "walking with nextChar rebuilds the string" =
+  expectEqual "aé日😀 end" (cursorRebuild (startCursor "aé日😀 end"))
+
+test "sliceBetween across multibyte characters" =
+  let c = startCursor "aé日😀z"
+  expectEqual "é日😀" (sliceBetween (advance 1 c) (advance 4 c))
+
+test "sliceBetween of a cursor with itself is empty" =
+  let c = advance 2 (startCursor "aé日")
+  expectEqual ("", 0) (strAndLen (sliceBetween c c))
+
+test "sliceBetween from the start to the end is the whole string" =
+  let c = startCursor "aé日😀"
+  expectEqual ("aé日😀", 4) (strAndLen (sliceBetween c (advance 4 c)))
+
+test "sliceBetween keeps the codepoint count of the slice" =
+  let c = startCursor "aé日😀z"
+  expectEqual ("é日", 2) (strAndLen (sliceBetween (advance 1 c) (advance 3 c)))
+
+test "a cursor from another string that bounds a valid range slices" =
+  let other = advance 1 (startCursor "xy")
+  expectEqual "h" (sliceBetween (startCursor "héllo") other)
