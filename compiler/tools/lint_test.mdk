@@ -30,12 +30,14 @@
 -- `medaka test --native compiler/tools/lint_test.mdk` (the Makefile `test:`
 -- target line does this).
 
-import test.{expectEqual, expectTrue, expectEach}
+import test.{expectEqual, expectTrue, expectEach, fail}
 import tools.lint_cache.{decodeEntry, LintEntry}
 import string.{replace}
 import support.util.{anyList, sortUniqS}
 import driver.diagnostics.{Diag(..)}
-import tools.lint.{StdlibIndex, buildStdlibIndex, mergeCrossFileIntoTriples}
+import tools.lint.{
+  StdlibIndex, buildStdlibIndexResult, mergeCrossFileIntoTriples
+}
 import tools.lint_cmd.{
   lintFilesToDiagTriples,
   lintFilesToDiagQuads,
@@ -83,31 +85,37 @@ dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 
 -- ── 1. the per-file-only gap, pinned ────────────────────────────────────────
 test "the old per-file-only triple builder never carries a duplicate-body finding" =
-  let idx = buildStdlibIndex
-  let triples = lintFilesToDiagTriples idx [] [] [] None fixtureFiles
-  expectTrue (not (anyDupRuleDiag triples))
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let triples = lintFilesToDiagTriples idx [] [] [] None fixtureFiles
+      expectTrue (not (anyDupRuleDiag triples))
 
 -- ── 2. the JSON path's own internals surface it ─────────────────────────────
 test "the JSON path's own internals surface the duplicate-body finding" =
-  let idx = buildStdlibIndex
-  let quads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
-  let triples = map dropQuadParse quads
-  let cross = crossFileJsonFindings [] [] [] quads
-  let merged = mergeCrossFileIntoTriples cross triples
-  expectTrue (anyDupRuleDiag merged)
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let quads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+      let triples = map dropQuadParse quads
+      let cross = crossFileJsonFindings [] [] [] quads
+      let merged = mergeCrossFileIntoTriples cross triples
+      expectTrue (anyDupRuleDiag merged)
 
 -- ── 3. renderer parity: JSON internals == MCP internals ─────────────────────
 test "the MCP path's own internals produce the SAME finding set as JSON" =
-  let idx = buildStdlibIndex
-  let jsonQuads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
-  let jsonTriples = map dropQuadParse jsonQuads
-  let jsonCross = crossFileJsonFindings [] [] [] jsonQuads
-  let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
-  let mcpQuads = lintPathsToDiagQuads idx [] [] [] fixtureFiles
-  let mcpTriples = map dropQuadParse mcpQuads
-  let mcpCross = crossFileMcpFindings [] [] [] mcpQuads
-  let mcpMerged = mergeCrossFileIntoTriples mcpCross mcpTriples
-  expectEqual (tripleKeys jsonMerged) (tripleKeys mcpMerged)
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let jsonQuads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+      let jsonTriples = map dropQuadParse jsonQuads
+      let jsonCross = crossFileJsonFindings [] [] [] jsonQuads
+      let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
+      let mcpQuads = lintPathsToDiagQuads idx [] [] [] fixtureFiles
+      let mcpTriples = map dropQuadParse mcpQuads
+      let mcpCross = crossFileMcpFindings [] [] [] mcpQuads
+      let mcpMerged = mergeCrossFileIntoTriples mcpCross mcpTriples
+      expectEqual (tripleKeys jsonMerged) (tripleKeys mcpMerged)
 
 cachePath : Option LintEntry -> Option String
 cachePath (Some entry) = Some entry.path

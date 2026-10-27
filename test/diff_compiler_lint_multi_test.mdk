@@ -215,23 +215,49 @@ malformedStdlibIn dir = match mkdirAll "\{dir}/stdlib"
   Err e => fail "could not create stdlib: \{e}"
   Ok () => match writeFile "\{dir}/stdlib/bad.mdk" "f x = = 1\n"
     Err e => fail "could not write malformed stdlib: \{e}"
-    Ok () =>
-      match (boundedInTree 120 "env" [
-        "MEDAKA_ROOT=\{dir}",
-        medakaBin,
-        "lint",
-        "--json",
-        dirAProbe,
-      ])
-        Err e => fail "could not spawn lint: \{e}"
-        Ok (1, out, err) => expectAll [
-          expectFalse (contains "E-PANIC" err),
-          expectEqual "" err,
-          expectTextContainsAll
-            ["\"code\":\"P-PARSE\"", "expected an expression", "bad.mdk"]
-            out,
-        ]
-        Ok (code, _, err) => fail "lint exited \{intToString code}: \{err}"
+    Ok () => match boundedInTree 120 "env" [
+      "MEDAKA_ROOT=\{dir}",
+      medakaBin,
+      "lint",
+      "--json",
+      dirAProbe,
+    ]
+      Err e => fail "could not spawn lint: \{e}"
+      Ok (1, out, err) => expectAll [
+        expectFalse (contains "E-PANIC" err),
+        expectEqual "" err,
+        expectTextContainsAll
+          ["\"code\":\"P-PARSE\"", "expected an expression", "bad.mdk"]
+          out,
+      ]
+      Ok (code, _, err) => fail "lint exited \{intToString code}: \{err}"
 
 test "lint diagnoses malformed stdlib before indexing" =
   inFreshDirOf malformedStdlibIn (e => fail e)
+
+oracleMalformedStdlibIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+oracleMalformedStdlibIn dir = match boundedInTree 120 "cp" [
+  "-R",
+  underRoot "stdlib",
+  underRoot "runtime",
+  dir,
+]
+  Err e => fail "could not copy root: \{e}"
+  Ok (0, _, _) => match writeFile "\{dir}/stdlib/broken.mdk" "broken = = 1\n"
+    Err e => fail "could not write malformed stdlib: \{e}"
+    Ok () => match boundedInTree 120 "env" [
+      "MEDAKA_ROOT=\{dir}",
+      underRoot "test/bin/lint_main",
+      underRoot "test/lint_fixtures/stdlib_reimpl_derived_index.mdk",
+    ]
+      Err e => fail "could not spawn lint oracle: \{e}"
+      Ok (code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual "" out,
+        expectFalse (contains "E-PANIC" err),
+        expectTextContainsAll ["broken.mdk:1:", "expected an expression"] err,
+      ]
+  Ok (code, _, err) => fail "copy exited \{intToString code}: \{err}"
+
+test "lint oracle rejects an unimported malformed stdlib member" =
+  inFreshDirOf oracleMalformedStdlibIn (e => fail e)

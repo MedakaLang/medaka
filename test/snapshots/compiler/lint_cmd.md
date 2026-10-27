@@ -110,7 +110,7 @@ import tools.lint_baseline.{
 --
 -- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
 -- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
--- runtime (`buildStdlibIndex`), content `ruleSetStamp`'s binary hash never
+-- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
 -- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
 -- file's cached findings silently answering with the pre-edit stdlib —
 -- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it

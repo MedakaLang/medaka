@@ -84,7 +84,6 @@ import tools.lint.{
   applySuppressionsMulti,
   applyFindingDeny,
   splitLintNames,
-  buildStdlibIndex,
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,

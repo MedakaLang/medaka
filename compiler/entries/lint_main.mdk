@@ -9,7 +9,7 @@
 --   reference index builds empty), it does not error.
 --
 -- `medaka run compiler/entries/lint_main.mdk <source.mdk>` does not work.  This entry builds the stdlib
--- reference index (`tools.lint.buildStdlibIndex`, needed so the gate oracle and
+-- reference index (`tools.lint.buildStdlibIndexResult`, needed so the gate oracle and
 -- the `medaka lint` CLI feed their rules the SAME inputs), and lexing all 29
 -- stdlib files under the tree-walking interpreter exceeds its 25000-frame depth
 -- cap: `frontend/lexer.mdk: runtime error [E-STACK-OVERFLOW]`.  Nothing in the
@@ -22,7 +22,9 @@
 -- harness sorts).  Mirror of compiler/entries/exhaust_main.mdk.
 
 import frontend.parser.{parseWithPositionsLocated}
-import tools.lint.{lintToLines, buildStdlibIndex}
+import tools.lint.{lintToLines, buildStdlibIndexResult, StdlibIndexError(..)}
+import driver.diagnostics.{ppDiagCliSrc}
+import support.stage_count.{stageExit}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -42,8 +44,11 @@ withTarget targetPath = match readFile targetPath
     -- it cannot read the stdlib itself).  This entry is the LINT GATE'S ORACLE:
     -- if it ran on an empty index while the CLI ran on a real one, the gate
     -- would go green on output the CLI never produces.  Both build the same way.
-    let idx = buildStdlibIndex
-    putStr (lintToLines idx targetSrc targetPath pos decls)
+    match buildStdlibIndexResult
+      Ok idx => putStr (lintToLines idx targetSrc targetPath pos decls)
+      Err (StdlibIndexError { path, source, diagnostic }) =>
+        ePutStrLn (ppDiagCliSrc source path diagnostic)
+        stageExit 1
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

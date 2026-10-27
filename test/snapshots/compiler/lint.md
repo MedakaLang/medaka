@@ -1,5 +1,5 @@
 # META
-source_lines=7269
+source_lines=7263
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -767,7 +767,7 @@ crossRuleNameOf r = r.name
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
 -- `idx` is the stdlib reference index, built ONCE by the IO caller (see
--- `buildStdlibIndex`) and handed to every rule; a caller with no stdlib to read
+-- `buildStdlibIndexResult`) and handed to every rule; a caller with no stdlib to read
 -- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
 export
 lintProgram : StdlibIndex ->
@@ -961,7 +961,7 @@ stdlibAmbiguousNames idx =
 -- `StdlibIndex` argument — is in the active `--only`/`--disable` set. Mirrors
 -- `ruleActiveFixable`'s only/disable semantics (the `enabled`/fixer checks
 -- that helper also makes don't apply here: the registry always enables this
--- rule). A caller uses this to decide whether `buildStdlibIndex` is worth
+-- rule). A caller uses this to decide whether `buildStdlibIndexResult` is worth
 -- its cost at all.
 export
 stdlibIndexNeeded : List String -> List String -> Bool
@@ -974,12 +974,6 @@ stdlibIndexNeeded only disable =
 -- gate this behind `stdlibIndexNeeded` first — when no active rule reads the
 -- index, `emptyStdlibIndex` costs nothing and every rule's `check` behaves
 -- identically (see `emptyStdlibIndex`'s own doc).
-export
-buildStdlibIndex : <IO> StdlibIndex
-buildStdlibIndex = match buildStdlibIndexResult
-  Ok idx => idx
-  Err _ => emptyStdlibIndex
-
 public export data StdlibIndexError = StdlibIndexError {
   path : String,
   source : String,
@@ -1009,7 +1003,7 @@ exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 
 -- ── cache-staleness guard for `--cache` ─────────────────────────────────────
 -- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
--- `--cache`'s key never sees: `buildStdlibIndex` parses the STDLIB SOURCE TREE
+-- `--cache`'s key never sees: `buildStdlibIndexResult` parses the stdlib source tree
 -- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
 -- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
 -- UNCHANGED compiler/sqlite file, so a cached shard for that file would
@@ -7482,8 +7476,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
-(DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
-(DFunDef false "buildStdlibIndex" () (EMatch (EVar "buildStdlibIndexResult") (arm (PCon "Ok" (PVar "idx")) () (EVar "idx")) (arm (PCon "Err" PWild) () (EVar "emptyStdlibIndex"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
 (DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "map") (ELam ((PVar "triples")) (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
@@ -9574,8 +9566,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
-(DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
-(DFunDef false "buildStdlibIndex" () (EMatch (EVar "buildStdlibIndexResult") (arm (PCon "Ok" (PVar "idx")) () (EVar "idx")) (arm (PCon "Err" PWild) () (EVar "emptyStdlibIndex"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
 (DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "triples")) (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))

@@ -274,7 +274,6 @@ import tools.lint.{
   allRules,
   lintProgram,
   StdlibIndex,
-  buildStdlibIndex,
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
@@ -3938,7 +3937,7 @@ runLintCmd argv0 =
   -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
   -- `check` is pure, and rebuilding it per target file would re-parse the whole
   -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
-  -- read (see `buildStdlibIndex`), the same way `lintCacheCtx` declines below.
+  -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
   -- `stdlibIndexNeeded` answers whether the only rule that reads it is even in
   -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
   -- skips the whole-stdlib parse for free (every other rule ignores its
