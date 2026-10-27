@@ -44,8 +44,10 @@ import driver.diagnostics.{
   checkJsonSingle,
   checkJsonFile,
   cjAllToJson,
+  cjFileEntry,
+  parseErrDiag,
   diagIsError,
-  Diag,
+  Diag(..),
 }
 import tools.lsp.{
   typeAtPoint,
@@ -66,7 +68,6 @@ import tools.lsp.{
 import tools.lint_cmd.{quadToParseTriple, quadToSrc}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
-import frontend.parser as P
 import frontend.parser.{
   Positions,
   parseResult,
@@ -89,7 +90,7 @@ import tools.lint.{
   stdlibIndexNeeded,
   StdlibIndex,
 }
-import tools.test_cmd.{runTestGradedReport}
+import tools.test_cmd.{runTestGradedReportParts, TestReportError(..)}
 import driver.build_cmd.{lastPreludeStaleLine}
 import driver.profile_select.{carryProjectProfile}
 import types.target_profile.{selectedProfile}
@@ -1667,7 +1668,7 @@ primaryDoctestRun ((_, run) :: _) = run
 -- means doctests/props never ran (mirrors `runTestReport`'s gate short-
 -- circuit), so it alone forces `False` regardless of `runs`/`props` (both are
 -- empty in that case anyway).
-testReportOk : Option String ->
+testReportOk : Option TestReportError ->
   List (Engine, RunResult) ->
   List GradedProp ->
   Bool
@@ -1696,11 +1697,29 @@ primaryEngineName (e :: _) = engineName e
 -- #1443: present iff `runTestReport`'s typecheck gate rejected the module —
 -- `doctests`/`properties`/`summary` are then the untouched empty defaults
 -- (mirrors the CLI's `runTest`, which never reaches `driveAll` on a gate
--- failure either), and `typeError` carries the SAME located error text
--- `medaka test`/`medaka check` would print for this file.
-typeErrorField : Option String -> List (String, Json)
+-- failure either). Diagnostic messages and structured ranges are separate;
+-- setup errors retain their original text.
+typeErrorField : Option TestReportError -> List (String, Json)
 typeErrorField None = []
-typeErrorField (Some errText) = [("typeError", JString errText)]
+typeErrorField (Some (TestSetupError errText)) =
+  [("typeError", JString errText)]
+typeErrorField (Some (TestDiagnosticError triples)) = [
+  (
+    "typeError",
+    JString (joinWith "\n" (flatMap testDiagnosticMessages triples)),
+  ),
+  ("typeDiagnostics", jArray (map testDiagnosticFile triples)),
+]
+
+testDiagnosticMessages : (String, String, List Diag) -> List String
+testDiagnosticMessages (_, _, diags) =
+  map ((Diag _ _ message _ _ _) => message) diags
+
+testDiagnosticFile : (String, String, List Diag) -> Json
+testDiagnosticFile (path, src, diags) = match cjFileEntry path src diags
+  JObject fields =>
+    jObject (map (mcpDiagnosticField (Some (indexSource src))) (toList fields))
+  value => value
 
 -- F7 (#1680/#1443): a distinct boolean field, present only when True — the
 -- human `medaka test` arm announces this on stderr (`typecheckSkipNotice`,
@@ -1737,7 +1756,7 @@ testDeclsSkippedField = [("testDeclsSkipped", JBool True)]
 -- `doctestRunEngineNames runs` would wrongly read "unknown").
 testReportJson : String ->
   List Engine ->
-  Option String ->
+  Option TestReportError ->
   List (Engine, RunResult) ->
   List GradedProp ->
   Bool ->
@@ -1797,7 +1816,7 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
       Err e =>
         toolArgError
           (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
-      Ok tsrc =>
+      Ok tsrc => match parseResult tsrc
         -- #2295 (d): `runTestReport` also returns the `test "…"` phase's
         -- structured results (a 4th tuple element, for `medaka test --json`'s
         -- benefit) and (F7) whether the module was typecheck-exempt (a 5th) —
@@ -1806,22 +1825,36 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
         -- False`, which (F3) also means the test-decl phase is never EVALUATED
         -- here, not merely unreported — a panicking `test "…"` decl in the
         -- target file can no longer crash the MCP server on this path.
-        let (typeError, runs, props, _testResults, typecheckSkipped) =
-          runTestGradedReport
-            engines
-            runtimeSrc
-            coreSrc
-            path
-            tsrc
-            (desugar (P.parse tsrc))
-            stdlibDir
-            100
-            None
-            False
-        toolTextResult
-          (stringify
-            (testReportJson path engines typeError runs props typecheckSkipped))
-          (not (testReportOk typeError runs props))
+
+        Err err =>
+          let failure =
+            Some (TestDiagnosticError [(path, tsrc, [parseErrDiag path err])])
+          toolTextResult
+            (stringify (testReportJson path engines failure [] [] False))
+            True
+        Ok decls =>
+          let (typeError, runs, props, _testResults, typecheckSkipped) =
+            runTestGradedReportParts
+              engines
+              runtimeSrc
+              coreSrc
+              path
+              tsrc
+              (desugar decls)
+              stdlibDir
+              100
+              None
+              False
+          toolTextResult
+            (stringify
+              (testReportJson
+                path
+                engines
+                typeError
+                runs
+                props
+                typecheckSkipped))
+            (not (testReportOk typeError runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 

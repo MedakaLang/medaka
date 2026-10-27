@@ -434,3 +434,156 @@ main = f 2
 
 test "mcp ambiguous positions preserve local scope" =
   withScratchDir scopeCoordinates
+
+testGateCoordinates : String -> <Exec, IO, FileRead> Expectation
+testGateCoordinates dir =
+  let ascii = "\{dir}/ascii.mdk"
+  let one = "\{dir}/one.mdk"
+  let two = "\{dir}/two.mdk"
+  let dep = "\{dir}/dep.mdk"
+  let main = "\{dir}/main.mdk"
+  let bad = "\{dir}/bad.mdk"
+  let missing = "\{dir}/missing.mdk"
+  let cycle = "\{dir}/cycle.mdk"
+  let request = "\{dir}/test.jsonl"
+  let paths = [ascii, one, two, main, bad, missing, cycle]
+  let calls =
+    map
+      (path =>
+        coordinateCall
+          1
+          "medaka_test"
+          (jObject [("file", JString path), ("engine", JString "eval")]))
+      paths
+  match (
+    writeOk ascii "-- > 1\n-- 1\nmain = (1 + \"x\")\n",
+    writeOk one "-- > 1\n-- 1\nmain = (\"😀\", 1 + \"x\")\n",
+    writeOk two "-- > 1\n-- 1\nmain = (\"😀😀\", 1 + \"x\")\n",
+    writeOk dep "export bad = (\"😀😀\", 1 + \"x\")\n",
+    writeOk main "import dep.{bad}\nmain = bad\n",
+    writeOk bad "import dep.{bad}\nmain = (\n",
+    writeOk missing "import absent.{x}\nmain = x\n",
+    writeOk cycle "import cycle.{x}\nx = 1\n",
+    writeOk request (stringConcat [join "\n" calls, "\n"]),
+  )
+    (Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _) =>
+      match mcpRun 60 request "" []
+        Err e => fail e
+        Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+          (Some a) :: (Some b) :: (Some c) :: (Some d) :: (Some e) :: (Some f) :: (Some g) :: _ => expectEach
+            [
+              ("exit", expectEqual 0 code),
+              (
+                "error envelope",
+                expectEqual 7 (length (split "\"isError\":true" out) - 1),
+              ),
+              (
+                "ASCII",
+                expectTextContainsAll
+                  ["T-NO-IMPL", "\"character\":8", "\"character\":15"]
+                  a,
+              ),
+              (
+                "one astral",
+                expectTextContainsAll ["\"character\":14", "\"character\":21"] b,
+              ),
+              (
+                "two astral",
+                expectTextContainsAll
+                  [
+                    "\"character\":16", "\"character\":23", "\"total\":0",
+                    "\"properties\":[]"
+                  ]
+                  c,
+              ),
+              (
+                "destination",
+                expectTextContainsAll
+                  [dep, "\"character\":22", "\"character\":29"]
+                  d,
+              ),
+              ("parse", expectTextContainsAll ["P-", "typeDiagnostics"] e),
+              ("missing", expectTextContainsAll ["R-MODULE-LOAD", "absent"] f),
+              (
+                "cycle",
+                expectTextContainsAll ["R-MODULE-LOAD", "cyclic dependency"] g,
+              ),
+            ]
+          _ => fail "test gate responses missing"
+    _ => fail "test gate fixture write failed"
+
+test "mcp test gate retains diagnostic sources and uses UTF-16 ranges" =
+  withScratchDir testGateCoordinates
+
+testGateControls : String -> <Exec, IO, FileRead> Expectation
+testGateControls dir =
+  let entry = stringConcat [dir, "/entry.mdk"]
+  let broken = stringConcat [dir, "/broken.mdk"]
+  let importing = stringConcat [dir, "/importing.mdk"]
+  let good = stringConcat [dir, "/good.mdk"]
+  let exempt = stringConcat [dir, "/exempt.mdk"]
+  let multi = stringConcat [dir, "/multi.mdk"]
+  let request = stringConcat [dir, "/controls.jsonl"]
+  let testCall =
+    path =>
+      coordinateCall
+        1
+        "medaka_test"
+        (jObject [("file", JString path), ("engine", JString "eval")])
+  let invalid =
+    coordinateCall
+      1
+      "medaka_test"
+      (jObject [("file", JString entry), ("engine", JString "wrong")])
+  let calls = [
+    invalid,
+    testCall entry,
+    testCall good,
+    testCall importing,
+    testCall exempt,
+    testCall multi,
+  ]
+  match (
+    writeOk entry "main = (\n",
+    writeOk broken "export bad = (\n",
+    writeOk importing "import broken.{bad}\nmain = bad\n",
+    writeOk good "main = 1\n",
+    writeOk exempt "test \"panic\" = panic \"must not run\"\n",
+    writeOk multi "-- > 1\n-- 1\nx = 1 + \"x\"\ny = True + 1\nmain = x\n",
+    writeOk request (stringConcat [join "\n" calls, "\n"]),
+  )
+    (Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _) => match mcpRun 60 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+        (Some a) :: (Some b) :: (Some c) :: (Some d) :: (Some e) :: (Some f) :: _ => expectEach
+          [
+            ("exit", expectEqual 0 code),
+            (
+              "engine before parse",
+              expectTextContainsAll ["engine", "wrong"] a,
+            ),
+            (
+              "entry parse",
+              expectTextContainsAll ["P-", "typeDiagnostics", "\"total\":0"] b,
+            ),
+            ("session survives", expectTextContainsAll ["\"ok\":true"] c),
+            ("import parse", expectTextContainsAll [broken, "P-"] d),
+            (
+              "exempt test skipped",
+              expectTextContainsAll
+                [
+                  "\"typecheckSkipped\":true", "\"testDeclsSkipped\":true",
+                  "\"ok\":true"
+                ]
+                e,
+            ),
+            (
+              "multiple errors",
+              expectAtLeast 2 (length (split "\"code\":" f) - 1),
+            ),
+          ]
+        _ => fail "test gate control responses missing"
+    _ => fail "test gate control fixture write failed"
+
+test "mcp test parse, validation, and skipped phase controls" =
+  withScratchDir testGateControls
