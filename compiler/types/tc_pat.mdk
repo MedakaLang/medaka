@@ -461,7 +461,7 @@ openExistentialScope mctx [] = ExistentialScope [] 0
 openExistentialScope mctx opened =
   enterLevel mctx ()
   let level = mctx.mcCells.currentLevel.value
-  fold (_ cell => raiseAuthvarLevel level cell) () opened
+  each (raiseAuthvarLevel level) opened
   ExistentialScope opened level
 
 -- A cell in the scope's value, or lowered below the scope's level, escaped
@@ -480,8 +480,8 @@ closeExistentialScope mctx (ExistentialScope [] _) _ _ = ()
 closeExistentialScope mctx (ExistentialScope opened level) t loc =
   exitLevel mctx ()
   let inValue = authCellsIn t Tip
-  fold
-    (_ cell =>
+  each
+    (cell =>
       if IdMap.has (authvarId cell) inValue || authvarLevel cell < level then
         mctx.mcCells.escapedExistentialsRef :=
           IdMap.set
@@ -493,7 +493,6 @@ closeExistentialScope mctx (ExistentialScope opened level) t loc =
           "T-AUTHORITY-ESCAPE"
           loc
           (existentialEscapeMsg (authvarName cell)))
-    ()
     opened
 
 -- A record's params and authorities freshened together; the constructor's

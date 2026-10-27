@@ -1,5 +1,5 @@
 # META
-source_lines=2161
+source_lines=2153
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -213,13 +213,12 @@ idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
 -- `addVariants`, reached only from `registerVariants`, itself called only from
 -- `registerData`'s `DData` and `DNewtype` arms) and the two prelude ctors
 -- `True`/`False`, hand-seeded straight into the map by `builtinCtors`, bypassing
--- `addCtor` entirely.  Both writers are constructor-only.  ("Populated only by
--- `addCtor`", which this comment asserted until 2026-07-31, was false — hence
--- the second clause.)  Re-derive with
+-- `addCtor` entirely.  Both writers are constructor-only, so `addCtor` alone is
+-- not the writer set.  Re-derive with
 -- `grep -n 'addCtor\|builtinCtors' compiler/types/typecheck.mdk`.
 --
--- The uppercase-mutable-cell-extern hazard this comment used to warn about is
--- retired BY CONSTRUCTION rather than by audit: the grammar still permits an
+-- An uppercase mutable-cell extern cannot pass the head test, BY CONSTRUCTION
+-- rather than by audit: the grammar still permits an
 -- uppercase extern NAME (`externNameFor (TUpper x) = emit x`,
 -- frontend/parser.mdk, vs `identNameFor`, which accepts only `TIdent`), but an
 -- extern is never passed to `addCtor`, so no extern — uppercase or not — can
@@ -330,14 +329,11 @@ genBindingRestricted dyn declared residual isValue force t
     lowerRowLevels dyn.dcModule.mcCells.currentLevel.value force
     -- a binding that turns out monomorphic after its scope kept residuals
     -- (a local pinned for dictionary forwarding) owes them where it lives
-    fold
-      (_ r =>
-        let _ =
-          lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arLower
-        let _ =
-          lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arUpper
+    each
+      (r =>
+        lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arLower
+        lowerAuthLevels dyn.dcModule.mcCells.currentLevel.value r.arUpper
         wantAuthorityWith dyn.dcModule r.arExact r.arLower r.arUpper)
-      ()
       residual
     Forall [] [] [] [] force t
 
@@ -1155,13 +1151,11 @@ sccProtectedSignatureIds sigTvMaps =
 --
 -- This list IS the dict-param cardinality of a `=>`-constrained top-level fn: it feeds
 -- `registerMemberSlots` → `funConstraintsRef`, which `dictArityOf` (define side) and
--- `inferDictAtFound` (call side) both size from.  It used to emit one entry per bare
--- tyvar ARGUMENT — `Ix a b =>` shattered into TWO dict params for ONE predicate, both
--- routed from the same single-argument goal — so the emitted convention disagreed with
--- the METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
--- one slot per constraint since #818) and with the impl-`requires` channel
--- (`registerReqSlots`, one slot per ENTRY).  All three channels now agree: one dict per
--- predicate.  The names are kept as a LIST, not collapsed to the first one here,
+-- `inferDictAtFound` (call side) both size from.  It emits one entry per PREDICATE,
+-- not per bare tyvar ARGUMENT: `Ix a b =>` is ONE dict param, matching the
+-- METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
+-- one slot per constraint) and the impl-`requires` channel (`registerReqSlots`, one
+-- slot per ENTRY).  All three channels agree: one dict per predicate.  The names are kept as a LIST, not collapsed to the first one here,
 -- because WHICH of them is still an abstract tyvar after body inference is not knowable
 -- until `registerMemberSlots` normalizes the instantiated monos — and every abstract one
 -- must still reach `activeDictVars`, or a body use dispatching on the predicate's SECOND
@@ -1609,9 +1603,9 @@ declaredOblOne mctx boundIds tvMap (Constraint { constraintHead = iface, constra
       None => []
 
 -- #1161 SYMPTOM 2: the predicate has an argument that is not a bare tyvar, so
--- `constraintArgMonos` answered `None` and the WHOLE predicate used to be discarded —
--- `Ix a Bool =>` with no `impl Ix _ Bool` anywhere reached neither the displayed scheme
--- nor any caller's obligation list, and `check` accepted it at exit 0 while the call
+-- `constraintArgMonos` answers `None`, and discarding the WHOLE predicate would let
+-- `Ix a Bool =>` with no `impl Ix _ Bool` anywhere reach neither the displayed scheme
+-- nor any caller's obligation list: `check` would accept it at exit 0 while the call
 -- dispatched to an unrelated impl.  DICT-SEMANTICS §3 makes `match(IE, Ix Int Bool)`
 -- empty and the goal a missing-instance rejection, so the predicate must survive the
 -- channel: record its WHOLE argument vector in `voArgs`, and the ids of its bare-tyvar
@@ -1812,12 +1806,10 @@ keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
 keepBoundResidual (iface, ids, args) =
   VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs ids args }
 
--- #1937: this test used to be `listLen ids == listLen args`, and that equivalence died
--- With the admission widening.  It relied on `declaredOblArgId` contributing exactly one
--- id per BARE-tyvar position and none for anything else, so equal lengths meant "every
--- position is a bare tyvar".  Now that a STRUCTURED argument contributes its own bound
--- leaves, `Conv (Wrap a) b` has two ids for two arguments and would have taken the
--- ids-only `[]` arm — instantiating through `substMonos o.voIds` to the goal `Conv a b`,
+-- #1937: the test is not `listLen ids == listLen args`.  `declaredOblArgId` contributes
+-- one id per bound leaf, so a STRUCTURED argument makes equal lengths no longer mean
+-- "every position is a bare tyvar": `Conv (Wrap a) b` has two ids for two arguments and
+-- would take the ids-only `[]` arm — instantiating through `substMonos o.voIds` to the goal `Conv a b`,
 -- i.e. silently DROPPING the `Wrap`.  Ask the structural question directly instead:
 -- every position a bare tyvar, and each of them one of [ids] (a bare variable the
 -- scheme does not quantify contributes no id, and the ids-only arm would drop it).
@@ -2222,7 +2214,7 @@ popMarkedClause grouped pending n =
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
-(DFunDef false "genBindingRestricted" ((PVar "dyn") (PVar "declared") (PVar "residual") (PVar "isValue") (PVar "force") (PVar "t")) (EIf (EVar "isValue") (EApp (EApp (EApp (EApp (EApp (EVar "generalizeBindingDeclared") (EVar "dyn")) (EVar "declared")) (EVar "residual")) (EVar "force")) (EVar "t")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EVar "lowerToCurrent") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "lowerRowLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EVar "force"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "r")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arLower"))) (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wantAuthorityWith") (EFieldAccess (EVar "dyn") "dcModule")) (EFieldAccess (EVar "r") "arExact")) (EFieldAccess (EVar "r") "arLower")) (EFieldAccess (EVar "r") "arUpper")))))) (ELit LUnit)) (EVar "residual"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "force")) (EVar "t")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "genBindingRestricted" ((PVar "dyn") (PVar "declared") (PVar "residual") (PVar "isValue") (PVar "force") (PVar "t")) (EIf (EVar "isValue") (EApp (EApp (EApp (EApp (EApp (EVar "generalizeBindingDeclared") (EVar "dyn")) (EVar "declared")) (EVar "residual")) (EVar "force")) (EVar "t")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EVar "lowerToCurrent") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "lowerRowLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EVar "force"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "r")) (EBlock (DoExpr (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arLower"))) (DoExpr (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wantAuthorityWith") (EFieldAccess (EVar "dyn") "dcModule")) (EFieldAccess (EVar "r") "arExact")) (EFieldAccess (EVar "r") "arLower")) (EFieldAccess (EVar "r") "arUpper")))))) (EVar "residual"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "force")) (EVar "t")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EDoOrigin" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
@@ -2755,7 +2747,7 @@ popMarkedClause grouped pending n =
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
-(DFunDef false "genBindingRestricted" ((PVar "dyn") (PVar "declared") (PVar "residual") (PVar "isValue") (PVar "force") (PVar "t")) (EIf (EVar "isValue") (EApp (EApp (EApp (EApp (EApp (EVar "generalizeBindingDeclared") (EVar "dyn")) (EVar "declared")) (EVar "residual")) (EVar "force")) (EVar "t")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EVar "lowerToCurrent") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "lowerRowLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EVar "force"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "r")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arLower"))) (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wantAuthorityWith") (EFieldAccess (EVar "dyn") "dcModule")) (EFieldAccess (EVar "r") "arExact")) (EFieldAccess (EVar "r") "arLower")) (EFieldAccess (EVar "r") "arUpper")))))) (ELit LUnit)) (EVar "residual"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "force")) (EVar "t")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "genBindingRestricted" ((PVar "dyn") (PVar "declared") (PVar "residual") (PVar "isValue") (PVar "force") (PVar "t")) (EIf (EVar "isValue") (EApp (EApp (EApp (EApp (EApp (EVar "generalizeBindingDeclared") (EVar "dyn")) (EVar "declared")) (EVar "residual")) (EVar "force")) (EVar "t")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EVar "lowerToCurrent") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "lowerRowLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EVar "force"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "r")) (EBlock (DoExpr (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arLower"))) (DoExpr (EApp (EApp (EVar "lowerAuthLevels") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wantAuthorityWith") (EFieldAccess (EVar "dyn") "dcModule")) (EFieldAccess (EVar "r") "arExact")) (EFieldAccess (EVar "r") "arLower")) (EFieldAccess (EVar "r") "arUpper")))))) (EVar "residual"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "force")) (EVar "t")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EDoOrigin" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))

@@ -2398,8 +2398,8 @@ recordSelectedStandaloneRoutes mctx mname dicts ((r, inner) :: rest) tx =
 -- unchanged — rows 15-20/22 do not move.
 --
 -- #54: the definer arm is gated on ifaceMethodName (typaram-agnostic) and the importer arm
--- on singleTyparamIfaceMethod (Fork 1's per-receiver scope) — the guards are now per-arm,
--- where they used to share one leading singleParamIfaceMethod test.
+-- on singleTyparamIfaceMethod (Fork 1's per-receiver scope) — the guards are per-arm,
+-- not one leading singleParamIfaceMethod test shared by both.
 export
 maybeStandaloneValueMono : TcEnv -> String -> Option Mono
 maybeStandaloneValueMono env name =
