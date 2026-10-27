@@ -65,14 +65,14 @@ import types.tc_effects.{
   recordValueFileBound,
   spineHeadEv,
 }
-import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
-import types.tc_state.{currentScopeStore, probeGraphCtx, wAll}
+import types.tc_state.{probeGraphCtx, wAll}
 import types.tc_test_support.{
   codesOf,
   firstSig,
   fresh,
   ifaceOf,
   intM,
+  scoped,
   withFirstSig,
 }
 import types.tc_types.{
@@ -133,16 +133,6 @@ twoGrantScheme ids =
         intM
         (EffRow [Atom (builtinLabel "FileRead") (AVar (authCell 1))] None)
         intM))
-
--- A module record named "probe" whose inference sits in the root scope of its own module, as
--- the checks that record where a use stands expect.
-scoped : Unit -> ModuleCtx
-scoped _ =
-  let m = fresh ()
-  let root =
-    freshScope (currentScopeStore m.mcGraph ()) None 0 "probe" ModuleOwner
-  m.mcCells.currentScope := openScopeCursor root
-  m
 
 -- ── small projections ─────────────────────────────────────────────────────
 

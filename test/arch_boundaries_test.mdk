@@ -607,6 +607,15 @@ test "arch_boundaries: types.tc_shadow closure matches its golden" =
 test "arch_boundaries: types.tc_effects closure matches its golden" =
   closurePin "types.tc_effects"
 
+test "arch_boundaries: types.tc_occurrence closure matches its golden" =
+  closurePin "types.tc_occurrence"
+
+test "arch_boundaries: types.tc_groups closure matches its golden" =
+  closurePin "types.tc_groups"
+
+test "arch_boundaries: types.tc_pat closure matches its golden" =
+  closurePin "types.tc_pat"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 
@@ -1118,6 +1127,9 @@ typecheckFamily = [
   "types.tc_solve_check",
   "types.tc_shadow",
   "types.tc_effects",
+  "types.tc_occurrence",
+  "types.tc_groups",
+  "types.tc_pat",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

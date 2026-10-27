@@ -1,0 +1,137 @@
+allEVars : Expr -> List String
+allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
+anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
+armEVars : Arm -> List String
+buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
+censusSuperClose : GraphCtx -> List (IfaceRef, Int) -> List (IfaceRef, Int)
+censusSuperCloseVec : GraphCtx -> List VecObl -> List VecObl
+censusSuperStep : List String -> Int -> Super -> Option Int
+censusVecSuperStep : List String -> (List Int, List Mono) -> Super -> Option (List Int, List Mono)
+checkAnnotTooGeneral : ModuleCtx -> Ty -> List Mono -> Unit
+checkClausesNonFunctionLocated : ModuleCtx -> List String -> String -> List FunClause -> Unit
+checkLetBind : ModuleCtx -> String -> List FunClause -> Unit
+checkLetBinds : ModuleCtx -> List LetBind -> Unit
+checkLetGroupBindsGo : ModuleCtx -> List LetBind -> Unit
+checkLetGroupBindsLocated : ModuleCtx -> List LetBind -> Unit
+checkLetRecDecls : ModuleCtx -> List Decl -> Unit
+checkRecBindNonFunction : ModuleCtx -> String -> Expr -> Unit
+checkRecursiveValue : DynCtx -> BindingSummary -> Unit
+checkSigConstraintCoverage : ModuleCtx -> List ConstraintReg -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+checkSigConstraintOne : ModuleCtx -> List ConstraintReg -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
+checkSigTooGeneral : ModuleCtx -> String -> Ty -> List (String, Mono) -> Unit
+checkSigsFixedBy : ModuleCtx -> List (Int, String) -> List (String, Ty, List (String, Mono)) -> Unit
+checkSigsFixedByExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> List (String, Ty, List (String, Mono)) -> Unit
+checkSigsOverExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List (String, Ty, List (String, Mono)) -> Unit
+checkSigsTooGeneral : ModuleCtx -> List (String, Ty, List (String, Mono)) -> Unit
+clauseEagerlyRefsGroup : List String -> FunClause -> Bool
+clauseIsNonFunction : FunClause -> Bool
+clauseIsValue : TcEnv -> FunClause -> Bool
+clauseRefs : (List Pat, Expr) -> List String
+clauseRefsUnder : Map String Unit -> (List Pat, Expr) -> List String
+clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesLoc : List FunClause -> Option Loc
+clausesSpanLoc : List FunClause -> Option Loc
+constraintArgMono : Ty -> List (String, Mono) -> Option Mono
+constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
+constraintArgVarName : Ty -> Option String
+constraintTyVarArgs : Constraint -> List (List Ty)
+constraintTyVars : Constraint -> List (IfaceRef, List String)
+constraintVarArgMonos : ModuleCtx -> List (IfaceRef, List String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
+constraintVarIfaceMonos : List (IfaceRef, List String) -> List (String, Mono) -> List (IfaceRef, List Mono)
+containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
+containsVecObl : VecObl -> List VecObl -> Bool
+declRefNames : Decl -> List String
+declaredOblMixed : ModuleCtx -> List Int -> IfaceRef -> List (String, Mono) -> List Ty -> List VecObl
+declaredOblOne : ModuleCtx -> List Int -> List (String, Mono) -> Constraint -> List VecObl
+declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
+declaredPairsFor : String -> List ConstraintReg -> List (IfaceRef, Int)
+declaredSchemeOblsFor : ModuleCtx -> List (String, Ty, List (String, Mono)) -> String -> List Int -> List VecObl
+dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
+dedupVecObls : List VecObl -> List VecObl
+depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
+depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
+doStmtEVars : DoStmt -> List String
+eagerRefs : Expr -> List String
+eagerRefsArm : Arm -> List String
+eagerRefsClauseAllPats : FunClause -> List String
+eagerRefsDoStmt : DoStmt -> List String
+eagerRefsFieldAssign : FieldAssign -> List String
+eagerRefsGuard : Guard -> List String
+eagerRefsGuardArm : GuardArm -> List String
+eagerRefsInterp : InterpPart -> List String
+eagerRefsLetBind : LetBind -> List String
+eagerRefsPair : (Expr, Expr) -> List String
+exprLoc : Expr -> Option Loc
+fieldAssignEVars : FieldAssign -> List String
+filterNonSelf : String -> List String -> List String
+fixedSibling : Int -> List (Int, String) -> Option String
+forwardedVecObls : ModuleCtx -> Bool -> List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
+freeArmEVars : Map String Unit -> Arm -> List String
+freeEVars : Map String Unit -> Expr -> List String
+freeFieldEVars : Map String Unit -> FieldAssign -> List String
+freeGuardArmEVars : Map String Unit -> GuardArm -> List String
+freeGuardsEVars : Map String Unit -> List Guard -> Expr -> List String
+freeInterpEVars : Map String Unit -> InterpPart -> List String
+freeKvEVars : Map String Unit -> (Expr, Expr) -> List String
+freeLetBindEVars : Map String Unit -> LetBind -> List String
+freeName : Map String Unit -> String -> List String
+freeStmtsEVars : Map String Unit -> List DoStmt -> List String
+funClauseEVars : FunClause -> List String
+genBindingRestricted : DynCtx -> Map Int Unit -> List AuthResidual -> Bool -> EffRow -> Mono -> Scheme
+generalizeGroup : TcEnv -> List (Int, AuthResidual) -> Int -> List (LetBind, (String, Scheme)) -> TcEnv
+groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
+groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
+groupRefs : List (List Pat, Expr) -> List String
+guardArmEVars : GuardArm -> List String
+guardEVars : Guard -> List String
+idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
+ifaceMethodEVars : IfaceMethod -> List String
+ifacePairKey : (IfaceRef, Int) -> String
+implMethodEVars : ImplMethod -> List String
+inferredIfacePairs : ModuleCtx -> String -> List Int -> List (IfaceRef, Int)
+interpEVars : InterpPart -> List String
+isCtorAppSpine : TcEnv -> Expr -> Bool
+isDeclaredCtorHead : TcEnv -> String -> Bool
+isLetrecGroup : List String -> Bool
+isNonexpansive : TcEnv -> Expr -> Bool
+isSyntacticLambda : Expr -> Bool
+keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
+keepGroupNames : Map String Unit -> List String -> List String
+kvEVars : (Expr, Expr) -> List String
+letBindEVars : LetBind -> List String
+letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono)
+letGroupComponents : List LetBind -> List (List LetBind)
+lookupSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (Ty, List (String, Mono))
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberForce : ScopedMember -> EffRow
+memberRole : Bool -> Bool -> BindingRole
+pairIface : ModuleCtx -> String -> Int -> List (IfaceRef, Int)
+pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
+quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
+quantifiedVecObls : List Int -> List VecObl -> List VecObl
+regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
+registerSchemeObligations : ModuleCtx -> Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+reportUncovered : ModuleCtx -> String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
+reportUncoveredVec : ModuleCtx -> String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
+requireGoalAt : UObligation -> List Int -> (IfaceRef, List Mono) -> List UObligation
+requireGoalsBelow : ModuleCtx -> (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
+residualOblArgs : List Int -> List Mono -> List Mono
+residualVecObls : ModuleCtx -> Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
+residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
+sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> Map String Unit
+sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (Int, AuthResidual) -> Int -> List ScopedMember -> List (String, Scheme)
+schemeObligationsOf : ModuleCtx -> Bool -> List Int -> List UObligation -> List VecObl
+schemeOblsForMember : ModuleCtx -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
+sectionEVars : Section -> List String
+sigConstraintArgTys : Ty -> List (List Ty)
+sigConstraints : Ty -> List (IfaceRef, List String)
+sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
+sigVarFixedBy : List (Int, String) -> List (String, Mono) -> Option (String, String)
+tyVarArgNames : List Ty -> List String
+unifiedRowReqs : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (String, Mono), List Int, List Require)
+vecOblKey : VecObl -> String
+vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
+vecOblOfPred : ModuleCtx -> Bool -> List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl

@@ -147,8 +147,11 @@ import support.util.{startsWith, splitOnChar, filterList, stringTrim}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import types.typecheck.{
-  driveInputsFor, constrainedSigNames, preludeReturnPosDictNames,
-  preludeArgPosDictNames, checkedFfiExternTypeNamesModules, checkOneSchemeFullK
+  checkedFfiExternTypeNamesModules,
+  checkOneSchemeFullK,
+  driveInputsFor,
+  preludeArgPosDictNames,
+  preludeReturnPosDictNames,
 }
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
@@ -167,6 +170,7 @@ import backend.wasm_emit.{
   makeWasmEmitInput,
 }
 import backend.emit_plan.{buildEmitPlanReached}
+import types.tc_occurrence.{constrainedSigNames}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)

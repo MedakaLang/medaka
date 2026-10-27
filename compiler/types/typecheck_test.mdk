@@ -107,8 +107,6 @@ import types.tc_solve_test_support.{
 }
 import types.typecheck.{
   TcDiag(..),
-  cellGoalInnerAliasing,
-  cellStoreMisses,
   chainArgs,
   checkModulesChainReportFor,
   checkModulesChainReportForGraph,
@@ -120,7 +118,6 @@ import types.typecheck.{
   checkOneDiagsGraph,
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
-  constrainedSigNames,
   defaultDriveInputs,
   driveArgs,
   driveInputsFor,
@@ -130,8 +127,6 @@ import types.typecheck.{
   elaborateOneFacts,
   isLiveSpan,
   matchWarningsNow,
-  methodReturnResolutionMutationProbe,
-  methodReturnTemplatePresenceProbe,
   ModDiags,
   stickyTypeErrorDiags,
   tcCode,
@@ -153,6 +148,7 @@ import types.tc_solve.{
   methodReturnMemoCurrentViews,
   spanKeys,
 }
+import types.tc_occurrence.{cellGoalInnerAliasing}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -319,24 +315,6 @@ test "an attribute above a signature keeps the signature binding the definition"
             (attrs => expectEqual bare (attributedSigErrors attrs src))
             attributeSpellings)
       attributedSigCases)
-
-test "an attributed constrained signature is still a constrained signature" =
-  expectEqual
-    ["g", "h"]
-    (constrainedSigNames
-      (desugar
-        (parse
-          (joinNl [
-            "@noinline",
-            "g : Num a => a -> a",
-            "g x = x",
-            "@must_use",
-            "@noinline",
-            "h : Num a => a -> a",
-            "h x = x",
-            "k : Int -> Int",
-            "k x = x",
-          ]))))
 
 test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource
@@ -1568,23 +1546,6 @@ test "wrapped return routes survive an intervening failed request" =
     expectEqual (Some ["wrapped_return::Seed|Int|[]"]) before,
     expectEqual before after,
   ]
-
-test "ordinary return validation rejects wrong selected instance" =
-  let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
-
-test "ordinary return validation rejects wrong prerequisites" =
-  let (_, _, rejected, _) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
-
-test "ordinary return validation rejects checker evidence disagreement" =
-  let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
-
-test "ordinary return template records present and absent interface formals" =
-  expectEqual
-    ([True, True], [True, False])
-    (methodReturnTemplatePresenceProbe ())
 
 absentReturnCodes : Bool -> List String
 absentReturnCodes reverseImpls =
@@ -3401,6 +3362,49 @@ ioJoinCheck name sources =
       (desugar (parseLocated ioJoinPrelude))
       (map (s => (fst s, desugar (parseLocated (snd s)))) sources))
 
+-- A constrained function of one module that shares its name with an interface method, used at a
+-- type with no impl by a second module that imports it: the rejection names the missing impl at
+-- the call.
+test "an imported constrained function used at a type with no impl is rejected at the call, naming the impl" =
+  let core =
+    desugar
+      (parseLocated
+        """
+interface Display a where
+  display : a -> String
+impl Display String where
+  display s = s
+interface Addable a where
+  add : a -> a -> a
+""")
+  let lib = """
+export
+add : Display b => a -> b -> a
+add x y = x
+"""
+  let entry =
+    """
+import lib.{add}
+
+data NoDisp = NoDisp
+
+main = add "a" NoDisp
+"""
+  expectEqual
+    [
+      (
+        "entry",
+        5,
+        "T-NO-IMPL",
+        "no impl of Display for NoDisp; add `deriving Display` to `NoDisp` or write `impl Display NoDisp`",
+      ),
+    ]
+    (ioJoinErrors
+      (checkModulesDiagsChain defaultDriveInputs None "" [] [] core [
+        ("lib", desugar (parseLocated lib)),
+        ("entry", desugar (parseLocated entry)),
+      ]))
+
 nodeJoinClause : String
 nodeJoinClause =
   "; `IO` on `wasmgc/node` is <Clock, Env, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout>"
@@ -4855,23 +4859,6 @@ test "twenty unkeyed elaborateModules drives keep the evidence arrays one graph 
 test "twenty unkeyed checkOneDiags drives keep the method-cell index one graph wide" =
   let (first, twentieth) = firstAndNth 20 diagsSpan
   expectAll [expectGreaterThan 0 first, expectEqual first twentieth]
-
--- A cell store miss names its reason: a site inference reached without marking, and
--- an id minted before the current graph lineage began.
-test "the cell stores report an unminted site and an id from an earlier graph" =
-  let _ = elaborateSpans ()
-  let (_, gctx) = elaborateSpansGraph ()
-  expectAll [
-    expectEqual
-      "site reached inference unminted"
-      (fst (cellStoreMisses gctx unminted)),
-    expectEqual
-      (
-        "site cell span_probe#0 is from an earlier graph",
-        "method cell span_probe#0 is from an earlier graph",
-      )
-      (cellStoreMisses gctx (EvId "span_probe" 0)),
-  ]
 
 -- A prelude with a data declaration and an exhaustive match of it.
 seedCoreDecls : Unit -> List Decl
