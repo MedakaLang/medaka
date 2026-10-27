@@ -622,7 +622,7 @@ loadErrorMessage (LoadParseFailed path _ e) =
 -- real ELoc spans via parseLocatedResult while the plain variant uses
 -- placeholder-loc parseResult).  A parse failure becomes a `LoadParseFailed`
 -- tagged with THIS module's path + the exact source `parseFn` saw.
-readModuleProgF : (String -> Result ParseError (List Decl)) ->
+readModuleProgF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
   List (String, String) ->
   List String ->
@@ -643,14 +643,14 @@ readModuleProgF parseFn read deps roots entry modId =
 -- Parse one module's source, tagging a failure with the module it came from.
 -- The single place a `ParseError` is promoted to a `LoadError`, so both the
 -- buffer-override and the on-disk arm attribute identically.
-parsedModule : (String -> Result ParseError (List Decl)) ->
+parsedModule : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   String ->
   String ->
   Result LoadError (String, String, List Decl)
 parsedModule parseFn owningRoot path src =
   let _ = noteLoadedSource path src
-  match parseFn src
+  match parseFn path src
     Err e => Err (LoadParseFailed path src e)
     Ok prog => Ok (owningRoot, path, prog)
 
@@ -1351,7 +1351,7 @@ cycleSite deps roots importer modId = match loadedSourceOf importer
       (loc => (src, loc))
       (findImportLoc modId (rewriteDecls deps roots (parseLocated src)))
 
-visitModF : (String -> Result ParseError (List Decl)) ->
+visitModF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
   List (String, String) ->
   List String ->
@@ -1394,7 +1394,7 @@ visitModF parseFn read deps roots stack visited acc importer entry modId =
           path
           (directImports prog2))
 
-visitModsF : (String -> Result ParseError (List Decl)) ->
+visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
   List (String, String) ->
   List String ->
@@ -1434,7 +1434,7 @@ loadProgramFilesE read entry roots =
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   finishLoad
     (visitModF
-      parseResult
+      (_ src => parseResult src)
       read
       deps
       roots
@@ -1459,7 +1459,7 @@ loadProgramFilesLocatedE read entry roots =
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   finishLoad
     (visitModF
-      parseLocatedResult
+      (_ src => parseLocatedResult src)
       read
       deps
       roots
@@ -1555,7 +1555,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
   finishCachedLoad
     parseCacheRef
     (visitModF
-      (s => parseCachedLocated parseCacheRef s)
+      (_ src => parseCachedLocated parseCacheRef src)
       read
       deps
       roots
@@ -1565,3 +1565,33 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
       ""
       entry
       (moduleIdOfPath roots entry))
+
+export
+loadProgramFilesLocatedCachedSourcesE : Ref (OrdMap (List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  <IO> (Result LoadError (List (String, String, List Decl)), OrdMap String)
+loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
+  let sources = Ref omEmpty
+  let parse =
+    path src =>
+      sources := omInsert path src !sources
+      parseCachedLocated parseCacheRef src
+  let _ = stageBump "load.cached"
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
+  let result =
+    finishCachedLoad
+      parseCacheRef
+      (visitModF
+        parse
+        read
+        deps
+        roots
+        []
+        []
+        []
+        ""
+        entry
+        (moduleIdOfPath roots entry))
+  (result, !sources)

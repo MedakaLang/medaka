@@ -28,11 +28,10 @@ import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
-  elaborateModulesWithReport,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
   checkedFfiExternTypeNamesModules,
+  elaborateModulesWithReport,
+  preludeArgPosDictNames,
+  preludeReturnPosDictNames,
 }
 import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
@@ -49,6 +48,7 @@ import driver.diagnostics.{refuseLlvmSymbolDefects}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import entries.entry_support.{driveModules}
+import types.tc_occurrence.{constrainedSigNames}
 
 export
 oracleMain : Unit -> <IO> Unit

@@ -40,7 +40,7 @@ joinProducedEnvelope ops values = Some (joinNonempty ops values)
 -- Otherwise `if flag then callback else pureFn` would first make callback pure.
 shapeUnknown : ValueJoinOps c -> Mono -> (c, Mono) -> (c, Mono)
 shapeUnknown ops witness (context, value) =
-  let _ = match normalize value
+  match normalize value
     TVar cell => match cell.value
       Unbound id _ =>
         if occursIn id witness then
@@ -99,7 +99,7 @@ matchingValues ops witness ((value@(context, t)) :: rest) =
   if sameShape witness t then
     value :: matchingValues ops witness rest
   else
-    let _ = ops.vjoEqual context witness t
+    ops.vjoEqual context witness t
     matchingValues ops witness rest
 
 joinNonempty : ValueJoinOps c -> List (c, Mono) -> Mono
@@ -147,13 +147,13 @@ joinWithWitness ops _ values = equalValues ops values
 equalValues : ValueJoinOps c -> List (c, Mono) -> Mono
 equalValues _ [] = panic "empty produced-value equality"
 equalValues ops ((_, first) :: rest) =
-  let _ = equalRest ops first rest
+  equalRest ops first rest
   first
 
 equalRest : ValueJoinOps c -> Mono -> List (c, Mono) -> Unit
 equalRest _ _ [] = ()
 equalRest ops first ((context, value) :: rest) =
-  let _ = ops.vjoEqual context first value
+  ops.vjoEqual context first value
   equalRest ops first rest
 
 arrowDomain : (c, Mono) -> (c, Mono)

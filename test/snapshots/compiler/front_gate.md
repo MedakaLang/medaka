@@ -1,7 +1,8 @@
 # META
-source_lines=537
+source_lines=511
 stages=DESUGAR,MARK
 # SOURCE
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
 -- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
 -- when the `build` verb asks for it (`frontGateEnv`).  Nothing here reads the
@@ -15,9 +16,7 @@ import frontend.parser.{
   parseLocated,
   parseResult,
   ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
 }
 import frontend.desugar.{desugarIn}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -40,8 +39,6 @@ import driver.diagnostics.{
   ppDiagCliSrc,
   ppMainEntryError,
   ppResolveErrorsByFile,
-  parseErrHelpFix,
-  parseErrCode,
   srcLinesArr,
   stdlibExportsReader,
   surfaceErrors,
@@ -70,33 +67,10 @@ export
 cliStdlibExports : String -> List String -> <IO> List (String, List String)
 cliStdlibExports stdlibDir names = stdlibExportsReader stdlibDir names
 
--- PARSE-ERROR-LOCATION Stage 1: render a located `ParseError` through the SAME
--- caret-aware `ppDiagCliSrc` + `Diag` machinery the typecheck/resolve text paths
--- use, so EVERY CLI-text parse error gets `file:L:C:` + a source snippet + caret
--- + the stable `P-*`/`L-*` code (and, for the clean single-token hints, a `help`).
--- `parseErrorLine` is 1-based, `parseErrorCol` 0-based — the exact convention
--- `ppDiagCliSrc`/`parseErrHelpFix` expect (matching the `--json` inline build).
 export
 ppParseError : String -> String -> ParseError -> String
 ppParseError src file e =
-  let ploc =
-    Loc
-      file
-      (parseErrorLine e)
-      (parseErrorCol e)
-      (parseErrorLine e)
-      (parseErrorCol e + 1)
-  let (h, fx) = parseErrHelpFix (parseErrorMessage e) ploc
-  ppDiagCliSrc
-    src
-    file
-    (Diag
-      SevError
-      (parseErrCode (parseErrorMessage e))
-      (parseErrorMessage e)
-      (Some ploc)
-      h
-      fx)
+  ppDiagCliSrc src file (parseDiagnosticToDiag file (parseErrorDiagnostic e))
 
 -- F3 Chunk B (R-MODULE-LOAD): the loader's `Err "unknown module: X"` carries no
 -- location (see loader.mdk's entry-scan doc comment).  `tsrc` is already known
@@ -540,13 +514,14 @@ fileWithNotes key notes (JObject members) = match toList members
   _ => None
 fileWithNotes _ _ _ = None
 # DESUGAR
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -555,7 +530,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig true "cliStdlibExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "cliStdlibExports" ((PVar "stdlibDir") (PVar "names")) (EApp (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir")) (EVar "names")))
 (DTypeSig true "ppParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
-(DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EBlock (DoLet false false (PVar "ploc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EApp (EVar "parseErrorCol") (EVar "e"))) (EApp (EVar "parseErrorLine") (EVar "e"))) (EBinOp "+" (EApp (EVar "parseErrorCol") (EVar "e")) (ELit (LInt 1))))) (DoLet false false (PTuple (PVar "h") (PVar "fx")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (EApp (EVar "parseErrorMessage") (EVar "e"))) (EApp (EVar "Some") (EVar "ploc"))) (EVar "h")) (EVar "fx"))))))
+(DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "file")) (EApp (EVar "parseErrorDiagnostic") (EVar "e")))))
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
@@ -623,13 +598,14 @@ fileWithNotes _ _ _ = None
 (DFunDef false "fileWithNotes" ((PVar "key") (PVar "notes") (PCon "JObject" (PVar "members"))) (EMatch (EApp (EVar "toList") (EVar "members")) (arm (PList (PTuple (PLit (LString "file")) (PCon "JString" (PVar "p"))) (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) () (EIf (EBinOp "==" (EVar "p") (EVar "key")) (EApp (EVar "Some") (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "p"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EBinOp "++" (EApp (EVar "toList") (EVar "ds")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "p")) (ELit (LString "")))) (EVar "notes")))))))))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "fileWithNotes" (PWild PWild PWild) (EVar "None"))
 # MARK
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -638,7 +614,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig true "cliStdlibExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "cliStdlibExports" ((PVar "stdlibDir") (PVar "names")) (EApp (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir")) (EVar "names")))
 (DTypeSig true "ppParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
-(DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EBlock (DoLet false false (PVar "ploc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EApp (EVar "parseErrorCol") (EVar "e"))) (EApp (EVar "parseErrorLine") (EVar "e"))) (EBinOp "+" (EApp (EVar "parseErrorCol") (EVar "e")) (ELit (LInt 1))))) (DoLet false false (PTuple (PVar "h") (PVar "fx")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (EApp (EVar "parseErrorMessage") (EVar "e"))) (EApp (EVar "Some") (EVar "ploc"))) (EVar "h")) (EVar "fx"))))))
+(DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "file")) (EApp (EVar "parseErrorDiagnostic") (EVar "e")))))
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))

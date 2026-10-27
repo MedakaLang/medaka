@@ -33,7 +33,10 @@ bindOutsideDoMsg : String
 binderDomainMsg : String -> String
 binderDomainTypeMsg : String -> String -> String
 binderNoDomainMsg : String -> String
+binderNonExhaustiveMsg : Option TabKey -> String -> (String, String)
 binderTypeMsg : String -> String -> String
+boxedLitPatHelp : String -> String
+boxedLitPatMsg : String -> String -> String
 closedRowMismatchMsg : List Atom -> List Atom -> String
 cohCrossModuleMsg : String -> String -> String -> String
 cohIncomparableHelp : String
@@ -78,6 +81,7 @@ fieldTypeDiffersMsg : String -> String -> String -> Mono -> String -> Mono -> St
 findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
 findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 firstMid : List String -> String
+groundedSigVarMsg : String -> String -> Mono -> String
 headL : List String -> String
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
@@ -148,6 +152,7 @@ rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowText : String -> String
 sameSpellingHint : Mono -> Mono -> Option String
 shadowIfaceLabel : IfaceRef -> String
+siblingSharedSigVarMsg : String -> String -> String -> String
 sigOverExpansiveMsg : String -> Ty -> String
 sigTooGeneralMsg : String -> Ty -> String
 sigVarGoalMsg : DeclaringBinder -> List (String, Ty, List (String, Mono)) -> List Int -> IfaceRef -> List Mono -> String

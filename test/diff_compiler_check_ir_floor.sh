@@ -176,7 +176,7 @@ CEIL_test="${TEST_IR_CEIL:-840000000}"
 # own fixture, graded against ITS OWN measured cost, not the hello-world baseline.
 #
 # LINT cell — `medaka lint --disable rule-stdlib-reimpl compiler/tools/lint.mdk`
-# (S-lint-pays-for-what-it-uses, #2351/#2062): skip buildStdlibIndex (a full-stdlib
+# (S-lint-pays-for-what-it-uses, #2351/#2062): skip buildStdlibIndexResult (a full-stdlib
 # parse) when the only consuming rule (rule-stdlib-reimpl) is excluded. DERIVED
 # 2026-09-15 (S-pin-the-wins, this tree, base be76ffe99b), cachegrind method, two
 # back-to-back runs, plus a revert of compiler/tools/{lint,lint_cmd,mcp}.mdk and

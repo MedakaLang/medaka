@@ -1,0 +1,105 @@
+admittedDeclHits : ModuleCtx -> ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
+admittedDeclHitters : ModuleCtx -> ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
+admittedIdxMax : ModuleCtx -> String -> List IfaceRef -> Option Int
+admittedReceiverMono : ModuleCtx -> String -> List IfaceRef -> Mono -> Option Mono
+appSpineHead : Expr -> Expr
+appSpineNodes : Expr -> List Expr
+appSpineNodesGo : Expr -> List Expr -> List Expr
+bareLocalBound : BareLocals -> String -> Bool
+bindTyName : List (String, String) -> String -> String -> Option (List (String, String))
+buildStandaloneShadowsGraph : List (String, String) -> List Decl -> List Decl -> List String
+callArgVecsV : GraphCtx -> List (CSlot, List Mono) -> List (Int, Mono) -> List (List Mono)
+checkAdmittedOccObl : ModuleCtx -> ImplEnv -> (String, Mono, Option Loc) -> Unit
+checkAdmittedOccObls : ModuleCtx -> Unit -> Unit
+computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
+constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
+coreShadowMapFor : GraphCtx -> List Decl -> List (String, String) -> List (String, String)
+declBareLocals : GraphCtx -> List Decl -> BareLocals -> BareLocals
+declaredConstraintFor : ModuleCtx -> String -> CDeclared
+declaredEffectsAt : GraphCtx -> MethodTrackedInstantiation -> Option CDeclared -> Option CDeclared
+declaresStandalone : String -> List Decl -> Bool
+definerReceiverDispatches : DynCtx -> String -> Mono -> Bool
+definerReceiverIsDictVar : DynCtx -> String -> Mono -> Bool
+definerShadowArgHead : ModuleCtx -> Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
+definerShadowArgHeadCell : ModuleCtx -> String -> EvCell -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
+definerShadowSpineArgAt : ModuleCtx -> Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner, Expr, List Expr)
+definerShadowSpineVarAt : ModuleCtx -> Expr -> Option (String, Expr, List Expr)
+definerShadowVarHead : ModuleCtx -> Expr -> Option String
+definerShadowsFromSet : GraphCtx -> (String -> Bool) -> List Decl -> List String
+dictVarSatisfiesIface : ModuleCtx -> String -> Int -> List (String, Mono) -> Bool
+emitValueShadowGate : ModuleCtx -> String -> Bool
+enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
+formBareLocals : GraphCtx -> UsePath -> BareLocals -> BareLocals
+groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
+groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
+groundShadowReceiver : DynCtx -> Option Mono -> Mono -> Bool -> Option Loc -> Unit
+groupMonos : DynCtx -> List (String, Mono)
+ifaceMethodName : ModuleCtx -> String -> Bool
+ifaceMethodSigFor : String -> Option Ty -> List (String, List String) -> List Decl -> Option (String, Ty)
+ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
+ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
+importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
+importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadows : DriveOutputs -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadowsIn : Map String (List (String, List String)) -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
+importerAdmittedVerdict : ModuleCtx -> ImplEnv -> String -> List Mono -> AdmittedVerdict
+importerDispatchIdxOuter : ModuleCtx -> String -> Option Int
+importerShadowDomain : TcEnv -> String -> Option Mono
+importerShadowDomainAt : TcEnv -> String -> Int -> Option Mono
+importerShadowOnEmitPath : ModuleCtx -> String -> Ref Route -> Bool
+isDefinerShadow : ModuleCtx -> String -> Bool
+isPreludeMid : String -> Bool
+isShadowStandalone : TcEnv -> String -> Bool
+leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
+localDeclaredConstraintFor : ModuleCtx -> String -> CDeclared
+methodCellLookup : GraphCtx -> EvId -> Result String EvCell
+methodCellOf : GraphCtx -> EvId -> EvCell
+moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
+nameableIfaceMethodSet : GraphCtx -> List Decl -> Map String Unit
+nameableIfaceRows : GraphCtx -> List Decl -> List (String, List String)
+nameableIfaceRowsIn : Map String (List (String, List String)) -> List Decl -> List (String, List String)
+nameableIfaceShadows : GraphCtx -> List Decl -> List String -> List String
+occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
+plainAppHeadVar : TcEnv -> Expr -> Bool
+pushAmbiguousMethod : ModuleCtx -> String -> List IfaceRef -> Option Loc -> Unit
+pushAmbiguousShadowDecl : ModuleCtx -> String -> List IfaceRef -> Option Loc -> Unit
+pushUnroutableAdmitted : ModuleCtx -> String -> List IfaceRef -> IfaceRef -> Option Loc -> Unit
+reachableStandaloneSig : List (String, List Decl) -> Int -> List Decl -> String -> Option (Option Ty)
+reachableStandaloneSigGo : List (String, List Decl) -> Int -> List (String, String) -> Option (Option Ty)
+recoveredShadowSym : String -> Ref Route -> String
+reexportedOrigins : List Decl -> String -> List (String, String)
+reexportedOriginsOf : Decl -> String -> List (String, String)
+rejectAdmittedValueOccurrence : ModuleCtx -> String -> Unit
+resolveRLocalSite : SiteCtx -> String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
+sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
+schemesAgree : Option Ty -> Ty -> Bool
+shadowBareName : List (String, String) -> String -> String
+shadowDeclaredFor : ModuleCtx -> String -> String -> CDeclared
+shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
+shadowHeadEnv : TcEnv -> TcEnv
+shadowSpineNodesAt : ModuleCtx -> String -> Expr -> Option (List Expr)
+shadowSpineNodesAtImporter : ModuleCtx -> String -> Expr -> Option (List Expr)
+shadowStandaloneDictSlots : GraphCtx -> List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
+shadowStandaloneDictSlotsAt : DynCtx -> Option ValueScheme -> String -> String -> Mono -> ShadowDicts
+shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner))
+shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner), Expr, List Expr)
+shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
+singleTyparamIfaceMethod : ModuleCtx -> String -> Bool
+spellCtxOf : GraphCtx -> List Decl -> SpellCtx
+stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
+stampRoutes : List (Ref Route) -> Unit
+standaloneShadowDomainAt : ModuleCtx -> String -> Int -> Option Mono
+standaloneShadowsFromSet : GraphCtx -> (String -> Bool) -> Map String Unit -> List Decl -> List String
+standaloneSigOf : String -> List Decl -> Option Ty
+standaloneValueBinding : TcEnv -> String -> Option ValueScheme
+standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
+standaloneValuePinned : TcEnv -> String -> Bool
+substArgVec : GraphCtx -> List (Int, Mono) -> Mono -> List Mono -> List Mono
+takeAlphaConstraint : List (String, String) -> Constraint -> List Constraint -> List Constraint -> Option (List (String, String), List Constraint)
+tyAlphaConstraint : List (String, String) -> Constraint -> Constraint -> Option (List (String, String))
+tyAlphaConstraints : List (String, String) -> List Constraint -> List Constraint -> Option (List (String, String))
+tyAlphaEq : Ty -> Ty -> Bool
+tyAlphaGo : List (String, String) -> Ty -> Ty -> Option (List (String, String))
+tyAlphaList : List (String, String) -> List Ty -> List Ty -> Option (List (String, String))
+unifyStandaloneDomain : DynCtx -> Mono -> Mono -> Option Loc -> Unit
+unitMangledShadows : List String -> (String, List Decl) -> List (String, String)

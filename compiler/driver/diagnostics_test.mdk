@@ -13,13 +13,16 @@
    publishes no link and no unsolved effect summary, and a value-restricted
    binding publishes its weak variable. -}
 
-import support.ordmap.{OrdMap, omEmpty, omSize}
+import support.ordmap.{OrdMap, omEmpty, omSize, omLookup}
 import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
-  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
-  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
-  FrontOutput(..), Diag(..), foldCachedIdentity, resolveCachedIdentity
+  analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
+  CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
+  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..),
+  foldCachedIdentity, resolveCachedIdentity
 }
+import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
+import support.source_index.{indexSource, offsetToUtf16Position}
 import types.typecheck.{defaultDriveInputs}
 import types.module_interface.{
   ModuleInterface(..), ModuleKey(..), currentModuleInterfaces
@@ -193,7 +196,7 @@ corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
         ("no published Link", expectEqual [] (cellsWhere isLink rows)),
         ("no open effect summary", expectEqual [] (cellsWhere isSummary rows)),
         ("every graph published its modules", expectEqual [] unloaded),
-        ("stdlib modules driven", expectEqual 47 (length stdlibEs)),
+        ("stdlib modules driven", expectEqual 48 (length stdlibEs)),
       ]
     (Err e, _) => fail e
     (_, Err e) => fail e
@@ -777,3 +780,352 @@ test "a graph recorded while another module was rejected serves what a cold anal
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (rejectedGraphCheck rsrc csrc)
     _ => fail "could not read the prelude pair"
+
+sourceSnapshotChecks : String -> <IO, FileWrite> Expectation
+sourceSnapshotChecks dir =
+  let entry = dir ++ "/main.mdk"
+  let dep = dir ++ "/dep.mdk"
+  let good = """import dep
+main = 1
+"""
+  let astral = "export value = \"😀\"\n"
+  match (writeFile entry good, writeFile dep astral)
+    (Ok _, Ok _) =>
+      let cache = Ref omEmpty
+      let (first, sources) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let (again, same) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let _ = removeFile dep
+      let (missing, missingSources) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let broken = "main = (\n"
+      let (bad, badSources) =
+        loadProgramFilesLocatedCachedSourcesE
+          cache
+          (p => if p == entry then Some broken else None)
+          entry
+          [dir]
+      expectEach [
+        ("success", expectTrue (isOk first)),
+        ("entry captured", expectEqual (Some good) (omLookup entry sources)),
+        ("astral captured", expectEqual (Some astral) (omLookup dep sources)),
+        (
+          "captured astral position after deletion",
+          expectEqual
+            (Some (0, 19))
+            (map
+                (src => offsetToUtf16Position (indexSource src) 18)
+                (omLookup dep sources)
+              |> optionOr None),
+        ),
+        ("repeated", expectTrue (isOk again)),
+        ("repeated source", expectEqual (Some astral) (omLookup dep same)),
+        ("missing dependency", expectTrue (isErr missing)),
+        (
+          "entry on failure",
+          expectEqual (Some good) (omLookup entry missingSources),
+        ),
+        ("no stale dependency", expectEqual None (omLookup dep missingSources)),
+        ("parse failure", expectTrue (isErr bad)),
+        ("broken source", expectEqual (Some broken) (omLookup entry badSources)),
+      ]
+    _ => fail "could not write snapshot fixture"
+
+test "loader snapshots contain only current parsed sources on success and failure" =
+  withScratchDir sourceSnapshotChecks
+
+analysisSnapshotChecks : String ->
+  String ->
+  String ->
+  <IO, FileWrite> Expectation
+analysisSnapshotChecks rsrc csrc dir =
+  let entry = dir ++ "/main.mdk"
+  let dep = dir ++ "/dep.mdk"
+  let entrySrc = """import dep
+main = 1
+"""
+  let depSrc = "export value = \"😀\"\n"
+  match (writeFile entry entrySrc, writeFile dep depSrc)
+    (Ok _, Ok _) =>
+      let cache = Ref []
+      let parseCache = Ref omEmpty
+      let (_, oldBuckets) =
+        analyzeProjectKeyed
+          noStdlibExports
+          True
+          []
+          (Ref [])
+          (Ref omEmpty)
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      let (keyed, newBuckets, sources) =
+        analyzeProjectKeyedSources
+          noStdlibExports
+          True
+          []
+          cache
+          parseCache
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      let _ = removeFile dep
+      let (failed, buckets, failedSources) =
+        analyzeProjectKeyedSources
+          noStdlibExports
+          True
+          []
+          cache
+          parseCache
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      expectEach [
+        ("success", expectTrue (isSome keyed)),
+        (
+          "unchanged diagnostics",
+          expectEqual
+            (map (b => (fst b, map diagText (snd b))) oldBuckets)
+            (map (b => (fst b, map diagText (snd b))) newBuckets),
+        ),
+        (
+          "captured dependency",
+          expectEqual (Some depSrc) (omLookup dep sources),
+        ),
+        ("failure", expectTrue (isNone failed)),
+        ("failure keeps diagnostics", expectTrue (length buckets > 0)),
+        (
+          "entry on failure",
+          expectEqual (Some entrySrc) (omLookup entry failedSources),
+        ),
+        (
+          "no previous dependency",
+          expectEqual None (omLookup dep failedSources),
+        ),
+      ]
+    _ => fail "could not write analysis snapshot fixture"
+
+test "project diagnostic snapshots are scoped to each analysis" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) => withScratchDir (analysisSnapshotChecks rsrc csrc)
+  _ => fail "could not read prelude"
+
+-- ── refutable binders, do binds and defer binds ───────────────────────────
+
+-- Runs [k] on the prelude pair every analysis below is checked against.
+withPrelude : (String -> String -> Expectation) -> <IO> Expectation
+withPrelude k = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) => k rsrc csrc
+  _ => fail "could not read the prelude pair"
+
+-- The diagnostics of the single-file program [src] whose text contains [needle].
+diagsContaining : String -> String -> String -> String -> List String
+diagsContaining needle rsrc csrc src =
+  analyzeFrom noStdlibExports "main" rsrc csrc (parseLocated src)
+    |> map diagText
+    |> filter (contains needle)
+
+-- [want] diagnostics of [src] contain [needle].
+expectDiags : String -> Int -> String -> <IO> Expectation
+expectDiags needle want src = withPrelude (rsrc csrc =>
+  expectEqual want (length (diagsContaining needle rsrc csrc src)))
+
+-- [top] is declared above `main`; [body] is a statement of `main`'s block.
+binderProgram : String -> String -> String
+binderProgram top body =
+  """data Pair = Pair Int Int
+\{top}
+main =
+  let p = None : Option Int
+\{body}
+  println "done"
+"""
+
+binderCase : String -> String -> Int -> String -> <IO> Expectation
+binderCase needle top want body =
+  expectDiags needle want (binderProgram top body)
+
+-- Counts every non-exhaustiveness warning, a clause-group one included.
+nonExhaustiveCase : String -> Int -> String -> <IO> Expectation
+nonExhaustiveCase = binderCase "W-NONEXHAUSTIVE"
+
+test "a refutable let pattern warns, an irrefutable one does not" = expectEach [
+  ("refutable let", nonExhaustiveCase "" 1 "  let (Some x) = p"),
+  ("tuple let", nonExhaustiveCase "" 0 "  let (a, b) = (1, 2)"),
+  (
+    "single-constructor let",
+    nonExhaustiveCase "" 0 "  let (Pair a b) = Pair 1 2",
+  ),
+]
+
+test "a refutable lambda parameter warns, an irrefutable one does not" = expectEach
+  [
+    ("refutable lambda", nonExhaustiveCase "" 1 "  let f = (Some x) => x"),
+    ("tuple lambda", nonExhaustiveCase "" 0 "  let f = (a, b) => a"),
+    (
+      "single-constructor lambda",
+      nonExhaustiveCase "" 0 "  let f = (Pair a b) => a",
+    ),
+  ]
+
+test "a refutable if-let or guard pattern does not warn as a binder" = expectEach
+  [
+    (
+      "if let",
+      nonExhaustiveCase "" 0 "  let _ = if let Some x = p then x else 0",
+    ),
+    (
+      "guard",
+      nonExhaustiveCase
+        """g : Option Int -> Int
+g o
+  | Some x <- o = x
+  | otherwise = 0"""
+        0
+        "  let _ = g p",
+    ),
+  ]
+
+test "the clauses of an impl method are not judged one pattern at a time" =
+  nonExhaustiveCase
+    """data Two = A | B
+impl Debug Two where
+  debug A = "A"
+  debug B = "B"
+"""
+    0
+    "  let _ = debug A"
+
+ifaceDefault : String -> String
+ifaceDefault clause =
+  """interface Get a where
+  get : a -> Option Int -> Int
+\{clause}"""
+
+test "an interface default clause is judged like an impl clause" = expectEach [
+  (
+    "refutable default",
+    binderCase
+      "W-NONEXHAUSTIVE-CLAUSES"
+      (ifaceDefault "  get _ (Some x) = x")
+      1
+      "  let _ = 0",
+  ),
+  (
+    "exhaustive default",
+    nonExhaustiveCase
+      (ifaceDefault "  get _ o = match o\n    Some x => x\n    None => 0")
+      0
+      "  let _ = 0",
+  ),
+]
+
+test "a refutable let-bound function warns with the lambda code" = expectEach [
+  (
+    "refutable let function",
+    binderCase "W-NONEXHAUSTIVE:" "" 1 "  let h (Some x) = x",
+  ),
+  (
+    "irrefutable let function",
+    nonExhaustiveCase "" 0 "  let h (a, b) = a",
+  ),
+]
+
+test "a binding with several refutable parameters warns once" = expectEach [
+  (
+    "let function",
+    nonExhaustiveCase "" 1 "  let h (Some x) (Some y) = x + y",
+  ),
+  (
+    "multi-parameter lambda",
+    nonExhaustiveCase "" 1 "  let f = (Some y) (Some z) => y + z",
+  ),
+  (
+    "one refutable parameter among irrefutable ones",
+    nonExhaustiveCase "" 1 "  let g (a, b) (Some c) = a + b + c",
+  ),
+  (
+    "only irrefutable parameters",
+    nonExhaustiveCase "" 0 "  let ok (a, b) c = a + b + c",
+  ),
+]
+
+test "a binder warning names the case and points at match or if let" = expectEach
+  [
+    (
+      "let",
+      binderCase
+        "handle `None` with a `match` or an `if let`"
+        ""
+        1
+        "  let (Some x) = p",
+    ),
+    (
+      "no match arm is suggested",
+      binderCase "arm or a `_` wildcard" "" 0 "  let (Some x) = p",
+    ),
+  ]
+
+-- [want] diagnostics containing [needle] for a `do` block binding [pat] from [rhs].
+doBindCase : String -> Int -> String -> String -> <IO> Expectation
+doBindCase needle want pat rhs =
+  expectDiags
+    needle
+    want
+    """data One = One Int
+r : Option Int
+r = do
+  \{pat} <- \{rhs}
+  Some 1
+main =
+  println (debug r)
+"""
+
+test "a do bind is judged by the pattern the user wrote" = expectEach [
+  ("unit bind is not unreachable", doBindCase "W-UNREACHABLE" 0 "()" "Some ()"),
+  ("unit bind is exhaustive", doBindCase "W-NONEXHAUSTIVE" 0 "()" "Some ()"),
+  (
+    "single-constructor bind is silent",
+    doBindCase "W-" 0 "One v" "Some (One 1)",
+  ),
+  ("tuple bind is silent", doBindCase "W-" 0 "(a, b)" "Some (1, 2)"),
+  (
+    "refutable bind warns",
+    doBindCase "W-NONEXHAUSTIVE" 1 "Some v" "Some (Some 1)",
+  ),
+  (
+    "refutable bind is not unreachable",
+    doBindCase "W-UNREACHABLE" 0 "Some v" "Some (Some 1)",
+  ),
+]
+
+-- [want] warnings for a `defer` block binding [pat] from [rhs].
+deferBindCase : Int -> String -> String -> <IO> Expectation
+deferBindCase want pat rhs =
+  expectDiags
+    "W-"
+    want
+    """import async.{Async, runAsync}
+f : Async <Stdout> Int
+f = defer
+  \{pat} <- deferPure (\{rhs})
+  deferPure 1
+main = println (debug (runAsync f))
+"""
+
+test "a defer bind is judged by the pattern the user wrote" = expectEach [
+  ("unit bind is silent", deferBindCase 0 "()" "()"),
+  ("refutable bind warns", deferBindCase 1 "Some v" "Some 1"),
+]

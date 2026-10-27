@@ -72,7 +72,8 @@ import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
   ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
   CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView, EvCell(..),
-  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder
+  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder, grantTopKey,
+  methodGrantKey, setGrantIds
 }
 
 -- ── the key ─────────────────────────────────────────────────────────────────
@@ -375,13 +376,13 @@ applyModuleTrees g t =
   let gs = r.grants
   let las = r.localAbs
   r.evTable := t.mtEvidence ++ r.evTable.value
-  let _ = each (setGrantIds gs.gsTopIds) t.mtTopIds
-  let _ = each (row => forgetLocalRows las gs (fst row)) t.mtLocalIds
+  each (setGrantIds gs.gsTopIds) t.mtTopIds
+  each (row => forgetLocalRows las gs (fst row)) t.mtLocalIds
   las.lasBinders :=
     omFromPairs
       (map (row => (fst row, map zonkLocalAbs (snd row))) t.mtLocalAbs)
       las.lasBinders.value
-  let _ = each (setGrantIds gs.gsLocalIds) t.mtLocalIds
+  each (setGrantIds gs.gsLocalIds) t.mtLocalIds
   gs.gsMethods :=
     fold
       (acc row => match snd row
@@ -393,25 +394,13 @@ applyModuleTrees g t =
   gs.gsBounds := omFromPairs t.mtBounds gs.gsBounds.value
   gs.gsValueBounds := omFromPairs t.mtValueBounds gs.gsValueBounds.value
   g.promotionHarvestRef := dedup (g.promotionHarvestRef.value ++ t.mtPromoted)
-  let _ = match t.mtMain
+  match t.mtMain
     Some p => g.mainSchemeRef := Some (thawScheme p)
     None => ()
   t.mtMarked
 
 zonkLocalAbs : LocalAbs -> LocalAbs
 zonkLocalAbs la = { la | laSlots = map zonkSlot la.laSlots }
-
--- The key a top-level binder's grant ids are recorded under.
-export
-grantTopKey : String -> String -> String
-grantTopKey mid n = "\{mid}|\{n}"
-
--- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
--- no binder that takes no grant has a row.
-export
-setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
-setGrantIds table (key, []) = table := omDelete key table.value
-setGrantIds table (key, ids) = table := omInsert key ids table.value
 
 -- Delete every row recorded under the renamed local binder [name].
 export
@@ -420,11 +409,6 @@ forgetLocalRows las gs name =
   las.lasBinders := omDelete name las.lasBinders.value
   las.lasRecOccs := omDelete name las.lasRecOccs.value
   gs.gsLocalIds := omDelete name gs.gsLocalIds.value
-
--- The key an interface method's grants are recorded under.
-export
-methodGrantKey : String -> String -> String
-methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
 
 -- The keys of the methods the interfaces of [prog] declare.
 methodGrantKeys : List Decl -> List String

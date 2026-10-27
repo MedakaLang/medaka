@@ -1,9 +1,9 @@
 # META
-source_lines=1371
+source_lines=1356
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
--- sugar (guards, sections, string interpolation, list comprehensions, do-blocks,
+-- sugar (guards, sections, string interpolation, do-blocks,
 -- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
 -- after the parser, before resolve — purely syntactic, no type info.
 --
@@ -455,31 +455,16 @@ callAndThen d e cont = locatedAt (exprSpanLoc e) (match exprLoc e
   Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
   None => callBin (bindMethodName d) e cont)
 
--- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
--- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
+-- bind continuation: a variable or wildcard binds directly; any other pattern
+-- goes through a one-arm match so the exhaustiveness check judges the user's
+-- pattern alone and a missed bind is a match miss at runtime.
 doCont : Pat -> Expr -> Expr
-doCont pat body
-  | isRefutable pat =
-    ELam
-      [PVar "__do_x" (Loc "" 0 0 0 0) noBinderId]
-      (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
-  | otherwise = ELam [pat] body
-
-isRefutable : Pat -> Bool
-isRefutable (PVar _ _ _) = False
-isRefutable PWild = False
-isRefutable (PLit _) = True
-isRefutable (PCon _ _) = True
-isRefutable (PCons _ _) = True
-isRefutable (PList _) = True
-isRefutable (PRng _ _ _) = True
-isRefutable (PRec _ _ _) = True
-isRefutable (PTuple ps) = anyRefutable ps
-isRefutable (PAs _ _ _ p) = isRefutable p
-
-anyRefutable : List Pat -> Bool
-anyRefutable [] = False
-anyRefutable (p :: ps) = isRefutable p || anyRefutable ps
+doCont (pat@(PVar _ _ _)) body = ELam [pat] body
+doCont PWild body = ELam [PWild] body
+doCont pat body =
+  ELam
+    [PVar "__do_x" (Loc "" 0 0 0 0) noBinderId]
+    (EMatch (EVar "__do_x") [Arm pat [] body])
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
 -- The Eq/Debug/Display/Ord/Generic
@@ -1214,11 +1199,11 @@ qualifiedAt (ELoc (Loc file sl sc el ec) _) member e =
 qualifiedAt _ _ e = e
 
 -- ── The pass pipeline ─────────────────────────────────────────────────────
--- Ported in the reference order (later passes run last): merge_iface_defaults →
--- expand_decl → desugar_record_puns → lower_container_literals →
--- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
--- The last step mints every binder's id (`stampBinderIds`), with `""` as the
--- module half; `desugarIn` is the same pipeline for a caller that knows the module.
+-- Pass order: qualifyAliasRefs → mergeIfaceDefaults → expandDecl →
+-- desugarRecordPuns → lowerContainerLiterals → rewriteDo → rewriteAssignIndex →
+-- rewriteSugar → stampBinderIds. The last step mints every binder's id, with
+-- `""` as the module half; `desugarIn` is the same pipeline for a caller that
+-- knows the module.
 export
 desugar : List Decl -> List Decl
 desugar prog = desugarIn "" prog
@@ -1564,21 +1549,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isRefutable" ((PCon "PVar" PWild PWild PWild)) (EVar "False"))
-(DFunDef false "isRefutable" ((PCon "PWild")) (EVar "False"))
-(DFunDef false "isRefutable" ((PCon "PLit" PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PCon" PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PCons" PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PList" PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PRng" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PRec" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "anyRefutable") (EVar "ps")))
-(DFunDef false "isRefutable" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "isRefutable") (EVar "p")))
-(DTypeSig false "anyRefutable" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
-(DFunDef false "anyRefutable" ((PList)) (EVar "False"))
-(DFunDef false "anyRefutable" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "||" (EApp (EVar "isRefutable") (EVar "p")) (EApp (EVar "anyRefutable") (EVar "ps"))))
+(DFunDef false "doCont" ((PAs "pat" (PCon "PVar" PWild PWild PWild)) (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")))
+(DFunDef false "doCont" ((PCon "PWild") (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "body")))
+(DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body"))))))
 (DTypeSig false "expandDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "expandDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DData" (EVar "d") ((fa "dataDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "kinds")) (EVar "variants"))) (EVar "derives"))))
 (DFunDef false "expandDecl" ((PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeParamKinds" (PVar "kinds")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "kinds")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))
@@ -2067,21 +2040,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isRefutable" ((PCon "PVar" PWild PWild PWild)) (EVar "False"))
-(DFunDef false "isRefutable" ((PCon "PWild")) (EVar "False"))
-(DFunDef false "isRefutable" ((PCon "PLit" PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PCon" PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PCons" PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PList" PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PRng" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PRec" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isRefutable" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "anyRefutable") (EVar "ps")))
-(DFunDef false "isRefutable" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "isRefutable") (EVar "p")))
-(DTypeSig false "anyRefutable" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
-(DFunDef false "anyRefutable" ((PList)) (EVar "False"))
-(DFunDef false "anyRefutable" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "||" (EApp (EVar "isRefutable") (EVar "p")) (EApp (EVar "anyRefutable") (EVar "ps"))))
+(DFunDef false "doCont" ((PAs "pat" (PCon "PVar" PWild PWild PWild)) (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")))
+(DFunDef false "doCont" ((PCon "PWild") (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "body")))
+(DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body"))))))
 (DTypeSig false "expandDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "expandDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DData" (EVar "d") ((fa "dataDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "kinds")) (EVar "variants"))) (EVar "derives"))))
 (DFunDef false "expandDecl" ((PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeParamKinds" (PVar "kinds")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "kinds")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))

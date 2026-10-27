@@ -1,5 +1,23 @@
 NEWLINE
 IMPORT
+IDENT "frontend"
+DOT
+IDENT "parse_diagnostic"
+DOT_LBRACE
+UPPER "ParseDiagnosticKind"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "UnicodeProblem"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+IDENT "renderParseProblem"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "support"
 DOT
 IDENT "stage_count"
@@ -363,7 +381,7 @@ UPPER "TEof"
 NEWLINE
 PIPE
 UPPER "TLexError"
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 DERIVING
 LPAREN
@@ -937,10 +955,16 @@ UPPER "TLexError"
 IDENT "s"
 RPAREN
 EQUAL
+INDENT
 STRING "LEX_ERROR "
 PLUSPLUS
 IDENT "debugStringLit"
+LPAREN
+IDENT "renderParseProblem"
 IDENT "s"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -1485,6 +1509,7 @@ UPPER "TLexError"
 IDENT "s"
 RPAREN
 EQUAL
+IDENT "renderParseProblem"
 IDENT "s"
 NEWLINE
 DATA
@@ -2205,7 +2230,8 @@ UPPER "None"
 FAT_ARROW
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "integer literal too large for U64 (max 2^64 - 1)"
+IDENT "e"
+UPPER "IntegerOverflow"
 NEWLINE
 DEDENT
 NEWLINE
@@ -2623,7 +2649,8 @@ THEN
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "unterminated block comment"
+IDENT "len"
+UPPER "UnterminatedComment"
 NEWLINE
 DEDENT
 ELSE
@@ -2788,6 +2815,13 @@ IDENT "at"
 IDENT "src"
 IDENT "p"
 RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
 EQUAL
 IDENT "p"
 NEWLINE
@@ -2809,23 +2843,26 @@ IDENT "lexErrorTok"
 COLON
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "ParseDiagnosticKind"
 ARROW
 UPPER "List"
 UPPER "RawTok"
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "p"
-IDENT "msg"
+IDENT "end"
+IDENT "kind"
 EQUAL
 LBRACKET
 UPPER "RTok"
 LPAREN
 UPPER "TLexError"
-IDENT "msg"
+IDENT "kind"
 RPAREN
 IDENT "p"
-IDENT "p"
+IDENT "end"
 RBRACKET
 NEWLINE
 IDENT "skipBlockComment"
@@ -4445,41 +4482,22 @@ IDENT "pos"
 IDENT "bad"
 IDENT "prefix"
 IDENT "digits"
+EQUAL
 INDENT
-PIPE
+IDENT "lexErrorTok"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
 IDENT "stringLength"
-IDENT "digits"
-EQ_EQ
-INT 0
-EQUAL
-INDENT
-IDENT "lexErrorTok"
-IDENT "pos"
-INTERP_OPEN "malformed radix literal `"
 IDENT "bad"
-INTERP_MID "`: no digits follow the "
-IDENT "prefix"
-INTERP_END " prefix; an underscore may only separate digits"
-NEWLINE
-DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-INDENT
-IDENT "lexErrorTok"
-IDENT "pos"
-INTERP_OPEN "malformed radix literal `"
+RPAREN
+LPAREN
+UPPER "MalformedRadix"
 IDENT "bad"
-INTERP_MID "`: an underscore cannot follow the "
 IDENT "prefix"
-INTERP_MID " prefix; write `"
-IDENT "prefix"
-INTERP_MID ""
 IDENT "digits"
-INTERP_END "`"
-NEWLINE
-DEDENT
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -4905,11 +4923,13 @@ INTERP_END ""
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+IDENT "expE"
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must follow the decimal point; write `"
 IDENT "good"
-INTERP_END "`"
+UPPER "False"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -5081,11 +5101,21 @@ RPAREN
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must follow the decimal point; write `"
+LPAREN
 IDENT "bad"
-INTERP_END "0`"
+PLUSPLUS
+STRING "0"
+RPAREN
+UPPER "False"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -5225,7 +5255,8 @@ ELSE
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "float literal out of range (overflows to infinity)"
+IDENT "endp"
+UPPER "FloatOverflow"
 NEWLINE
 DEDENT
 NEWLINE
@@ -5267,7 +5298,8 @@ IDENT "len"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
-STRING "unterminated string literal"
+IDENT "len"
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "isQuote"
@@ -5348,7 +5380,8 @@ RPAREN
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
-STRING "unterminated string literal"
+IDENT "len"
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -5517,18 +5550,19 @@ IDENT "invalidStrEscMsg"
 COLON
 UPPER "Char"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "invalidStrEscMsg"
 IDENT "e"
 EQUAL
-INDENT
-INTERP_OPEN "invalid escape sequence `\\"
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
-NEWLINE
-DEDENT
+RPAREN
+UPPER "False"
 NEWLINE
 IDENT "scanStrEsc"
 COLON
@@ -5615,14 +5649,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -5661,6 +5691,16 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
 LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
@@ -5701,6 +5741,11 @@ UPPER "None"
 FAT_ARROW
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -6074,14 +6119,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6119,6 +6160,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -6132,6 +6183,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -6786,14 +6842,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6834,6 +6886,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -6847,6 +6909,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -7314,14 +7381,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -7359,6 +7422,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -7372,6 +7445,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -8744,6 +8822,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 PIPE
@@ -8760,13 +8839,17 @@ INT 1
 GEQ
 IDENT "len"
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 LPAREN
 IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isBackslash"
@@ -8841,16 +8924,18 @@ IDENT "src"
 IDENT "p"
 RPAREN
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 LPAREN
 IDENT "p"
 MINUS
 INT 1
 RPAREN
-STRING "character literal is empty; a character is exactly one codepoint, such as `'a'`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+UPPER "EmptyChar"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -8866,11 +8951,11 @@ DEDENT
 NEWLINE
 IDENT "charUntermMsg"
 COLON
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "charUntermMsg"
 EQUAL
-STRING "unterminated character literal"
+UPPER "UnterminatedChar"
 NEWLINE
 IDENT "escChar"
 COLON
@@ -8909,6 +8994,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgChar"
 IDENT "src"
 IDENT "len"
@@ -8926,15 +9021,23 @@ IDENT "e"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
 IDENT "lexErrorTok"
 IDENT "p"
-INTERP_OPEN "invalid escape sequence `\\"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\u{...}"
-NEWLINE
-DEDENT
+RPAREN
+UPPER "True"
+RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "s"
@@ -8991,6 +9094,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9099,6 +9203,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9110,12 +9215,20 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
-INTERP_OPEN "character literal `'"
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "LongChar"
+LPAREN
 IDENT "substr"
 IDENT "src"
 IDENT "p"
 IDENT "e"
-INTERP_END "'` has more than one codepoint; write a `\"...\"` string for text"
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9432,23 +9545,33 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscTermErr"
 IDENT "src"
 IDENT "len"
 IDENT "s"
 IDENT "he"
+IDENT "p"
+IDENT "endp"
 INDENT
 PIPE
 IDENT "he"
 GEQ
 IDENT "len"
 EQUAL
-INDENT
-STRING "unicode escape is not terminated; the file ends before its closing `}`"
-NEWLINE
-DEDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeUnterminated"
+RPAREN
 NEWLINE
 PIPE
 IDENT "at"
@@ -9457,10 +9580,13 @@ IDENT "he"
 EQ_EQ
 CHAR "_"
 EQUAL
-INDENT
-STRING "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
-NEWLINE
-DEDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeSeparator"
+RPAREN
 NEWLINE
 PIPE
 IDENT "he"
@@ -9474,7 +9600,13 @@ EQ_EQ
 CHAR "}"
 EQUAL
 INDENT
-STRING "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeEmpty"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9484,14 +9616,23 @@ EQ_EQ
 IDENT "s"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape expects a hex digit after `\\u{` but found `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedDigit"
+LPAREN
 IDENT "charToStr"
 LPAREN
 IDENT "at"
 IDENT "src"
 IDENT "he"
 RPAREN
-INTERP_END "`"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9499,14 +9640,23 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape expects `}` after its hex digits but found `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedClose"
+LPAREN
 IDENT "charToStr"
 LPAREN
 IDENT "at"
 IDENT "src"
 IDENT "he"
 RPAREN
-INTERP_END "`"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9521,14 +9671,24 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
+EQUAL
 INDENT
-PIPE
+LET
+IDENT "endp"
+EQUAL
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+IF
 IDENT "not"
 LPAREN
 IDENT "uniEscWellFormed"
@@ -9536,7 +9696,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 RPAREN
-EQUAL
+THEN
 INDENT
 IDENT "uniEscTermErr"
 IDENT "src"
@@ -9556,12 +9716,11 @@ PLUS
 INT 3
 RPAREN
 RPAREN
+IDENT "p"
+IDENT "endp"
 NEWLINE
 DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
+ELSE
 MATCH
 IDENT "uniEscCode"
 IDENT "src"
@@ -9575,28 +9734,150 @@ IDENT "uniIsSurrogate"
 IDENT "cp"
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeSurrogate"
+LPAREN
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeOutOfRange"
+LPAREN
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "` is out of range; a codepoint is at most 10FFFF"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "unicodeErrorEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+NEWLINE
+IDENT "unicodeErrorEndGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "}"
+EQUAL
+IDENT "p"
+PLUS
+INT 1
+NEWLINE
+PIPE
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9631,14 +9912,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -9710,6 +9987,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9900,7 +10178,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
@@ -9908,17 +10186,19 @@ IDENT "len"
 IDENT "p"
 EQUAL
 INDENT
-INTERP_OPEN "bare unicode escape `"
+UPPER "BareUnicodeEscape"
+LPAREN
 IDENT "bareUnicodeEscWritten"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_MID "` is not valid; did you mean `"
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscSuggested"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "`?"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9931,7 +10211,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "bareUnicodeEscMsgChar"
 IDENT "src"
@@ -11366,12 +11646,14 @@ IDENT "depth"
 IDENT "id"
 CHAR "\\"
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "Medaka has no `\\x -> e` lambdas; write `x => e`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsLambda"
 NEWLINE
 IDENT "singleOp"
 IDENT "src"
@@ -11381,12 +11663,14 @@ IDENT "depth"
 IDENT "id"
 CHAR "$"
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "Medaka has no `$`; write `f (g x)`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsDollar"
 NEWLINE
 IDENT "singleOp"
 IDENT "src"
@@ -11399,10 +11683,18 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "unexpected character `"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "UnexpectedCharacter"
+LPAREN
 IDENT "charToStr"
 IDENT "c"
-INTERP_END "`"
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -11572,11 +11864,17 @@ IDENT "e"
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+IDENT "e"
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must precede the decimal point; write `0"
+LPAREN
+STRING "0"
+PLUSPLUS
 IDENT "bad"
-INTERP_END "`"
+RPAREN
+UPPER "True"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -19203,6 +19501,65 @@ IDENT "arrayGetUnsafe"
 IDENT "i"
 IDENT "src"
 EQ_EQ
+CHAR "\r"
+AND
+IDENT "i"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "src"
+EQ_EQ
+CHAR "\n"
+EQUAL
+INDENT
+IDENT "i"
+PLUS
+INT 2
+CONS
+IDENT "lineStartsGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "i"
+PLUS
+INT 2
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+EQ_EQ
+CHAR "\r"
+EQUAL
+IDENT "i"
+PLUS
+INT 1
+CONS
+IDENT "lineStartsGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+EQ_EQ
 CHAR "\n"
 EQUAL
 IDENT "i"
@@ -19437,6 +19794,60 @@ IDENT "line2"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "isLineBreakAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isLineBreakAt"
+IDENT "src"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+LT
+IDENT "arrayLength"
+IDENT "src"
+AND
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\n"
+OR
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\r"
+AND
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+GEQ
+IDENT "arrayLength"
+IDENT "src"
+OR
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "src"
+NEQ
+CHAR "\n"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "advanceLine"
 COLON
 UPPER "Array"
@@ -19484,11 +19895,9 @@ IDENT "p"
 RPAREN
 NEWLINE
 PIPE
-IDENT "arrayGetUnsafe"
-IDENT "p"
+IDENT "isLineBreakAt"
 IDENT "src"
-EQ_EQ
-CHAR "\n"
+IDENT "p"
 EQUAL
 IDENT "advanceLine"
 IDENT "src"
@@ -19622,11 +20031,9 @@ IDENT "lineStart"
 RPAREN
 NEWLINE
 PIPE
-IDENT "at"
+IDENT "isLineBreakAt"
 IDENT "src"
 IDENT "p"
-EQ_EQ
-CHAR "\n"
 EQUAL
 IDENT "posLineColFrom"
 IDENT "src"

@@ -1,0 +1,561 @@
+-- Tests of `types.tc_shadow`'s own API: the route and arity stamps a recorded shadow site
+-- receives, the recovered shadow symbol and the bare name a mangled symbol stands for, the
+-- occurrence-spelling test of the admitted set (`moduleSpellsShadowBare`,
+-- `shadowSymSpelledBare`), the definer-shadow table (`computeMangledShadowMap`) and the
+-- graph-wide shadow names (`buildStandaloneShadowsGraph`), the importer-side collision
+-- report (`importedStandaloneShadowsIn`), the method-cell lookup, the application heads of
+-- an imported shadow (`shadowStandaloneHead`, `plainAppHeadVar`), and the recorded-site
+-- resolution `resolveRLocalSite` for a receiver no impl answers and for one a live impl
+-- does.  One property: the shadows a program has do not depend on the order its standalones
+-- are declared in.  Each test builds the module record, interface scope and impl
+-- environment it reads; none reaches the inference recursion.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{
+  Decl(..),
+  EvId(..),
+  Expr(..),
+  Loc(..),
+  Route(..),
+  Ty,
+  TyConOrigin(..),
+}
+import frontend.parser.{parse}
+import types.evidence.{ScopeId(..)}
+import types.evidence_complete.{innerNone}
+import types.private_mangle.{mangledName}
+import types.repr.{Mono, ppMono, ppTy}
+import types.tc_env.{
+  buildImplEnvGo,
+  bindingWithStandalone,
+  declEnvModule,
+  envFor,
+  extendBindings,
+  implAccFinish,
+  methodEnvGo,
+  ordinaryEnvBinding,
+  emptyDeclEnvAcc,
+}
+import types.tc_mono.{monoScheme}
+import types.tc_shadow.{
+  buildStandaloneShadowsGraph,
+  computeMangledShadowMap,
+  constraintMonosOf,
+  importedStandaloneShadowsIn,
+  isPreludeMid,
+  methodCellLookup,
+  plainAppHeadVar,
+  moduleSpellsShadowBare,
+  recoveredShadowSym,
+  resolveRLocalSite,
+  shadowBareName,
+  shadowStandaloneHead,
+  shadowSymSpelledBare,
+  stampMethodArities,
+  stampRoutes,
+}
+import types.tc_state.{blankModuleCtx, probeGraphCtx}
+import types.tc_test_support.{boolM, fresh, intM, readerOfLib, varM}
+import types.tc_types.{
+  BareLocals(..),
+  DeclEnvAcc(..),
+  DeclEnvs(..),
+  EvCell(..),
+  GraphCtx(..),
+  ModuleCtx(..),
+  SpellCtx(..),
+  TcEnv,
+  ValueScheme(..),
+  StandaloneOrigin(..),
+  siteFor,
+}
+import support.ordmap.{omEmpty, omInsert}
+import support.util.{joinNl}
+import list.{sort}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- Two interfaces; `size`, `describe` and `walk` are their methods.
+interfaces : String
+interfaces =
+  """
+interface Sizeable a where
+  size : a -> Int
+  describe : a -> String
+interface Walkable a where
+  walk : a -> Int
+"""
+
+-- A standalone [name] of type Int -> Int.
+standalone : String -> String
+standalone name = joinNl ["\{name} : Int -> Int", "\{name} n = n"]
+
+localName : Route -> Option String
+localName (RLocal s []) = Some s
+localName _ = None
+
+-- A spelling context with the given top-level functions and bare locals.
+spellOf : List String -> BareLocals -> SpellCtx
+spellOf fns bare =
+  SpellCtx { scTopFns = fns, scBare = bare, scCorePfx = mangledName "core" "" }
+
+noBare : BareLocals
+noBare = BareLocals { blAll = False, blSet = [] }
+
+-- ── the stamps ────────────────────────────────────────────────────────────
+
+test "stampRoutes makes each queued route a local route that keeps its mangled symbol" =
+  let a = Ref (RLocal "f$m" [RDict "d"])
+  let b = Ref RNone
+  stampRoutes [a, b]
+  expectEqual [Some "f$m", Some ""] [localName a.value, localName b.value]
+
+test "stampMethodArities writes the arity into every queued cell" =
+  let a = Ref None
+  let b = Ref (Some 9)
+  stampMethodArities [a, b] 2
+  expectEqual [Some 2, Some 2] [a.value, b.value]
+
+-- ── symbols and names ─────────────────────────────────────────────────────
+
+test "the recovered shadow symbol is empty when the route's symbol is the bare name or no symbol" = expectAll
+  [
+    expectEqual "" (recoveredShadowSym "size" (Ref (RLocal "size" []))),
+    expectEqual "" (recoveredShadowSym "size" (Ref RNone)),
+    expectEqual
+      "m__size"
+      (recoveredShadowSym "size" (Ref (RLocal "m__size" []))),
+  ]
+
+test "the bare name of a mangled shadow symbol is its table entry, and any other name stands for itself" =
+  let table = [("m__size", "size")]
+  expectAll [
+    expectEqual "size" (shadowBareName table "m__size"),
+    expectEqual "walk" (shadowBareName table "walk"),
+    expectEqual "walk" (shadowBareName [] "walk"),
+  ]
+
+test "only the empty module id and core are the implicit prelude" = expectAll [
+  expectTrue (isPreludeMid "core"),
+  expectTrue (isPreludeMid ""),
+  expectFalse (isPreludeMid "map"),
+  expectFalse (isPreludeMid "core2"),
+]
+
+test "a constraint's mono is the instantiation of its id, and an id the call did not instantiate is left out" =
+  let subst = [(1, intM), (3, boolM)]
+  let shown = ids => map ppMono (constraintMonosOf ids subst)
+  expectAll [
+    expectEqual ["Int", "Bool"] (shown [1, 3]),
+    expectEqual ["Int"] (shown [1, 2]),
+    expectEqual [] (shown []),
+    expectEqual [] (shown [7]),
+  ]
+
+-- ── the occurrence spelling of the admitted set ───────────────────────────
+
+test "a module that defines the standalone spells the shadow bare" =
+  let sc = spellOf ["m__size"] noBare
+  expectAll [
+    expectTrue (moduleSpellsShadowBare sc "m__size" "size"),
+    expectFalse (moduleSpellsShadowBare sc "n__size" "size"),
+  ]
+
+test "a prelude symbol spells its own bare name and no other method's" =
+  let sc = spellOf [] noBare
+  expectAll [
+    expectTrue (moduleSpellsShadowBare sc "core__not" "not"),
+    expectFalse (moduleSpellsShadowBare sc "core__not" "size"),
+  ]
+
+test "a module spells a shadow bare when an import binds the bare local, by list or by wildcard" =
+  let named = spellOf [] BareLocals { blAll = False, blSet = ["size"] }
+  let wild = spellOf [] BareLocals { blAll = True, blSet = [] }
+  expectAll [
+    expectTrue (moduleSpellsShadowBare named "amod__size" "size"),
+    expectFalse (moduleSpellsShadowBare named "amod__size" "walk"),
+    expectTrue (moduleSpellsShadowBare wild "amod__size" "walk"),
+    expectFalse (moduleSpellsShadowBare (spellOf [] noBare) "amod__size" "size"),
+  ]
+
+test "a symbol outside the shadow table is admitted, and one inside is admitted where its bare name is spelled" =
+  let table = [("amod__size", "size")]
+  expectAll [
+    expectTrue (shadowSymSpelledBare (spellOf [] noBare) table "other"),
+    expectFalse (shadowSymSpelledBare (spellOf [] noBare) table "amod__size"),
+    expectTrue
+      (shadowSymSpelledBare
+        (spellOf [] BareLocals { blAll = False, blSet = ["size"] })
+        table
+        "amod__size"),
+  ]
+
+-- ── the definer-shadow table ──────────────────────────────────────────────
+
+test "a unit's standalone named like a method is a row of the mangled symbol when the mangler renamed it" =
+  let all = parse interfaces
+  let renamed = parse (standalone (mangledName "m" "size"))
+  expectEqual
+    [(mangledName "m" "size", "size")]
+    (computeMangledShadowMap all [("m", renamed)])
+
+test "a user unit's standalone with the bare method name is a row naming itself" =
+  let all = parse interfaces
+  expectEqual
+    [("walk", "walk")]
+    (computeMangledShadowMap all [("m", parse (standalone "walk"))])
+
+test "the prelude unit contributes no bare row" =
+  let all = parse interfaces
+  expectAll [
+    expectEqual
+      []
+      (computeMangledShadowMap all [("core", parse (standalone "walk"))]),
+    expectEqual
+      []
+      (computeMangledShadowMap all [("", parse (standalone "walk"))]),
+  ]
+
+test "a method two interfaces declare gives one row, not two" =
+  let twice =
+    parse
+      """
+interface A a where
+  size : a -> Int
+interface B a where
+  size : a -> Int
+"""
+  expectEqual
+    [("size", "size")]
+    (computeMangledShadowMap twice [("m", parse (standalone "size"))])
+
+test "a unit with no standalone named like a method contributes nothing" =
+  expectEqual
+    []
+    (computeMangledShadowMap (parse interfaces) [
+      ("m", parse (standalone "helper")),
+    ])
+
+-- ── the graph-wide shadow names ───────────────────────────────────────────
+
+test "a standalone named like a method anywhere in the graph is a shadow name" =
+  let user = parse (joinNl [standalone "size", standalone "helper"])
+  expectEqual
+    ["size"]
+    (buildStandaloneShadowsGraph [] (parse interfaces ++ user) user)
+
+test "a standalone the mangler renamed is a shadow name through the shadow table" =
+  let user = parse (standalone "m__size")
+  expectAll [
+    expectEqual
+      ["m__size"]
+      (buildStandaloneShadowsGraph
+        [("m__size", "size")]
+        (parse interfaces)
+        user),
+    expectEqual [] (buildStandaloneShadowsGraph [] (parse interfaces) user),
+  ]
+
+test "a standalone defined by two clauses is one shadow name" =
+  let user = parse (joinNl [standalone "size", "size 0 = 0"])
+  expectEqual ["size"] (buildStandaloneShadowsGraph [] (parse interfaces) user)
+
+-- ── the importer-side collision report ────────────────────────────────────
+
+-- The (bound name, interface) of each collision [found] reports.
+collidingPairs : List (String, String, Option Ty, Ty, a) ->
+  List (String, String)
+collidingPairs found =
+  map
+    (r => match r
+      (local, iface, _, _, _) => (local, iface))
+    found
+
+-- The collisions of a module [importer] against the modules [graph], by (bound name,
+-- interface); the index carries the one interface set of `importer`'s own declarations.
+collisionsIn : List (String, List Decl) -> String -> List (String, String)
+collisionsIn graph importer =
+  collidingPairs
+    (importedStandaloneShadowsIn
+      (omInsert "core" [] omEmpty)
+      graph
+      (parse importer))
+
+-- The collisions of a module [importer] against a dependency [lib].
+collisions : String -> String -> List (String, String)
+collisions lib importer = collisionsIn [("lib", parse lib)] importer
+
+sizeMethod : String
+sizeMethod = """
+interface Sizeable a where
+  size : a -> Int
+"""
+
+-- An importer that selects `size` from `lib` and declares the interface that has it.
+importsSize : String
+importsSize = joinNl ["import lib.{size}", sizeMethod]
+
+test "a selectively imported standalone whose scheme differs from a nameable method is reported" =
+  expectEqual
+    [("size", "Sizeable")]
+    (collisions (standalone "size") importsSize)
+
+test "an alpha-equal standalone and method are not reported" =
+  expectEqual
+    []
+    (collisions (joinNl ["size : b -> Int", "size x = 1"]) importsSize)
+
+test "a standalone declared without a signature counts as differing" =
+  expectEqual [("size", "Sizeable")] (collisions "size x = 1" importsSize)
+
+test "an aliased import is reported under the name it binds here" =
+  expectEqual
+    [("sz", "Sizeable")]
+    (collisions
+      (standalone "size")
+      """
+import lib.{size as sz}
+interface Sizeable a where
+  sz : a -> Int
+""")
+
+test "a wildcard import and a name no interface declares report nothing" = expectAll
+  [
+    expectEqual
+      []
+      (collisions (standalone "size") (joinNl ["import lib.*", sizeMethod])),
+    expectEqual
+      []
+      (collisions
+        (standalone "helper")
+        (joinNl ["import lib.{helper}", sizeMethod])),
+  ]
+
+test "a standalone reached through a re-export is reported" =
+  let graph = [
+    ("lib", parse "export import deep.{size}"),
+    ("deep", parse (standalone "size")),
+  ]
+  expectEqual [("size", "Sizeable")] (collisionsIn graph importsSize)
+
+test "an empty interface index answers no collision" =
+  expectEqual
+    []
+    (collidingPairs
+      (importedStandaloneShadowsIn
+        omEmpty
+        [("lib", parse (standalone "size"))]
+        (parse importsSize)))
+
+test "the reported method signature is the one the interface declares" =
+  let found =
+    importedStandaloneShadowsIn
+      (omInsert "core" [] omEmpty)
+      [("lib", parse (standalone "size"))]
+      (parse importsSize)
+  expectEqual
+    [(Some "Int -> Int", "a -> Int")]
+    (map
+      (r => match r
+        (_, _, sty, mty, _) => (map ppTy sty, ppTy mty))
+      found)
+
+-- ── the method-cell lookup ────────────────────────────────────────────────
+
+-- The reason a lookup has no cell, or `None` when it has one.
+reasonOf : Result String EvCell -> Option String
+reasonOf (Err message) = Some message
+reasonOf (Ok _) = None
+
+test "a method cell of an id the graph never minted is reported, not invented" =
+  let gctx = probeGraphCtx ()
+  expectAll [
+    expectEqual
+      (Some "method cell m#5 was never minted")
+      (reasonOf (methodCellLookup gctx (EvId "m" 5))),
+    expectEqual
+      (Some "method cell m#0 was never minted")
+      (reasonOf (methodCellLookup gctx (EvId "m" 0))),
+  ]
+
+test "a method cell below the graph's first ordinal is from an earlier graph" =
+  let gctx = probeGraphCtx ()
+  let later = { gctx | graphRun = { gctx.graphRun | evBase = 4 } }
+  expectEqual
+    (Some "method cell m#3 is from an earlier graph")
+    (reasonOf (methodCellLookup later (EvId "m" 3)))
+
+-- ── the recorded site ─────────────────────────────────────────────────────
+
+-- The symbol of the `RLocal` stamp [resolveRLocalSite] leaves on a `size` site whose receiver
+-- is [receiver] in the module [m], or `None` when it left the site's route untouched.
+stampedAt : ModuleCtx -> Mono -> Option String
+stampedAt m receiver =
+  let tag = Ref RNone
+  resolveRLocalSite
+    (siteFor m)
+    "size"
+    tag
+    receiver
+    "enc"
+    (ScopeId 0)
+    "m__size"
+    []
+    []
+    []
+  localName tag.value
+
+test "an ungrounded receiver of a name that is no definer shadow leaves the route untouched" =
+  expectEqual None (stampedAt (fresh ()) (varM 1))
+
+test "an ungrounded receiver of a definer shadow is stamped as the standalone" =
+  let m = fresh ()
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  expectEqual (Some "m__size") (stampedAt m (varM 1))
+
+test "a grounded receiver no impl of the method answers is stamped as the standalone" =
+  expectEqual (Some "m__size") (stampedAt (fresh ()) intM)
+
+test "an importer shadow whose receiver head has a live impl keeps the method's route" =
+  expectEqual None (stampedAt (readerOfLib ()) intM)
+
+test "an importer shadow whose receiver head has no impl is stamped as the standalone" =
+  expectEqual (Some "m__size") (stampedAt (readerOfLib ()) boolM)
+
+test "a definer shadow is stamped as the standalone even where a live impl answers at the receiver head" =
+  let m = readerOfLib ()
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  expectEqual (Some "m__size") (stampedAt m intM)
+
+-- ── the heads of an imported shadow ───────────────────────────────────────
+
+-- The reader of `lib` with `size` also bound in its term environment as a standalone
+-- imported from another module, which is what makes `size` an importer shadow.
+shadowEnv : ModuleCtx -> TcEnv
+shadowEnv m =
+  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
+  let scheme = monoScheme intM
+  extendBindings (envFor m) [
+    (
+      "size",
+      bindingWithStandalone (ordinaryEnvBinding scheme) (
+        ImportedStandalone,
+        ValueScheme { vsScheme = scheme, vsDeclared = None },
+      ),
+    ),
+  ]
+
+-- The name `shadowStandaloneHead` finds at the head of [e], with how many arity and route
+-- cells it hands back to stamp.
+headOf : TcEnv -> Expr -> Option (String, Int, Int)
+headOf env e =
+  map
+    (r => match r
+      (name, arities, routes) => (name, length arities, length routes))
+    (shadowStandaloneHead env e)
+
+-- A method occurrence of `name` whose evidence cell the module [m] holds at ordinal 0.
+methodOccurrence : ModuleCtx -> String -> Expr
+methodOccurrence m name =
+  let ev = EvId "probe" 0
+  let cell = EvCell {
+    ecId = ev,
+    ecIface = Ref "",
+    ecArity = Ref None,
+    ecTag = Ref RNone,
+    ecImpl = Ref [],
+    ecMeth = Ref [],
+    ecLoc = Ref None,
+    ecName = Ref "",
+    ecInner = Ref innerNone,
+  }
+  m.mcGraph.graphRun.evCells := arrayMake 1 (Some cell)
+  EMethodAt name "" ev
+
+test "an unmarked head naming an importer shadow hands back no cell to stamp, under any located wrapper" =
+  let env = shadowEnv (readerOfLib ())
+  expectAll [
+    expectEqual (Some ("size", 0, 0)) (headOf env (EVar "size")),
+    expectEqual (Some ("size", 0, 0)) (headOf env (EVarId "size" 4)),
+    expectEqual
+      (Some ("size", 0, 0))
+      (headOf env (ELoc (Loc "m.mdk" 1 1 1 5) (EVar "size"))),
+  ]
+
+test "a marked head naming an importer shadow hands back its occurrence's arity and route cells" =
+  let m = readerOfLib ()
+  let env = shadowEnv m
+  expectEqual (Some ("size", 1, 1)) (headOf env (methodOccurrence m "size"))
+
+test "a head that names no importer shadow is not a standalone head" =
+  let env = shadowEnv (readerOfLib ())
+  expectAll [
+    expectEqual None (headOf env (EVar "other")),
+    expectEqual None (headOf env (EApp (EVar "size") (EVar "x"))),
+  ]
+
+test "a name with no imported standalone in the environment is not an importer shadow" =
+  let m = readerOfLib ()
+  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
+  expectEqual None (headOf (envFor m) (EVar "size"))
+
+test "a plain application head is neither an importer shadow nor a definer shadow" =
+  let m = readerOfLib ()
+  let env = shadowEnv m
+  expectAll [
+    expectTrue (plainAppHeadVar env (EVar "other")),
+    expectFalse (plainAppHeadVar env (EVar "size")),
+  ]
+
+test "a head that only a definer shadow names is not plain" =
+  let m = readerOfLib ()
+  m.mcCells.definerShadowNamesRef := omInsert "size" () omEmpty
+  expectAll [
+    expectFalse (plainAppHeadVar (envFor m) (EVar "size")),
+    expectTrue (plainAppHeadVar (envFor m) (EVar "other")),
+  ]
+
+-- ── the declaration order of unrelated standalones ────────────────────────
+
+-- The index of the standalone each position declares, from a pool of five names of which
+-- three are methods.
+data OrderCase = OrderCase (List Int)
+
+impl Arbitrary OrderCase where
+  arbitrary () = OrderCase (picks (randomInt 2 6))
+  shrink (OrderCase xs) = match xs
+    _ :: rest => [OrderCase rest]
+    [] => []
+
+picks : Int -> <Rand> List Int
+picks n
+  | n <= 0 = []
+  | otherwise = randomInt 0 4 :: picks (n - 1)
+
+poolName : Int -> String
+poolName 0 = "size"
+poolName 1 = "describe"
+poolName 2 = "walk"
+poolName 3 = "helper"
+poolName _ = "other"
+
+programOf : List Int -> String
+programOf order =
+  joinNl (interfaces :: map (k => standalone (poolName k)) order)
+
+-- The shadows the program has and the definer-shadow rows of its one unit, the first as a
+-- set.
+shadowsOf : List Int -> (List String, List (String, String))
+shadowsOf order =
+  let all = parse (programOf order)
+  (
+    sort (buildStandaloneShadowsGraph [] all all),
+    computeMangledShadowMap all [("m", all)],
+  )
+
+-- Law: the shadows of a program, and the rows of its definer-shadow table, are the same for
+-- every order its standalones are declared in (compared with the order sorted).
+-- Precondition: none; a draw whose standalones are already in order checks the identity.
+prop "the shadows of a program do not depend on the order its standalones are declared in" (c : OrderCase) =
+  let (OrderCase order) = c
+  shadowsOf order == shadowsOf (sort order)

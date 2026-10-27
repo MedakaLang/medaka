@@ -194,7 +194,7 @@ export
 registerValueAllowance : SummarySolver c -> Ref Effvar -> Unit
 registerValueAllowance solver cell = match solver.essStack.value
   scope :: _ =>
-    let _ = registerExistential solver cell
+    registerExistential solver cell
     scope.essAllowances := M.set (effvarId cell) cell scope.essAllowances.value
   [] => ()
 
@@ -334,10 +334,9 @@ grow work id atoms leaves = match M.get id work.eswNodes
           if M.has key node.ewnLeaves.value then acc else M.set key cell acc)
         Tip
         leaves
-    let _ =
-      if isNonEmptyL newAtoms then
-        node.ewnAtoms := atomsUnion node.ewnAtoms.value newAtoms
-        node.ewnPendingAtoms := atomsUnion node.ewnPendingAtoms.value newAtoms
+    if isNonEmptyL newAtoms then
+      node.ewnAtoms := atomsUnion node.ewnAtoms.value newAtoms
+      node.ewnPendingAtoms := atomsUnion node.ewnPendingAtoms.value newAtoms
     let changedLeaves = match newLeaves
       Tip => False
       _ =>
@@ -399,13 +398,13 @@ addEdges work target (cell :: rest) coverAtoms coverLeaves exact leaves =
 addBodyEquations : SolveWork -> List SummaryNode -> Unit
 addBodyEquations _ [] = ()
 addBodyEquations work (node :: rest) =
-  let _ = addLowers work (effvarId node.esnCell) node.esnLowers.value
+  addLowers work (effvarId node.esnCell) node.esnLowers.value
   addBodyEquations work rest
 
 addLowers : SolveWork -> Int -> List EffRow -> Unit
 addLowers _ _ [] = ()
 addLowers work id (row :: rest) =
-  let _ = addEquation work id row [] Tip False
+  addEquation work id row [] Tip False
   addLowers work id rest
 
 leafSet : List (Ref Effvar) -> Map Int Unit
@@ -420,18 +419,11 @@ addRelationEquations _ [] = ()
 addRelationEquations work (rel :: rest) =
   let (upperAtoms, upperCells) = rowFlat rel.esrUpper
   let vertices = filter (cell => M.has (effvarId cell) work.eswNodes) upperCells
-  let _ = match vertices
+  match vertices
     [cell] => match !cell
       EUnbound id _ =>
         let fixed = filter (c => effvarId c /= id) upperCells
-        let _ =
-          addEquation
-            work
-            id
-            rel.esrLower
-            upperAtoms
-            (leafSet fixed)
-            rel.esrExact
+        addEquation work id rel.esrLower upperAtoms (leafSet fixed) rel.esrExact
         if rel.esrExact then
           work.eswExactTargets := M.set id () work.eswExactTargets.value
         else
@@ -448,7 +440,7 @@ drainWork work = match work.eswQueue.value
   id :: rest =>
     work.eswQueue := rest
     work.eswQueued := M.delete id work.eswQueued.value
-    let _ = match M.get id work.eswNodes
+    match M.get id work.eswNodes
       Some node =>
         let atoms = node.ewnPendingAtoms.value
         let leaves = node.ewnPendingLeaves.value
@@ -473,12 +465,11 @@ propagate work atoms delta (edge :: rest) =
         if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
       Tip
       delta
-  let _ =
-    grow
-      work
-      edge.eseTarget
-      (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
-      leaves
+  grow
+    work
+    edge.eseTarget
+    (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
+    leaves
   propagate work atoms delta rest
 
 linkSolutions : Int ->
@@ -491,7 +482,7 @@ linkSolutions owner makeJoin (node :: rest) =
     [] => EffRow node.ewnAtoms.value None
     [cell] => EffRow node.ewnAtoms.value (Some cell)
     cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
-  let _ = match !node.ewnCell
+  match !node.ewnCell
     ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
     _ => linkRow node.ewnCell row
   linkSolutions owner makeJoin rest
@@ -511,8 +502,8 @@ validateRelations solver protected escape (rel :: rest) =
   if rowHasSummary rel.esrLower
     || rowHasSummary rel.esrUpper then match solver.essStack.value
     _ :: parent :: _ =>
-      let _ = retainRowAt parent.essLevel rel.esrLower
-      let _ = retainRowAt parent.essLevel rel.esrUpper
+      retainRowAt parent.essLevel rel.esrLower
+      retainRowAt parent.essLevel rel.esrUpper
       parent.essRelations :=
         RowRelation {
             esrLower = rel.esrLower,
@@ -628,7 +619,7 @@ retainRowAt level row = retainLeavesAt level (snd (rowFlat row))
 retainLeavesAt : Int -> List (Ref Effvar) -> Unit
 retainLeavesAt _ [] = ()
 retainLeavesAt level (cell :: rest) =
-  let _ = match !cell
+  match !cell
     EUnbound id old => if old > level then cell := EUnbound id level
     _ => ()
   retainLeavesAt level rest
@@ -668,7 +659,7 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
     snd (rowFlatMembers [] (M.values scope.essAllowances.value))
   let outward = outerRelationLeaves scope untransferred
   let pending = transferAllowanceRelations solver frozen outward untransferred
-  let _ = transferAllowances solver initialAllowances
+  transferAllowances solver initialAllowances
   let retained2 = collapseInclusionCycles scope frozen retained pending
   let allowanceCells =
     snd (rowFlatMembers [] (M.values scope.essAllowances.value))
@@ -695,16 +686,15 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
   let leastFrozen =
     M.foldlWithKey (acc id _ => M.set id () acc) frozen retained2
   let nodes = relationNodes scope leastFrozen relations initial
-  let _ =
-    solveEquations
-      scope.essOwner
-      nodes
-      summaries
-      relations
-      Tip
-      escape
-      makeJoin
-      makeResidual
+  solveEquations
+    scope.essOwner
+    nodes
+    summaries
+    relations
+    Tip
+    escape
+    makeJoin
+    makeResidual
   -- Only after summaries have solutions can their evidence constrain a
   -- retained upper row. Normalize/drop reflexive obligations first; fresh bare
   -- inclusion cycles exposed by summary substitution again mean equality.
@@ -714,16 +704,15 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
   let residual = filter (rel => not (relationProven escape rel)) local
   let retainedNodes = relationNodes scope frozen residual Tip
   let borrowedRoots = leafSet (snd (rowFlatMembers [] (M.values borrowed)))
-  let _ =
-    solveEquations
-      scope.essOwner
-      retainedNodes
-      []
-      residual
-      borrowedRoots
-      escape
-      makeJoin
-      makeResidual
+  solveEquations
+    scope.essOwner
+    retainedNodes
+    []
+    residual
+    borrowedRoots
+    escape
+    makeJoin
+    makeResidual
   let unproven = filter (rel => not (relationProven escape rel)) residual0
   let failures = validateRelations solver frozen escape unproven
   -- Row validation may have derived new authority obligations; solve the
@@ -851,25 +840,23 @@ solveOwnedStaged : SummaryScope c ->
   Map Int Int
 solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
   Tip =>
-    let _ =
-      solveOwnedAuthorities
-        scope
-        rigid
-        (withoutRigid rigid roles.rlOutward)
-        Tip
-        (internalAuth roles)
-        widen
+    solveOwnedAuthorities
+      scope
+      rigid
+      (withoutRigid rigid roles.rlOutward)
+      Tip
+      (internalAuth roles)
+      widen
     Tip
   quantifiable =>
     let outward = withoutRigid rigid roles.rlOutward
-    let _ =
-      solveOwnedAuthorities
-        scope
-        rigid
-        outward
-        quantifiable
-        (internalAuth roles)
-        widen
+    solveOwnedAuthorities
+      scope
+      rigid
+      outward
+      quantifiable
+      (internalAuth roles)
+      widen
     let eligible =
       residualEligible
         scope
@@ -878,14 +865,13 @@ solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
         rigid
         (roles.rlMemberAuths ())
         scope.essAuthorities.value
-    let _ =
-      solveOwnedAuthorities
-        scope
-        rigid
-        outward
-        eligible
-        (internalAuth roles)
-        widen
+    solveOwnedAuthorities
+      scope
+      rigid
+      outward
+      eligible
+      (internalAuth roles)
+      widen
     eligible
 
 -- The quantifiable variables whose obligations become residuals rather than
@@ -1059,11 +1045,10 @@ solveAuthorities owned defaultable widen wanteds =
               acc)
           Tip
           ids
-      let _ =
-        fold
-          (_ members => solveClass lowers idOfName widen members)
-          ()
-          (tarjanSCCs names edges)
+      fold
+        (_ members => solveClass lowers idOfName widen members)
+        ()
+        (tarjanSCCs names edges)
       bottomUnbounded defaultable wanteds
 
 -- An owned variable no obligation bounds below (it only ever appears on the
@@ -1141,18 +1126,16 @@ solveClass nodes idOfName widen (first :: rest) =
   -- one pattern-ranging member makes the class pattern-ranging: every member
   -- reads the representative, so its solution is the least pattern above the
   -- lower bounds (`linkAuthvar`)
-  let _ =
-    if anyList
-      (id => authvarIsPattern (fst (nodeOf id nodes)))
-      (repId :: members) then
-      markAuthvarPattern rep
-  let _ =
-    fold
-      (_ id =>
-        let (cell, _) = nodeOf id nodes
-        linkAuthvar cell (AVar rep))
-      ()
-      members
+  if anyList
+    (id => authvarIsPattern (fst (nodeOf id nodes)))
+    (repId :: members) then
+    markAuthvarPattern rep
+  fold
+    (_ id =>
+      let (cell, _) = nodeOf id nodes
+      linkAuthvar cell (AVar rep))
+    ()
+    members
   let all = flatMap (id => snd (nodeOf id nodes)) (repId :: members)
   let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
   match kept
@@ -1332,12 +1315,11 @@ closeRootAuthorities : SummarySolver c ->
 closeRootAuthorities solver rigid exported widen =
   let wanteds = reverseL solver.essRoot.value
   let owned = cell => not (M.has (authvarId cell) rigid)
-  let _ =
-    solveAuthorities
-      owned
-      (cell => owned cell && not (M.has (authvarId cell) exported))
-      widen
-      wanteds
+  solveAuthorities
+    owned
+    (cell => owned cell && not (M.has (authvarId cell) exported))
+    widen
+    wanteds
   solver.essRoot := []
   distinctFailures
     (flatMap
@@ -1463,7 +1445,7 @@ transferAllowanceRelations solver protected outward relations =
       Tip => relations
       _ =>
         let work = indexTransferRelations relations 0 Tip Tip
-        let _ = selectTransferRows work (M.keys outward)
+        selectTransferRows work (M.keys outward)
         partitionTransferred parent protected work.etwSelected.value 0 relations
     _ => relations
 
@@ -1476,8 +1458,8 @@ partitionTransferred : SummaryScope c ->
 partitionTransferred _ _ _ _ [] = []
 partitionTransferred parent protected selected id (rel :: rest) =
   if M.has id selected then
-    let _ = retainRowAt parent.essLevel rel.esrLower
-    let _ = retainRowAt parent.essLevel rel.esrUpper
+    retainRowAt parent.essLevel rel.esrLower
+    retainRowAt parent.essLevel rel.esrUpper
     parent.essRelations :=
       RowRelation {
           esrLower = rel.esrLower,
@@ -1529,14 +1511,13 @@ solveEquations owner nodes summaries relations borrowed escape makeJoin makeResi
     eswExactTargets = Ref Tip,
     eswEscape = escape,
   }
-  let _ = addBodyEquations work summaries
-  let _ = addRelationEquations work relations
-  let _ =
-    M.foldlWithKey
-      (_ id node => seedBorrowedResidual work borrowed makeResidual id node)
-      ()
-      nodes
-  let _ = drainWork work
+  addBodyEquations work summaries
+  addRelationEquations work relations
+  M.foldlWithKey
+    (_ id node => seedBorrowedResidual work borrowed makeResidual id node)
+    ()
+    nodes
+  drainWork work
   linkSolutions owner makeJoin (M.values nodes)
 
 -- An input allowance may include more than its demonstrated lower bound.
@@ -1647,13 +1628,12 @@ collapseInclusionClass cells retained (first :: rest) =
       members
   let id = effvarId representative
   representative := EUnbound id level
-  let _ =
-    fold
-      (_ cell =>
-        if effvarId cell /= id then
-          linkRow cell (EffRow [] (Some representative)))
-      ()
-      members
+  fold
+    (_ cell =>
+      if effvarId cell /= id then
+        linkRow cell (EffRow [] (Some representative)))
+    ()
+    members
   if keep then M.set id () retained else retained
 
 -- Reflexivity and known widening impose no lower bound on an unknown tail.

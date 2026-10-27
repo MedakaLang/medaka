@@ -58,6 +58,7 @@ import types.tc_env.{
   ordOfIndex,
   removeAllS,
   tyTabKey,
+  hasImportDefiner,
 }
 import types.tc_mono.{monoScheme, tconBuiltin}
 import types.tc_state.{blankModuleCtx, emptyClassEnv, probeGraphCtx}
@@ -69,6 +70,8 @@ import types.tc_types.{
   ImplEnv,
   TcEnv,
   BuiltinClass(..),
+  ModuleCtx(..),
+  ModuleCells(..),
 }
 import support.ordmap.{omEmpty, omInsert}
 
@@ -333,3 +336,13 @@ test "builtin class names are the surface names" = expectAll [
   expectEqual "Num" (builtinClassName BNum),
   expectEqual "Semigroup" (builtinClassName BSemigroup),
 ]
+
+test "a name is an import definer once the module records the module it comes from" =
+  let m = blankModuleCtx (probeGraphCtx ()) "probe"
+  let before = hasImportDefiner m "size"
+  m.mcCells.currentImportDefinersRef := omInsert "size" "lib" omEmpty
+  expectAll [
+    expectFalse before,
+    expectTrue (hasImportDefiner m "size"),
+    expectFalse (hasImportDefiner m "walk"),
+  ]

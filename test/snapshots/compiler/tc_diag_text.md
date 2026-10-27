@@ -1,5 +1,5 @@
 # META
-source_lines=1453
+source_lines=1485
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -36,6 +36,7 @@ import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
   Expr(..),
+  isI64Head,
   KindAnn(..),
   kindAnnSource,
   Lit(..),
@@ -878,6 +879,18 @@ nonExhaustiveMatchWarning : String
 nonExhaustiveMatchWarning =
   "Warning: non-exhaustive match; not every case is covered"
 
+-- The warning for a `let` pattern, lambda parameter or `do` bind that can fail.  There is no
+-- match to add an arm to, so the help sends the user to a construct that can handle the case.
+export
+binderNonExhaustiveMsg : Option TabKey -> String -> (String, String)
+binderNonExhaustiveMsg ty witness =
+  let hint =
+    "handle `\{witness}` with a `match` or an `if let` instead of binding the pattern directly"
+  (
+    "Warning: refutable binding pattern\{tyOfMsg ty}: missing `\{witness}`; \{hint}",
+    hint,
+  )
+
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
 -- An arm is unreachable when an EARLIER *unguarded* arm already covers its pattern
 -- (the detection is `patUnreachable` in `frontend.exhaust`; this module holds the
@@ -1228,6 +1241,25 @@ sigTooGeneralMsg name ty =
   "the signature of `\{name}` is more general than its body: `\{ppTy ty}` claims type variables that inference makes the same type"
 
 export
+groundedSigVarMsg : String -> String -> Mono -> String
+groundedSigVarMsg vname name actual =
+  "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the body requires `\{ppMono actual}`; write that type in the signature or make the body work for every `\{vname}`"
+
+export
+siblingSharedSigVarMsg : String -> String -> String -> String
+siblingSharedSigVarMsg vname name sibling =
+  "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the zero-argument sibling `\{sibling}` shares it and is evaluated once; give `\{sibling}` a parameter or declare its monomorphic type"
+
+export
+boxedLitPatMsg : String -> String -> String
+boxedLitPatMsg tag lit =
+  "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
+
+export
+boxedLitPatHelp : String -> String
+boxedLitPatHelp lit = "compare in a guard instead: `x if x == \{lit}`"
+
+export
 annotTooGeneralMsg : Ty -> String
 annotTooGeneralMsg ty =
   "type annotation `"
@@ -1457,7 +1489,7 @@ prependDiagOpt code sev help (Some msg) ds =
   writtenDiag (TcDiag code sev None msg help None) :: ds
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
@@ -1709,6 +1741,8 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
 (DTypeSig true "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match; not every case is covered")))
+(DTypeSig true "binderNonExhaustiveMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "binderNonExhaustiveMsg" ((PVar "ty") (PVar "witness")) (EBlock (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "handle `")) (EApp (EVar "display") (EVar "witness"))) (ELit (LString "` with a `match` or an `if let` instead of binding the pattern directly")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: refutable binding pattern")) (EApp (EVar "display") (EApp (EVar "tyOfMsg") (EVar "ty")))) (ELit (LString ": missing `"))) (EApp (EVar "display") (EVar "witness"))) (ELit (LString "`; "))) (EApp (EVar "display") (EVar "hint"))) (ELit (LString ""))) (EVar "hint")))))
 (DTypeSig true "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm; an earlier arm already covers this pattern")))
 (DTypeSig true "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
@@ -1817,6 +1851,14 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "sigOverExpansiveMsg" ((PVar "name") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is polymorphic (`"))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "`) but its body is not a value, so it cannot be generalized; give `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` a parameter or declare a monomorphic type"))))
 (DTypeSig true "sigTooGeneralMsg" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "sigTooGeneralMsg" ((PVar "name") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is more general than its body: `"))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` claims type variables that inference makes the same type"))))
+(DTypeSig true "groundedSigVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "groundedSigVarMsg" ((PVar "vname") (PVar "name") (PVar "actual")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type variable `")) (EApp (EVar "display") (EVar "vname"))) (ELit (LString "` in the signature of `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` must remain universal, but the body requires `"))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "actual")))) (ELit (LString "`; write that type in the signature or make the body work for every `"))) (EApp (EVar "display") (EVar "vname"))) (ELit (LString "`"))))
+(DTypeSig true "siblingSharedSigVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "siblingSharedSigVarMsg" ((PVar "vname") (PVar "name") (PVar "sibling")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type variable `")) (EApp (EVar "display") (EVar "vname"))) (ELit (LString "` in the signature of `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` must remain universal, but the zero-argument sibling `"))) (EApp (EVar "display") (EVar "sibling"))) (ELit (LString "` shares it and is evaluated once; give `"))) (EApp (EVar "display") (EVar "sibling"))) (ELit (LString "` a parameter or declare its monomorphic type"))))
+(DTypeSig true "boxedLitPatMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "boxedLitPatMsg" ((PVar "tag") (PVar "lit")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the literal pattern `")) (EApp (EVar "display") (EVar "lit"))) (ELit (LString "` cannot match "))) (EApp (EVar "display") (EIf (EApp (EVar "isI64Head") (EVar "tag")) (ELit (LString "an")) (ELit (LString "a"))))) (ELit (LString " `"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "`; compare in a guard instead"))))
+(DTypeSig true "boxedLitPatHelp" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "boxedLitPatHelp" ((PVar "lit")) (EBinOp "++" (EBinOp "++" (ELit (LString "compare in a guard instead: `x if x == ")) (EApp (EVar "display") (EVar "lit"))) (ELit (LString "`"))))
 (DTypeSig true "annotTooGeneralMsg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "annotTooGeneralMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "type annotation `")) (EApp (EVar "ppTy") (EVar "ty"))) (ELit (LString "` is more polymorphic than the expression: a type variable in it is a specific type, or two of its variables are the same type"))))
 (DTypeSig true "requiresUnroutedMsg" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String"))))
@@ -1895,7 +1937,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
@@ -2147,6 +2189,8 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
 (DTypeSig true "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match; not every case is covered")))
+(DTypeSig true "binderNonExhaustiveMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "binderNonExhaustiveMsg" ((PVar "ty") (PVar "witness")) (EBlock (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "handle `")) (EApp (EMethodRef "display") (EVar "witness"))) (ELit (LString "` with a `match` or an `if let` instead of binding the pattern directly")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: refutable binding pattern")) (EApp (EMethodRef "display") (EApp (EVar "tyOfMsg") (EVar "ty")))) (ELit (LString ": missing `"))) (EApp (EMethodRef "display") (EVar "witness"))) (ELit (LString "`; "))) (EApp (EMethodRef "display") (EVar "hint"))) (ELit (LString ""))) (EVar "hint")))))
 (DTypeSig true "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm; an earlier arm already covers this pattern")))
 (DTypeSig true "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
@@ -2255,6 +2299,14 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "sigOverExpansiveMsg" ((PVar "name") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is polymorphic (`"))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "`) but its body is not a value, so it cannot be generalized; give `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` a parameter or declare a monomorphic type"))))
 (DTypeSig true "sigTooGeneralMsg" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "sigTooGeneralMsg" ((PVar "name") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is more general than its body: `"))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` claims type variables that inference makes the same type"))))
+(DTypeSig true "groundedSigVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "groundedSigVarMsg" ((PVar "vname") (PVar "name") (PVar "actual")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type variable `")) (EApp (EMethodRef "display") (EVar "vname"))) (ELit (LString "` in the signature of `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` must remain universal, but the body requires `"))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "actual")))) (ELit (LString "`; write that type in the signature or make the body work for every `"))) (EApp (EMethodRef "display") (EVar "vname"))) (ELit (LString "`"))))
+(DTypeSig true "siblingSharedSigVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "siblingSharedSigVarMsg" ((PVar "vname") (PVar "name") (PVar "sibling")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type variable `")) (EApp (EMethodRef "display") (EVar "vname"))) (ELit (LString "` in the signature of `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` must remain universal, but the zero-argument sibling `"))) (EApp (EMethodRef "display") (EVar "sibling"))) (ELit (LString "` shares it and is evaluated once; give `"))) (EApp (EMethodRef "display") (EVar "sibling"))) (ELit (LString "` a parameter or declare its monomorphic type"))))
+(DTypeSig true "boxedLitPatMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "boxedLitPatMsg" ((PVar "tag") (PVar "lit")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the literal pattern `")) (EApp (EMethodRef "display") (EVar "lit"))) (ELit (LString "` cannot match "))) (EApp (EMethodRef "display") (EIf (EApp (EVar "isI64Head") (EVar "tag")) (ELit (LString "an")) (ELit (LString "a"))))) (ELit (LString " `"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "`; compare in a guard instead"))))
+(DTypeSig true "boxedLitPatHelp" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "boxedLitPatHelp" ((PVar "lit")) (EBinOp "++" (EBinOp "++" (ELit (LString "compare in a guard instead: `x if x == ")) (EApp (EMethodRef "display") (EVar "lit"))) (ELit (LString "`"))))
 (DTypeSig true "annotTooGeneralMsg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "annotTooGeneralMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "type annotation `")) (EApp (EVar "ppTy") (EVar "ty"))) (ELit (LString "` is more polymorphic than the expression: a type variable in it is a specific type, or two of its variables are the same type"))))
 (DTypeSig true "requiresUnroutedMsg" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String"))))

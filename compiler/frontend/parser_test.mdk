@@ -35,7 +35,7 @@ import support.util.{joinWith}
 -- other outcome so a wrong outcome shows up in the assertion's diff.
 failText : PR a -> String
 failText (PErr f _) = renderFail f
-failText (PFatal m _) = "fatal: \{m}"
+failText (PFatal f _) = "fatal: \{renderFail f}"
 failText (POk _ _) = "ok"
 
 failPos : PR a -> Int

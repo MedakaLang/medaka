@@ -962,6 +962,16 @@ extern stringByteLength : String -> Int
 export
 extern stringSlice : Int -> Int -> String -> String
 
+-- The codepoint starting at a byte offset, packed as `codepoint * 8 + width`
+-- (width in bytes). The offset must be inside the string and on a codepoint
+-- boundary. Internal primitive for `string.mdk`; a mid-codepoint offset yields
+-- a plausible wrong Int.
+extern stringCodepointAtByte : String -> Int -> Int
+
+-- The bytes `[lo, hi)` of a string. Panics unless both offsets are in range,
+-- ordered, and on codepoint boundaries. Internal primitive for `string.mdk`.
+extern stringSliceBytes : Int -> Int -> String -> String
+
 -- | The strings joined end to end.
 extern stringConcat : List String -> String
 

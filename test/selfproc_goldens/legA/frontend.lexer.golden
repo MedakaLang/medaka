@@ -13,8 +13,8 @@ armsHerald : Bool -> Option Token -> Bool
 armsHeraldTok : Bool -> Token -> Bool
 at : Array Char -> Int -> Char
 atToken : Array Char -> Int -> Token
-bareUnicodeEscMsgChar : Array Char -> Int -> Int -> String
-bareUnicodeEscMsgStr : Array Char -> Int -> Int -> String
+bareUnicodeEscMsgChar : Array Char -> Int -> Int -> ParseDiagnosticKind
+bareUnicodeEscMsgStr : Array Char -> Int -> Int -> ParseDiagnosticKind
 bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
 bareUnicodeEscWritten : Array Char -> Int -> Int -> String
 bracketCloser : Token -> Bool
@@ -26,7 +26,7 @@ canEndExpr : Token -> Bool
 canStartAtom : Token -> Bool
 charClose : Array Char -> Int -> Int -> Int
 charEscDecode : Char -> Option String
-charUntermMsg : String
+charUntermMsg : ParseDiagnosticKind
 clauseBreak : Int -> Int -> Int -> Bool -> RawTok
 clauseBreaksGo : List RawTok -> Int -> Int -> Bool -> List RawTok
 clauseOpen : Int -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
@@ -93,7 +93,7 @@ indentOf : String -> Int
 indentOfGo : Array Char -> Int -> Int -> Int
 indentSentinel : Int
 intLitOverflows : Array Char -> Int -> Int -> Bool
-invalidStrEscMsg : Char -> String
+invalidStrEscMsg : Char -> ParseDiagnosticKind
 is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
 is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
@@ -102,6 +102,7 @@ isElseTok : Token -> Bool
 isExpMarker : Char -> Bool
 isExprEnd : Char -> Bool
 isFloatAt : Array Char -> Int -> Int -> Bool
+isLineBreakAt : Array Char -> Int -> Bool
 isMalformedExpDot : Array Char -> Int -> Int -> Bool
 isMalformedLeadingDot : Array Char -> Int -> Int -> Bool
 isMalformedRadixPrefix : Array Char -> Int -> Int -> Bool
@@ -123,7 +124,7 @@ layoutToks : List RawTok -> List Int -> List BracketFrame -> Token -> Bool -> Li
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 leadingOp : Array Char -> Int -> Int -> Option (Token, Int)
-lexErrorTok : Int -> String -> List RawTok
+lexErrorTok : Int -> Int -> ParseDiagnosticKind -> List RawTok
 lineStartSearch : Array Int -> Int -> Int -> Int -> Int
 lineStartsGo : Array Char -> Int -> Int -> List Int
 lineStartsOf : String -> Array Int
@@ -223,12 +224,14 @@ uHexEnd : Array Char -> Int -> Int -> Int
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscCode : Array Char -> Int -> Int -> Option Int
 uniEscEnd : Array Char -> Int -> Int -> Int
-uniEscErr : Array Char -> Int -> Int -> String
-uniEscTermErr : Array Char -> Int -> Int -> Int -> String
+uniEscErr : Array Char -> Int -> Int -> List RawTok
+uniEscTermErr : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 uniEscText : Array Char -> Int -> Int -> String
 uniEscWellFormed : Array Char -> Int -> Int -> Bool
 uniHexSigLen : Array Char -> Int -> Int -> Int
 uniIsSurrogate : Int -> Bool
+unicodeErrorEnd : Array Char -> Int -> Int -> Int
+unicodeErrorEndGo : Array Char -> Int -> Int -> Int
 wideBase : Array Char -> Int -> Int
 wideHalves : Int -> List Char -> Option (Int, Int)
 wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)

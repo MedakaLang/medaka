@@ -102,8 +102,8 @@ import json.{
 import list.{nub, reverse, somes, sort}
 import path.{basename}
 import string.{contains, join, lines, startsWith, trim, unlines}
-import test.{fail, pass}
-import test_process.{medakaBin, medakaRoot}
+import test.{fail, pass, expectEach, expectEqual, expectTextContainsAll}
+import test_process.{medakaBin, medakaRoot, withScratchDir}
 
 -- # Framing
 
@@ -1341,6 +1341,318 @@ drive msgs =
       ]
       (findings, out)
 
+test "inlay positions remain stable with astral source" =
+  let uri = "file:///unicode-inlay.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri """first = ("😀", 123)
+second = first
+""",
+    rpc 3 "textDocument/inlayHint" (inlayParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "hints",
+        expectEqual
+          (Some
+            (jArray [
+              jObject [
+                ("position", jObject [("line", JInt 0), ("character", JInt 5)]),
+                ("label", JString ": (String, Int)"),
+                ("paddingLeft", JBool True),
+              ],
+              jObject [
+                ("position", jObject [("line", JInt 1), ("character", JInt 6)]),
+                ("label", JString ": (String, Int)"),
+                ("paddingLeft", JBool True),
+              ],
+            ]))
+          (resultTo 3 objs),
+      ),
+    ]
+
+test "semantic token positions use UTF-16" =
+  let uri = "file:///unicode.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = (\"😀\", 123)\n",
+    rpc 3 "textDocument/semanticTokens/full" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "token data",
+        expectEqual
+          (Some
+            (jObject [
+              (
+                "data",
+                jArray (map JInt [0, 0, 4, 3, 0, 0, 8, 4, 5, 0, 0, 6, 3, 6, 0]),
+              ),
+            ]))
+          (resultTo 3 objs),
+      ),
+    ]
+
+coordPos : Int -> Int -> Json
+coordPos line col = jObject [("line", JInt line), ("character", JInt col)]
+
+coordRange : Int -> Int -> Int -> Json
+coordRange line start end = jObject [
+  ("start", coordPos line start),
+  ("end", coordPos line end),
+]
+
+coordLocation : String -> Int -> Int -> Int -> Json
+coordLocation uri line start end = jObject [
+  ("uri", JString uri),
+  ("range", coordRange line start end),
+]
+
+test "unreadable manifest publishes a source-less diagnostic" = withScratchDir
+  (dir => match mkdirAll (dir ++ "/medaka.toml")
+    Err e => fail e
+    Ok _ =>
+      let uri = "file://" ++ dir ++ "/main.mdk"
+      let manifestUri = "file://" ++ dir ++ "/medaka.toml"
+      let (errors, out) = drive [didOpenMsg uri "main = 1\n", bye]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let diagnostics =
+            publishes objs
+              |> filter (p => uriOf p == manifestUri)
+              |> flatMap diagsOf
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("diagnostic count", expectEqual 1 (length diagnostics)),
+            (
+              "zero range",
+              expectEqual
+                [Some (coordRange 0 0 0)]
+                (map (get "range") diagnostics),
+            ),
+            (
+              "severity",
+              expectEqual [Some (JInt 1)] (map (get "severity") diagnostics),
+            ),
+            (
+              "message retained",
+              expectTextContainsAll
+                ["cannot read `[target]`", "medaka.toml"]
+                (join "\n" (map (strField "message") diagnostics)),
+            ),
+          ])
+
+test "project diagnostic empty bucket clears an earlier error" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", """[project]
+name = "clear"
+"""),
+    ("main.mdk", "main = 1\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let uri = "file://" ++ dir ++ "/main.mdk"
+      let (errors, out) = drive [
+        didOpenMsg uri "main = 1 + \"x\"\n",
+        didChangeMsg uri "main = 1\n",
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let counts =
+            publishes objs
+              |> filter (p => uriOf p == uri)
+              |> map (p => length (diagsOf p))
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("error then clear", expectEqual [1, 0] counts),
+          ])
+
+test "malformed editor sources do not crash semantic token requests" =
+  let uri = "file:///malformed-tokens.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = \"😀",
+    rpc 1 "textDocument/semanticTokens/full" (docParams uri),
+    didChangeMsg uri "main = (\r\n",
+    rpc 2 "textDocument/semanticTokens/full" (docParams uri),
+    didChangeMsg uri "main = \"\"\"😀\r\n",
+    rpc 3 "textDocument/semanticTokens/full" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "responses",
+        expectEqual 3 (length (filter (obj => isSome (get "id" obj)) objs)),
+      ),
+    ]
+
+formatEdit : Int -> Int -> String -> Json
+formatEdit line col text = jArray [
+  jObject [
+    ("range", jObject [("start", coordPos 0 0), ("end", coordPos line col)]),
+    ("newText", JString text),
+  ],
+]
+
+firstSymbolRange : Int -> List Json -> Option Json
+firstSymbolRange id objs = match elems (resultTo id objs)
+  first :: _ => get "range" first
+  [] => None
+
+test "symbol ranges stay within their source" =
+  let a = "file:///symbol-empty.mdk"
+  let b = "file:///symbol-newline.mdk"
+  let c = "file:///symbol-eof.mdk"
+  let d = "file:///symbol-astral.mdk"
+  let (errors, out) = drive [
+    didOpenMsg a "",
+    rpc 1 "textDocument/documentSymbol" (docParams a),
+    didOpenMsg b "main = 1\n",
+    rpc 2 "textDocument/documentSymbol" (docParams b),
+    didOpenMsg c "main = 1",
+    rpc 3 "textDocument/documentSymbol" (docParams c),
+    didOpenMsg d "main = \"😀\"",
+    rpc 4 "textDocument/documentSymbol" (docParams d),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("empty", expectEqual (Some (jArray [])) (resultTo 1 objs)),
+      (
+        "terminated",
+        expectEqual
+          (Some (jObject [("start", coordPos 0 0), ("end", coordPos 1 0)]))
+          (firstSymbolRange 2 objs),
+      ),
+      (
+        "unterminated",
+        expectEqual (Some (coordRange 0 0 8)) (firstSymbolRange 3 objs),
+      ),
+      (
+        "astral",
+        expectEqual (Some (coordRange 0 0 11)) (firstSymbolRange 4 objs),
+      ),
+    ]
+
+test "formatting edits end at EOF" =
+  let a = "file:///fmt-empty.mdk"
+  let b = "file:///fmt-newline.mdk"
+  let c = "file:///fmt-eof.mdk"
+  let d = "file:///fmt-astral.mdk"
+  let (errors, out) = drive [
+    didOpenMsg a "",
+    rpc 1 "textDocument/formatting" (docParams a),
+    didOpenMsg b "main=1\n",
+    rpc 2 "textDocument/formatting" (docParams b),
+    didOpenMsg c "main=1",
+    rpc 3 "textDocument/formatting" (docParams c),
+    didOpenMsg d "main=(\"😀\",1)",
+    rpc 4 "textDocument/formatting" (docParams d),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("empty", expectEqual (Some (jArray [])) (resultTo 1 objs)),
+      (
+        "trailing newline",
+        expectEqual (Some (formatEdit 1 0 "main = 1\n")) (resultTo 2 objs),
+      ),
+      (
+        "no trailing newline",
+        expectEqual (Some (formatEdit 0 6 "main = 1\n")) (resultTo 3 objs),
+      ),
+      (
+        "astral",
+        expectEqual
+          (Some (formatEdit 0 13 "main = (\"😀\", 1)\n"))
+          (resultTo 4 objs),
+      ),
+    ]
+
+test "cross-file coordinates use unsaved destination source" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", """[project]
+name = "coords"
+"""),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", """import lib.{value}
+main = value
+"""),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let (errors, out) = drive [
+        didOpenMsg lib "export value = 1\n",
+        didOpenMsg main """import lib.{value}
+main = ("😀", value + "x")
+""",
+        rpc
+          2
+          "textDocument/references"
+          (jObject [
+            ("textDocument", jObject [("uri", JString lib)]),
+            ("position", coordPos 0 8),
+            ("context", jObject [("includeDeclaration", JBool True)]),
+          ]),
+        rpc 3 "textDocument/definition" (posParams main 1 14),
+        rpc 4 "textDocument/documentHighlight" (posParams main 1 14),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs => expectEach [
+          ("process", expectEqual [] errors),
+          (
+            "references",
+            expectEqual
+              (Some
+                (jArray [coordLocation lib 0 7 12, coordLocation main 1 14 19]))
+              (resultTo 2 objs),
+          ),
+          (
+            "definition",
+            expectEqual
+              (Some (jArray [coordLocation lib 0 7 12]))
+              (resultTo 3 objs),
+          ),
+          (
+            "destination diagnostics",
+            expectEqual
+              [Some (coordRange 1 14 25)]
+              (publishes objs
+                |> filter (p => uriOf p == main)
+                |> flatMap diagsOf
+                |> map (get "range")),
+          ),
+          (
+            "highlight",
+            expectEqual
+              (Some
+                (jArray [
+                  jObject [("range", coordRange 0 12 17)],
+                  jObject [("range", coordRange 1 14 19)],
+                ]))
+              (resultTo 4 objs),
+          ),
+        ])
+
 {- | One row's outcome. `findings` is the whole list rather than the first,
    so a red run names every disagreement at once. -}
 data Outcome = Outcome { name : String, findings : List String }
@@ -1502,3 +1814,382 @@ test "the bless tool mints exactly the goldens this file reads" =
       else
         fail
           "test/lsp_bless.sh and this file disagree about the golden set.\n  the tool mints:\n\{indentAll minted}  this gate reads:\n\{indentAll ownGoldens}"
+
+test "parse diagnostic carries typed code and UTF-16 edit" =
+  let uri = "file:///parse-unicode.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = (\"😀\", 1 != 2)\n",
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "P-BAD-NEQ")) (get "code" d)),
+          (
+            "message",
+            expectEqual
+              (Some (JString "unexpected `!=`; did you mean `/=`?"))
+              (get "message" d),
+          ),
+          (
+            "help",
+            expectEqual (Some (JString "replace `!=` with `/=`")) (get "help" d),
+          ),
+          ("start", expectEqual "0:16" (endpoint "start" d)),
+          ("end", expectEqual "0:18" (endpoint "end" d)),
+          (
+            "fix",
+            expectEqual (Some (JString "/=")) (dig ["fix", "replacement"] d),
+          ),
+          ("fix range", expectEqual (get "range" d) (dig ["fix", "range"] d)),
+        ]
+        _ => fail "expected one parse diagnostic"
+      _ => fail "expected one publish"
+
+codeActionMsg : Int -> String -> Json -> Json
+codeActionMsg id uri diagnostic =
+  rpc
+    id
+    "textDocument/codeAction"
+    (jObject [
+      ("textDocument", jObject [("uri", JString uri)]),
+      ("context", jObject [("diagnostics", jArray [diagnostic])]),
+    ])
+
+test "parse quick fix uses the published snapshot and UTF-16 range" =
+  let uri = "file:///action.mdk"
+  let src = "main = (\"😀\", 1 != 2)\n"
+  let range = jObject [
+    ("start", jObject [("line", JInt 0), ("character", JInt 16)]),
+    ("end", jObject [("line", JInt 0), ("character", JInt 18)]),
+  ]
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", range),
+    (
+      "data",
+      jObject [("uri", JString uri), ("generation", JInt 0)],
+    ),
+  ]
+  let (errors, out) = drive [
+    initBare,
+    didOpenMsg uri src,
+    codeActionMsg 2 uri diagnostic,
+    codeActionMsg 3 "file:///wrong.mdk" diagnostic,
+    didChangeMsg uri "main = (\"😀\", 1 /= 2)\n",
+    codeActionMsg 4 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match elems (resultTo 2 objs)
+      [action] => expectEach [
+        ("process", expectEqual [] errors),
+        (
+          "capability",
+          expectEqual (Some (JBool True)) (match replyTo 1 objs
+            Some o => dig ["result", "capabilities", "codeActionProvider"] o
+            None => None),
+        ),
+        ("kind", expectEqual (Some (JString "quickfix")) (get "kind" action)),
+        (
+          "versioned edit",
+          expectEqual
+            (Some
+              (jArray [
+                jObject [
+                  (
+                    "textDocument",
+                    jObject [("uri", JString uri), ("version", JInt 1)],
+                  ),
+                  (
+                    "edits",
+                    jArray [
+                      jObject [("range", range), ("newText", JString "/=")],
+                    ],
+                  ),
+                ],
+              ]))
+            (dig ["edit", "documentChanges"] action),
+        ),
+        ("wrong URI", expectEqual [] (elems (resultTo 3 objs))),
+        ("stale", expectEqual [] (elems (resultTo 4 objs))),
+        (
+          "follow-up",
+          expectEqual [] (match reverse (publishes objs)
+            p :: _ => diagsOf p
+            [] => [JNull]),
+        ),
+      ]
+      _ => fail "expected exactly one quick fix"
+
+test "project publication binds the open buffer snapshot" = withScratchDir
+  (dir =>
+    let src = """export
+bad = 1 != 2
+"""
+    let entry = """import bad.{bad}
+main = bad
+"""
+    match layOut dir [("bad.mdk", src), ("main.mdk", entry)]
+      Err e => fail e
+      Ok _ =>
+        let uri = "file://" ++ dir ++ "/bad.mdk"
+        let main = "file://" ++ dir ++ "/main.mdk"
+        let snapshotData = jObject [
+          ("uri", JString uri),
+          ("generation", JInt 0),
+        ]
+        let diagnostic = jObject [
+          ("code", JString "P-BAD-NEQ"),
+          ("range", coordRange 1 8 10),
+          ("data", snapshotData),
+        ]
+        let (errors, out) = drive [
+          didOpenMsg uri src,
+          didOpenMsg main entry,
+          codeActionMsg 2 uri diagnostic,
+          didChangeMsg uri "export\nbad = 1 /= 2\n",
+          codeActionMsg 3 uri diagnostic,
+          bye,
+        ]
+        match decodeFrames out
+          Err e => fail e
+          Ok objs =>
+            let badPublishes = filter (p => uriOf p == uri) (publishes objs)
+            match badPublishes
+              _ :: project :: _ => expectEach [
+                ("process", expectEqual [] errors),
+                (
+                  "project identity",
+                  expectEqual
+                    [Some snapshotData, Some snapshotData]
+                    (map (get "data") (diagsOf project)),
+                ),
+                (
+                  "action",
+                  match elems (resultTo 2 objs)
+                    [action] =>
+                      expectEqual
+                        (Some
+                          (jArray [
+                            jObject [
+                              (
+                                "textDocument",
+                                jObject [
+                                  ("uri", JString uri),
+                                  ("version", JInt 1),
+                                ],
+                              ),
+                              (
+                                "edits",
+                                jArray [
+                                  jObject [
+                                    ("range", coordRange 1 8 10),
+                                    ("newText", JString "/="),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ]))
+                        (dig ["edit", "documentChanges"] action)
+                    _ => fail "expected exactly one project action",
+                ),
+                ("stale", expectEqual [] (elems (resultTo 3 objs))),
+              ]
+              _ => fail "expected direct and project publications")
+
+test "unversioned diagnostics bind the document generation" =
+  let uri = "file:///no-version.mdk"
+  let src = "main = 1 != 2\n"
+  let open =
+    notify
+      "textDocument/didOpen"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri), ("text", JString src)]),
+      ])
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", coordRange 0 9 11),
+    (
+      "data",
+      jObject [("uri", JString uri), ("generation", JInt 0)],
+    ),
+  ]
+  let change =
+    notify
+      "textDocument/didChange"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri)]),
+        (
+          "contentChanges",
+          jArray [jObject [("text", JString "main = 2 != 3\n")]],
+        ),
+      ])
+  let (errors, out) = drive [
+    open,
+    codeActionMsg 2 uri diagnostic,
+    change,
+    codeActionMsg 3 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "unchanged",
+        expectEqual
+          [
+            jObject [
+              ("title", JString "Replace with /="),
+              ("kind", JString "quickfix"),
+              (
+                "edit",
+                jObject [
+                  (
+                    "documentChanges",
+                    jArray [
+                      jObject [
+                        (
+                          "textDocument",
+                          jObject [("uri", JString uri), ("version", JNull)],
+                        ),
+                        (
+                          "edits",
+                          jArray [
+                            jObject [
+                              ("range", coordRange 0 9 11),
+                              ("newText", JString "/="),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ]
+          (elems (resultTo 2 objs)),
+      ),
+      ("changed", expectEqual [] (elems (resultTo 3 objs))),
+    ]
+
+test "non-parse suggestion keeps its code help and fix on wire" =
+  let (errors, out) =
+    drive [didOpenMsg "file:///typo.mdk" "main = printl \"hi\"\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "R-UNBOUND")) (get "code" d)),
+          (
+            "help",
+            expectEqual (Some (JString "did you mean `print`?")) (get "help" d),
+          ),
+          (
+            "fix",
+            expectEqual (Some (JString "print")) (dig ["fix", "replacement"] d),
+          ),
+        ]
+        _ => fail "expected one resolve diagnostic"
+      _ => fail "expected one publish"
+
+test "published diagnostic survives reordered fields and generation changes" =
+  let uri = "file:///roundtrip.mdk"
+  let src = "main = 1 != 2\n"
+  let (_, first) = drive [didOpenMsg uri src, bye]
+  match decodeFrames first
+    Err e => fail e
+    Ok firstObjs => match publishes firstObjs
+      pub :: _ => match diagsOf pub
+        d :: _ =>
+          let identity = optionOr JNull (get "data" d)
+          let range = optionOr JNull (get "range" d)
+          let start = optionOr JNull (get "start" range)
+          let end = optionOr JNull (get "end" range)
+          let reversePos p = jObject [
+            ("character", optionOr JNull (get "character" p)),
+            ("line", optionOr JNull (get "line" p)),
+          ]
+          let reordered = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            (
+              "range",
+              jObject [("end", reversePos end), ("start", reversePos start)],
+            ),
+            (
+              "data",
+              jObject [
+                ("generation", optionOr JNull (get "generation" identity)),
+                ("uri", optionOr JNull (get "uri" identity)),
+              ],
+            ),
+          ]
+          let makeVariant r i = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            ("range", r),
+            ("data", i),
+          ]
+          let reverseData = jObject [
+            ("generation", optionOr JNull (get "generation" identity)),
+            ("uri", optionOr JNull (get "uri" identity)),
+          ]
+          let reverseRange = jObject [("end", end), ("start", start)]
+          let reversePositions = jObject [
+            ("start", reversePos start),
+            ("end", reversePos end),
+          ]
+          let close =
+            notify
+              "textDocument/didClose"
+              (jObject [("textDocument", jObject [("uri", JString uri)])])
+          let (errors, out) = drive [
+            didOpenMsg uri src,
+            codeActionMsg 2 uri d,
+            codeActionMsg 3 uri reordered,
+            codeActionMsg 7 uri (makeVariant range reverseData),
+            codeActionMsg 8 uri (makeVariant reverseRange identity),
+            codeActionMsg 9 uri (makeVariant reversePositions identity),
+            didChangeMsg uri src,
+            codeActionMsg 4 uri d,
+            close,
+            codeActionMsg 5 uri reordered,
+            didOpenMsg uri src,
+            codeActionMsg 6 uri d,
+            bye,
+          ]
+          match decodeFrames out
+            Err e => fail e
+            Ok objs => expectEach [
+              ("process", expectEqual [] errors),
+              ("published", expectEqual 1 (length (elems (resultTo 2 objs)))),
+              ("reordered", expectEqual 1 (length (elems (resultTo 3 objs)))),
+              ("data order", expectEqual 1 (length (elems (resultTo 7 objs)))),
+              ("range order", expectEqual 1 (length (elems (resultTo 8 objs)))),
+              (
+                "position order",
+                expectEqual 1 (length (elems (resultTo 9 objs))),
+              ),
+              ("reused version", expectEqual [] (elems (resultTo 4 objs))),
+              ("closed", expectEqual [] (elems (resultTo 5 objs))),
+              ("reopened", expectEqual [] (elems (resultTo 6 objs))),
+            ]
+        [] => fail "expected published diagnostic"
+      [] => fail "expected publication"
+
+test "unfixable parse diagnostic has no snapshot identity" =
+  let (_, out) = drive [didOpenMsg "file:///invalid.mdk" "main = = 1\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      pub :: _ => match diagsOf pub
+        d :: _ => expectEqual None (get "data" d)
+        [] => fail "expected diagnostic"
+      [] => fail "expected publication"

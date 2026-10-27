@@ -1,5 +1,5 @@
 # META
-source_lines=885
+source_lines=942
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,10 +8,11 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
-  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
-  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, byteLength, center, countOccurrences, drop, endsWith, fromChars,
+  indexOf, join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll,
+  reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
+  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -887,8 +888,64 @@ test "charToStr of a three-byte char" =
 
 test "charToStr of a four-byte char" =
   expectEqual ("😀", 1) (strAndLen (charToStr '😀'))
+
+-- # Cursors
+
+-- The codepoints a cursor walk visits.
+cursorCodes : StrCursor -> List Int
+cursorCodes c = match nextChar c
+  None => []
+  Some (ch, rest) => charCode ch :: cursorCodes rest
+
+-- The cursor after `n` steps; the start cursor's own position past the end.
+advance : Int -> StrCursor -> StrCursor
+advance 0 c = c
+advance n c = match nextChar c
+  None => c
+  Some (_, rest) => advance (n - 1) rest
+
+-- The walk's characters joined back into a string.
+cursorRebuild : StrCursor -> String
+cursorRebuild c = match nextChar c
+  None => ""
+  Some (ch, rest) => charToStr ch ++ cursorRebuild rest
+
+test "nextChar walks ASCII" =
+  expectEqual [97, 98, 99] (cursorCodes (startCursor "abc"))
+
+test "nextChar walks 1-, 2-, 3- and 4-byte codepoints" =
+  expectEqual [97, 233, 26085, 128512] (cursorCodes (startCursor "aé日😀"))
+
+test "nextChar on the empty string is None" =
+  expectEqual [] (cursorCodes (startCursor ""))
+
+test "nextChar at the end of the string is None" =
+  startCursor "aé日😀" |> advance 4 |> nextChar |> isNone |> expectTrue
+
+test "walking with nextChar rebuilds the string" =
+  expectEqual "aé日😀 end" (cursorRebuild (startCursor "aé日😀 end"))
+
+test "sliceBetween across multibyte characters" =
+  let c = startCursor "aé日😀z"
+  expectEqual "é日😀" (sliceBetween (advance 1 c) (advance 4 c))
+
+test "sliceBetween of a cursor with itself is empty" =
+  let c = advance 2 (startCursor "aé日")
+  expectEqual ("", 0) (strAndLen (sliceBetween c c))
+
+test "sliceBetween from the start to the end is the whole string" =
+  let c = startCursor "aé日😀"
+  expectEqual ("aé日😀", 4) (strAndLen (sliceBetween c (advance 4 c)))
+
+test "sliceBetween keeps the codepoint count of the slice" =
+  let c = startCursor "aé日😀z"
+  expectEqual ("é日", 2) (strAndLen (sliceBetween (advance 1 c) (advance 3 c)))
+
+test "a cursor from another string that bounds a valid range slices" =
+  let other = advance 1 (startCursor "xy")
+  expectEqual "h" (sliceBetween (startCursor "héllo") other)
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1117,8 +1174,25 @@ test "charToStr of a four-byte char" =
 (DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
 (DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
 (DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))
+(DTypeSig false "cursorCodes" (TyFun (TyCon "StrCursor") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "cursorCodes" ((PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "ch") (PVar "rest"))) () (EBinOp "::" (EApp (EVar "charCode") (EVar "ch")) (EApp (EVar "cursorCodes") (EVar "rest"))))))
+(DTypeSig false "advance" (TyFun (TyCon "Int") (TyFun (TyCon "StrCursor") (TyCon "StrCursor"))))
+(DFunDef false "advance" ((PLit (LInt 0)) (PVar "c")) (EVar "c"))
+(DFunDef false "advance" ((PVar "n") (PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (EVar "c")) (arm (PCon "Some" (PTuple PWild (PVar "rest"))) () (EApp (EApp (EVar "advance") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "cursorRebuild" (TyFun (TyCon "StrCursor") (TyCon "String")))
+(DFunDef false "cursorRebuild" ((PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PTuple (PVar "ch") (PVar "rest"))) () (EBinOp "++" (EApp (EVar "charToStr") (EVar "ch")) (EApp (EVar "cursorRebuild") (EVar "rest"))))))
+(DTest false "nextChar walks ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString "abc"))))))
+(DTest false "nextChar walks 1-, 2-, 3- and 4-byte codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 26085)) (ELit (LInt 128512)))) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString "aé日😀"))))))
+(DTest false "nextChar on the empty string is None" (EApp (EApp (EVar "expectEqual") (EListLit)) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString ""))))))
+(DTest false "nextChar at the end of the string is None" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "startCursor") (ELit (LString "aé日😀"))) (EApp (EVar "advance") (ELit (LInt 4)))) (EVar "nextChar")) (EVar "isNone")) (EVar "expectTrue")))
+(DTest false "walking with nextChar rebuilds the string" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日😀 end"))) (EApp (EVar "cursorRebuild") (EApp (EVar "startCursor") (ELit (LString "aé日😀 end"))))))
+(DTest false "sliceBetween across multibyte characters" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "é日😀"))) (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c")))))))
+(DTest false "sliceBetween of a cursor with itself is empty" (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "advance") (ELit (LInt 2))) (EApp (EVar "startCursor") (ELit (LString "aé日"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EVar "c")))))))
+(DTest false "sliceBetween from the start to the end is the whole string" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé日😀")) (ELit (LInt 4)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c"))))))))
+(DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
+(DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1347,3 +1421,20 @@ test "charToStr of a four-byte char" =
 (DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
 (DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
 (DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))
+(DTypeSig false "cursorCodes" (TyFun (TyCon "StrCursor") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "cursorCodes" ((PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "ch") (PVar "rest"))) () (EBinOp "::" (EApp (EVar "charCode") (EVar "ch")) (EApp (EVar "cursorCodes") (EVar "rest"))))))
+(DTypeSig false "advance" (TyFun (TyCon "Int") (TyFun (TyCon "StrCursor") (TyCon "StrCursor"))))
+(DFunDef false "advance" ((PLit (LInt 0)) (PVar "c")) (EVar "c"))
+(DFunDef false "advance" ((PVar "n") (PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (EVar "c")) (arm (PCon "Some" (PTuple PWild (PVar "rest"))) () (EApp (EApp (EVar "advance") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "cursorRebuild" (TyFun (TyCon "StrCursor") (TyCon "String")))
+(DFunDef false "cursorRebuild" ((PVar "c")) (EMatch (EApp (EVar "nextChar") (EVar "c")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PTuple (PVar "ch") (PVar "rest"))) () (EBinOp "++" (EApp (EVar "charToStr") (EVar "ch")) (EApp (EVar "cursorRebuild") (EVar "rest"))))))
+(DTest false "nextChar walks ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString "abc"))))))
+(DTest false "nextChar walks 1-, 2-, 3- and 4-byte codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 26085)) (ELit (LInt 128512)))) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString "aé日😀"))))))
+(DTest false "nextChar on the empty string is None" (EApp (EApp (EVar "expectEqual") (EListLit)) (EApp (EVar "cursorCodes") (EApp (EVar "startCursor") (ELit (LString ""))))))
+(DTest false "nextChar at the end of the string is None" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "startCursor") (ELit (LString "aé日😀"))) (EApp (EVar "advance") (ELit (LInt 4)))) (EVar "nextChar")) (EVar "isNone")) (EVar "expectTrue")))
+(DTest false "walking with nextChar rebuilds the string" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日😀 end"))) (EApp (EVar "cursorRebuild") (EApp (EVar "startCursor") (ELit (LString "aé日😀 end"))))))
+(DTest false "sliceBetween across multibyte characters" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "é日😀"))) (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c")))))))
+(DTest false "sliceBetween of a cursor with itself is empty" (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "advance") (ELit (LInt 2))) (EApp (EVar "startCursor") (ELit (LString "aé日"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EVar "c")))))))
+(DTest false "sliceBetween from the start to the end is the whole string" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé日😀")) (ELit (LInt 4)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c"))))))))
+(DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
+(DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))

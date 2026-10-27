@@ -2,7 +2,8 @@
 -- own, imported and undecided rungs, admission, the method scheme rows it selects
 -- (`pickSchemesByDecl`, `admittedRowFor`, `admittedSchemeFor`, `undecidedSchemeFor`,
 -- `annotateImportedMethodRows`), the dispatch-index and impl-existence reads scoped by it), the
--- ctor and record scoped views (candidates, overrides, scoped entries), and the alias-qualified
+-- ctor and record scoped views (candidates, overrides, scoped entries), the interface rows an import
+-- makes visible (`importedIfaceRows`), and the alias-qualified
 -- supply (`import m as A` rows, keys, spellings, ambiguity message, dictionary names and constraint
 -- entries).
 --
@@ -66,6 +67,7 @@ import types.tc_env.{
   originMethodName,
   recordCandInfo,
   variantNamed,
+  selectIfaceRows,
 }
 import types.tc_diag.{pushTypeErrorHelpFixAt, pushTypeErrorOnceAt}
 import types.tc_diag_text.{ambigReexportHelp, ambigReexportMsg, backticked}
@@ -766,12 +768,11 @@ aliasMethodKeyApply mctx g (k :: rest) tab =
     [] => tab
     [_] => aliasMethodKeyEntry mctx k hits tab
     _ =>
-      let _ =
-        pushTypeErrorOnceAt
-          mctx
-          "T-AMBIGUOUS-ALIAS-METHOD"
-          (aliasRowLastLoc hits)
-          (aliasAmbiguityMsg k hits)
+      pushTypeErrorOnceAt
+        mctx
+        "T-AMBIGUOUS-ALIAS-METHOD"
+        (aliasRowLastLoc hits)
+        (aliasAmbiguityMsg k hits)
       tab
   aliasMethodKeyApply mctx g rest tab2
 
@@ -1325,7 +1326,7 @@ overrideScopedRecords : ModuleCtx ->
   Unit
 overrideScopedRecords mctx _ _ [] = ()
 overrideScopedRecords mctx prog cands (n :: rest) =
-  let _ = match omLookup n cands
+  match omLookup n cands
     None => ()
     Some cs => match scopedRecordEntry mctx.mcGraph prog n cs
       None => ()
@@ -1680,10 +1681,10 @@ export
 reportAmbiguousImportsIn : ModuleCtx -> OrdMap Unit -> List Decl -> Unit
 reportAmbiguousImportsIn mctx _ [] = ()
 reportAmbiguousImportsIn mctx occ ((DAttrib _ d) :: rest) =
-  let _ = reportAmbiguousImportsIn mctx occ [d]
+  reportAmbiguousImportsIn mctx occ [d]
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ ((DUse _ path loc) :: rest) =
-  let _ = reportAmbiguousImport mctx occ (useModId path) path loc
+  reportAmbiguousImport mctx occ (useModId path) path loc
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ (_ :: rest) =
   reportAmbiguousImportsIn mctx occ rest
@@ -1733,14 +1734,13 @@ pushAmbiguousImports : ModuleCtx ->
   Unit
 pushAmbiguousImports mctx _ _ [] = ()
 pushAmbiguousImports mctx depId loc ((n, mids) :: rest) =
-  let _ =
-    pushTypeErrorHelpFixAt
-      mctx
-      "T-AMBIGUOUS-REEXPORT"
-      (Some loc)
-      (ambigReexportMsg n depId mids)
-      (ambigReexportHelp n depId mids)
-      None
+  pushTypeErrorHelpFixAt
+    mctx
+    "T-AMBIGUOUS-REEXPORT"
+    (Some loc)
+    (ambigReexportMsg n depId mids)
+    (ambigReexportHelp n depId mids)
+    None
   pushAmbiguousImports mctx depId loc rest
 
 export
@@ -1758,3 +1758,17 @@ export
 withAliasMethodNames : List (String, String) -> OrdMap Unit -> OrdMap Unit
 withAliasMethodNames rows set =
   omFromNames (map fst (filterList (r => omHasKey (snd r) set) rows)) set
+
+export
+importedIfaceRows : OrdMap (List (String, List String)) ->
+  List Decl ->
+  List (String, List String)
+importedIfaceRows _ [] = []
+importedIfaceRows idx ((DAttrib _ d) :: rest) =
+  importedIfaceRows idx [d] ++ importedIfaceRows idx rest
+importedIfaceRows idx ((DUse _ path _) :: rest) =
+  (match omLookup (useModId path) idx
+      None => []
+      Some src => selectIfaceRows path src)
+    ++ importedIfaceRows idx rest
+importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest

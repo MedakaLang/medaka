@@ -5988,6 +5988,25 @@ emitAppRef prog env d app =
     CDict name routes => emitDictRef prog env d name routes args mode CallValueW
     _ => emitIndirectApp prog env d hd args CallValueW
 
+-- A string slice call: `lo`/`hi` are i31 Ints unboxed to i32, `s` a `$str`,
+-- and `callee` the runtime helper (named without its `$`) taking them in that
+-- order.
+emitStrSliceCall : Prog ->
+  Env ->
+  Int ->
+  String ->
+  CExpr ->
+  CExpr ->
+  CExpr ->
+  List String
+emitStrSliceCall prog env d callee lo hi s =
+  emitRefExpr prog env d lo
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d hi
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", rtCallW prog callee 3]
+
 -- ── W6 string / IO externs ───────────────────────────────────────────────────
 -- `intToString` : i31 Int → unbox → i64 → $mdk_int_to_str → (ref $str) (an (ref eq)).
 -- `stringLength` : (ref $str) → cached cp_count (O(1), §5 INTRINSIC) → i31 Int.
@@ -6064,14 +6083,28 @@ emitStrExternRef prog env d "stringConcat" _ =
   gapLP prog "wasm W8: stringConcat takes exactly one argument"
 -- stringSlice lo hi s : lo/hi are i31 Int codepoint indices, s a $str.
 emitStrExternRef prog env d "stringSlice" [lo, hi, s] =
-  emitRefExpr prog env d lo
-    ++ ["ref.cast (ref i31)", "i31.get_s"]
-    ++ emitRefExpr prog env d hi
-    ++ ["ref.cast (ref i31)", "i31.get_s"]
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_str_slice" 3]
+  emitStrSliceCall prog env d "mdk_str_slice" lo hi s
 emitStrExternRef prog env d "stringSlice" _ =
   gapLP prog "wasm W8: stringSlice takes exactly three arguments"
+-- stringCodepointAtByte s b : s a $str, b an i31 Int byte offset; the packed
+-- codepoint * 8 + width comes back as an i31 Int.
+emitStrExternRef prog env d "stringCodepointAtByte" [s, b] =
+  emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d b
+    ++ [
+      "ref.cast (ref i31)",
+      "i31.get_s",
+      rtCallW prog "mdk_str_cp_at_byte" 2,
+      "ref.i31",
+    ]
+emitStrExternRef prog env d "stringCodepointAtByte" _ =
+  gapLP prog "wasm: stringCodepointAtByte takes exactly two arguments"
+-- stringSliceBytes lo hi s : lo/hi are i31 Int byte offsets, s a $str.
+emitStrExternRef prog env d "stringSliceBytes" [lo, hi, s] =
+  emitStrSliceCall prog env d "mdk_str_slice_bytes" lo hi s
+emitStrExternRef prog env d "stringSliceBytes" _ =
+  gapLP prog "wasm: stringSliceBytes takes exactly three arguments"
 emitStrExternRef prog env d "stringToUpper" [s] =
   emitRefExpr prog env d s
     ++ ["ref.cast (ref $str)", rtCallW prog "mdk_str_upper" 1]

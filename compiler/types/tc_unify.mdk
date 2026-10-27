@@ -262,7 +262,7 @@ freshEffvarAt gctx lvl = Ref (EUnbound (newEffvarId gctx ()) lvl)
 freshInferenceEffvar : ModuleCtx -> Unit -> Ref Effvar
 freshInferenceEffvar mctx _ =
   let cell = freshEffvar mctx ()
-  let _ = EffectSolver.registerExistential mctx.mcCells.effectSummaries cell
+  EffectSolver.registerExistential mctx.mcCells.effectSummaries cell
   cell
 
 export
@@ -291,7 +291,7 @@ isRigidCell mctx cell =
 export
 performEffect : ModuleCtx -> Ref (List EffRow) -> EffRow -> Unit
 performEffect mctx cur eff =
-  let _ = recordEffectSites mctx eff
+  recordEffectSites mctx eff
   recordEffect cur eff
 
 -- Most performed rows carry no atom of their own (a pure call, a row that
@@ -343,7 +343,7 @@ unifyIndex mctx qa qb = match (authNorm qa, authNorm qb)
   (AVar a, b) if flexibleIndex mctx a b => substituteIndex mctx a b
   (a, AVar b) if flexibleIndex mctx b a => substituteIndex mctx b a
   (a, b) =>
-    let _ = wantAuthorityWith mctx True a b
+    wantAuthorityWith mctx True a b
     wantAuthorityWith mctx True b a
 
 -- A pattern-ranging cell takes only a pattern-ranging term (EFFECTS-SEMANTICS
@@ -353,16 +353,15 @@ unifyIndex mctx qa qb = match (authNorm qa, authNorm qb)
 -- equation is refused.
 substituteIndex : ModuleCtx -> Ref Authvar -> Authority -> Unit
 substituteIndex mctx cell term =
-  let _ =
-    if authvarIsPattern cell && not (authIsPattern term) then
-      let fixed = indexOutsidePatterns mctx term
-      if isEmptyL fixed then
-        fold
-          (_ v => if authvarIsPattern v then () else markAuthvarPattern v)
-          ()
-          (authVars term)
-      else
-        pushTypeError mctx "T-AUTHORITY-PATTERN" (patternIndexMsg term)
+  if authvarIsPattern cell && not (authIsPattern term) then
+    let fixed = indexOutsidePatterns mctx term
+    if isEmptyL fixed then
+      fold
+        (_ v => if authvarIsPattern v then () else markAuthvarPattern v)
+        ()
+        (authVars term)
+    else
+      pushTypeError mctx "T-AUTHORITY-PATTERN" (patternIndexMsg term)
   substituteIndexLinked mctx cell term
 
 -- The operands of [term] no narrowing brings into the pattern range: a
@@ -383,13 +382,12 @@ indexOutsidePatterns mctx term =
 
 substituteIndexLinked : ModuleCtx -> Ref Authvar -> Authority -> Unit
 substituteIndexLinked mctx cell term =
-  let _ = lowerAuthLevels (authvarLevel cell) term
-  let _ =
-    if authHasVars term then
-      ()
-    else
-      mctx.mcCells.indexSubstitutedRef :=
-        IdMap.set (authvarId cell) () mctx.mcCells.indexSubstitutedRef.value
+  lowerAuthLevels (authvarLevel cell) term
+  if authHasVars term then
+    ()
+  else
+    mctx.mcCells.indexSubstitutedRef :=
+      IdMap.set (authvarId cell) () mctx.mcCells.indexSubstitutedRef.value
   linkAuthvar cell term
 
 flexibleIndex : ModuleCtx -> Ref Authvar -> Authority -> Bool
@@ -407,7 +405,7 @@ unifyRow dyn r1 r2 = unifyRowN dyn (effrowNorm r1) (effrowNorm r2)
 unifyRowN : DynCtx -> EffRow -> EffRow -> Unit
 unifyRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
-    let _ = deferEffectRelation dyn.dcModule False r1 r2
+    deferEffectRelation dyn.dcModule False r1 r2
     deferEffectRelation dyn.dcModule False r2 r1
   else if rowTailIsJoin r1
     || rowTailIsJoin r2
@@ -468,9 +466,8 @@ unifyJoinRows mctx isIndex r1 r2 =
   let flexB = filterList (c => not (isRigidCell mctx c)) onlyB
   -- An index with no flexible member on either side has no room for an
   -- atom the other side lacks, so its shared labels are equal as indices.
-  let _ =
-    if isIndex && isEmptyL flexA && isEmptyL flexB && isEmptyL cflex then
-      unifyIndexAtomAuthorities mctx (fst fa) (fst fb)
+  if isIndex && isEmptyL flexA && isEmptyL flexB && isEmptyL cflex then
+    unifyIndexAtomAuthorities mctx (fst fa) (fst fb)
   let dA = atomsDiff (fst fa) (fst fb)
   let dB = atomsDiff (fst fb) (fst fa)
   -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
@@ -487,25 +484,20 @@ unifyJoinRows mctx isIndex r1 r2 =
       [freshEffvarAt mctx.mcGraph (minLevelOf (flexA ++ flexB ++ cflex))]
     else
       []
-  let _ =
-    if isNonEmptyL rigidA && isEmptyL flexB && not bindC then
-      joinMismatch mctx isIndex fa fb
-  let _ =
-    if isNonEmptyL rigidB && isEmptyL flexA && not bindC then
-      joinMismatch mctx isIndex fa fb
-  let _ =
-    if isNonEmptyL dA && isEmptyL flexB && not bindC then
-      joinSideCheck mctx isIndex dA dB (fst fa) (fst fb)
-  let _ =
-    if isNonEmptyL dB && isEmptyL flexA && not bindC then
-      joinSideCheck mctx isIndex dB dA (fst fb) (fst fa)
-  let _ = bindEach flexA (rowOfMembers mctx.mcGraph dB (v3s ++ rigidB))
-  let _ = bindEach flexB (rowOfMembers mctx.mcGraph dA (v3s ++ rigidA))
-  let _ =
-    if bindC then
-      bindEach
-        cflex
-        (rowOfMembers mctx.mcGraph (atomsUnion dA dB) (v3s ++ rigidA ++ rigidB))
+  if isNonEmptyL rigidA && isEmptyL flexB && not bindC then
+    joinMismatch mctx isIndex fa fb
+  if isNonEmptyL rigidB && isEmptyL flexA && not bindC then
+    joinMismatch mctx isIndex fa fb
+  if isNonEmptyL dA && isEmptyL flexB && not bindC then
+    joinSideCheck mctx isIndex dA dB (fst fa) (fst fb)
+  if isNonEmptyL dB && isEmptyL flexA && not bindC then
+    joinSideCheck mctx isIndex dB dA (fst fb) (fst fa)
+  bindEach flexA (rowOfMembers mctx.mcGraph dB (v3s ++ rigidB))
+  bindEach flexB (rowOfMembers mctx.mcGraph dA (v3s ++ rigidA))
+  if bindC then
+    bindEach
+      cflex
+      (rowOfMembers mctx.mcGraph (atomsUnion dA dB) (v3s ++ rigidA ++ rigidB))
   match v3s
     v3 :: _ => recordAbsorptions mctx (dA ++ dB) v3
     [] => ()
@@ -602,10 +594,9 @@ unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
     -- still see the variable after `inferApp` has unified the callee's row
     -- with a fresh one.  Two rigid tails meeting here still identify (the dup
     -- check downstream reports it), exactly as before.
-    let _ =
-      if isRigidCell dyn.dcModule v1 || isRigidCell dyn.dcModule v2 then
-        dyn.dcModule.mcCells.rigidEffvarsRef :=
-          IdMap.set (effvarId v3) () dyn.dcModule.mcCells.rigidEffvarsRef.value
+    if isRigidCell dyn.dcModule v1 || isRigidCell dyn.dcModule v2 then
+      dyn.dcModule.mcCells.rigidEffvarsRef :=
+        IdMap.set (effvarId v3) () dyn.dcModule.mcCells.rigidEffvarsRef.value
     linkRow v1 (EffRow d21 (Some v3))
     linkRow v2 (EffRow d12 (Some v3))
     -- #839 2a: both diffs vanish into the shared fresh tail v3; record them
@@ -617,12 +608,10 @@ unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
 -- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
 -- the guarded direction.)
 unifyRowPlain dyn (EffRow l1 (Some v1)) (EffRow l2 None) =
-  let _ =
-    effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l1 l2) l2
+  effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l1 l2) l2
   linkRow v1 (EffRow (atomsDiff l2 l1) None)
 unifyRowPlain dyn (EffRow l1 None) (EffRow l2 (Some v2)) =
-  let _ =
-    effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l2 l1) l1
+  effectLeakCheck dyn.dcModule (atomsEscape dyn.dcModule.mcGraph l2 l1) l1
   linkRow v2 (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: EQUALITY, via `closedRowEqCheck` (#2557).  Two written rows
 -- have no tail to bind and this unifier has no expected/actual role, so the only
@@ -720,7 +709,7 @@ unifyIndexAtomAuthorities mctx a1 a2 =
 unifyIndexRowN : DynCtx -> EffRow -> EffRow -> Unit
 unifyIndexRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
-    let _ = deferEffectRelation dyn.dcModule True r1 r2
+    deferEffectRelation dyn.dcModule True r1 r2
     deferEffectRelation dyn.dcModule True r2 r1
   else if rowTailIsJoin r1
     || rowTailIsJoin r2
@@ -749,16 +738,15 @@ unifyIndexRowPlain dyn r1 r2 = unifyRowPlain dyn r1 r2
 
 indexRowEquate : ModuleCtx -> List Atom -> List Atom -> Unit
 indexRowEquate mctx l1 l2 =
-  let _ = unifyIndexAtomAuthorities mctx l1 l2
+  unifyIndexAtomAuthorities mctx l1 l2
   indexRowEqCheck mctx (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
 
 indexOpenClosed : ModuleCtx -> List Atom -> Ref Effvar -> List Atom -> Unit
 indexOpenClosed mctx lOpen v lClosed =
-  let _ =
-    effectLeakCheck
-      mctx
-      (indexAtomsCovered mctx (atomsEscape mctx.mcGraph lOpen lClosed) lClosed)
-      lClosed
+  effectLeakCheck
+    mctx
+    (indexAtomsCovered mctx (atomsEscape mctx.mcGraph lOpen lClosed) lClosed)
+    lClosed
   linkRow v (EffRow (atomsDiff lClosed lOpen) None)
 
 -- The atoms of [escaping] whose label [bound] does not carry.  An escaping
@@ -770,7 +758,7 @@ indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
 indexAtomsCovered mctx [] _ = []
 indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
   Some y =>
-    let _ = wantIndexCovered mctx (atomAuth x) (atomAuth y)
+    wantIndexCovered mctx (atomAuth x) (atomAuth y)
     indexAtomsCovered mctx rest bound
   None => x :: indexAtomsCovered mctx rest bound
 
@@ -863,13 +851,13 @@ export
 lowerRowLevels : Int -> EffRow -> Unit
 lowerRowLevels level r =
   let (atoms, members) = rowFlat r
-  let _ = lowerMembers level members
+  lowerMembers level members
   fold (_ a => lowerAuthLevels level (atomAuth a)) () atoms
 
 lowerMembers : Int -> List (Ref Effvar) -> Unit
 lowerMembers _ [] = ()
 lowerMembers level (m :: ms) =
-  let _ = match !m
+  match !m
     EUnbound id lvl => if lvl > level then m := EUnbound id level
     _ => ()
   lowerMembers level ms
@@ -952,7 +940,7 @@ recordOblAt mctx p originId prov loc scope = wPush
 recordAbsorptions : ModuleCtx -> List Atom -> Ref Effvar -> Unit
 recordAbsorptions mctx [] _ = ()
 recordAbsorptions mctx (a :: rest) cell =
-  let _ = wPush mctx.mcCells.absorptions AbsorptionEvent {
+  wPush mctx.mcCells.absorptions AbsorptionEvent {
     atom = a,
     cell = cell,
     loc = mctx.mcLoc,
@@ -975,15 +963,15 @@ occursAdjust mctx id level t = match normalize t
   TCon _ _ => ()
   TRigid _ => ()
   TApp a b =>
-    let _ = occursAdjust mctx id level a
+    occursAdjust mctx id level a
     occursAdjust mctx id level b
   TFun a r b =>
-    let _ = occursAdjust mctx id level a
-    let _ = lowerRowLevels level r
+    occursAdjust mctx id level a
+    lowerRowLevels level r
     occursAdjust mctx id level b
   TEff r => lowerRowLevels level r
   TQual a q =>
-    let _ = lowerAuthLevels level q
+    lowerAuthLevels level q
     occursAdjust mctx id level a
   TAuth q => lowerAuthLevels level q
 
@@ -1082,11 +1070,11 @@ unifyN dyn t1 t2
 -- the argument must be EQUAL rather than merely compatible — see
 -- `paramVarianceGuard`, which unifies the argument.
 unifyN dyn (TApp a1 b1) (TApp a2 b2) =
-  let _ = unifyStruct dyn a1 a2
+  unifyStruct dyn a1 a2
   paramVarianceGuard dyn a1 b1 b2
 unifyN dyn (TFun a1 r1 b1) (TFun a2 r2 b2) =
-  let _ = unifyStruct dyn a1 a2
-  let _ = unifyRow dyn r1 r2
+  unifyStruct dyn a1 a2
+  unifyRow dyn r1 r2
   unifyStruct dyn b1 b2
 -- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
 -- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
@@ -1096,14 +1084,14 @@ unifyN dyn (TEff r1) (TEff r2) = unifyIndexRow dyn r1 r2
 -- authorities must cover each other, in both directions, whatever the flow.
 unifyN dyn (TAuth qa) (TAuth qb) = unifyIndex dyn.dcModule qa qb
 unifyN dyn (TQual a qa) (TQual b qb) =
-  let _ = wantAuthority dyn.dcModule qa qb
-  let _ = wantAuthority dyn.dcModule qb qa
+  wantAuthority dyn.dcModule qa qb
+  wantAuthority dyn.dcModule qb qa
   unifyStruct dyn a b
 unifyN dyn (TQual a qa) b =
-  let _ = wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
+  wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
   unifyStruct dyn a b
 unifyN dyn a (TQual b qb) =
-  let _ = wantAuthority dyn.dcModule (authTop (authDomainTop qb)) qb
+  wantAuthority dyn.dcModule (authTop (authDomainTop qb)) qb
   unifyStruct dyn a b
 unifyN dyn a b = typeMismatch dyn a b
 
@@ -1200,10 +1188,9 @@ solveFlexibleUpper mctx lower upper = match authNorm upper
     else match withoutVar cell lower
       [] => True
       rest =>
-        let _ =
-          linkAuthvar
-            cell
-            (widenOpenedFor mctx (authvarLevel cell) (authJoinAll rest))
+        linkAuthvar
+          cell
+          (widenOpenedFor mctx (authvarLevel cell) (authJoinAll rest))
         True
   _ => False
 
@@ -1486,11 +1473,11 @@ unifyVars dyn c1 c2 =
 bindVar : DynCtx -> Ref Tyvar -> Mono -> Unit
 bindVar dyn cell t =
   dyn.dcModule.mcCells.occursCheckFailed := False
-  let _ = occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) t
+  occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) t
   if dyn.dcModule.mcCells.occursCheckFailed.value then
     ()
   else
-    let _ = propagatePoison dyn.dcModule cell t
+    propagatePoison dyn.dcModule cell t
     let shaped = takeJoinsShapedBy dyn.dcModule cell t
     cell := Link t
     settleShapedJoins dyn shaped
@@ -1561,7 +1548,7 @@ poisonMismatchVars mctx a b =
 
 typeMismatch : DynCtx -> Mono -> Mono -> Unit
 typeMismatch dyn a b =
-  let _ = poisonMismatchVars dyn.dcModule a b
+  poisonMismatchVars dyn.dcModule a b
   typeMismatchReport dyn a b
 
 -- The do-chain a mismatch is blamed on: none once a report has been made for it.
@@ -1714,8 +1701,8 @@ generalizeBindingDeclared : DynCtx ->
   Mono ->
   Scheme
 generalizeBindingDeclared dyn declared residual force t =
-  let _ = defaultDeferredPatLitsIn dyn dyn.dcModule.mcCells.currentLevel.value t
-  let _ = defaultSourcelessAuthorities dyn.dcModule declared force t
+  defaultDeferredPatLitsIn dyn dyn.dcModule.mcCells.currentLevel.value t
+  defaultSourcelessAuthorities dyn.dcModule declared force t
   quantifyFree dyn.dcModule residual force t
 
 quantifyFree : ModuleCtx -> List AuthResidual -> EffRow -> Mono -> Scheme
@@ -1743,18 +1730,18 @@ lowerToCurrent mctx t = match normalize t
   TCon _ _ => ()
   TRigid _ => ()
   TApp a b =>
-    let _ = lowerToCurrent mctx a
+    lowerToCurrent mctx a
     lowerToCurrent mctx b
   TFun a r b =>
-    let _ = lowerToCurrent mctx a
-    let _ = lowerRowLevels mctx.mcCells.currentLevel.value r
+    lowerToCurrent mctx a
+    lowerRowLevels mctx.mcCells.currentLevel.value r
     lowerToCurrent mctx b
   TAuth q => lowerAuthLevels mctx.mcCells.currentLevel.value q
   TEff r =>
-    let _ = lowerRowLevels mctx.mcCells.currentLevel.value r
+    lowerRowLevels mctx.mcCells.currentLevel.value r
     ()
   TQual a q =>
-    let _ = lowerAuthLevels mctx.mcCells.currentLevel.value q
+    lowerAuthLevels mctx.mcCells.currentLevel.value q
     lowerToCurrent mctx a
 
 freeGenVars : Int -> Mono -> List Int
@@ -1827,7 +1814,7 @@ freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
 freshSubst mctx [] = []
 freshSubst mctx (id :: rest) =
   let v = freshVar mctx ()
-  let _ = if id == ambiguousImportTyvarId then poisonMismatchVars mctx v v
+  if id == ambiguousImportTyvarId then poisonMismatchVars mctx v v
   (id, v) :: freshSubst mctx rest
 
 -- The one quantified id no allocation ever mints (`newTyvarId` counts up from
@@ -1974,10 +1961,9 @@ export
 freshAuthvarRanged : ModuleCtx -> Param -> Bool -> Option String -> Ref Authvar
 freshAuthvarRanged mctx top pat name =
   let id = newEffvarId mctx.mcGraph ()
-  let _ =
-    if pat then
-      mctx.mcGraph.graphRun.patternAuthIdsRef :=
-        IdMap.set id () mctx.mcGraph.graphRun.patternAuthIdsRef.value
+  if pat then
+    mctx.mcGraph.graphRun.patternAuthIdsRef :=
+      IdMap.set id () mctx.mcGraph.graphRun.patternAuthIdsRef.value
   Ref (AUnbound id mctx.mcCells.currentLevel.value top pat name)
 
 -- What [readSlots] reads off every registered head's argument list, given
@@ -2034,7 +2020,7 @@ defaultDeferredPatLitsIn dyn lvl t =
 defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
 defaultPatLitVarsIn dyn _ [] = ()
 defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
-  let _ = match normalize a
+  match normalize a
     TVar cell =>
       if containsI (tyvarId cell) quantified then
         unifyIn dyn (tconBuiltin "Int") a
@@ -2045,7 +2031,7 @@ export
 unifyAll : DynCtx -> Mono -> List Mono -> Unit
 unifyAll dyn _ [] = ()
 unifyAll dyn t (x :: xs) =
-  let _ = unifyIn dyn t x
+  unifyIn dyn t x
   unifyAll dyn t xs
 
 -- THE qual-entry resolution: a cross-module constrained callee's whole recorded
@@ -2172,12 +2158,11 @@ instantiateMethodTracked mctx (Forall ids evars avars residual force body) =
 export
 forceInstantiation : ModuleCtx -> String -> MethodTrackedInstantiation -> Mono
 forceInstantiation mctx name inst =
-  let _ = performEffect mctx mctx.mcCells.curEffect inst.mtiForce
-  let _ =
-    fold
-      (_ r => wantAuthorityFrom mctx (Some name) r.arExact r.arLower r.arUpper)
-      ()
-      inst.mtiResidual
+  performEffect mctx mctx.mcCells.curEffect inst.mtiForce
+  fold
+    (_ r => wantAuthorityFrom mctx (Some name) r.arExact r.arLower r.arUpper)
+    ()
+    inst.mtiResidual
   inst.mtiBody
 
 export
@@ -2209,7 +2194,7 @@ zipSlotVecs (s :: rest) (v :: vs) = (s, v) :: zipSlotVecs rest vs
 export
 noteNumlitCtx : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
 noteNumlitCtx mctx a b kind =
-  let _ = tagNumlitCtxIf mctx a b kind
+  tagNumlitCtxIf mctx a b kind
   tagNumlitCtxIf mctx b a kind
 
 -- Tag EVERY literal whose var shares [v]'s root (not just the first) when [other]
@@ -2230,10 +2215,8 @@ tagAllLitLocs mctx v kind = match normalize v
 tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagLitLocsWithRoot mctx _ _ [] = ()
 tagLitLocsWithRoot mctx id kind ((mv, l) :: rest) =
-  let _ =
-    if sameRootId id mv then
-      mctx.mcCells.numlitCtxTags :=
-        (l, kind) :: mctx.mcCells.numlitCtxTags.value
+  if sameRootId id mv then
+    mctx.mcCells.numlitCtxTags := (l, kind) :: mctx.mcCells.numlitCtxTags.value
   tagLitLocsWithRoot mctx id kind rest
 
 -- The arrow a callee presents, introduced when its shape is still unknown.
@@ -2245,7 +2228,7 @@ calleeArrow dyn ft = match normalize ft
     let dom = freshVar dyn.dcModule ()
     let row = openRow dyn.dcModule ()
     let res = freshVar dyn.dcModule ()
-    let _ = unifyIn dyn ft (TFun dom row res)
+    unifyIn dyn ft (TFun dom row res)
     (dom, row, res)
 
 -- The type a `Ref` cell stores, read verbatim: the read is a directed flow out
@@ -2257,7 +2240,7 @@ refStored dyn t = match normalize t
   TApp (TCon "Ref" _) inner => inner
   _ =>
     let inner = freshVar dyn.dcModule ()
-    let _ = unifyIn dyn t (TApp (tconBuiltin "Ref") inner)
+    unifyIn dyn t (TApp (tconBuiltin "Ref") inner)
     inner
 
 export
@@ -2270,12 +2253,7 @@ instantiateLegacyVarTracked mctx x id s =
   match lookupSchemeObls x id mctx.mcCells.schemeObligationsRef.value
     Some obs =>
       let inst = instantiateValueTracked mctx x s
-      let _ =
-        recordSchemeCallObligations
-          mctx
-          id
-          obs
-          inst.mtiSubstitution.misTypeSubst
+      recordSchemeCallObligations mctx id obs inst.mtiSubstitution.misTypeSubst
       inst
     -- #673: schemeObligationsRef is a PER-MODULE ref (reset per module), so a CROSS-MODULE
     -- constrained binding used as a plain EVar has NO entry here.  For a PRELUDE binding
@@ -2285,12 +2263,11 @@ instantiateLegacyVarTracked mctx x id s =
     None => match declaredCrossModuleObls mctx x
       Some obs =>
         let inst = instantiateValueTracked mctx x s
-        let _ =
-          recordSchemeCallObligations
-            mctx
-            id
-            obs
-            inst.mtiSubstitution.misTypeSubst
+        recordSchemeCallObligations
+          mctx
+          id
+          obs
+          inst.mtiSubstitution.misTypeSubst
         inst
       None => instantiateValueTracked mctx x s
 
@@ -2437,16 +2414,15 @@ recordSchemeCallObligations mctx originId (o :: rest) subst =
       -- `schemeObligationsRef` and its cross-module mirrors
       -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
       -- site never records `OriginUnresolved`.
-      let _ =
-        recordObl
-          mctx
-          Predicate {
-            iface = o.voIface,
-            args = monos,
-          }
-          originId
-          PSchemeReinst
-          mctx.mcLoc
+      recordObl
+        mctx
+        Predicate {
+          iface = o.voIface,
+          args = monos,
+        }
+        originId
+        PSchemeReinst
+        mctx.mcLoc
       recordSchemeCallObligations mctx originId rest subst
     None => recordSchemeCallObligations mctx originId rest subst
 
@@ -2489,7 +2465,7 @@ export
 unifySpineProbe : DynCtx -> Mono -> List Mono -> Unit
 unifySpineProbe dyn ft args =
   let saved = wSnapshot dyn.dcModule.mcCells.fileValueFlows
-  let _ = unifySpineProbeGo dyn ft args
+  unifySpineProbeGo dyn ft args
   wRestore dyn.dcModule.mcCells.fileValueFlows saved
 
 unifySpineProbeGo : DynCtx -> Mono -> List Mono -> Unit
@@ -2521,12 +2497,11 @@ unifyInto dyn pos e a = unifyIntoOrd dyn False pos e a
 export
 unifyIntoOrd : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
 unifyIntoOrd dyn valueFirst pos e a =
-  let _ =
-    if monoHasArrowInSlot e || monoHasArrowInSlot a then
-      if pos then
-        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc e a
-      else
-        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc a e
+  if monoHasArrowInSlot e || monoHasArrowInSlot a then
+    if pos then
+      recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc e a
+    else
+      recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc a e
   unifyIntoStep dyn valueFirst pos e a
 
 -- Capture a directed judgment once; recursive descent does not rescan every
@@ -2559,32 +2534,27 @@ unifyIntoN dyn _ _ (t@(TQual _ _)) (TVar cell) = bindVar dyn cell t
 -- only be admitted when the qualifier admits the domain's top, since nothing
 -- bounds the plain value (the application site refines this with α).
 unifyIntoN dyn vf pos (TQual e qe) (TQual a qa) =
-  let _ =
-    if pos then
-      wantAuthority dyn.dcModule qa qe
-    else
-      wantAuthority dyn.dcModule qe qa
+  if pos then
+    wantAuthority dyn.dcModule qa qe
+  else
+    wantAuthority dyn.dcModule qe qa
   unifyIntoStep dyn vf pos e a
 unifyIntoN dyn vf pos (TQual e qe) a =
-  let _ = if pos then wantAuthority dyn.dcModule (authTop (authDomainTop qe)) qe
+  if pos then wantAuthority dyn.dcModule (authTop (authDomainTop qe)) qe
   unifyIntoStep dyn vf pos e a
 unifyIntoN dyn vf pos e (TQual a qa) =
-  let _ =
-    if pos then
-      ()
-    else
-      wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
+  if pos then () else wantAuthority dyn.dcModule (authTop (authDomainTop qa)) qa
   unifyIntoStep dyn vf pos e a
 unifyIntoN dyn _ _ (TAuth qe) (TAuth qa) = unifyIndex dyn.dcModule qa qe
 unifyIntoN dyn vf pos (TFun e1 er e2) (TFun a1 ar a2) =
-  let _ = unifyIntoStep dyn vf (not pos) e1 a1
-  let _ = rowInto dyn pos (effrowNorm er) (effrowNorm ar)
+  unifyIntoStep dyn vf (not pos) e1 a1
+  rowInto dyn pos (effrowNorm er) (effrowNorm ar)
   unifyIntoStep dyn vf pos e2 a2
 unifyIntoN dyn vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
   | tupleUnifyClash e a || monoSlotNonCovariant dyn.dcModule e1 =
     unifyOrdered dyn vf e a
   | otherwise =
-    let _ = unifyIntoStep dyn vf pos e1 a1
+    unifyIntoStep dyn vf pos e1 a1
     unifyIntoStep dyn vf pos e2 a2
 unifyIntoN dyn vf _ e a = unifyOrdered dyn vf e a
 
@@ -2596,7 +2566,7 @@ unifyIntoN dyn vf _ e a = unifyOrdered dyn vf e a
 bindValueUpper : DynCtx -> Ref Tyvar -> Mono -> Unit
 bindValueUpper dyn cell lower =
   dyn.dcModule.mcCells.occursCheckFailed := False
-  let _ = occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) lower
+  occursAdjust dyn.dcModule (tyvarId cell) (tyvarLevel cell) lower
   if not dyn.dcModule.mcCells.occursCheckFailed.value then
     let upper =
       optionOrFresh
@@ -2607,18 +2577,15 @@ bindValueUpper dyn cell lower =
           collectValueAllowance) [
           (dyn.dcModule.mcLoc, lower),
         ])
-    let _ = recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc upper lower
+    recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc upper lower
     bindVar dyn cell upper
 
 collectValueAllowance : DynCtx -> List EffRow -> EffRow
 collectValueAllowance dyn rows =
   let cell = freshInferenceEffvar dyn.dcModule ()
-  let _ =
-    EffectSolver.registerValueAllowance
-      dyn.dcModule.mcCells.effectSummaries
-      cell
+  EffectSolver.registerValueAllowance dyn.dcModule.mcCells.effectSummaries cell
   let upper = EffRow [] (Some cell)
-  let _ = fold (_ lower => rowInto dyn True upper lower) () rows
+  fold (_ lower => rowInto dyn True upper lower) () rows
   upper
 
 unifyOrdered : DynCtx -> Bool -> Mono -> Mono -> Unit
@@ -2685,7 +2652,7 @@ monoSlotNonCovariant mctx hd = match headTyconMono hd
 export
 unifyParamsExpected : DynCtx -> List Mono -> List Mono -> Unit
 unifyParamsExpected dyn (p :: ps) (e :: es) =
-  let _ = bindFrom dyn p e
+  bindFrom dyn p e
   unifyParamsExpected dyn ps es
 unifyParamsExpected dyn _ _ = ()
 
@@ -2695,18 +2662,18 @@ export
 applicationRowTyped : DynCtx -> Mono -> Mono -> Mono -> EffRow
 applicationRowTyped dyn ft xt result = match normalize ft
   TFun dom row res =>
-    let _ = argumentIntoTyped dyn dom xt
-    let _ = bindFrom dyn result res
+    argumentIntoTyped dyn dom xt
+    bindFrom dyn result res
     row
   _ =>
     let unknown = openRow dyn.dcModule ()
-    let _ = unifyIn dyn ft (TFun xt unknown result)
+    unifyIn dyn ft (TFun xt unknown result)
     unknown
 
 argumentIntoTyped : DynCtx -> Mono -> Mono -> Unit
 argumentIntoTyped dyn dom xt = match normalize dom
   TQual d q =>
-    let _ = unifyInto dyn True d xt
+    unifyInto dyn True d xt
     wantAuthority dyn.dcModule (typeAuthority (authDomainTop q) xt) q
   _ => unifyInto dyn True dom xt
 
@@ -2804,7 +2771,7 @@ resolvePendingJoins dyn level = match dyn.dcModule.mcCells.pendingJoinsRef.value
   pj :: rest =>
     if pj.pjLevel >= level then
       dyn.dcModule.mcCells.pendingJoinsRef := rest
-      let _ = resolvePendingJoin dyn pj
+      resolvePendingJoin dyn pj
       resolvePendingJoins dyn level
   [] => ()
 
@@ -2831,10 +2798,10 @@ settlePending dyn level postponed =
       if pj.pjLevel >= level then
         dyn.dcModule.mcCells.pendingJoinsRef := rest
         if joinOfOuterVariables level pj then
-          let _ = lowerTyvarLevel (level - 1) pj.pjResult
+          lowerTyvarLevel (level - 1) pj.pjResult
           settlePending dyn level ({ pj | pjLevel = level - 1 } :: postponed)
         else
-          let _ = resolvePendingJoin dyn pj
+          resolvePendingJoin dyn pj
           settlePending dyn level postponed
       else
         postponed
@@ -2893,7 +2860,7 @@ collectAuthAllowance mctx lowers =
     q :: _ => authDomainTop q
     [] => PUnit
   let cell = freshAuthvar mctx top None
-  let _ = fold (_ q => wantAuthority mctx q (AVar cell)) () lowers
+  fold (_ q => wantAuthority mctx q (AVar cell)) () lowers
   AVar cell
 
 export
@@ -2904,7 +2871,7 @@ optionOrFresh mctx (Some value) = value
 joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual outer context loc left right =
   let dyn = dynAtIfSome loc outer
-  let _ = noteNumlitCtx dyn.dcModule left right context
+  noteNumlitCtx dyn.dcModule left right context
   unifyIn { dyn | dcJoin = Some context } left right
 
 export
@@ -2985,13 +2952,13 @@ unifySourceDomains dyn arity owned actual =
     ()
   else match (normalize owned, normalize actual)
     (TFun domain _ result, TFun param _ body) =>
-      let _ = unifyIn dyn domain param
+      unifyIn dyn domain param
       unifySourceDomains dyn (arity - 1) result body
     _ => unifyIn dyn owned actual
 
 export
 zipBindFrom : DynCtx -> List Mono -> List Mono -> Unit
 zipBindFrom dyn (p :: ps) (q :: qs) =
-  let _ = bindFrom dyn p q
+  bindFrom dyn p q
   zipBindFrom dyn ps qs
 zipBindFrom dyn _ _ = ()

@@ -1,4 +1,8 @@
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import driver.main_autoprint.{executedMainInputs}
+import support.source_index.{
+  indexSource, sourcePositionToOffset, offsetToUtf16Position
+}
 import types.capability_manifest.{EntryKey(..)}
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
@@ -18,17 +22,15 @@ import types.capability_manifest.{EntryKey(..)}
 -- one per line, sorted by the harness.
 
 import frontend.ast.{
-  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp,
-  UsePath(..), UseMember(..), useMemberLocal
+  Decl(..), Expr(..), Loc(..), Pat, Ty, UsePath(..), UseMember(..),
+  useMemberLocal
 }
 import frontend.parser.{
   parse,
   parseLocated,
   parseResult,
   ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
 }
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugar, checkDerives}
@@ -74,14 +76,18 @@ import types.publish.{
   noEntryTables
 }
 import types.typecheck.{
+  TcDiag(..),
+  chainFullKey,
+  checkModulesChainReportFor,
+  checkModulesEntryFullReportK,
+  checkModulesPartialK,
   driveInputsFor,
-  checkModulesEntryFullReportK, entrySplit, schemeLines,
-  checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
-  entryOwnSchemes, dropModSchemes, ModDiags,
-  TcDiag(..), tcMsg,
-  -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
-  -- typechecker because S1's `nameable in M` operand does; see its own comment.
-  importedStandaloneShadows, importedStandaloneShadowsIn,
+  dropModSchemes,
+  entryOwnSchemes,
+  entrySplit,
+  ModDiags,
+  schemeLines,
+  tcMsg,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
@@ -95,6 +101,7 @@ import driver.loader.{
   LoadError(..),
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
+  loadProgramFilesLocatedCachedSourcesE,
   loadedSourceOf,
   parseCachedLocated,
   loadProgramFilesLocatedE,
@@ -137,36 +144,11 @@ import backend.wasm_symbols.{
 import backend.llvm_symbols as LlvmSymbols
 import support.symbol_origin.{SymbolOrigin, originPosition}
 import json.{Json(..), jObject, stringify}
+import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
-public export data Severity = SevError | SevWarning
-
--- A structured diagnostic: severity + human-readable message + an optional
--- source span (B.10.2b).  `Some` for type errors (expr-level span from the
--- ELoc substrate); `None` for resolve / guard / match diagnostics the compiler
--- pipeline does not yet locate.
--- Stage 1 (DIAGNOSTIC-CODES-DESIGN): every Diag carries a stable machine-readable
--- `Code` (a kebab string, e.g. "T-TYPE-MISMATCH") authored at its producing site.
--- The JSON `kind` is DERIVED from the code prefix (`codeKind`), never stored — so
--- authors supply exactly one token.  The CLI text renderers (`ppDiag`/
--- `ppDiagCliSrc`) deliberately ignore the code (JSON-only for Stage 1), keeping the
--- human-facing CLI output byte-identical.
--- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
--- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
--- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
--- today only did-you-mean (a resolve error carrying a suggestion) populates
--- them.  A `Fix` replaces its `Loc` span with the replacement string.
-public export data Fix = Fix Loc String
-
-public export data Diag =
-  Diag Severity String String (Option Loc) (Option String) (Option Fix)
-
--- Smart constructor for a diagnostic with no structured help/fix (the common
--- case) — keeps the ~15 plain construction sites terse.
-export
-mkDiag : Severity -> String -> String -> Option Loc -> Diag
-mkDiag sev code msg loc = Diag sev code msg loc None None
+export import driver.diagnostic_value.{Severity(..), Fix(..), Diag(..), mkDiag}
 
 -- The edit for a did-you-mean at [loc].  A PrivateNameAccess carries the
 -- statement's span when the dotted import form (`import m.name`) has no member
@@ -409,209 +391,6 @@ codeKind code
   | startsWith "W-" code = "warning"
   | startsWith "rule-" code = "lint"
   | otherwise = "error"
-
--- The reserved-keyword-in-identifier-position diagnostic (parser.mdk's
--- `reservedKeywordMsg`) reads ``<word>` is a reserved keyword — …`.  Its stable
--- marker is the substring "is a reserved keyword" (the word itself varies, so a
--- prefix match won't do); the offending keyword is the text between the first
--- pair of backticks.  Recover it here — from the message the diagnostic already
--- carries, no re-lex — so both the code mapping and the rename `fix` can reuse it.
-isReservedKwMsg : String -> Bool
-isReservedKwMsg msg = match stringIndexOf "is a reserved keyword" msg
-  Some _ => True
-  None => False
-
-wordBetweenBackticks : String -> Option String
-wordBetweenBackticks msg = match stringIndexOf "`" msg
-  None => None
-  Some i =>
-    let rest = stringSlice (i + 1) (stringLength msg) msg
-    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
-
--- Every backtick-quoted substring in `msg`, in order. The malformed-literal
--- lex messages (#677) embed BOTH the offending spelling and the suggested
--- one (`` `bad`: … write `good` ``), so a two-element read of this list is
--- exactly the (old, new) pair a machine `fix` needs — without re-deriving
--- either from the diagnostic's single-point `Loc`, which only pins the START
--- column, not a length.
-allBacktickWords : String -> List String
-allBacktickWords msg = match stringIndexOf "`" msg
-  None => []
-  Some i =>
-    let rest = stringSlice (i + 1) (stringLength msg) msg
-    match stringIndexOf "`" rest
-      None => []
-      Some j =>
-        let word = stringSlice 0 j rest
-        let after = stringSlice (j + 1) (stringLength rest) rest
-        word :: allBacktickWords after
-
-twoBacktickWords : String -> Option (String, String)
-twoBacktickWords msg = match allBacktickWords msg
-  a :: b :: _ => Some (a, b)
-  _ => None
-
--- A whole-literal replacement `Fix`, spanning exactly `[sc, sc + len(old))` —
--- the malformed spelling — replaced with the suggested one.
-oldNewFixOf : String -> Int -> Int -> (String, String) -> Fix
-oldNewFixOf f sl sc (old, new) =
-  Fix (Loc f sl sc sl (sc + stringLength old)) new
-
--- Stable code for a parse/lex diagnostic, recovered at the ParseError→Diag
--- boundary from the message (a lexer TLexError surfaces as a ParseError; lexer
--- messages map to `L-*`, specifically recognized parse errors to their own `P-*`,
--- and everything else to the umbrella `P-PARSE`).
---
--- The guard clauses below ARE the list — do not restate their number here. Counts
--- like "the four lexer messages" or "the two special parse cases" rot silently, in
--- the one file whose whole job is mapping messages to codes. A count encodes a
--- fact with no derivation and no expiry (.claude/ORCHESTRATING.md, "DERIVE, don't
--- encode"), so it goes stale the next time anyone adds a clause and nothing
--- notices — which is exactly how it rotted, unremarked, twice. Read the clauses;
--- they cannot lie.
-export
-parseErrCode : String -> String
-parseErrCode msg
-  | startsWith "unterminated string" msg = "L-UNTERMINATED-STRING"
-  | startsWith "unterminated block" msg = "L-UNTERMINATED-COMMENT"
-  | startsWith "unterminated character" msg = "L-BAD-CHAR-LITERAL"
-  | startsWith "invalid escape" msg = "L-BAD-ESCAPE"
-  | startsWith "unicode escape" msg = "L-BAD-UNICODE-ESCAPE"
-  | startsWith "bare unicode escape" msg = "L-BARE-UNICODE-ESCAPE"
-  | startsWith "character literal" msg = "L-BAD-CHAR-LITERAL"
-  | startsWith "Medaka has no `\\x" msg = "L-HS-LAMBDA"
-  | startsWith "Medaka has no `$`" msg = "L-HS-DOLLAR"
-  | startsWith "unexpected character" msg = "L-BAD-CHAR"
-  | startsWith "integer literal too large" msg = "L-INT-OVERFLOW"
-  | startsWith "float literal out of range" msg = "L-FLOAT-OVERFLOW"
-  | startsWith "malformed radix literal" msg = "L-MALFORMED-RADIX"
-  | startsWith "malformed float literal" msg = "L-MALFORMED-FLOAT"
-  | startsWith "unexpected end of input" msg = "P-UNEXPECTED-EOF"
-  | startsWith "unexpected `!=`" msg = "P-BAD-NEQ"
-  | startsWith "Medaka has no `case" msg = "P-HS-CASE"
-  | startsWith "Medaka has no `match ... with`" msg = "P-OCAML-MATCH-WITH"
-  | startsWith "Medaka has no `**`" msg = "P-NO-POW-OPERATOR"
-  | startsWith "`::` is the list cons operator" msg = "P-HS-SIG"
-  | startsWith "Medaka has no `/* " msg = "L-BLOCKCOMMENT"
-  | startsWith "Medaka has no `{ ... }` blocks" msg = "P-BRACE-BLOCK"
-  | startsWith "Medaka has no `for`" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no `while`" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no `def`" msg = "P-DEF-KEYWORD"
-  | startsWith "Medaka has no statement terminator" msg = "L-SEMICOLON"
-  | startsWith "missing `where` on this " msg = "P-MISSING-WHERE"
-  | startsWith "a `where` block must start on the next line" msg =
-    "P-WHERE-BODY-SAME-LINE"
-  | startsWith "a `do` block must end" msg = "P-DO-ENDS-IN-BINDING"
-  | startsWith "a `defer` block must end" msg = "P-DO-ENDS-IN-BINDING"
-  | startsWith "a match-arm guard uses" msg = "P-GUARD-BAR-IN-MATCH"
-  | startsWith "an equation guard uses" msg = "P-GUARD-IF-IN-EQUATION"
-  | isReservedKwMsg msg = "P-RESERVED-KEYWORD"
-  | otherwise = "P-PARSE"
-
-doEndsInBindingHelp : String
-doEndsInBindingHelp =
-  "end the block with the expression whose value it should have, such as `pure x`"
-
--- Build the (help, fix) pair for the two parse-error hints with a clean,
--- mechanical single-token fix (the Haskell `::`-signature carveout and the
--- `!=`-inequality hint).  Both hints' pre-scan already reports a `Loc` whose
--- start col points at the offending token's first character (verified against
--- `medaka check --json`: `::` and `!=` both start exactly at `sc`), so the fix
--- span is `[sc, sc+2)` — the two-character token — regardless of the diag's
--- own (single-char, display-only) range.  Every other parse hint (`\x->`, `$`,
--- `case…of`) needs a multi-edit rewrite, so it stays help/message-only (no
--- `fix`) — this is deliberately narrow, not a general parse-error-fix engine.
-export
-parseErrHelpFix : String -> Loc -> (Option String, Option Fix)
-parseErrHelpFix msg (Loc f sl sc el ec)
-  | startsWith "`::` is the list cons operator" msg = (
-    Some "replace `::` with `:`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) ":"),
-  )
-  | startsWith "unexpected `!=`" msg = (
-    Some "replace `!=` with `/=`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
-  )
-  | startsWith intMinLiteralMsg msg = (Some intMinLiteralHelp, None)
-  -- Malformed radix/float literals (#677): the lexer already embeds BOTH the
-  -- offending spelling and its suggested fix in backticks (`` `bad` … `good` ``),
-  -- so the fix span is `[sc, sc + len(bad))` — the malformed literal itself,
-  -- starting exactly where the diag is anchored (the lexer raises the error at
-  -- the literal's own start, not a downstream victim). When the literal has no
-  -- safe suggested spelling (`0x_`, digits nowhere in sight), the message
-  -- carries only the one `bad` backtick pair and `twoBacktickWords` returns
-  -- `None` — help stays, `fix` doesn't.
-  -- Bare `\uXXXX` unicode escape (#515): the lexer's message already embeds
-  -- both spellings as the first two backtick pairs (`` `\uXXXX` `` then
-  -- `` `\u{XXXX}` ``), so this reuses the SAME (old, new) machinery the
-  -- malformed-radix/malformed-float hints use just above — no bespoke
-  -- fix-building needed.
-  | startsWith "bare unicode escape" msg = (
-    Some "write the unicode escape braced, `\\u{XXXX}`",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  | startsWith "malformed radix literal" msg = (
-    Some "the digit separator `_` may only appear between digits",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  | startsWith "malformed float literal" msg = (
-    Some "a float literal needs a digit on both sides of the decimal point",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  -- A reserved keyword used as a name: rename by appending `_` (any reserved word
-  -- + `_` is a legal identifier).  The diagnostic's `sc` already points at the
-  -- keyword's first char, so the fix span is `[sc, sc + len(word))` — the same
-  -- `sc + stringLength …` span the did-you-mean resolve fix uses.
-  | isReservedKwMsg msg = match wordBetweenBackticks msg
-    Some w => (
-      Some
-        "rename it to `\{w}_`; any reserved word plus `_` is a valid identifier",
-      Some (Fix (Loc f sl sc sl (sc + stringLength w)) "\{w}_"),
-    )
-    None => (None, None)
-  -- `public` in front of anything but `data` (#67): `afterPublicFor`
-  -- (`compiler/frontend/parser.mdk`) now reports this AT the `public` token
-  -- itself (captured via `getPos` before it's consumed), so `sc` already
-  -- points at its first char — the fix is a clean single-token deletion, the
-  -- same shape as the reserved-keyword rename above.
-  | startsWith "`public` applies only to `data` declarations" msg = (
-    Some "drop `public`; a function or value is exported with plain `export`",
-    Some (Fix (Loc f sl sc sl (sc + stringLength "public")) ""),
-  )
-  -- Missing `where` on an `interface`/`impl` header (#1160), and a member
-  -- written on the same line as `where` (#1140).  Help-only, deliberately: the
-  -- repair for the first is an INSERTION at the end of the header LINE and for
-  -- the second a line break plus an indent, and neither position is derivable
-  -- from the single-point `Loc` these diagnostics carry (both are anchored at
-  -- the construct that is wrong — the header keyword / the misplaced member —
-  -- not at the edit site).  A `fix` here would have to guess a column, which is
-  -- worse than none: an agent applies it verbatim.
-  | startsWith "missing `where` on this " msg = (
-    Some
-      "end the header with `where`; without it the next line is read as another type argument",
-    None,
-  )
-  | startsWith "a `do` block must end" msg = (Some doEndsInBindingHelp, None)
-  | startsWith "a `defer` block must end" msg = (Some doEndsInBindingHelp, None)
-  | startsWith "a `where` block must start on the next line" msg = (
-    Some
-      "`where` opens a block only when it ends the line; move the member to the next line",
-    None,
-  )
-  -- Guard-keyword confusion (#591): the parser anchors each diagnostic AT the
-  -- offending keyword (`|` / `if`), so `sc` is its first char — the fix is a
-  -- clean single-token swap to the other spelling.
-  | startsWith "a match-arm guard uses" msg = (
-    Some "replace `|` with `if`",
-    Some (Fix (Loc f sl sc sl (sc + 1)) "if"),
-  )
-  | startsWith "an equation guard uses" msg = (
-    Some "replace `if` with `|`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) "|"),
-  )
-  | otherwise = (None, None)
-
--- ── rendering ──────────────────────────────────────────────────────────────
 
 export
 ppSeverity : Severity -> String
@@ -1636,30 +1415,9 @@ wrappedRead cacheRef staleRef parseCacheRef read path = match read path
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
 
--- A parse-error `Loc` for the editing buffer (1-based line, 0-based col), so the
--- LSP can squiggle the offending token (mirror parseResult's located line/col).
-parseErrLoc : String -> ParseError -> Loc
-parseErrLoc path e =
-  let ln = parseErrorLine e
-  let c = parseErrorCol e
-  Loc path ln c ln (c + 1)
-
--- A located parse/lex `Diag` for `path`, carrying the stable `P-*`/`L-*` code and
--- any machine-applicable fix.  One definition shared by the stale-buffer path and
--- the loader's `LoadParseFailed` path (#100) so an imported module's parse error
--- is byte-for-byte the diagnostic that file gets when checked directly.
 export
 parseErrDiag : String -> ParseError -> Diag
-parseErrDiag path e =
-  let ploc = parseErrLoc path e
-  let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
-  Diag
-    SevError
-    (parseErrCode (parseErrorMessage e))
-    (parseErrorMessage e)
-    (Some ploc)
-    phelp
-    pfix
+parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
 
 -- ── project analysis ────────────────────────────────────────────────────────
 --
@@ -1824,49 +1582,92 @@ analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
 analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
-  match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
-    -- #100: a parse/lex error in a dependency is attributed to THAT module's file
-    -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
-    -- (a half-typed buffer), and it must not reach here as a panic that would take the
-    -- whole didChange response with it.
-    Err (LoadParseFailed mpath _ pe) =>
-      (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-    Err (LoadMsg e) => (
-      None,
-      appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
-    )
-    -- The cycle is reported at the `import` that closes it, in the module that
-    -- holds that import.
-    Err (LoadCycle e cpath csite) => match csite
-      Some (_, loc) => (
-        None,
-        appendStale staleRef [
-          (cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)]),
-        ],
-      )
-      None => (
-        None,
-        appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
-      )
-    Ok mods =>
-      let chainKey = chainKeyOf entry roots
-      let front =
-        frontEnd
-          exportsFor
-          (d => unkept (checkReportOf RecordSteps chainKey d))
-          FrontInput {
-            fiInputs = driveInputsFor !selectedProfile False [],
-            fiAllowInternal = allowInternal,
-            fiTrusted = trustedMods,
-            fiRuntimeSrc = runtimeSrc,
-            fiCoreSrc = coreSrc,
-            fiPolicy = DriveUnblocked chainKey RecordSteps,
-            fiProgram = FrontGraph mods (desugaredModPairs mods),
-          }
-      (
-        Some ((front.foReport, front.foOutputs), graphIdOf mods),
-        appendStale staleRef front.foDiags,
-      )
+  projectKeyedFromLoad
+    exportsFor
+    allowInternal
+    trustedMods
+    entry
+    roots
+    runtimeSrc
+    coreSrc
+    staleRef
+    (loadProgramFilesLocatedCachedE parseCacheRef wread entry roots)
+
+export
+analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  Ref (List (String, String)) ->
+  Ref (OrdMap (List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag), OrdMap String)
+analyzeProjectKeyedSources exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+  let staleRef = newStale ()
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let (loaded, sources) =
+    loadProgramFilesLocatedCachedSourcesE parseCacheRef wread entry roots
+  let (keyed, diags) =
+    projectKeyedFromLoad
+      exportsFor
+      allowInternal
+      trustedMods
+      entry
+      roots
+      runtimeSrc
+      coreSrc
+      staleRef
+      loaded
+  (keyed, diags, sources)
+
+projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  Ref (List (String, Diag)) ->
+  Result LoadError (List (String, String, List Decl)) ->
+  <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
+-- Dependency errors keep the destination file and the exact located parser error.
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+  (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadMsg e)) = (
+  None,
+  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+)
+-- A located cycle belongs to the importing module that closes it.
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e cpath (Some (_, loc)))) = (
+  None,
+  appendStale staleRef [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])],
+)
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e _ None)) = (
+  None,
+  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+)
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
+  let chainKey = chainKeyOf entry roots
+  let front =
+    frontEnd
+      exportsFor
+      (d => unkept (checkReportOf RecordSteps chainKey d))
+      FrontInput {
+        fiInputs = driveInputsFor !selectedProfile False [],
+        fiAllowInternal = allowInternal,
+        fiTrusted = trustedMods,
+        fiRuntimeSrc = runtimeSrc,
+        fiCoreSrc = coreSrc,
+        fiPolicy = DriveUnblocked chainKey RecordSteps,
+        fiProgram = FrontGraph mods (desugaredModPairs mods),
+      }
+  (
+    Some ((front.foReport, front.foOutputs), graphIdOf mods),
+    appendStale staleRef front.foDiags,
+  )
 
 -- Whether resolve rejected any module of a bucketed graph.
 bucketsResolveRejected : List (String, List Diag) -> Bool
@@ -2836,7 +2637,16 @@ cjRange sl sc el ec =
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
 export
 cjRangeOfLoc : String -> Option Loc -> Json
-cjRangeOfLoc src (Some (Loc _ sl sc el ec)) = cjRange (sl - 1) sc (el - 1) ec
+cjRangeOfLoc "" (Some (Loc _ sl sc el ec)) = cjRange (sl - 1) sc (el - 1) ec
+cjRangeOfLoc src (Some (Loc _ sl sc el ec)) =
+  let index = indexSource src
+  let positions = do
+    start <- sourcePositionToOffset index sl sc
+    end <- sourcePositionToOffset index el ec
+    (a, b) <- offsetToUtf16Position index start
+    (c, d) <- offsetToUtf16Position index end
+    Some (cjRange a b c d)
+  optionOr JNull positions
 cjRangeOfLoc src None = JNull
 
 -- Severity code: Error=1, Warning=2.
@@ -2864,8 +2674,11 @@ optField _ None = []
 -- the range covering exactly the span to overwrite (mirrors the LSP text edit).
 export
 cjFixJson : Fix -> Json
-cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject [
-  ("range", cjRange (sl - 1) sc (el - 1) ec),
+cjFixJson = cjFixJsonWithSource ""
+
+cjFixJsonWithSource : String -> Fix -> Json
+cjFixJsonWithSource src (Fix loc repl) = jObject [
+  ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
 
@@ -2874,7 +2687,7 @@ cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
     ([("code", JString code)]
-      ++ optField "fix" (map cjFixJson fix)
+      ++ optField "fix" (map (cjFixJsonWithSource src) fix)
       ++ optField "help" (map JString help)
       ++ [
         ("kind", JString (diagKind sev code)),
@@ -2885,8 +2698,6 @@ cjDiagnostic _ src (Diag sev code msg loc help fix) =
       ])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
--- `src` is the file's source text; the JSON range comes from each `Loc`, so it
--- is unused by `cjRangeOfLoc`.
 -- `diags` is the List Diag from analyzeProject.
 export
 cjFileEntry : String -> String -> List Diag -> Json
@@ -3444,35 +3255,11 @@ readFileSafe path = match readFile path
   Err _ => ""
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
--- Mirrors runCheckJsonCmd's inline parse-error diag (built inline, not via
--- cjDiagnostic) so a hard parse failure still carries a stable `code`, a range,
--- and — for the two single-token hints — a machine-applicable `fix`.
+-- Uses the same serializer as other diagnostics, including typed edits.
 export
 cjParseErrJson : String -> String -> ParseError -> String
 cjParseErrJson target src e =
-  let ln = parseErrorLine e - 1
-  let col = parseErrorCol e
-  let r = cjRange ln col ln (col + 1)
-  let pcode = parseErrCode (parseErrorMessage e)
-  let ploc = Loc target (parseErrorLine e) col (parseErrorLine e) (col + 1)
-  let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
-  let diagJson =
-    jObject
-      ([("code", JString pcode)]
-        ++ optField "fix" (map cjFixJson pfix)
-        ++ optField "help" (map JString phelp)
-        ++ [
-          ("kind", JString (codeKind pcode)),
-          ("message", JString (parseErrorMessage e)),
-          ("range", r),
-          ("severity", JInt 1),
-          ("source", JString "medaka"),
-        ])
-  let filesJson = jObject [
-    ("file", JString target),
-    ("diagnostics", JArray (arrayFromList [diagJson])),
-  ]
-  stringify (jObject [("files", JArray (arrayFromList [filesJson]))])
+  cjAllToJson [(target, src, [parseErrDiag target e])]
 
 -- Single-module check → JSON.  Parse errors are detected FIRST; otherwise the
 -- single-file located pipeline runs and its diags serialize via cjAllToJson.
@@ -3486,8 +3273,7 @@ cjParseErrJson target src e =
 -- `CjParts` also carries the ENTRY's path key — the value a caller needs to
 -- fold diagnostics of its own into the right file's bucket, since the
 -- multi-module arm relativizes paths.  The located parse-error envelope is
--- hand-built (`cjParseErrJson` computes a range `cjDiagnostic` does not), so
--- it can only be handed back already rendered; it always travels with
+-- rendered as a complete envelope and always travels with
 -- `hasErr = True`, which is why no caller has to fold into it.
 public export data CheckJson =
   | CjRendered String

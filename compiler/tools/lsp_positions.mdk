@@ -1,0 +1,36 @@
+import support.source_index.{
+  SourceIndex, sourcePositionToOffset, offsetToUtf16Position,
+  utf16PositionToOffset, clampSourcePositionToOffset
+}
+import frontend.ast.{Loc(..)}
+import json.{Json(..), jObject, get, asInt}
+
+position : (Int, Int) -> Json
+position (line, col) = jObject [("line", JInt line), ("character", JInt col)]
+
+export
+locToLspRange : SourceIndex -> Loc -> Option Json
+locToLspRange index (Loc _ sl sc el ec) = do
+  start <- sourcePositionToOffset index sl sc
+  end <- sourcePositionToOffset index el ec
+  a <- offsetToUtf16Position index start
+  b <- offsetToUtf16Position index end
+  Some (jObject [("start", position a), ("end", position b)])
+
+export
+lspPositionToOffset : SourceIndex -> Json -> Option Int
+lspPositionToOffset index pos = match (get "line" pos, get "character" pos)
+  (Some l, Some c) => match (asInt l, asInt c)
+    (Some line, Some col) => utf16PositionToOffset index line col
+    _ => None
+  _ => None
+
+export
+clampedLocToLspRange : SourceIndex -> Loc -> Option Json
+clampedLocToLspRange index (Loc _ sl sc el ec) = match (
+  offsetToUtf16Position index (clampSourcePositionToOffset index sl sc),
+  offsetToUtf16Position index (clampSourcePositionToOffset index el ec),
+)
+  (Some a, Some b) =>
+    Some (jObject [("start", position a), ("end", position b)])
+  _ => None

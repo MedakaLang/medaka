@@ -182,6 +182,7 @@ suites = [
   -- importing `bytes` does not import `test` with it.
   ("bytes_test", (5, EvalAndNative)),
   ("core", (138, Eval)),
+  ("core_stack_test", (2, NativeSpeed)),
   ("core_test", (45, EvalAndNative)),
   ("crypto/hmac", (12, EvalAndNative)),
   ("crypto/sha256_fast_test", (7, EvalAndNative)),
@@ -449,6 +450,9 @@ test "stdlib/bytes_test.mdk executed >= 5 assertions" =
   floorExpectation "bytes_test"
 
 test "stdlib/core.mdk executed >= 138 assertions" = floorExpectation "core"
+
+test "stdlib/core_stack_test.mdk executed >= 2 assertions" =
+  floorExpectation "core_stack_test"
 
 test "stdlib/core_test.mdk executed >= 29 assertions" =
   floorExpectation "core_test"
