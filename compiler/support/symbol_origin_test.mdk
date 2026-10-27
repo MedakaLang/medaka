@@ -1,0 +1,25 @@
+-- Sibling test for `compiler/support/symbol_origin.mdk` ([P-TEST-SIBLING]).
+
+import support.symbol_origin.{
+  SymbolOrigin(..),
+  bindingOf,
+  originPosition,
+  placeOf,
+}
+import test.{expectAll, expectEqual}
+
+test "a located origin names its binding and its position" =
+  let o = SymbolOrigin "f" "a/m.mdk" 4 2
+  expectAll [
+    expectEqual "`f`" (bindingOf o),
+    expectEqual "`f` (a/m.mdk:4:2)" (placeOf o),
+    expectEqual ("a/m.mdk", 4, 2) (originPosition o),
+  ]
+
+test "an origin with no file names its binding alone" =
+  let o = SymbolOrigin "module" "" 0 0
+  expectAll [
+    expectEqual "`module`" (bindingOf o),
+    expectEqual "`module`" (placeOf o),
+    expectEqual ("", 0, 0) (originPosition o),
+  ]

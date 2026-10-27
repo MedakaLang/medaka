@@ -25,7 +25,6 @@ import backend.wasm_emit.{
 }
 import backend.wasm_symbols.{
   SymbolDefect(..),
-  SymbolOrigin(..),
   SymbolRegistry,
   WasmShape(..),
   WasmSymbol(..),
@@ -40,6 +39,7 @@ import backend.wasm_symbols.{
   excuseSymbol,
   unresolved,
 }
+import support.symbol_origin.{SymbolOrigin(..)}
 
 at : String -> SymbolOrigin
 at b = SymbolOrigin b "" 0 0

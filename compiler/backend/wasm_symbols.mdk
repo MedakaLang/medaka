@@ -20,6 +20,7 @@
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
 }
+import support.symbol_origin.{SymbolOrigin, bindingOf, placeOf}
 import support.util.{reverseL}
 
 -- A physical name, without its `$`.
@@ -41,12 +42,6 @@ public export data WasmShape =
   | TypeDecl
   | GlobalDecl
   | ElemDecl
-  deriving (Eq, Debug)
-
--- Where an identity was written or used: the source binding whose emission did
--- it, and that binding's file, line and column ("" and 0 when it has none).
-public export data SymbolOrigin =
-  SymbolOrigin String String Int Int
   deriving (Eq, Debug)
 
 public export data SymbolDefect =
@@ -299,11 +294,3 @@ describe (WasmFunc n) = "function `$\{n}`"
 describe (WasmType n) = "type `$\{n}`"
 describe (WasmGlobal n) = "global `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"
-
-bindingOf : SymbolOrigin -> String
-bindingOf (SymbolOrigin b _ _ _) = "`\{b}`"
-
-placeOf : SymbolOrigin -> String
-placeOf (SymbolOrigin b "" _ _) = "`\{b}`"
-placeOf (SymbolOrigin b file line col) =
-  "`\{b}` (\{file}:\{intToString line}:\{intToString col})"

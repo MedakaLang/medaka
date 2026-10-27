@@ -1,5 +1,5 @@
 # META
-source_lines=706
+source_lines=714
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -23,7 +23,7 @@ import ir.core_ir.{
   CallSite(..),
   CImplEntry(..),
 }
-import frontend.ast.{Lit(..), Pat}
+import frontend.ast.{Lit(..), Loc(..), Pat}
 import backend.trmc_analysis.{patVars, bindNames, bindName}
 import support.util.{
   contains,
@@ -46,6 +46,7 @@ import support.ordmap.{
   omMapValues,
 }
 import support.scc.{tarjanSCCs}
+import support.symbol_origin.{SymbolOrigin(..)}
 
 -- ── eager free-var / strictness analysis ─────────────────────────────────────
 -- names referenced EAGERLY in `body`: like freeVars, but a `CLam` body is NOT
@@ -708,13 +709,21 @@ isTailCall _ = False
 export
 implEntryDeclaredArity : CImplEntry -> Int
 implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
+
+-- Where the binding [name] at [loc] is, as a symbol registry reports it: no
+-- position for the placeholder span of a binding without a source location.
+export
+bindingOrigin : String -> Loc -> SymbolOrigin
+bindingOrigin name (Loc f 1 0 1 0) = SymbolOrigin name f 0 0
+bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 # DESUGAR
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
@@ -945,13 +954,17 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
+(DTypeSig true "bindingOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "SymbolOrigin"))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (ELit (LInt 0))) (ELit (LInt 0))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (EVar "line")) (EVar "col")))
 # MARK
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
@@ -1182,3 +1195,6 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
+(DTypeSig true "bindingOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "SymbolOrigin"))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (ELit (LInt 0))) (ELit (LInt 0))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (EVar "line")) (EVar "col")))

@@ -362,8 +362,11 @@ checkEtaArity : CallableShape -> String -> Expectation
 checkEtaArity shape name =
   let cp = lowered ("main = let _ = " ++ name ++ " in 42")
   let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
-  let (text, _) =
+  let emitted =
     emitProgramRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+  let text = match emitted
+    Ok (t, _) => t
+    Err _ => ""
   let definitions =
     filter (line => contains "define internal i64 @mdk_eta_" line) (lines text)
   expectEqual
