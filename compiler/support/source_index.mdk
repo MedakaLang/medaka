@@ -1,0 +1,117 @@
+import array.{fromList}
+import list.{reverse}
+import string.{toChars}
+
+export data SourceIndex = SourceIndex (Array Int) (Array Int) (Array Int)
+
+-- Starts and ends exclude newline codepoints; prefixes count UTF-16 units.
+indexGo : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  List Int ->
+  List Int ->
+  List Int ->
+  SourceIndex
+indexGo chars i start units starts ends prefixes =
+  if i >= arrayLength chars then
+    SourceIndex
+      (fromList (reverse (start :: starts)))
+      (fromList (reverse (i :: ends)))
+      (fromList (reverse (units :: prefixes)))
+  else
+    let c = arrayGetUnsafe i chars
+    if c == '\r'
+      && i + 1 < arrayLength chars
+      && arrayGetUnsafe (i + 1) chars == '\n' then
+      indexGo
+        chars
+        (i + 2)
+        (i + 2)
+        (units + 2)
+        (start :: starts)
+        (i :: ends)
+        (units + 1 :: units :: prefixes)
+    else if c == '\r' || c == '\n' then
+      indexGo
+        chars
+        (i + 1)
+        (i + 1)
+        (units + 1)
+        (start :: starts)
+        (i :: ends)
+        (units :: prefixes)
+    else
+      indexGo
+        chars
+        (i + 1)
+        start
+        (units + (if charCode c > 65535 then 2 else 1))
+        starts
+        ends
+        (units :: prefixes)
+
+export
+indexSource : String -> SourceIndex
+indexSource source = indexGo (toChars source) 0 0 0 [] [] []
+
+-- Last index whose value is at most target, or -1 if none.
+floorIndex : Array Int -> Int -> Int -> Int -> Int
+floorIndex values target lo hi =
+  if lo >= hi then
+    lo - 1
+  else
+    let mid = (lo + hi) / 2
+    if arrayGetUnsafe mid values <= target then
+      floorIndex values target (mid + 1) hi
+    else
+      floorIndex values target lo mid
+
+export
+offsetToSourcePosition : SourceIndex -> Int -> Option (Int, Int)
+offsetToSourcePosition (SourceIndex starts ends _) offset =
+  let line = floorIndex starts offset 0 (arrayLength starts)
+  if line < 0 || offset > arrayGetUnsafe line ends then
+    None
+  else
+    Some (line + 1, offset - arrayGetUnsafe line starts)
+
+export
+sourcePositionToOffset : SourceIndex -> Int -> Int -> Option Int
+sourcePositionToOffset (SourceIndex starts ends _) line column =
+  let i = line - 1
+  if i < 0 || i >= arrayLength starts || column < 0 then
+    None
+  else
+    let start = arrayGetUnsafe i starts
+    if column > arrayGetUnsafe i ends - start then
+      None
+    else
+      Some (start + column)
+
+export
+offsetToUtf16Position : SourceIndex -> Int -> Option (Int, Int)
+offsetToUtf16Position index offset = match index
+  SourceIndex starts _ prefixes => match offsetToSourcePosition index offset
+    None => None
+    Some (line, _) =>
+      let start = arrayGetUnsafe (line - 1) starts
+      Some (
+        line - 1,
+        arrayGetUnsafe offset prefixes - arrayGetUnsafe start prefixes,
+      )
+
+export
+utf16PositionToOffset : SourceIndex -> Int -> Int -> Option Int
+utf16PositionToOffset (SourceIndex starts ends prefixes) line column =
+  if line < 0 || line >= arrayLength starts || column < 0 then
+    None
+  else
+    let start = arrayGetUnsafe line starts
+    let end = arrayGetUnsafe line ends
+    let target = arrayGetUnsafe start prefixes + column
+    let offset = floorIndex prefixes target start (end + 1)
+    if offset < start || arrayGetUnsafe offset prefixes /= target then
+      None
+    else
+      Some offset

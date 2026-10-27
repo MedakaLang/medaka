@@ -1,0 +1,47 @@
+import support.source_index.{
+  indexSource, offsetToSourcePosition, sourcePositionToOffset,
+  offsetToUtf16Position, utf16PositionToOffset
+}
+import test.{expectEach, expectEqual, expectNone, expectSome}
+
+-- Codepoints: a, é, 😀, combining acute, CR, LF, x, CR, y, LF.
+test "coordinate boundaries" =
+  let index = indexSource "aé😀́\r\nx\ry\n"
+  expectEach [
+    ("ascii", expectEqual (Some (1, 1)) (offsetToSourcePosition index 1)),
+    ("bmp", expectEqual (Some (0, 2)) (offsetToUtf16Position index 2)),
+    ("astral", expectEqual (Some (0, 4)) (offsetToUtf16Position index 3)),
+    ("combining", expectEqual (Some (0, 5)) (offsetToUtf16Position index 4)),
+    ("crlf interior", expectNone (offsetToSourcePosition index 5)),
+    (
+      "crlf next line",
+      expectEqual (Some (2, 0)) (offsetToSourcePosition index 6),
+    ),
+    ("lone cr", expectEqual (Some (3, 0)) (offsetToSourcePosition index 8)),
+    ("eof", expectEqual (Some (3, 0)) (offsetToUtf16Position index 10)),
+    ("negative", expectNone (offsetToSourcePosition index (-1))),
+    ("past eof", expectNone (offsetToSourcePosition index 11)),
+    ("surrogate interior", expectNone (utf16PositionToOffset index 0 3)),
+    ("line past end", expectNone (sourcePositionToOffset index 1 5)),
+    ("negative line", expectNone (utf16PositionToOffset index (-1) 0)),
+    ("negative column", expectNone (utf16PositionToOffset index 0 (-1))),
+    ("eof valid", expectSome (utf16PositionToOffset index 3 0)),
+  ]
+
+roundTrip : String -> Int -> Bool
+roundTrip source offset =
+  let index = indexSource source
+  match (
+    offsetToSourcePosition index offset,
+    offsetToUtf16Position index offset,
+  )
+    (Some (line, col), Some (uLine, uCol)) =>
+      sourcePositionToOffset index line col == Some offset
+        && utf16PositionToOffset index uLine uCol == Some offset
+    (None, None) => True
+    _ => False
+
+prop "valid offsets round-trip" (source : String) (n : Int) =
+  let count = stringLength source
+  let offset = if n < 0 then 0 else n % (count + 1)
+  roundTrip source offset
