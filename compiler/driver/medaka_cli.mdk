@@ -3959,11 +3959,10 @@ runLintCmd argv0 =
       Ok emptyStdlibIndex
   match indexResult
     Err (StdlibIndexError { path, source, diagnostic }) =>
-      let _ =
-        if jsonMode then
-          putStr (cjAllToJson [(path, source, [diagnostic])])
-        else
-          ePutStrLn (ppDiagCliSrc source path diagnostic)
+      if jsonMode then
+        putStr (cjAllToJson [(path, source, [diagnostic])])
+      else
+        ePutStrLn (ppDiagCliSrc source path diagnostic)
       stageExit 1
     Ok stdlibIdx =>
       runLintWithIndex
@@ -4107,7 +4106,7 @@ runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
     lintFilesToDiagTriples idx disableNames onlyNames denyNames None files
   let parseFailures = flatMap lintBaselineParseFailures triples
   if listLen parseFailures > 0 then
-    let _ = emitWarningLines parseFailures
+    emitWarningLines parseFailures
     stageExit 1
   else
     let perFile = map (t => baselineFileCodes cwd t) triples

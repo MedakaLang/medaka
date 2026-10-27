@@ -512,7 +512,7 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
             []
         None => match lintParseSource src
           Err e =>
-            let _ = ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+            ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
             (True, [], [])
           Ok parsedSource =>
             lintOneFileParsed
@@ -666,7 +666,7 @@ lintOneFileFix onlyNames disableNames target = match readSource target
     True
   Ok src => match lintParseSource src
     Err e =>
-      let _ = ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+      ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
       True
     Ok parsedSource =>
       lintFixParsed onlyNames disableNames target src parsedSource

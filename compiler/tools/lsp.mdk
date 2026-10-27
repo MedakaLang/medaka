@@ -1721,13 +1721,15 @@ initializeResultFor serverVersion = jObject [
 ]
 
 parseErrorDiags : SourceSnapshot -> String -> ParseError -> List Json
-parseErrorDiags snapshot src e = [
-  parseDiagnosticJson
-    snapshot
-    (wholeDocRange src)
-    (parseDiagnosticToDiag "" (parseErrorDiagnostic e))
-    (parseErrorDiagnostic e),
-]
+parseErrorDiags snapshot src e =
+  let diagnostic = parseErrorDiagnostic e
+  [
+    parseDiagnosticJson
+      snapshot
+      (wholeDocRange src)
+      (parseDiagnosticToDiag "" diagnostic)
+      diagnostic,
+  ]
 
 publishDiagnosticsList : String -> List Json -> <IO> Unit
 publishDiagnosticsList uri diags =
@@ -1991,7 +1993,7 @@ publishForSelected : String ->
 publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
     Err e =>
-      let _ = match docsSnapshot uri docs
+      match docsSnapshot uri docs
         Some snapshot =>
           publishDiagnosticsList uri (parseErrorDiags snapshot text e)
         None => publishDiagnosticsList uri []
@@ -2070,7 +2072,10 @@ handleCodeAction id params docs =
             optionOr JNull (locToLspRange (indexSource text) (diagnosticLoc pd))
           let context = fieldOr "context" params
           let diagnostics =
-            optionOr [] (map toList (asArray (fieldOr "diagnostics" context)))
+            fieldOr "diagnostics" context
+              |> asArray
+              |> map toList
+              |> optionOr []
           if any
             (actionDiagnosticMatches snapshot (diagnosticCode pd) range)
             diagnostics then

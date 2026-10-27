@@ -1928,8 +1928,12 @@ test "parse quick fix uses the published snapshot and UTF-16 range" =
 
 test "project publication binds the open buffer snapshot" = withScratchDir
   (dir =>
-    let src = "export\nbad = 1 != 2\n"
-    let entry = "import bad.{bad}\nmain = bad\n"
+    let src = """export
+bad = 1 != 2
+"""
+    let entry = """import bad.{bad}
+main = bad
+"""
     match layOut dir [("bad.mdk", src), ("main.mdk", entry)]
       Err e => fail e
       Ok _ =>
@@ -2036,7 +2040,42 @@ test "unversioned diagnostics bind the document generation" =
     Err e => fail e
     Ok objs => expectEach [
       ("process", expectEqual [] errors),
-      ("unchanged", expectEqual 1 (length (elems (resultTo 2 objs)))),
+      (
+        "unchanged",
+        expectEqual
+          [
+            jObject [
+              ("title", JString "Replace with /="),
+              ("kind", JString "quickfix"),
+              (
+                "edit",
+                jObject [
+                  (
+                    "documentChanges",
+                    jArray [
+                      jObject [
+                        (
+                          "textDocument",
+                          jObject [("uri", JString uri), ("version", JNull)],
+                        ),
+                        (
+                          "edits",
+                          jArray [
+                            jObject [
+                              ("range", coordRange 0 9 11),
+                              ("newText", JString "/="),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ]
+          (elems (resultTo 2 objs)),
+      ),
       ("changed", expectEqual [] (elems (resultTo 3 objs))),
     ]
 

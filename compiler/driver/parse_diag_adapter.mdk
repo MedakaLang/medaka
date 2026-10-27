@@ -1,3 +1,4 @@
+import list.{findMap}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
@@ -9,10 +10,13 @@ withPath : String -> Loc -> Loc
 withPath path (Loc _ sl sc el ec) = Loc path sl sc el ec
 
 machineFix : String -> List ParseEdit -> Option Fix
-machineFix _ [] = None
-machineFix path ((ParseEdit loc _ replacement MachineApplicable) :: _) =
-  Some (Fix (withPath path loc) replacement)
-machineFix path (_ :: rest) = machineFix path rest
+machineFix path edits =
+  findMap
+    (edit => match edit
+      ParseEdit loc _ replacement MachineApplicable =>
+        Some (Fix (withPath path loc) replacement)
+      _ => None)
+    edits
 
 export
 parseDiagnosticToDiag : String -> ParseDiagnostic -> Diag
