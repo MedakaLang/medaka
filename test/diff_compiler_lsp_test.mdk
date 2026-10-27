@@ -1814,3 +1814,382 @@ test "the bless tool mints exactly the goldens this file reads" =
       else
         fail
           "test/lsp_bless.sh and this file disagree about the golden set.\n  the tool mints:\n\{indentAll minted}  this gate reads:\n\{indentAll ownGoldens}"
+
+test "parse diagnostic carries typed code and UTF-16 edit" =
+  let uri = "file:///parse-unicode.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = (\"😀\", 1 != 2)\n",
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "P-BAD-NEQ")) (get "code" d)),
+          (
+            "message",
+            expectEqual
+              (Some (JString "unexpected `!=`; did you mean `/=`?"))
+              (get "message" d),
+          ),
+          (
+            "help",
+            expectEqual (Some (JString "replace `!=` with `/=`")) (get "help" d),
+          ),
+          ("start", expectEqual "0:16" (endpoint "start" d)),
+          ("end", expectEqual "0:18" (endpoint "end" d)),
+          (
+            "fix",
+            expectEqual (Some (JString "/=")) (dig ["fix", "replacement"] d),
+          ),
+          ("fix range", expectEqual (get "range" d) (dig ["fix", "range"] d)),
+        ]
+        _ => fail "expected one parse diagnostic"
+      _ => fail "expected one publish"
+
+codeActionMsg : Int -> String -> Json -> Json
+codeActionMsg id uri diagnostic =
+  rpc
+    id
+    "textDocument/codeAction"
+    (jObject [
+      ("textDocument", jObject [("uri", JString uri)]),
+      ("context", jObject [("diagnostics", jArray [diagnostic])]),
+    ])
+
+test "parse quick fix uses the published snapshot and UTF-16 range" =
+  let uri = "file:///action.mdk"
+  let src = "main = (\"😀\", 1 != 2)\n"
+  let range = jObject [
+    ("start", jObject [("line", JInt 0), ("character", JInt 16)]),
+    ("end", jObject [("line", JInt 0), ("character", JInt 18)]),
+  ]
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", range),
+    (
+      "data",
+      jObject [("uri", JString uri), ("generation", JInt 0)],
+    ),
+  ]
+  let (errors, out) = drive [
+    initBare,
+    didOpenMsg uri src,
+    codeActionMsg 2 uri diagnostic,
+    codeActionMsg 3 "file:///wrong.mdk" diagnostic,
+    didChangeMsg uri "main = (\"😀\", 1 /= 2)\n",
+    codeActionMsg 4 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match elems (resultTo 2 objs)
+      [action] => expectEach [
+        ("process", expectEqual [] errors),
+        (
+          "capability",
+          expectEqual (Some (JBool True)) (match replyTo 1 objs
+            Some o => dig ["result", "capabilities", "codeActionProvider"] o
+            None => None),
+        ),
+        ("kind", expectEqual (Some (JString "quickfix")) (get "kind" action)),
+        (
+          "versioned edit",
+          expectEqual
+            (Some
+              (jArray [
+                jObject [
+                  (
+                    "textDocument",
+                    jObject [("uri", JString uri), ("version", JInt 1)],
+                  ),
+                  (
+                    "edits",
+                    jArray [
+                      jObject [("range", range), ("newText", JString "/=")],
+                    ],
+                  ),
+                ],
+              ]))
+            (dig ["edit", "documentChanges"] action),
+        ),
+        ("wrong URI", expectEqual [] (elems (resultTo 3 objs))),
+        ("stale", expectEqual [] (elems (resultTo 4 objs))),
+        (
+          "follow-up",
+          expectEqual [] (match reverse (publishes objs)
+            p :: _ => diagsOf p
+            [] => [JNull]),
+        ),
+      ]
+      _ => fail "expected exactly one quick fix"
+
+test "project publication binds the open buffer snapshot" = withScratchDir
+  (dir =>
+    let src = """export
+bad = 1 != 2
+"""
+    let entry = """import bad.{bad}
+main = bad
+"""
+    match layOut dir [("bad.mdk", src), ("main.mdk", entry)]
+      Err e => fail e
+      Ok _ =>
+        let uri = "file://" ++ dir ++ "/bad.mdk"
+        let main = "file://" ++ dir ++ "/main.mdk"
+        let snapshotData = jObject [
+          ("uri", JString uri),
+          ("generation", JInt 0),
+        ]
+        let diagnostic = jObject [
+          ("code", JString "P-BAD-NEQ"),
+          ("range", coordRange 1 8 10),
+          ("data", snapshotData),
+        ]
+        let (errors, out) = drive [
+          didOpenMsg uri src,
+          didOpenMsg main entry,
+          codeActionMsg 2 uri diagnostic,
+          didChangeMsg uri "export\nbad = 1 /= 2\n",
+          codeActionMsg 3 uri diagnostic,
+          bye,
+        ]
+        match decodeFrames out
+          Err e => fail e
+          Ok objs =>
+            let badPublishes = filter (p => uriOf p == uri) (publishes objs)
+            match badPublishes
+              _ :: project :: _ => expectEach [
+                ("process", expectEqual [] errors),
+                (
+                  "project identity",
+                  expectEqual
+                    [Some snapshotData, Some snapshotData]
+                    (map (get "data") (diagsOf project)),
+                ),
+                (
+                  "action",
+                  match elems (resultTo 2 objs)
+                    [action] =>
+                      expectEqual
+                        (Some
+                          (jArray [
+                            jObject [
+                              (
+                                "textDocument",
+                                jObject [
+                                  ("uri", JString uri),
+                                  ("version", JInt 1),
+                                ],
+                              ),
+                              (
+                                "edits",
+                                jArray [
+                                  jObject [
+                                    ("range", coordRange 1 8 10),
+                                    ("newText", JString "/="),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ]))
+                        (dig ["edit", "documentChanges"] action)
+                    _ => fail "expected exactly one project action",
+                ),
+                ("stale", expectEqual [] (elems (resultTo 3 objs))),
+              ]
+              _ => fail "expected direct and project publications")
+
+test "unversioned diagnostics bind the document generation" =
+  let uri = "file:///no-version.mdk"
+  let src = "main = 1 != 2\n"
+  let open =
+    notify
+      "textDocument/didOpen"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri), ("text", JString src)]),
+      ])
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", coordRange 0 9 11),
+    (
+      "data",
+      jObject [("uri", JString uri), ("generation", JInt 0)],
+    ),
+  ]
+  let change =
+    notify
+      "textDocument/didChange"
+      (jObject [
+        ("textDocument", jObject [("uri", JString uri)]),
+        (
+          "contentChanges",
+          jArray [jObject [("text", JString "main = 2 != 3\n")]],
+        ),
+      ])
+  let (errors, out) = drive [
+    open,
+    codeActionMsg 2 uri diagnostic,
+    change,
+    codeActionMsg 3 uri diagnostic,
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "unchanged",
+        expectEqual
+          [
+            jObject [
+              ("title", JString "Replace with /="),
+              ("kind", JString "quickfix"),
+              (
+                "edit",
+                jObject [
+                  (
+                    "documentChanges",
+                    jArray [
+                      jObject [
+                        (
+                          "textDocument",
+                          jObject [("uri", JString uri), ("version", JNull)],
+                        ),
+                        (
+                          "edits",
+                          jArray [
+                            jObject [
+                              ("range", coordRange 0 9 11),
+                              ("newText", JString "/="),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ]
+          (elems (resultTo 2 objs)),
+      ),
+      ("changed", expectEqual [] (elems (resultTo 3 objs))),
+    ]
+
+test "non-parse suggestion keeps its code help and fix on wire" =
+  let (errors, out) =
+    drive [didOpenMsg "file:///typo.mdk" "main = printl \"hi\"\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "R-UNBOUND")) (get "code" d)),
+          (
+            "help",
+            expectEqual (Some (JString "did you mean `print`?")) (get "help" d),
+          ),
+          (
+            "fix",
+            expectEqual (Some (JString "print")) (dig ["fix", "replacement"] d),
+          ),
+        ]
+        _ => fail "expected one resolve diagnostic"
+      _ => fail "expected one publish"
+
+test "published diagnostic survives reordered fields and generation changes" =
+  let uri = "file:///roundtrip.mdk"
+  let src = "main = 1 != 2\n"
+  let (_, first) = drive [didOpenMsg uri src, bye]
+  match decodeFrames first
+    Err e => fail e
+    Ok firstObjs => match publishes firstObjs
+      pub :: _ => match diagsOf pub
+        d :: _ =>
+          let identity = optionOr JNull (get "data" d)
+          let range = optionOr JNull (get "range" d)
+          let start = optionOr JNull (get "start" range)
+          let end = optionOr JNull (get "end" range)
+          let reversePos p = jObject [
+            ("character", optionOr JNull (get "character" p)),
+            ("line", optionOr JNull (get "line" p)),
+          ]
+          let reordered = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            (
+              "range",
+              jObject [("end", reversePos end), ("start", reversePos start)],
+            ),
+            (
+              "data",
+              jObject [
+                ("generation", optionOr JNull (get "generation" identity)),
+                ("uri", optionOr JNull (get "uri" identity)),
+              ],
+            ),
+          ]
+          let makeVariant r i = jObject [
+            ("code", optionOr JNull (get "code" d)),
+            ("range", r),
+            ("data", i),
+          ]
+          let reverseData = jObject [
+            ("generation", optionOr JNull (get "generation" identity)),
+            ("uri", optionOr JNull (get "uri" identity)),
+          ]
+          let reverseRange = jObject [("end", end), ("start", start)]
+          let reversePositions = jObject [
+            ("start", reversePos start),
+            ("end", reversePos end),
+          ]
+          let close =
+            notify
+              "textDocument/didClose"
+              (jObject [("textDocument", jObject [("uri", JString uri)])])
+          let (errors, out) = drive [
+            didOpenMsg uri src,
+            codeActionMsg 2 uri d,
+            codeActionMsg 3 uri reordered,
+            codeActionMsg 7 uri (makeVariant range reverseData),
+            codeActionMsg 8 uri (makeVariant reverseRange identity),
+            codeActionMsg 9 uri (makeVariant reversePositions identity),
+            didChangeMsg uri src,
+            codeActionMsg 4 uri d,
+            close,
+            codeActionMsg 5 uri reordered,
+            didOpenMsg uri src,
+            codeActionMsg 6 uri d,
+            bye,
+          ]
+          match decodeFrames out
+            Err e => fail e
+            Ok objs => expectEach [
+              ("process", expectEqual [] errors),
+              ("published", expectEqual 1 (length (elems (resultTo 2 objs)))),
+              ("reordered", expectEqual 1 (length (elems (resultTo 3 objs)))),
+              ("data order", expectEqual 1 (length (elems (resultTo 7 objs)))),
+              ("range order", expectEqual 1 (length (elems (resultTo 8 objs)))),
+              (
+                "position order",
+                expectEqual 1 (length (elems (resultTo 9 objs))),
+              ),
+              ("reused version", expectEqual [] (elems (resultTo 4 objs))),
+              ("closed", expectEqual [] (elems (resultTo 5 objs))),
+              ("reopened", expectEqual [] (elems (resultTo 6 objs))),
+            ]
+        [] => fail "expected published diagnostic"
+      [] => fail "expected publication"
+
+test "unfixable parse diagnostic has no snapshot identity" =
+  let (_, out) = drive [didOpenMsg "file:///invalid.mdk" "main = = 1\n", bye]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      pub :: _ => match diagsOf pub
+        d :: _ => expectEqual None (get "data" d)
+        [] => fail "expected diagnostic"
+      [] => fail "expected publication"

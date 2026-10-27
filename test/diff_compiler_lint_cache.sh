@@ -20,7 +20,7 @@
 #   6. concurrency           — parallel runs stay correct and leave no torn shard
 #   7. STDLIB edit invalidation — a stdlib-tree edit invalidates every entry too
 #      (#2327): `rule-stdlib-reimpl` reads the stdlib SOURCE TREE from disk at
-#      runtime (`buildStdlibIndex`), which neither `contentHashOf` (per-file) nor
+#      runtime (`buildStdlibIndexResult`), which neither `contentHashOf` (per-file) nor
 #      the old `ruleSetStamp` (the BINARY's bytes) observes. A target file whose
 #      own content never changes can still gain a NEW finding when the stdlib
 #      gains a colliding export — exactly the shape scenario 5 pins for a
@@ -448,7 +448,7 @@ else
 fi
 
 # ── 8. STDLIB-INDEX CACHE POISONING (F1) ─────────────────────────────────────
-# `stdlibIndexNeeded` lets an uncached run skip `buildStdlibIndex` for free when
+# `stdlibIndexNeeded` lets an uncached run skip `buildStdlibIndexResult` for free when
 # the active `--only`/`--disable` set never reads it — but a `--cache` POPULATE
 # run persists `lintFileFresh`'s FULL rule roster regardless of which rules are
 # active, so populating with `rule-stdlib-reimpl` disabled must not poison the

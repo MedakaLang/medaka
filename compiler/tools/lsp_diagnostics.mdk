@@ -1,0 +1,147 @@
+import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+import support.source_index.{SourceIndex, sourcePositionToOffset}
+import tools.lsp_positions.{locToLspRange}
+import tools.source_snapshot.{SourceSnapshot(..), SnapshotId(..), snapshotId}
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
+  diagnosticLoc, diagnosticEdits
+}
+import json.{Json(..), jObject, jArray}
+import string.{sliceClamped}
+
+severityCode : Severity -> Int
+severityCode SevError = 1
+severityCode SevWarning = 2
+
+fields : Json -> Diag -> List (String, Json)
+fields range (Diag sev code msg _ help _) =
+  [
+      ("range", range),
+      ("severity", JInt (severityCode sev)),
+      ("source", JString "medaka"),
+      ("message", JString msg),
+      ("code", JString code),
+    ]
+    ++ (match help
+      Some h => [("help", JString h)]
+      None => [])
+
+export
+diagnosticWithRange : Json -> Diag -> Json
+diagnosticWithRange range d = jObject (fields range d)
+
+fixField : SourceIndex -> Option Fix -> List (String, Json)
+fixField index (Some (Fix loc replacement)) = [
+  (
+    "fix",
+    jObject [
+      ("range", optionOr JNull (locToLspRange index loc)),
+      ("replacement", JString replacement),
+    ],
+  ),
+]
+fixField _ None = []
+
+export
+diagnosticJson : SourceIndex -> Diag -> Json
+diagnosticJson index d = diagnosticJsonOr index JNull d
+
+export
+diagnosticJsonOr : SourceIndex -> Json -> Diag -> Json
+diagnosticJsonOr index fallback (Diag sev code msg loc help fix) =
+  let range = match loc
+    Some l => optionOr JNull (locToLspRange index l)
+    None => fallback
+  let d = Diag sev code msg loc help fix
+  jObject (fields range d ++ fixField index fix)
+
+export
+snapshotJson : SourceSnapshot -> Json
+snapshotJson snapshot = match snapshotId snapshot
+  SnapshotId uri generation => jObject [
+    ("uri", JString uri),
+    ("generation", JInt generation),
+  ]
+
+export
+parseDiagnosticJson : SourceSnapshot -> Json -> Diag -> ParseDiagnostic -> Json
+parseDiagnosticJson snapshot fallback d pd = match snapshot
+  SourceSnapshot _ _ _ _ index => match d
+    Diag _ code _ loc _ _ =>
+      let base = diagnosticJsonOr index fallback d
+      let matching =
+        code == diagnosticCode pd
+          && (match loc
+            Some l =>
+              locToLspRange index l == locToLspRange index (diagnosticLoc pd)
+            None => False)
+      if matching
+        && length (parseDiagnosticActions snapshot [pd]) > 0 then match base
+        JObject fields =>
+          jObject (toList fields ++ [("data", snapshotJson snapshot)])
+        _ => base
+      else
+        base
+
+actionForEdit : SourceSnapshot -> ParseEdit -> List Json
+actionForEdit (SourceSnapshot uri version _ text index) (ParseEdit loc expected replacement applicability) =
+  match loc
+    Loc _ sl sc el ec => match (
+      sourcePositionToOffset index sl sc,
+      sourcePositionToOffset index el ec,
+      locToLspRange index loc,
+    )
+      (Some start, Some end, Some range) =>
+        if applicability == MachineApplicable
+          && end >= start
+          && sliceClamped start end text == expected then
+          [
+            jObject [
+              ("title", JString ("Replace with " ++ replacement)),
+              ("kind", JString "quickfix"),
+              (
+                "edit",
+                jObject [
+                  (
+                    "documentChanges",
+                    jArray [
+                      jObject [
+                        (
+                          "textDocument",
+                          jObject [
+                            ("uri", JString uri),
+                            (
+                              "version",
+                              match version
+                                Some v => JInt v
+                                None => JNull,
+                            ),
+                          ],
+                        ),
+                        (
+                          "edits",
+                          jArray [
+                            jObject [
+                              ("range", range),
+                              ("newText", JString replacement),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ]
+        else
+          []
+      _ => []
+
+export
+parseDiagnosticActions : SourceSnapshot -> List ParseDiagnostic -> List Json
+parseDiagnosticActions snapshot diagnostics =
+  flatMap
+    (d => flatMap (actionForEdit snapshot) (diagnosticEdits d))
+    diagnostics

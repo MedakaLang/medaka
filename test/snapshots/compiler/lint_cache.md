@@ -86,7 +86,7 @@ public export data LintEntry = LintEntry {
 -- decode into something WRONG rather than fail to decode.  A version mismatch is
 -- a miss, so bumping is always safe and never needs a cache purge.
 cacheFormatVersion : Int
-cacheFormatVersion = 1
+cacheFormatVersion = 2
 
 -- ── content hashing ──────────────────────────────────────────────────────────
 -- The key on which a hit is decided.  `hashString` is FNV-1a but the extern
@@ -493,7 +493,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
 (DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "findings" (TyApp (TyCon "List") (TyCon "Finding"))) (field "dupOccs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
-(DFunDef false "cacheFormatVersion" () (ELit (LInt 1)))
+(DFunDef false "cacheFormatVersion" () (ELit (LInt 2)))
 (DTypeSig true "contentHashOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "contentHashOf" ((PVar "src")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "src"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "src")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig true "ruleSetStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -609,7 +609,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
 (DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "findings" (TyApp (TyCon "List") (TyCon "Finding"))) (field "dupOccs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
-(DFunDef false "cacheFormatVersion" () (ELit (LInt 1)))
+(DFunDef false "cacheFormatVersion" () (ELit (LInt 2)))
 (DTypeSig true "contentHashOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "contentHashOf" ((PVar "src")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "src"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "src")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig true "ruleSetStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))

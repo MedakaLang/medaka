@@ -17,8 +17,9 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads goldens,
    neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{boundedInTree}
+import compiler_cli_test_support.{boundedInTree, inFreshDirOf}
 import regex.{mustCompile, isMatch}
+import fs.{mkdirAll}
 import string.{contains, lines, replaceAll, unwords}
 import io.{getEnvOr}
 import test_process.{medakaBin, medakaRoot, underRoot}
@@ -163,3 +164,100 @@ test "diff_compiler_lint_crossfile: recursive walk and cross-file duplicate-body
         "\{crossfileFixtures}/crossfile.json.expected",
     ),
   ]
+
+malformedLintRow : List String -> <Exec, IO> (String, Expectation)
+malformedLintRow args = (
+  unwords args,
+  match lintBoth args
+    Err e => fail "could not run lint: \{e}"
+    Ok (code, both) => expectAll [
+      expectEqual 1 code,
+      expectFalse (contains "E-PANIC" both),
+      expectTextContainsAll ["expected an expression"] both,
+    ],
+)
+
+malformedLintIn : String -> <Exec, FileWrite, IO> Expectation
+malformedLintIn dir =
+  let bad = "\{dir}/bad.mdk"
+  match writeFile bad "f x = = 1\n"
+    Err e => fail "could not write malformed input: \{e}"
+    Ok () =>
+      expectEach
+        (map malformedLintRow [
+          ["lint", bad],
+          ["lint", "--json", bad],
+          ["lint", "--fix", bad],
+          ["lint", "--cache", bad],
+          ["lint", "--write-baseline=\{dir}/baseline.toml", bad],
+        ])
+
+test "malformed lint input is diagnosed on every output path" =
+  inFreshDirOf malformedLintIn (e => fail e)
+
+test "repl survives malformed input with session state intact" =
+  match boundedInTree 120 "sh" [
+    "-c",
+    "printf 'x = 41\\ntype x\\n1 +\\n:type 1 +\\nx\\n1 + 1\\n:quit\\n' | exec \"$1\" repl",
+    "sh",
+    medakaBin,
+  ]
+    Err e => fail "could not run repl: \{e}"
+    Ok (0, out, err) => expectAll [
+      expectFalse (contains "E-PANIC" err),
+      expectTextContainsAll ["val x : Int", "41 : Int", "2 : Int"] out,
+      expectTextContainsAll ["<repl>:1:5:", "<repl>:1:2:", "<repl>:1:8:"] err,
+    ]
+    Ok (code, _, err) => fail "repl exited \{intToString code}: \{err}"
+
+malformedStdlibIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+malformedStdlibIn dir = match mkdirAll "\{dir}/stdlib"
+  Err e => fail "could not create stdlib: \{e}"
+  Ok () => match writeFile "\{dir}/stdlib/bad.mdk" "f x = = 1\n"
+    Err e => fail "could not write malformed stdlib: \{e}"
+    Ok () => match boundedInTree 120 "env" [
+      "MEDAKA_ROOT=\{dir}",
+      medakaBin,
+      "lint",
+      "--json",
+      dirAProbe,
+    ]
+      Err e => fail "could not spawn lint: \{e}"
+      Ok (1, out, err) => expectAll [
+        expectFalse (contains "E-PANIC" err),
+        expectEqual "" err,
+        expectTextContainsAll
+          ["\"code\":\"P-PARSE\"", "expected an expression", "bad.mdk"]
+          out,
+      ]
+      Ok (code, _, err) => fail "lint exited \{intToString code}: \{err}"
+
+test "lint diagnoses malformed stdlib before indexing" =
+  inFreshDirOf malformedStdlibIn (e => fail e)
+
+oracleMalformedStdlibIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+oracleMalformedStdlibIn dir = match boundedInTree 120 "cp" [
+  "-R",
+  underRoot "stdlib",
+  underRoot "runtime",
+  dir,
+]
+  Err e => fail "could not copy root: \{e}"
+  Ok (0, _, _) => match writeFile "\{dir}/stdlib/broken.mdk" "broken = = 1\n"
+    Err e => fail "could not write malformed stdlib: \{e}"
+    Ok () => match boundedInTree 120 "env" [
+      "MEDAKA_ROOT=\{dir}",
+      underRoot "test/bin/lint_main",
+      underRoot "test/lint_fixtures/stdlib_reimpl_derived_index.mdk",
+    ]
+      Err e => fail "could not spawn lint oracle: \{e}"
+      Ok (code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual "" out,
+        expectFalse (contains "E-PANIC" err),
+        expectTextContainsAll ["broken.mdk:1:", "expected an expression"] err,
+      ]
+  Ok (code, _, err) => fail "copy exited \{intToString code}: \{err}"
+
+test "lint oracle rejects an unimported malformed stdlib member" =
+  inFreshDirOf oracleMalformedStdlibIn (e => fail e)
