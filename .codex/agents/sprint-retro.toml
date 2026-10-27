@@ -1,6 +1,6 @@
 name = "sprint_retro"
 description = "Lightweight Terra v8 sprint retrospective focused on deleting workflow cost."
-model = "gpt-5.6-terra"
+model = "gpt-6.1-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
