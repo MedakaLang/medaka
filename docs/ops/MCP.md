@@ -43,7 +43,8 @@ errors use the same coordinate policy, and doctest example lines are zero-based.
 When the `medaka_test` typecheck gate rejects a program, `typeError` contains
 diagnostic messages without human location prefixes and `typeDiagnostics`
 contains the gate's structured diagnostics and UTF-16 ranges. Setup failures
-remain unlocated in `typeError`. Earlier versions embedded one-based human
+remain verbatim text in `typeError` without structured ranges and may contain
+human-formatted locations. Earlier versions embedded one-based human
 locations in that string.
 Malformed entry source also returns structured parse diagnostics before the
 test gate, and leaves the MCP session open.

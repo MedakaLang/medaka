@@ -626,7 +626,7 @@ exemptNotice False _ _ = ()
 exemptNotice True target userDecls =
   ePutStrLn (typecheckSkipNotice target userDecls)
 
--- Setup failures have no location; diagnostic failures retain per-file source.
+-- Setup failures have no structured location; diagnostic failures retain per-file source.
 -- lint-disable-next-line rule-clone-type
 public export data TestReportError =
   | TestSetupError String
