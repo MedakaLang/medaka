@@ -1,8 +1,9 @@
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
--- module record, the codes it has been given, the signatures of a parsed source, the
+-- module record (`fresh`, and `scoped` inside a root scope), the codes it has been given, the signatures of a parsed source, the
 -- alias table and declared parameter kinds a source's declarations register, and the
 -- interface reference and the monos of the probe module (`ifaceOf`, `intM`, `boolM`,
--- `varM`).  Test siblings import it and no production module does.  `aliasTableOf` and
+-- `varM`), a hand-built pattern (`at`, `pvar`) and the reader of a module that declares an
+-- interface with a live impl (`readerOfLib`).  Test siblings import it and no production module does.  `aliasTableOf` and
 -- `recordKindsOf` are the fixture-side twins of `tc_decls`' `graphAliasRow` and
 -- `withDeclParamKinds`: a test of a module below `tc_decls` cannot import those, and its
 -- fixtures need the same tables.
@@ -10,19 +11,65 @@
 import list.{reverse}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
-import frontend.ast.{Decl(..), TabKey, Ty(..), TyConOrigin(..)}
+import frontend.ast.{
+  Decl(..),
+  Loc(..),
+  Pat(..),
+  TabKey,
+  Ty(..),
+  TyConOrigin(..),
+  noBinderId,
+}
 import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
 import support.ordmap.{omInsert}
 import types.publish.{tcCode}
-import types.tc_env.{declParamKinds, tyTabKey}
-import types.tc_state.{blankModuleCtx, probeGraphCtx, wAll}
+import types.tc_env.{
+  buildImplEnvGo,
+  declEnvModule,
+  declParamKinds,
+  emptyDeclEnvAcc,
+  implAccFinish,
+  methodEnvGo,
+  tyTabKey,
+}
+import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
+import types.tc_state.{
+  blankModuleCtx,
+  currentScopeStore,
+  probeGraphCtx,
+  wAll,
+}
 import types.tc_types.{Kind(..), ModuleCtx(..)}
+
+-- A source position and a variable pattern at it, for tests that build syntax by hand.
+export
+at : Loc
+at = Loc "t.mdk" 1 1 1 1
+
+export
+pvar : String -> Pat
+pvar name = PVar name at noBinderId
 
 -- A module record named "probe", minted in a fresh graph record.
 export
 fresh : Unit -> ModuleCtx
 fresh _ = blankModuleCtx (probeGraphCtx ()) "probe"
+
+-- A module record named "probe" whose inference sits in the root scope of its own module, as
+-- the checks that record where a use stands expect.
+export
+scoped : Unit -> ModuleCtx
+scoped _ = inRootScope (fresh ())
+
+-- [m], its inference placed in the root scope of its own module.
+export
+inRootScope : ModuleCtx -> ModuleCtx
+inRootScope m =
+  let root =
+    freshScope (currentScopeStore m.mcGraph ()) None 0 "probe" ModuleOwner
+  m.mcCells.currentScope := openScopeCursor root
+  m
 
 -- The codes of the diagnostics pushed to [m] so far, oldest first.
 export
@@ -112,3 +159,46 @@ recordKinds m o n kinds
 kindIsDeclared : Kind -> Bool
 kindIsDeclared KType = False
 kindIsDeclared _ = True
+
+-- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.
+export
+libSource : String
+libSource =
+  """
+interface Sizeable a where
+  size : a -> Int
+impl Sizeable Int where
+  size n = n
+"""
+
+-- The declarations of [ds] stamped as declared in the module [mid].
+export
+declaredIn : String -> List Decl -> List Decl
+declaredIn mid ds = map (declaredAs mid) ds
+
+declaredAs : String -> Decl -> Decl
+declaredAs mid (d@(DInterface { ifaceOrigin = _ })) =
+  DInterface { d | ifaceOrigin = OriginModule mid }
+declaredAs mid (d@(DImpl { implOrigin = _ })) =
+  DImpl { d | implOrigin = OriginModule mid }
+declaredAs _ d = d
+
+-- The reader `user` (ordinal 2) of the module `lib` (ordinal 1), which declares `Sizeable`
+-- and `impl Sizeable Int`.  The graph's method environment and the reader's impl
+-- environment are built the way `checkBodyImpl` installs them, so `size` is the one
+-- visible method and a live impl answers at `Int`.
+export
+readerOfLib : Unit -> ModuleCtx
+readerOfLib _ =
+  let g = probeGraphCtx ()
+  let lib = declEnvModule g 1 "lib" (declaredIn "lib" (parse libSource))
+  let user = declEnvModule g 2 "user" []
+  let empty = g.declEnvsRef.value
+  g.declEnvsRef := { empty |
+    deMethods = methodEnvGo g [lib, user] empty.deMethods,
+  }
+  let m = blankModuleCtx g "user"
+  m.mcCells.methodScopeCtxRef := Some ([], 2)
+  m.mcCells.bodyImplEnvRef :=
+    implAccFinish (buildImplEnvGo [lib, user] emptyDeclEnvAcc.daImpls)
+  m

@@ -1,0 +1,621 @@
+-- Tests of `types.tc_groups`'s own API: the free-variable walk behind binding-group
+-- formation (`allEVars`, `declRefNames`, `depGraphMap`, `groupClauses`, `groupNames`), the
+-- component order of a `where` or `let` block (`letGroupComponents`), the group predicate
+-- (`isLetrecGroup`), the value restriction (`isNonexpansive`), the rejections raised at a
+-- binding boundary (`checkLetRecDecls`, `checkRecBindNonFunction`, `checkAnnotTooGeneral`),
+-- the signature-constraint readings (`sigConstraints`, `sigConstraintArgTys`,
+-- `constraintVarIfaceMonos`, `sccProtectedSignatureIds`), the authority residual filter
+-- (`residualsOf`) and the write-back of marked clauses (`rebuildGroupDecls`).  Two
+-- properties run over generated groups: the dependency edges of a group do not depend on
+-- what its parameter is called, and the components of a block come dependencies first.  Each
+-- test builds the module record or environment it reads; none reaches the inference
+-- recursion, and the mark pass over groups is tested in `tc_occurrence_test`.
+
+import test.{
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectTrue,
+}
+import types.effect_authority.{Authority(..)}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  FieldAssign(..),
+  FunClause(..),
+  LetBind(..),
+  Lit(..),
+  Pat(..),
+  Ty(..),
+  noBinderId,
+}
+import frontend.parser.{parse}
+import types.repr.{AuthResidual(..), ppMono}
+import types.tc_effects.{clausesOf}
+import types.tc_env.{envFor}
+import types.tc_groups.{
+  allEVars,
+  checkAnnotTooGeneral,
+  checkLetRecDecls,
+  checkRecBindNonFunction,
+  constraintVarIfaceMonos,
+  declRefNames,
+  depGraphMap,
+  exprLoc,
+  groupClauses,
+  groupNames,
+  isLetrecGroup,
+  isNonexpansive,
+  letGroupComponents,
+  rebuildGroupDecls,
+  residualsOf,
+  sccProtectedSignatureIds,
+  sigConstraintArgTys,
+  sigConstraints,
+}
+import types.tc_test_support.{
+  at,
+  boolM,
+  codesOf,
+  fresh,
+  ifaceOf,
+  intM,
+  intTy,
+  pvar,
+  varM,
+  withFirstSig,
+}
+import support.ordmap.{omEmpty, omKeys, omLookup}
+import support.util.{contains, joinNl, listLen}
+import list.{range, sort, zip}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- The (name, (parameters, body)) of every function clause of [src], in source order.
+defsOf : String -> List (String, (List Pat, Expr))
+defsOf src = flatMap clauseOf (parse src)
+
+clauseOf : Decl -> List (String, (List Pat, Expr))
+clauseOf (DFunDef _ name pats body _ _) = [(name, (pats, body))]
+clauseOf _ = []
+
+-- The body of the first function clause of [src].
+bodyOf : String -> Expr
+bodyOf src = match defsOf src
+  (_, (_, body)) :: _ => body
+  [] => EVar "<no function in source>"
+
+-- The names a group's dependency graph relates, as (name, dependencies) in name order.
+edgesOf : List String ->
+  List (String, (List Pat, Expr)) ->
+  List (String, Option (List String))
+edgesOf names defs =
+  let graph = depGraphMap names (groupClauses defs)
+  map (n => (n, omLookup n graph)) names
+
+-- A binding of the block [name] whose body applies each of [refs] in turn.
+bindingOf : String -> List String -> LetBind
+bindingOf name refs =
+  LetBind name [FunClause [] (applyAll (map EVar refs))] at noBinderId
+
+applyAll : List Expr -> Expr
+applyAll [] = ELit (LInt 0)
+applyAll [e] = e
+applyAll (f :: x :: rest) = applyAll (EApp f x :: rest)
+
+namesOfComponents : List (List LetBind) -> List (List String)
+namesOfComponents comps = map (map letBindName) comps
+
+letBindName : LetBind -> String
+letBindName (LetBind n _ _ _) = n
+
+-- ── the free-variable walk ────────────────────────────────────────────────
+
+test "allEVars lists every reference of an expression in source order, binders included" =
+  expectEqual
+    ["g", "h", "x", "k", "x", "x"]
+    (allEVars (bodyOf "f x = g (h x) (k x) x"))
+
+test "allEVars sees through lambdas, conditionals and tuples" = expectAll [
+  expectEqual
+    ["a", "b", "c"]
+    (allEVars (bodyOf "f = (y => if a then b else c)")),
+  expectEqual ["p", "q"] (allEVars (bodyOf "f = (p, q)")),
+]
+
+test "an expression that mentions nothing has no references" =
+  expectEqual [] (allEVars (ELit (LInt 3)))
+
+test "declRefNames reads the body of a function, an impl method and an interface default" =
+  let decls =
+    parse
+      """
+interface Sz a where
+  sz : a -> Int
+  sz x = base x
+impl Sz Int where
+  sz n = other n
+f x = used x
+"""
+  expectEqual
+    [["base", "x"], ["other", "n"], ["used", "x"]]
+    (filter (r => not (isEmpty r)) (map declRefNames decls))
+
+test "a declaration that holds no expression has no references" =
+  expectEqual
+    [[], []]
+    (map declRefNames (parse """
+data Shape = Circle | Square
+f : Int
+"""))
+
+-- ── dependency edges ──────────────────────────────────────────────────────
+
+test "a binding depends on the other group names its bodies mention, never on itself" =
+  expectEqual
+    [("f", Some ["g"]), ("g", Some ["f"]), ("h", Some [])]
+    (edgesOf
+      ["f", "g", "h"]
+      (defsOf
+        (joinNl [
+          "f n = f (g n)",
+          "g n = f n",
+          "h n = outside n",
+        ])))
+
+test "a name outside the group is no edge" =
+  expectEqual [("f", Some [])] (edgesOf ["f"] (defsOf "f n = print n"))
+
+test "a parameter spelled like a group name is no reference to it" =
+  expectEqual
+    [("f", Some []), ("g", Some ["f"])]
+    (edgesOf ["f", "g"] (defsOf (joinNl ["f g = g", "g n = f n"])))
+
+test "a let binder spelled like a group name hides it inside its body only" =
+  expectEqual
+    [("f", Some ["g"]), ("g", Some [])]
+    (edgesOf
+      ["f", "g"]
+      (defsOf
+        (joinNl [
+          "f n = (g => g) n + g n",
+          "g n = n",
+        ])))
+
+test "every clause of a function contributes its references to one edge list" =
+  expectEqual
+    [("f", Some ["g", "h"]), ("g", Some []), ("h", Some [])]
+    (edgesOf
+      ["f", "g", "h"]
+      (defsOf
+        (joinNl [
+          "f 0 = g 0",
+          "f n = h n",
+          "g n = n",
+          "h n = n",
+        ])))
+
+test "the clauses of a name are grouped in source order and each name is listed once" =
+  let defs = defsOf (joinNl ["f 0 = a", "g n = b", "f n = c"])
+  expectAll [
+    expectEqual ["f", "g"] (groupNames defs omEmpty),
+    expectEqual ["f", "g"] (sort (omKeys (groupClauses defs))),
+    expectEqual
+      [["a"], ["c"]]
+      (map (c => allEVars (snd c)) (clausesOf "f" (groupClauses defs))),
+  ]
+
+-- ── the group predicate and the component order of a block ────────────────────
+
+test "only a block of two or more names is a recursive group" = expectAll [
+  expectFalse (isLetrecGroup []),
+  expectFalse (isLetrecGroup ["f"]),
+  expectTrue (isLetrecGroup ["f", "g"]),
+]
+
+test "the components of a block come dependencies first and an independent binding stands alone" =
+  expectEqual
+    [["c"], ["b"], ["a"], ["d"]]
+    (namesOfComponents
+      (letGroupComponents [
+        bindingOf "a" ["b"],
+        bindingOf "b" ["c"],
+        bindingOf "c" [],
+        bindingOf "d" [],
+      ]))
+
+test "mutually recursive bindings form one component, kept in source order" =
+  expectEqual
+    [["a", "b"], ["c"]]
+    (namesOfComponents
+      (letGroupComponents [
+        bindingOf "a" ["b"],
+        bindingOf "b" ["a"],
+        bindingOf "c" ["a"],
+      ]))
+
+test "a block that repeats a name stays one group" =
+  expectEqual
+    [["a", "c", "a"]]
+    (namesOfComponents
+      (letGroupComponents [
+        bindingOf "a" [],
+        bindingOf "c" [],
+        bindingOf "a" [],
+      ]))
+
+-- ── the value restriction ─────────────────────────────────────────────────
+
+test "literals, variables, lambdas and tuples of them are non-expansive" =
+  let env = envFor (fresh ())
+  expectAll [
+    expectTrue (isNonexpansive env (ELit (LInt 1))),
+    expectTrue (isNonexpansive env (EVar "x")),
+    expectTrue
+      (isNonexpansive env (ELam [pvar "x"] (EApp (EVar "f") (EVar "x")))),
+    expectTrue (isNonexpansive env (ETuple [ELit (LInt 1), EVar "y"])),
+    expectTrue (isNonexpansive env (EListLit [])),
+  ]
+
+test "a call is expansive, alone or inside a tuple, and an annotation does not change that" =
+  let env = envFor (fresh ())
+  let call = EApp (EVar "f") (ELit (LInt 1))
+  expectAll [
+    expectFalse (isNonexpansive env call),
+    expectFalse (isNonexpansive env (ETuple [ELit (LInt 1), call])),
+    expectFalse (isNonexpansive env (EAnnot call intTy)),
+    expectTrue (isNonexpansive env (EAnnot (EVar "x") intTy)),
+  ]
+
+test "a record is non-expansive exactly when every field expression is" =
+  let env = envFor (fresh ())
+  let call = EApp (EVar "f") (EVar "x")
+  expectAll [
+    expectTrue
+      (isNonexpansive
+        env
+        (ERecordCreate "P" [FieldAssign "a" (ELit (LInt 1))])),
+    expectFalse
+      (isNonexpansive
+        env
+        (ERecordCreate "P" [
+          FieldAssign "a" (ELit (LInt 1)),
+          FieldAssign "b" call,
+        ])),
+  ]
+
+test "a location wrapper is read through and names its position" =
+  let env = envFor (fresh ())
+  expectAll [
+    expectTrue (isSome (exprLoc (ELoc at (EVar "x")))),
+    expectFalse (isSome (exprLoc (EVar "x"))),
+    expectTrue (isNonexpansive env (ELoc at (EVar "x"))),
+    expectFalse (isNonexpansive env (ELoc at (EApp (EVar "f") (EVar "x")))),
+  ]
+
+-- ── rejections at a binding boundary ──────────────────────────────────────
+
+test "a let rec group whose binding is a plain value is rejected with T-NONREC-VALUE-LET" =
+  let m = fresh ()
+  checkLetRecDecls m [DLetGroup False [bindingOf "v" ["w"]]]
+  expectEqual ["T-NONREC-VALUE-LET"] (codesOf m)
+
+test "a let rec group of functions is accepted" =
+  let m = fresh ()
+  let fn = LetBind "f" [FunClause [] (ELam [pvar "x"] (EVar "x"))] at noBinderId
+  checkLetRecDecls m [DLetGroup False [fn], DTypeSig False "t" intTy at]
+  expectEqual [] (codesOf m)
+
+test "an expression bound by let rec is rejected unless it is a lambda" =
+  let rejected = fresh ()
+  let accepted = fresh ()
+  checkRecBindNonFunction rejected "v" (EVar "w")
+  checkRecBindNonFunction accepted "f" (ELam [pvar "x"] (EVar "x"))
+  expectEqual (["T-NONREC-VALUE-LET"], []) (codesOf rejected, codesOf accepted)
+
+test "an annotation variable that grounded or collapsed is rejected with T-TYPE-TOO-GENERAL" =
+  let grounded = fresh ()
+  let collapsed = fresh ()
+  let distinct = fresh ()
+  checkAnnotTooGeneral grounded intTy [varM 1, intM]
+  checkAnnotTooGeneral collapsed intTy [varM 1, varM 1]
+  checkAnnotTooGeneral distinct intTy [varM 1, varM 2]
+  expectEqual
+    (["T-TYPE-TOO-GENERAL"], ["T-TYPE-TOO-GENERAL"], [])
+    (codesOf grounded, codesOf collapsed, codesOf distinct)
+
+-- ── signature constraints ─────────────────────────────────────────────────
+
+sigNames : Ty -> List (String, List String)
+sigNames t = map (c => ((fst c).irName, snd c)) (sigConstraints t)
+
+test "each constraint over a type variable is one slot carrying its variable names" = withFirstSig
+  "f : (Eq a, Ord b) => a -> b -> Bool"
+  (t => expectEqual [("Eq", ["a"]), ("Ord", ["b"])] (sigNames t))
+
+test "a multi-parameter constraint is one slot over every variable it names" = withFirstSig
+  "f : Conv a b => a -> b"
+  (t => expectEqual [("Conv", ["a", "b"])] (sigNames t))
+
+test "a variable a constraint repeats is named once" = withFirstSig
+  "f : Conv a a => a -> a"
+  (t => expectEqual [("Conv", ["a"])] (sigNames t))
+
+test "a constraint with no type variable carries no slot, and an unconstrained signature has none" = expectAll
+  [
+    withFirstSig "f : Eq Int => Int -> Int" (t => expectEqual [] (sigNames t)),
+    withFirstSig "f : a -> a" (t => expectEqual [] (sigNames t)),
+  ]
+
+test "the argument types of each slot follow the slots in order" = withFirstSig
+  "f : (Eq a, Conv a Int) => a -> Int"
+  (t =>
+    expectEqual
+      [["a"], ["a", "Int"]]
+      (map (tys => map tyName tys) (sigConstraintArgTys t)))
+
+tyName : Ty -> String
+tyName (TyVar v) = v
+tyName (TyCon { tyConName = n }) = n
+tyName _ = "<other>"
+
+test "a slot survives when one of its variables is instantiated, with the monos that are" =
+  let eq = ifaceOf "Eq"
+  let monos =
+    constraintVarIfaceMonos
+      [(eq, ["a"]), (eq, ["z"]), (eq, ["a", "z", "b"])]
+      [("a", intM), ("b", boolM)]
+  expectEqual
+    [("Eq", ["Int"]), ("Eq", ["Int", "Bool"])]
+    (map (r => ((fst r).irName, map ppMono (snd r))) monos)
+
+test "the protected signature ids are the unbound variables of every declared variable" =
+  expectEqual
+    ["3", "9"]
+    (sort
+      (omKeys
+        (sccProtectedSignatureIds [
+          ("f", intTy, [("a", varM 3), ("b", intM)]),
+          ("g", intTy, [("a", varM 9)]),
+        ])))
+
+residual : Bool -> AuthResidual
+residual exact =
+  AuthResidual { arLower = AJoin [], arUpper = AJoin [], arExact = exact }
+
+test "the residuals of one member are those its index owns, in order" =
+  expectEqual
+    [True, False]
+    (map
+      (r => r.arExact)
+      (residualsOf 1 [
+        (1, residual True),
+        (2, residual True),
+        (1, residual False),
+      ]))
+
+-- ── the write-back of marked clauses ──────────────────────────────────────
+
+test "rebuilding writes each marked clause over its own declaration and leaves the rest" =
+  let prog =
+    parse
+      (joinNl [
+        "f : Int -> Int",
+        "f 0 = a",
+        "g n = b",
+        "f n = c",
+        "data T = X",
+      ])
+  let marked =
+    map
+      ((name, (pats, body)) => (
+        name,
+        (pats, EVar ("marked_" ++ name ++ "_" ++ joinNl (allEVars body))),
+      ))
+      (defsOf (joinNl ["f 0 = a", "g n = b", "f n = c"]))
+  let rebuilt = rebuildGroupDecls (groupClauses marked) prog
+  expectEqual
+    [[], ["marked_f_a"], ["marked_g_b"], ["marked_f_c"], []]
+    (map declRefNames rebuilt)
+
+-- ── the law preconditions ─────────────────────────────────────────────────
+
+test "the rename law is informative exactly when the parameter shares the name of a member its body mentions" = expectAll
+  [
+    expectTrue (shadowsMention (RenameCase 2 [[RefGroup 0], [RefParam]] 1)),
+    expectFalse (shadowsMention (RenameCase 2 [[RefGroup 0], [RefParam]] 0)),
+    expectFalse (shadowsMention (RenameCase 2 [[RefGroup 1], [Rebind 1]] 1)),
+  ]
+
+test "the order law is informative exactly when some binding depends on a later component" =
+  let refs = [[1], []]
+  let comps = namesOfComponents (letGroupComponents (blockOf refs))
+  expectEqual
+    ([("b0", "b1")], [])
+    (
+      crossEdges refs comps,
+      crossEdges
+        [[], []]
+        (namesOfComponents (letGroupComponents (blockOf [[], []]))),
+    )
+
+-- ── properties ────────────────────────────────────────────────────────────
+
+-- One use inside a function body: the parameter, a group member, or a lambda that rebinds a
+-- group member's name and uses it.
+data Piece = RefParam | RefGroup Int | Rebind Int deriving (Eq, Debug)
+
+-- A group of [size] functions, each with its pieces, and the name its parameter has:
+-- 0 is a name outside the group, k > 0 is the name of group member (k - 1).
+data RenameCase = RenameCase Int (List (List Piece)) Int
+
+impl Arbitrary RenameCase where
+  arbitrary () =
+    let size = randomInt 2 4
+    RenameCase size (genBodies size) (randomInt 0 size)
+  shrink (RenameCase size bodies p) = match bodies
+    _ :: rest if size > 2 => [RenameCase (size - 1) rest (min p (size - 1))]
+    _ => []
+
+genBodies : Int -> <Rand> List (List Piece)
+genBodies n
+  | n <= 0 = []
+  | otherwise = genPieces (randomInt 1 4) :: genBodies (n - 1)
+
+genPieces : Int -> <Rand> List Piece
+genPieces n
+  | n <= 0 = []
+  | otherwise = pieceOf (randomInt 0 2) (randomInt 0 3) :: genPieces (n - 1)
+
+pieceOf : Int -> Int -> Piece
+pieceOf 0 _ = RefParam
+pieceOf 1 k = RefGroup k
+pieceOf _ k = Rebind k
+
+memberName : Int -> String
+memberName k = "m" ++ intToString k
+
+paramNameOf : Int -> Int -> String
+paramNameOf size p = if p == 0 then "x" else memberName ((p - 1) % size)
+
+-- The body a piece list builds under the parameter name [param].
+bodyFor : Int -> String -> List Piece -> Expr
+bodyFor size param ps = applyAll (map (useOf size param) ps)
+
+useOf : Int -> String -> Piece -> Expr
+useOf _ param RefParam = EVar param
+useOf size _ (RefGroup k) = EVar (memberName (k % size))
+useOf size _ (Rebind k) =
+  let n = memberName (k % size)
+  ELam [pvar n] (EVar n)
+
+-- The group a case builds with its parameter called [param].
+groupWith : Int ->
+  List (List Piece) ->
+  String ->
+  List (String, (List Pat, Expr))
+groupWith size bodies param =
+  map
+    ((i, ps) => (memberName i, ([pvar param], bodyFor size param ps)))
+    (zip (range 0 size) bodies)
+
+-- Alpha-renaming of the parameter [from] to [to] over the fragment a body uses: every
+-- reference the parameter binds is renamed, and a lambda that rebinds [from] shields its body.
+renameFree : String -> String -> Expr -> Expr
+renameFree from to (EVar x) = if x == from then EVar to else EVar x
+renameFree from to (EApp f x) =
+  EApp (renameFree from to f) (renameFree from to x)
+renameFree from to (ELam [PVar n l b] body)
+  | n == from = ELam [PVar n l b] body
+  | otherwise = ELam [PVar n l b] (renameFree from to body)
+renameFree _ _ e = e
+
+renamedGroup : Int ->
+  List (List Piece) ->
+  String ->
+  List (String, (List Pat, Expr))
+renamedGroup size bodies param =
+  map
+    ((name, (_, body)) =>
+      (name, ([pvar "renamed"], renameFree param "renamed" body)))
+    (groupWith size bodies param)
+
+-- The case's group names, and its edges before and after renaming its parameter.
+edgesBothWays : RenameCase ->
+  (List (String, Option (List String)), List (String, Option (List String)))
+edgesBothWays (RenameCase size bodies p) =
+  let names = map memberName (range 0 size)
+  let param = paramNameOf size p
+  (
+    edgesOf names (groupWith size bodies param),
+    edgesOf names (renamedGroup size bodies param),
+  )
+
+-- Whether the case's parameter shares a group member's name that its body mentions, so the
+-- rename has a capture to get right.
+shadowsMention : RenameCase -> Bool
+shadowsMention (RenameCase size bodies p) =
+  p > 0 && any (ps => any (mentions size (paramNameOf size p)) ps) bodies
+
+mentions : Int -> String -> Piece -> Bool
+mentions _ _ RefParam = True
+mentions size name (RefGroup k) = memberName (k % size) == name
+mentions size name (Rebind k) = memberName (k % size) == name
+
+-- Law: the dependency edges of a group are the same after its parameter is alpha-renamed.
+-- Precondition: none for the law to hold; it is only informative when the parameter shares a
+-- group member's name that its body mentions (`shadowsMention`).
+prop "the dependency edges of a group do not depend on what its parameter is called" (c : RenameCase) =
+  let (before, after) = edgesBothWays c
+  before == after
+
+-- The refs of each binding of a block, as indices of its members.
+data BlockCase = BlockCase (List (List Int))
+
+impl Arbitrary BlockCase where
+  arbitrary () = BlockCase (genRefs (randomInt 2 5) (randomInt 2 5))
+  shrink (BlockCase refs) = match refs
+    _ :: rest => [BlockCase rest]
+    [] => []
+
+genRefs : Int -> Int -> <Rand> List (List Int)
+genRefs size n
+  | n <= 0 = []
+  | otherwise = genRefList size (randomInt 0 2) :: genRefs size (n - 1)
+
+genRefList : Int -> Int -> <Rand> List Int
+genRefList size n
+  | n <= 0 = []
+  | otherwise = randomInt 0 (size - 1) :: genRefList size (n - 1)
+
+blockNames : List (List Int) -> List String
+blockNames refs = map (i => "b" ++ intToString i) (range 0 (listLen refs))
+
+blockOf : List (List Int) -> List LetBind
+blockOf refs =
+  map
+    ((name, rs) =>
+      bindingOf name (map (j => "b" ++ intToString (j % listLen refs)) rs))
+    (zip (blockNames refs) refs)
+
+-- The index of the component that holds [name].
+componentIndex : List (List String) -> String -> Int
+componentIndex comps name = indexFrom 0 comps
+  where
+    indexFrom _ [] = 0 - 1
+    indexFrom i (c :: rest) =
+      if contains name c then i else indexFrom (i + 1) rest
+
+-- The edges of a block that run from one component to an earlier one.
+crossEdges : List (List Int) -> List (List String) -> List (String, String)
+crossEdges refs comps =
+  flatMap
+    ((name, rs) =>
+      flatMap
+        (j =>
+          let dep = "b" ++ intToString (j % listLen refs)
+          if componentIndex comps dep < componentIndex comps name then
+            [(name, dep)]
+          else
+            [])
+        rs)
+    (zip (blockNames refs) refs)
+
+-- Law: every binding of a block lands in one component, and a binding's component does not
+-- come before the component of any binding it mentions.
+-- Precondition: none for the law to hold; it is only informative when some edge crosses
+-- components (`crossEdges` nonempty).
+prop "a block's components hold every binding once and come dependencies first" (c : BlockCase) =
+  let (BlockCase refs) = c
+  let comps = namesOfComponents (letGroupComponents (blockOf refs))
+  let names = blockNames refs
+  let dependenciesFirst =
+    all
+      ((name, rs) =>
+        all
+          (j =>
+            componentIndex comps ("b" ++ intToString (j % listLen refs))
+              <= componentIndex comps name)
+          rs)
+      (zip names refs)
+  sort (flatMap (c => c) comps) == sort names && dependenciesFirst

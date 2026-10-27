@@ -55,7 +55,7 @@ import types.tc_shadow.{
   stampRoutes,
 }
 import types.tc_state.{blankModuleCtx, probeGraphCtx}
-import types.tc_test_support.{boolM, fresh, intM, varM}
+import types.tc_test_support.{boolM, fresh, intM, readerOfLib, varM}
 import types.tc_types.{
   BareLocals(..),
   DeclEnvAcc(..),
@@ -404,46 +404,6 @@ stampedAt m receiver =
     []
     []
   localName tag.value
-
--- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.
-libSource : String
-libSource =
-  """
-interface Sizeable a where
-  size : a -> Int
-impl Sizeable Int where
-  size n = n
-"""
-
--- The declarations of [ds] stamped as declared in the module [mid].
-declaredIn : String -> List Decl -> List Decl
-declaredIn mid ds = map (declaredAs mid) ds
-
-declaredAs : String -> Decl -> Decl
-declaredAs mid (d@(DInterface { ifaceOrigin = _ })) =
-  DInterface { d | ifaceOrigin = OriginModule mid }
-declaredAs mid (d@(DImpl { implOrigin = _ })) =
-  DImpl { d | implOrigin = OriginModule mid }
-declaredAs _ d = d
-
--- The reader `user` (ordinal 2) of the module `lib` (ordinal 1), which declares `Sizeable`
--- and `impl Sizeable Int`.  The graph's method environment and the reader's impl
--- environment are built the way `checkBodyImpl` installs them, so `size` is the one
--- visible method and a live impl answers at `Int`.
-readerOfLib : Unit -> ModuleCtx
-readerOfLib _ =
-  let g = probeGraphCtx ()
-  let lib = declEnvModule g 1 "lib" (declaredIn "lib" (parse libSource))
-  let user = declEnvModule g 2 "user" []
-  let empty = g.declEnvsRef.value
-  g.declEnvsRef := { empty |
-    deMethods = methodEnvGo g [lib, user] empty.deMethods,
-  }
-  let m = blankModuleCtx g "user"
-  m.mcCells.methodScopeCtxRef := Some ([], 2)
-  m.mcCells.bodyImplEnvRef :=
-    implAccFinish (buildImplEnvGo [lib, user] emptyDeclEnvAcc.daImpls)
-  m
 
 test "an ungrounded receiver of a name that is no definer shadow leaves the route untouched" =
   expectEqual None (stampedAt (fresh ()) (varM 1))
