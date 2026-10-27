@@ -53,7 +53,6 @@ dedentRestSegs : Int -> Bool -> List String -> List String
 dedentTripleGo : List RawTok -> List RawTok
 dedentTripleGroup : String -> Int -> Int -> List String -> List RawTok -> List RawTok -> List RawTok
 dedentTripleInterp : List RawTok -> List RawTok
-describeToken : Token -> String
 digitVal : Char -> Int
 digitsEnd : Array Char -> Int -> Int -> Int
 dotContinuesAccess : Array Char -> Int -> Int -> Bool
@@ -97,7 +96,6 @@ invalidStrEscMsg : Char -> ParseDiagnosticKind
 is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
 is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
-isCommaTok : Token -> Bool
 isElseTok : Token -> Bool
 isExpMarker : Char -> Bool
 isExprEnd : Char -> Bool
@@ -125,9 +123,6 @@ layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 leadingOp : Array Char -> Int -> Int -> Option (Token, Int)
 lexErrorTok : Int -> Int -> ParseDiagnosticKind -> List RawTok
-lineStartSearch : Array Int -> Int -> Int -> Int -> Int
-lineStartsGo : Array Char -> Int -> Int -> List Int
-lineStartsOf : String -> Array Int
 magnitudeInt : Int -> Int
 malformedExpDotTok : Array Char -> Int -> Int -> Int -> List RawTok
 malformedLeadingDotTok : Array Char -> Int -> Int -> List RawTok
@@ -142,7 +137,6 @@ nextIsComment : Array Char -> Int -> Int -> Bool
 normalizeMin : Int -> Int
 numFinish : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 offsetToLineCol : String -> Int -> (Int, Int)
-offsetToLineColFast : Array Int -> Int -> (Int, Int)
 offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLinesGo : Array Char -> List Int -> Int -> Int -> List Int
 openBrace : Array Char -> Int -> Int -> Int -> Int -> List RawTok
@@ -215,7 +209,6 @@ stripLines : Int -> List String -> List String
 substituteOwn : List String -> List RawTok -> List RawTok
 substr : Array Char -> Int -> Int -> String
 substrNoUs : Array Char -> Int -> Int -> String
-tokenToString : Token -> String
 tokenize : String -> List Token
 tokenizeWithLines : String -> (List Token, List Int)
 tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))

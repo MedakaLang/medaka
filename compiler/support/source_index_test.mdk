@@ -1,6 +1,7 @@
 import support.source_index.{
-  indexSource, offsetToSourcePosition, sourcePositionToOffset,
-  offsetToUtf16Position, utf16PositionToOffset, clampSourcePositionToOffset
+  lineStartsOf, lineStartIndex, offsetToLineColFast, indexSource,
+  offsetToSourcePosition, sourcePositionToOffset, offsetToUtf16Position,
+  utf16PositionToOffset, clampSourcePositionToOffset
 }
 import test.{expectEach, expectEqual, expectNone, expectSome}
 
@@ -53,3 +54,51 @@ prop "valid offsets round-trip" (source : String) (n : Int) =
   let count = stringLength source
   let offset = if n < 0 then 0 else n % (count + 1)
   roundTrip source offset
+
+test "cheap line starts and scalar coordinates" = expectEach [
+  (
+    "empty",
+    expectEqual
+      (0, (1, 0))
+      (
+        lineStartIndex (lineStartsOf "") 0,
+        offsetToLineColFast (lineStartsOf "") 0,
+      ),
+  ),
+  (
+    "lf eof",
+    expectEqual
+      (1, (2, 0))
+      (
+        lineStartIndex (lineStartsOf "a\n") 2,
+        offsetToLineColFast (lineStartsOf "a\n") 2,
+      ),
+  ),
+  (
+    "crlf",
+    expectEqual
+      (1, (2, 0))
+      (
+        lineStartIndex (lineStartsOf "a\r\nb") 3,
+        offsetToLineColFast (lineStartsOf "a\r\nb") 3,
+      ),
+  ),
+  (
+    "lone cr",
+    expectEqual
+      (1, (2, 1))
+      (
+        lineStartIndex (lineStartsOf "a\rb") 3,
+        offsetToLineColFast (lineStartsOf "a\rb") 3,
+      ),
+  ),
+  (
+    "emoji",
+    expectEqual
+      (0, (1, 1))
+      (
+        lineStartIndex (lineStartsOf "😀x") 1,
+        offsetToLineColFast (lineStartsOf "😀x") 1,
+      ),
+  ),
+]

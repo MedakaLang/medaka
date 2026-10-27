@@ -7,7 +7,6 @@ eval.eval	16
 frontend.desugar	1
 frontend.desugar_cache	2
 frontend.parse_cache	1
-frontend.parser	8
 frontend.resolve	3
 support.opcount	2
 support.scc	6

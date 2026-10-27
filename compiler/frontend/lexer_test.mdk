@@ -1,5 +1,5 @@
 import frontend.lexer.{
-  Token(..), tokenToString, tokenize, tokenizeWithOffsets,
+  Token(..), tokenToString, describeToken, tokenize, tokenizeWithOffsets,
   tokenizeWithOffsetPairs
 }
 import test.{Expectation, expectEqual, expectAll, expectEach}
@@ -225,3 +225,16 @@ test "Unicode failure kinds and exact spans agree across scanner continuations" 
         ("triple interpolation", "\"\"\"a\\{1}😀", "\"\"\""),
         ("character", "'", "'"),
       ])
+
+test "token descriptions and constructors" = expectEach [
+  (
+    "identifier",
+    expectEqual
+      ("IDENT \"hello\"", "`hello`")
+      (tokenToString (TIdent "hello"), describeToken (TIdent "hello")),
+  ),
+  (
+    "eof",
+    expectEqual ("EOF", "end of input") (tokenToString TEof, describeToken TEof),
+  ),
+]

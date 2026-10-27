@@ -6,7 +6,7 @@
 
 import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..)}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.parser.{
+import frontend.parse_engine.{
   PR(..),
   PFail(..),
   ParserE(..),
@@ -15,6 +15,9 @@ import frontend.parser.{
   expectTok,
   runP,
   renderFail,
+  runPWith,
+}
+import frontend.parser.{
   parseResult,
   parse,
   parseLocated,
@@ -26,10 +29,16 @@ import frontend.parser.{
 }
 import test.{
   expectEqual, expectEach, expectAll, expectSome, expectNone, expectTrue,
-  Expectation
+  expectOkThen, expectErrContains, Expectation
 }
 import frontend.parser as P
+import frontend.parse_engine as E
+import frontend.parse_result as R
 import support.util.{joinWith}
+import frontend.parse_diagnostic.{renderParseDiagnostic}
+import string as S
+import tools.fmt.{formatParsed}
+import tools.codemod.{codemodSource}
 
 -- The rendered message of a recoverable failure, or the marker text for any
 -- other outcome so a wrong outcome shows up in the assertion's diff.
@@ -96,7 +105,7 @@ test "renderFail of a plain message is that message" =
 
 -- `far` fails at token index 1 (after "consuming" one token), `near` at 0.
 far : Parser Unit
-far = ParserE (toks pos => runP (expectTok TRParen) toks (pos + 1))
+far = ParserE (ctx pos => runPWith ctx (expectTok TRParen) (pos + 1))
 
 near : Parser Unit
 near = failP "near"
@@ -110,22 +119,22 @@ test "farthest failure wins when it is the first alternative" =
   expectEqual
     ("unexpected `x`; expected `)`", 1)
     (
-      failText (runP (P.orElse far near) twoToks 0),
-      failPos (runP (P.orElse far near) twoToks 0),
+      failText (runP (E.orElse far near) twoToks 0),
+      failPos (runP (E.orElse far near) twoToks 0),
     )
 
 -- The second alternative failed further: it is kept.
 test "farthest failure wins when it is the second alternative" =
   expectEqual
     "unexpected `x`; expected `)`"
-    (failText (runP (P.orElse near far) twoToks 0))
+    (failText (runP (E.orElse near far) twoToks 0))
 
 -- Equal positions: the later alternative (`otherwise = PErr eb qb`) wins.
 -- Reverting the tie to the first alternative would give "first".
 test "a tie goes to the later alternative" =
   expectEqual
     "second"
-    (failText (runP (P.orElse (failP "first") (failP "second")) twoToks 0))
+    (failText (runP (E.orElse (failP "first") (failP "second")) twoToks 0))
 
 -- ── The binary-operator ladder ──────────────────────────────────────────
 -- Expected values follow the ladder `binLevelOf` encodes, which is the one the
@@ -459,3 +468,161 @@ test "parseResult spans do not depend on the located parse before it" =
   expectEqual
     (afterLocatedResult "longname = 1\nb = 2\n")
     (afterLocatedResult "q = 0\n")
+
+locTuple : Option Loc -> Option (Int, Int, Int, Int)
+locTuple loc = map ((Loc _ l c el ec) => (l, c, el, ec)) loc
+
+test "position and immutable result projections preserve CRLF and Unicode" =
+  let (decls, positions) =
+    P.parseWithPositions "-- λ\r\ndata Foo = Bar | Baz\r\nx = 1\r\n"
+  let metadata = R.makeParseMetadata [(2, 3)] [(3, 0, 1)]
+  let result = R.makeParsedSource decls positions metadata
+  expectAll [
+    expectEqual 2 (length (R.parsedDecls result)),
+    expectEqual
+      [(2, 2), (3, 3)]
+      (map
+        (d => (P.declPosLine d, P.declPosEndLine d))
+        (P.positionsDecls (R.parsedPositions result))),
+    expectEqual
+      [Some (2, 5, 2, 8), Some (3, 0, 3, 1)]
+      (map (d => locTuple (P.declPosNameLoc d)) (P.positionsDecls positions)),
+    expectEqual
+      [[Some (2, 11, 2, 14), Some (2, 17, 2, 20)], []]
+      (map
+        (d => map locTuple (P.declPosChildLocs d))
+        (P.positionsDecls positions)),
+    expectEqual [(2, 3)] (R.metadataTrailingCommas (R.parsedMetadata result)),
+    expectEqual [(3, 0, 1)] (R.metadataUnitStarts (R.parsedMetadata result)),
+  ]
+
+metadataPair : R.ParsedSource -> (List (Int, Int), List (Int, Int, Int))
+metadataPair parsed =
+  let m = R.parsedMetadata parsed
+  (R.metadataTrailingCommas m, R.metadataUnitStarts m)
+
+test "retained P after Q and unlocated parsing equals cold P" =
+  expectOkThen
+    (p =>
+      let before = publishedView p
+      let _ = parse "plain = [0,]\n"
+      expectOkThen
+        (_ =>
+          expectOkThen
+            (_ =>
+              expectOkThen
+                (cold => expectEqual (publishedView cold) before)
+                (parsePublished "main = [1, 2,]\n"))
+            (map
+              (ds => length ds)
+              (mapErr
+                parseErrorMessage
+                (parseResult "checked = Box { field = 7 }\n"))))
+        (parsePublished "other = [9,]\n"))
+    (parsePublished "main = [1, 2,]\n")
+
+test "discarded variant update speculation contributes exactly one comma" =
+  expectOkThen
+    (p => expectEqual ([(1, 18)], []) (metadataPair p))
+    (parsePublished "main = Box { [1, 2,] }\n")
+
+test "discarded variant update speculation contributes exactly one field unit" =
+  expectOkThen
+    (p => expectEqual ([], [(4, 1, 21)]) (metadataPair p))
+    (parsePublished "main = Box { Inner { field = 1 } }\n")
+
+boundedCues : String -> ((String, Int), (List (Int, Int), List (Int, Int, Int)))
+boundedCues src =
+  let (ts, os) = tokenizeWithOffsetPairs src
+  let ctx =
+    E.newParseContextWith
+      E.LocatedSyntax
+      src
+      (arrayFromList ts)
+      (arrayFromList os)
+  let r = P.parseDeclAt ctx 0
+  let result = match r
+    POk _ q => ("ok", q)
+    PErr f q => (renderFail f, q)
+    PFatal f q => ("fatal: " ++ renderFail f, q)
+  (result, E.contextCues ctx)
+
+test "raw operator RHS fallback discards cues from its failed operand" =
+  let (outcome, cues) = boundedCues "main = a + Box { [1, 2,]\n"
+  expectAll [expectEqual "ok" (fst outcome), expectEqual ([], []) cues]
+
+test "a failed match with expression lookahead restores its entry cues" =
+  let (outcome, cues) = boundedCues "main = match x\n  [1, 2,]\n"
+  expectAll [
+    expectEqual "unexpected `[`; expected the end of the block" (fst outcome),
+    expectEqual ([], []) cues,
+  ]
+
+test "bounded declaration failure restores entry cues" =
+  let (ts, os) = tokenizeWithOffsetPairs "main = Box { [1, 2,]"
+  let ctx =
+    E.newParseContext
+      "main = Box { [1, 2,]"
+      (arrayFromList ts)
+      (arrayFromList os)
+  let _ = E.runPWith ctx (E.recordUnitStart 2 0) 0
+  let before = E.contextCues ctx
+  let _ = P.parseDeclAt ctx 0
+  expectEqual before (E.contextCues ctx)
+
+test "retained formatting uses P metadata after another parse" =
+  let src = "main = [1, 2,]\n"
+  expectOkThen
+    (p =>
+      let cold = formatParsed src p
+      expectOkThen
+        (_ => expectEqual cold (formatParsed src p))
+        (parsePublished "other = 9\n"))
+    (parsePublished src)
+
+test "codemod formatting retains cues across a transform callback parse" =
+  let src = "main = [1, 2,]\n"
+  let cold = codemodSource (d => (d, True)) src
+  let interleaved =
+    codemodSource
+      (d =>
+        let _ = P.parseWithPositions "other = 9\n"
+        (d, True))
+      src
+  expectEqual
+    (mapErr parseErrorMessage cold)
+    (mapErr parseErrorMessage interleaved)
+
+test "expression, pattern and type nesting share the existing cap" =
+  let deep = S.repeat 20001 "("
+  let close = S.repeat 20001 ")"
+  expectEach
+    (map
+      ((name, src) => (
+        name,
+        expectErrContains
+          "nesting too deep"
+          (map (ds => length ds) (mapErr parseErrorMessage (parseResult src))),
+      ))
+      [
+        ("expression", "main = " ++ deep ++ "1" ++ close ++ "\n"),
+        ("pattern", "f " ++ deep ++ "x" ++ close ++ " = 1\n"),
+        ("type", "f : " ++ deep ++ "Int" ++ close ++ "\n"),
+      ])
+
+parsePublished : String -> Result String R.ParsedSource
+parsePublished src = mapErr renderParseDiagnostic (P.parseSource src)
+
+publishedView : R.ParsedSource ->
+  (String, List (Int, Int, Option (Int, Int, Int, Int)), List (Int, Int), List (Int, Int, Int))
+publishedView p =
+  let (commas, units) = metadataPair p
+  (
+    bodyLocText (R.parsedDecls p),
+    map
+      (d =>
+        (P.declPosLine d, P.declPosEndLine d, locTuple (P.declPosNameLoc d)))
+      (P.positionsDecls (R.parsedPositions p)),
+    commas,
+    units,
+  )

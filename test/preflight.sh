@@ -640,7 +640,7 @@ need_fixpoint=0
 while IFS= read -r f; do
   case "$f" in
     # ── front-end: everything downstream of it is suspect ──
-    compiler/frontend/lexer.mdk)
+    compiler/frontend/lexer.mdk|compiler/frontend/lex_token.mdk)
       # The self-lex token-stream rows (the former diff_compiler_lex_files) are
       # rows of the survivor diff_compiler_fmt, whose name no `lex*` glob reaches.
       add 'diff_compiler_fmt'
@@ -653,7 +653,7 @@ while IFS= read -r f; do
     # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
     # enforcement table (`grep -oE 'compiler/[a-zA-Z_/]+\.mdk' docs/spec/*-SEMANTICS.md`),
     # so both spec-conformance gates belong here too.
-    compiler/frontend/parser.mdk|compiler/frontend/ast.mdk)
+    compiler/frontend/parser.mdk|compiler/frontend/ast.mdk|compiler/frontend/parse_engine.mdk|compiler/frontend/parse_positions.mdk|compiler/frontend/parse_result.mdk)
       # Same diff_compiler_check repoint as the lexer.mdk arm above.
       add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
