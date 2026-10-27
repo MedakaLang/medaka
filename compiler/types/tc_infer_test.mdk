@@ -561,42 +561,43 @@ main =
 
 -- ── calls, guards and groups ──────────────────────────────────────────────
 
--- The tuple-call hints [src] leaves behind as candidates for the call's mismatch.
-tupleCallHints : String -> List String
-tupleCallHints src =
+-- [k] applied to the tuple-call hints [src] leaves behind as candidates for the call's
+-- mismatch.
+withTupleCallHints : String -> (List String -> Expectation) -> Expectation
+withTupleCallHints src k =
   let m = scopedWith shapes
   let env = envWithData m shapes
-  match mainOf m src
-    Some e =>
-      let _ = infer env e
-      map helpOf m.mcCells.tupleCallCandidates.value
-    None => ["no main"]
+  withMain m src (e =>
+    let _ = infer env e
+    k (map helpOf m.mcCells.tupleCallCandidates.value))
 
 helpOf : (Mono, String, a) -> String
 helpOf (_, h, _) = h
 
 test "a call that passes a tuple to a function of that many parameters leaves a hint to use spaces" = expectAll
   [
-    expectTrue
-      (any
-        (contains "passes the single tuple `('a', 'b')`; did you mean")
-        (tupleCallHints """
+    withTupleCallHints """
 main =
   let f x y = x
   f ('a', 'b')
-""")),
-    expectEqual
-      []
-      (tupleCallHints """
+""" (hints =>
+      expectTrue
+        (any
+          (contains "passes the single tuple `('a', 'b')`; did you mean")
+          hints)),
+    withTupleCallHints
+      """
 main =
   let f x y = x
   f ('a', 'b', 'c')
-"""),
-    expectEqual [] (tupleCallHints """
+"""
+      (hints => expectEqual [] hints),
+    withTupleCallHints """
 main =
   let g p = p
   g ('a', 'b')
-"""),
+""" (hints =>
+      expectEqual [] hints),
   ]
 
 test "a call with too many arguments names the function and how many it takes" = says
@@ -768,17 +769,20 @@ test "each arithmetic, comparison and unary operator records one obligation on i
 
 -- ── wide literals ─────────────────────────────────────────────────────────
 
+-- Whether a wide literal is written with a minus sign in front.
+data Sign = Positive | Negated deriving (Eq)
+
 -- The messages checkWideLiterals pushes for one literal of type [t] with halves [hi] and [lo].
-wideMessages : Mono -> String -> Int -> Int -> Bool -> List String
-wideMessages t lx hi lo negated =
+wideMessages : Mono -> String -> Int -> Int -> Sign -> List String
+wideMessages t lx hi lo sign =
   let m = scoped ()
-  checkWideLiterals m [(t, lx, hi, lo, negated, None)]
+  checkWideLiterals m [(t, lx, hi, lo, sign == Negated, None)]
   messagesOf m
 
 test "a literal of 2^62 does not fit Int and says so" =
   expectEqual
     ["integer literal too large for Int (max 4611686018427387903)"]
-    (wideMessages intM "4611686018427387904" 1073741824 0 False)
+    (wideMessages intM "4611686018427387904" 1073741824 0 Positive)
 
 test "a literal of 2^63 fits U64, and I64 only when negated" =
   expectEqual
@@ -793,10 +797,30 @@ test "a literal of 2^63 fits U64, and I64 only when negated" =
       [],
     ]
     [
-      wideMessages (tconBuiltin "U64") "9223372036854775808" 2147483648 0 False,
-      wideMessages (tconBuiltin "U64") "9223372036854775808" 2147483648 0 True,
-      wideMessages (tconBuiltin "I64") "9223372036854775808" 2147483648 0 False,
-      wideMessages (tconBuiltin "I64") "9223372036854775808" 2147483648 0 True,
+      wideMessages
+        (tconBuiltin "U64")
+        "9223372036854775808"
+        2147483648
+        0
+        Positive,
+      wideMessages
+        (tconBuiltin "U64")
+        "9223372036854775808"
+        2147483648
+        0
+        Negated,
+      wideMessages
+        (tconBuiltin "I64")
+        "9223372036854775808"
+        2147483648
+        0
+        Positive,
+      wideMessages
+        (tconBuiltin "I64")
+        "9223372036854775808"
+        2147483648
+        0
+        Negated,
     ]
 
 test "a wide literal at any other type or an undetermined one is rejected" =
@@ -813,8 +837,8 @@ test "a wide literal at any other type or an undetermined one is rejected" =
         "9223372036854775808"
         2147483648
         0
-        False,
-      wideMessages (varM 7) "9223372036854775808" 2147483648 0 False,
+        Positive,
+      wideMessages (varM 7) "9223372036854775808" 2147483648 0 Positive,
     ]
 
 test "an expression holding a wide literal parks it for the range check" =
@@ -1101,14 +1125,13 @@ test "a one-element tuple passed to a one-parameter function leaves no tuple-cal
       (ELet at False (pvar "f") idLam (EApp (EVar "f") (ETuple [charE])))
   expectEqual [] (map helpOf m.mcCells.tupleCallCandidates.value)
 
-test "a tuple passed to a function whose first parameter is a tuple of that size leaves no hint" =
-  expectEqual
-    []
-    (tupleCallHints """
+test "a tuple passed to a function whose first parameter is a tuple of that size leaves no hint" = withTupleCallHints
+  """
 main =
   let f (a, b) y = a
   f ('a', 'b')
-""")
+"""
+  (hints => expectEqual [] hints)
 
 test "the elements of an array literal and the bounds of a range are checked" = expectAll
   [
@@ -1123,10 +1146,10 @@ tcHelp : TcDiag -> Option String
 tcHelp (TcDiag _ _ _ _ h _) = h
 
 -- The diagnostics checkWideLiterals pushes for one literal, as (message, help).
-wideDiags : Mono -> String -> Int -> Int -> Bool -> List (String, Option String)
-wideDiags t lx hi lo negated =
+wideDiags : Mono -> String -> Int -> Int -> Sign -> List (String, Option String)
+wideDiags t lx hi lo sign =
   let m = scoped ()
-  checkWideLiterals m [(t, lx, hi, lo, negated, None)]
+  checkWideLiterals m [(t, lx, hi, lo, sign == Negated, None)]
   map (d => (tcMsg d, tcHelp d)) (reverse (wAll m.mcCells.typeErrors))
 
 test "a literal just above 2^62 and one just above the I64 negative bound are named with their type" =
@@ -1146,8 +1169,8 @@ test "a literal just above 2^62 and one just above the I64 negative bound are na
       ],
     ]
     [
-      wideDiags intM "4611686018427387905" 1073741824 1 False,
-      wideDiags (tconBuiltin "I64") "9223372036854775809" 2147483648 1 True,
+      wideDiags intM "4611686018427387905" 1073741824 1 Positive,
+      wideDiags (tconBuiltin "I64") "9223372036854775809" 2147483648 1 Negated,
     ]
 
 test "a wide literal at an undetermined type is told how to annotate it" =
@@ -1159,7 +1182,7 @@ test "a wide literal at an undetermined type is told how to annotate it" =
           "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(9223372036854775808 : U64)`",
       ),
     ]
-    (wideDiags (varM 7) "9223372036854775808" 2147483648 0 False)
+    (wideDiags (varM 7) "9223372036854775808" 2147483648 0 Positive)
 
 -- ── binders that share a location ─────────────────────────────────────────
 
@@ -1429,7 +1452,7 @@ chainSource (ChainCase binders uses) =
 innermostKind : List (Int, Int) -> Int -> Int
 innermostKind binders n = match filter (b => fst b == n) (reverse binders)
   (_, k) :: _ => k
-  [] => 3
+  [] => unitKind
 
 -- Law: every use in the body of a chain of lambdas has the type of the literal its innermost
 -- binder of that name was applied to.  Precondition (`shadowedUse`): some used name is bound
