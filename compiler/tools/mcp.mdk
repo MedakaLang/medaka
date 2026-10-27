@@ -34,6 +34,10 @@ import json.{
   asArray,
 }
 import string.{stripCR}
+import support.source_index.{
+  SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
+}
+import tools.lsp_positions.{locToLspRange}
 import driver.diagnostics.{
   stdlibExportsReader,
   checkJsonSingle,
@@ -58,7 +62,7 @@ import tools.lsp.{
   unit,
 }
 import tools.lint_cmd.{quadToParseTriple, quadToSrc}
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser as P
 import frontend.parser.{
@@ -350,12 +354,12 @@ mcpTools : List McpTool
 mcpTools = [
   McpTool
     "medaka_check"
-    "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns the same structured JSON `medaka check --json` emits (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."
+    "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns structured JSON using zero-based UTF-16 positions (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."
     medakaCheckSchema
     runCheckTool,
   McpTool
     "medaka_type_at"
-    "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."
+    "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."
     medakaTypeAtSchema
     runTypeAtTool,
   McpTool
@@ -365,12 +369,12 @@ mcpTools = [
     runSymbolsTool,
   McpTool
     "medaka_definition"
-    "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."
+    "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."
     medakaDefinitionSchema
     runDefinitionTool,
   McpTool
     "medaka_references"
-    "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line`/`col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."
+    "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line` and UTF-16 `col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."
     medakaReferencesSchema
     runReferencesTool,
   McpTool
@@ -489,7 +493,7 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
       Ok _ =>
         let (json, hasErr) =
           checkJsonFile False runtimeSrc coreSrc path stdlibDir
-        toolTextResult json hasErr
+        toolTextResult (mcpDiagnosticJson json None) hasErr
   (None, Some src) =>
     -- Inline source belongs to no project, and this server has analyzed other
     -- projects' files before it.
@@ -503,7 +507,78 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
         coreSrc
         syntheticSourceName
         src
-    toolTextResult json hasErr
+    toolTextResult (mcpDiagnosticJson json (Some src)) hasErr
+
+-- The check/lint serializer owns the shared JSON envelope; MCP projects its
+-- source-coordinate ranges to protocol coordinates using the file's source.
+mcpDiagnosticJson : String -> Option String -> <IO> String
+mcpDiagnosticJson text inlineSrc = match parse text
+  Err _ => text
+  Ok (JObject fields) =>
+    stringify (jObject (map (mcpFilesField inlineSrc) (toList fields)))
+  Ok _ => text
+
+mcpFilesField : Option String -> (String, Json) -> <IO> (String, Json)
+mcpFilesField inlineSrc ("files", JArray files) =
+  ("files", jArray (map (mcpDiagnosticFile inlineSrc) (toList files)))
+mcpFilesField _ pair = pair
+
+mcpDiagnosticFile : Option String -> Json -> <IO> Json
+mcpDiagnosticFile inlineSrc file = match fieldStr "file" file
+  None => file
+  Some path =>
+    let source =
+      if path == syntheticSourceName then
+        inlineSrc
+      else match readFile path
+        Ok src => Some src
+        Err _ => None
+    match file
+      JObject fields =>
+        jObject
+          (map (mcpDiagnosticField (map indexSource source)) (toList fields))
+      _ => file
+
+mcpDiagnosticField : Option SourceIndex -> (String, Json) -> (String, Json)
+mcpDiagnosticField source ("diagnostics", JArray ds) =
+  ("diagnostics", jArray (map (mcpDiagnosticValue source) (toList ds)))
+mcpDiagnosticField _ pair = pair
+
+mcpDiagnosticValue : Option SourceIndex -> Json -> Json
+mcpDiagnosticValue source (JObject fields) =
+  jObject (map (mcpDiagnosticPair source) (toList fields))
+mcpDiagnosticValue _ value = value
+
+mcpDiagnosticPair : Option SourceIndex -> (String, Json) -> (String, Json)
+mcpDiagnosticPair source ("range", range) = ("range", mcpRange source range)
+mcpDiagnosticPair source ("fix", fix) = ("fix", mcpDiagnosticValue source fix)
+mcpDiagnosticPair _ pair = pair
+
+mcpRange : Option SourceIndex -> Json -> Json
+mcpRange _ JNull = JNull
+mcpRange None _ = JNull
+mcpRange (Some index) range = match (get "start" range, get "end" range)
+  (Some start, Some end) => match (
+    fieldInt "line" start,
+    fieldInt "character" start,
+    fieldInt "line" end,
+    fieldInt "character" end,
+  )
+    (Some sl, Some sc, Some el, Some ec) =>
+      match locToLspRange index (Loc "" (sl + 1) sc (el + 1) ec)
+        None => JNull
+        Some converted => jObject [
+          ("end", mcpOrderedPosition (fieldOr "end" converted)),
+          ("start", mcpOrderedPosition (fieldOr "start" converted)),
+        ]
+    _ => JNull
+  _ => JNull
+
+mcpOrderedPosition : Json -> Json
+mcpOrderedPosition pos = jObject [
+  ("character", fieldOr "character" pos),
+  ("line", fieldOr "line" pos),
+]
 
 -- ── symbol-name addressing (#849) ───────────────────────────────────────────
 -- `medaka_type_at`/`medaka_definition` accept an alternative to a numeric
@@ -530,27 +605,21 @@ fieldSymbol args = match fieldStr "symbol" args
   Some "" => None
   other => other
 
--- The raw text of 0-based `line` of `src` (no line terminator), or None if
--- the file has no such line.  One left-to-right pass over the char array:
--- walk past `line` newlines to find the start, then scan on to that line's
--- own terminating '\n' (or EOF for an unterminated final line).
+-- The raw text of a zero-based line, excluding its line terminator.
 lineTextAt : String -> Int -> Option String
-lineTextAt src line
-  | line < 0 = None
-  | otherwise = lineTextGo (stringToChars src) src (stringLength src) 0 0 line
-
-lineTextGo : Array Char -> String -> Int -> Int -> Int -> Int -> Option String
-lineTextGo arr src len i curLine target
-  | curLine == target = Some (stringSlice i (lineTextEnd arr len i) src)
-  | i >= len = None
-  | arrayGetUnsafe i arr == '\n' =
-    lineTextGo arr src len (i + 1) (curLine + 1) target
-  | otherwise = lineTextGo arr src len (i + 1) curLine target
+lineTextAt src line =
+  map
+    (start =>
+      stringSlice
+        start
+        (lineTextEnd (stringToChars src) (stringLength src) start)
+        src)
+    (sourcePositionToOffset (indexSource src) (line + 1) 0)
 
 lineTextEnd : Array Char -> Int -> Int -> Int
 lineTextEnd arr len i
   | i >= len = len
-  | arrayGetUnsafe i arr == '\n' = i
+  | arrayGetUnsafe i arr == '\n' || arrayGetUnsafe i arr == '\r' = i
   | otherwise = lineTextEnd arr len (i + 1)
 
 -- Every identifier token on `text` (the WIDE class `support.char.isIdentChar`
@@ -560,10 +629,13 @@ identTokenRe : Regex
 identTokenRe = mustCompile "[A-Za-z0-9_']+"
 
 identifiersInLine : String -> List (String, Int)
-identifiersInLine text = map identPair (findAll identTokenRe text)
+identifiersInLine text =
+  map (identPair (indexSource text)) (findAll identTokenRe text)
 
-identPair : Match -> (String, Int)
-identPair m = (m.text, m.start)
+identPair : SourceIndex -> Match -> (String, Int)
+identPair index m = match offsetToUtf16Position index m.start
+  Some (_, col) => (m.text, col)
+  None => (m.text, m.start)
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").
@@ -623,7 +695,7 @@ medakaTypeAtSchema = jObject [
           (
             "description",
             JString
-              "0-based column (LSP-style). Alternative to 'symbol' — provide exactly one.",
+              "0-based UTF-16 column. Alternative to 'symbol' — provide exactly one.",
           ),
         ],
       ),
@@ -794,12 +866,27 @@ medakaSymbolsSchema = jObject [
 symbolsResult : String -> Json
 symbolsResult src = match parseResult src
   Err e =>
+    let index = indexSource src
+    let position =
+      match sourcePositionToOffset index (parseErrorLine e) (parseErrorCol e)
+        Some off => offsetToUtf16Position index off
+        None => None
     toolTextResult
       (stringify
         (jObject [
           ("parseError", JBool True),
-          ("line", JInt (parseErrorLine e)),
-          ("col", JInt (parseErrorCol e)),
+          (
+            "line",
+            match position
+              Some (line, _) => JInt line
+              None => JNull,
+          ),
+          (
+            "col",
+            match position
+              Some (_, col) => JInt col
+              None => JNull,
+          ),
           ("message", JString (parseErrorMessage e)),
         ]))
       True
@@ -1013,8 +1100,7 @@ medakaReferencesSchema = jObject [
           ("type", JString "integer"),
           (
             "description",
-            JString
-              "0-based column of the position (LSP-style, first column is 0).",
+            JString "0-based UTF-16 column of the position (first column is 0).",
           ),
         ],
       ),
@@ -1378,7 +1464,9 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let triples = map dropQuadParse quads
     let cross = crossFileMcpFindings disable only deny quads
     let merged = mergeCrossFileIntoTriples cross triples
-    toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
+    toolTextResult
+      (mcpDiagnosticJson (cjAllToJson merged) None)
+      (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 

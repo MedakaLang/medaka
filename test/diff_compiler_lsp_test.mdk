@@ -102,8 +102,8 @@ import json.{
 import list.{nub, reverse, somes, sort}
 import path.{basename}
 import string.{contains, join, lines, startsWith, trim, unlines}
-import test.{fail, pass}
-import test_process.{medakaBin, medakaRoot}
+import test.{fail, pass, expectEach, expectEqual}
+import test_process.{medakaBin, medakaRoot, withScratchDir}
 
 -- # Framing
 
@@ -1340,6 +1340,203 @@ drive msgs =
         unless (err == "") "medaka lsp wrote to stderr: \{debug err}",
       ]
       (findings, out)
+
+test "semantic token positions use UTF-16" =
+  let uri = "file:///unicode.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = (\"😀\", 123)\n",
+    rpc 3 "textDocument/semanticTokens/full" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "token data",
+        expectEqual
+          (Some
+            (jObject [
+              (
+                "data",
+                jArray (map JInt [0, 0, 4, 3, 0, 0, 8, 4, 5, 0, 0, 6, 3, 6, 0]),
+              ),
+            ]))
+          (resultTo 3 objs),
+      ),
+    ]
+
+coordPos : Int -> Int -> Json
+coordPos line col = jObject [("line", JInt line), ("character", JInt col)]
+
+coordRange : Int -> Int -> Int -> Json
+coordRange line start end = jObject [
+  ("start", coordPos line start),
+  ("end", coordPos line end),
+]
+
+coordLocation : String -> Int -> Int -> Int -> Json
+coordLocation uri line start end = jObject [
+  ("uri", JString uri),
+  (
+    "range",
+    jObject [
+      ("start", coordPos line start),
+      ("end", coordPos line end),
+    ],
+  ),
+]
+
+formatEdit : Int -> Int -> String -> Json
+formatEdit line col text = jArray [
+  jObject [
+    ("range", jObject [("start", coordPos 0 0), ("end", coordPos line col)]),
+    ("newText", JString text),
+  ],
+]
+
+firstSymbolRange : Int -> List Json -> Option Json
+firstSymbolRange id objs = match elems (resultTo id objs)
+  first :: _ => get "range" first
+  [] => None
+
+test "symbol ranges stay within their source" =
+  let a = "file:///symbol-empty.mdk"
+  let b = "file:///symbol-newline.mdk"
+  let c = "file:///symbol-eof.mdk"
+  let d = "file:///symbol-astral.mdk"
+  let (errors, out) = drive [
+    didOpenMsg a "",
+    rpc 1 "textDocument/documentSymbol" (docParams a),
+    didOpenMsg b "main = 1\n",
+    rpc 2 "textDocument/documentSymbol" (docParams b),
+    didOpenMsg c "main = 1",
+    rpc 3 "textDocument/documentSymbol" (docParams c),
+    didOpenMsg d "main = \"😀\"",
+    rpc 4 "textDocument/documentSymbol" (docParams d),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("empty", expectEqual (Some (jArray [])) (resultTo 1 objs)),
+      (
+        "terminated",
+        expectEqual
+          (Some (jObject [("start", coordPos 0 0), ("end", coordPos 1 0)]))
+          (firstSymbolRange 2 objs),
+      ),
+      (
+        "unterminated",
+        expectEqual (Some (coordRange 0 0 8)) (firstSymbolRange 3 objs),
+      ),
+      (
+        "astral",
+        expectEqual (Some (coordRange 0 0 11)) (firstSymbolRange 4 objs),
+      ),
+    ]
+
+test "formatting edits end at EOF" =
+  let a = "file:///fmt-empty.mdk"
+  let b = "file:///fmt-newline.mdk"
+  let c = "file:///fmt-eof.mdk"
+  let d = "file:///fmt-astral.mdk"
+  let (errors, out) = drive [
+    didOpenMsg a "",
+    rpc 1 "textDocument/formatting" (docParams a),
+    didOpenMsg b "main=1\n",
+    rpc 2 "textDocument/formatting" (docParams b),
+    didOpenMsg c "main=1",
+    rpc 3 "textDocument/formatting" (docParams c),
+    didOpenMsg d "main=(\"😀\",1)",
+    rpc 4 "textDocument/formatting" (docParams d),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("empty", expectEqual (Some (jArray [])) (resultTo 1 objs)),
+      (
+        "trailing newline",
+        expectEqual (Some (formatEdit 1 0 "main = 1\n")) (resultTo 2 objs),
+      ),
+      (
+        "no trailing newline",
+        expectEqual (Some (formatEdit 0 6 "main = 1\n")) (resultTo 3 objs),
+      ),
+      (
+        "astral",
+        expectEqual
+          (Some (formatEdit 0 13 "main = (\"😀\", 1)\n"))
+          (resultTo 4 objs),
+      ),
+    ]
+
+test "cross-file coordinates use unsaved destination source" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"coords\"\n"),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", "import lib.{value}\nmain = value\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let (errors, out) = drive [
+        didOpenMsg lib "export value = 1\n",
+        didOpenMsg main "import lib.{value}\nmain = (\"😀\", value + \"x\")\n",
+        rpc
+          2
+          "textDocument/references"
+          (jObject [
+            ("textDocument", jObject [("uri", JString lib)]),
+            ("position", coordPos 0 8),
+            ("context", jObject [("includeDeclaration", JBool True)]),
+          ]),
+        rpc 3 "textDocument/definition" (posParams main 1 14),
+        rpc 4 "textDocument/documentHighlight" (posParams main 1 14),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs => expectEach [
+          ("process", expectEqual [] errors),
+          (
+            "references",
+            expectEqual
+              (Some
+                (jArray [coordLocation lib 0 7 12, coordLocation main 1 14 19]))
+              (resultTo 2 objs),
+          ),
+          (
+            "definition",
+            expectEqual
+              (Some (jArray [coordLocation lib 0 7 12]))
+              (resultTo 3 objs),
+          ),
+          (
+            "destination diagnostics",
+            expectEqual
+              [Some (coordRange 1 14 25)]
+              (map
+                (get "range")
+                (flatMap
+                  diagsOf
+                  (filter (p => uriOf p == main) (publishes objs)))),
+          ),
+          (
+            "highlight",
+            expectEqual
+              (Some
+                (jArray [
+                  jObject [("range", coordRange 0 12 17)],
+                  jObject [("range", coordRange 1 14 19)],
+                ]))
+              (resultTo 4 objs),
+          ),
+        ])
 
 {- | One row's outcome. `findings` is the whole list rather than the first,
    so a red run names every disagreement at once. -}

@@ -29,7 +29,8 @@ import test.{
 }
 import fs.{fixtureFiles}
 import path.{stem}
-import string.{split, endsWith}
+import json.{Json(..), jObject, stringify, parse, get}
+import string.{split, endsWith, join}
 import list.{reverse}
 
 corpus : <IO> String
@@ -212,3 +213,123 @@ test "mcp memo-hit: two medaka_check calls on one project keep the terminal main
         0
         "Unit main",
     ])
+
+coordinateCall : Int -> String -> Json -> String
+coordinateCall id name args =
+  stringify
+    (jObject [
+      ("jsonrpc", JString "2.0"),
+      ("id", JInt id),
+      ("method", JString "tools/call"),
+      ("params", jObject [("name", JString name), ("arguments", args)]),
+    ])
+
+coordinateFile : String -> Json
+coordinateFile path = jObject [("file", JString path)]
+
+coordinateResponse : String -> String
+coordinateResponse line = match parse line
+  Ok obj => match get "result" obj
+    Some result => match get "content" result
+      Some (JArray content) => match toList content
+        first :: _ => match get "text" first
+          Some (JString text) => text
+          _ => ""
+        [] => ""
+      _ => ""
+    _ => ""
+  _ => ""
+
+coordinateRun : String -> <Exec, IO, FileRead> Expectation
+coordinateRun dir =
+  let path = stringConcat [dir, "/unicode.mdk"]
+  let one = stringConcat [dir, "/one.mdk"]
+  let two = stringConcat [dir, "/two.mdk"]
+  let request = stringConcat [dir, "/coordinate.jsonl"]
+  let calls = [
+    coordinateCall
+      1
+      "medaka_definition"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("col", JInt 18),
+      ]),
+    coordinateCall
+      2
+      "medaka_definition"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("symbol", JString "value"),
+      ]),
+    coordinateCall
+      3
+      "medaka_definition"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("symbol", JString "missing"),
+      ]),
+    coordinateCall
+      4
+      "medaka_type_at"
+      (jObject [
+        ("file", JString path),
+        ("line", JInt 1),
+        ("col", JInt 18),
+      ]),
+    coordinateCall 5 "medaka_symbols" (coordinateFile one),
+    coordinateCall 6 "medaka_symbols" (coordinateFile two),
+    coordinateCall
+      7
+      "medaka_check"
+      (jObject [("source", JString "main = (\"😀\", 1 + \"x\")\n")]),
+    coordinateCall 8 "medaka_symbols" (coordinateFile path),
+  ]
+  match (
+    writeOk path "value = 1\nmain = (\"😀\", value + value)",
+    writeOk one "main = (\n",
+    writeOk two "value = 1\nbad = )\n",
+    writeOk request (stringConcat [join "\n" calls, "\n"]),
+  )
+    (Ok _, Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+        first :: ambiguous :: missing :: ty :: firstError :: secondError :: diag :: symbols :: _ => expectEach
+          [
+            ("exit", expectEqual 0 code),
+            ("definition", expectTextContainsAll ["\"character\":5"] first),
+            (
+              "ambiguity",
+              expectTextContainsAll ["\"col\":14", "\"col\":22"] ambiguous,
+            ),
+            (
+              "miss",
+              expectTextContainsAll ["\"col\":14", "\"col\":22"] missing,
+            ),
+            ("type", expectEqual "value : Int" ty),
+            (
+              "first line",
+              expectTextContainsAll ["\"line\":0", "\"col\":0"] firstError,
+            ),
+            (
+              "second line",
+              expectTextContainsAll ["\"line\":1", "\"col\":6"] secondError,
+            ),
+            (
+              "diagnostic",
+              expectTextContainsAll
+                ["\"character\":14", "\"character\":21"]
+                diag,
+            ),
+            (
+              "symbol EOF",
+              expectTextContainsAll ["\"line\":1,\"character\":28"] symbols,
+            ),
+          ]
+        _ => fail "coordinate responses missing"
+    _ => fail "coordinate fixture write failed"
+
+test "mcp positions use UTF-16 and parse errors use zero-based lines" =
+  withScratchDir coordinateRun
