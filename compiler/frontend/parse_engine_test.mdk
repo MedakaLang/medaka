@@ -1,15 +1,15 @@
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMode(..),
-  newParseContext, newParseContextWith, runPWith, runP, contextP, getPos,
-  expectTok, advance, failP, fatalAtP, orElse as parseOrElse, many, mark,
-  rewind, depthOf, withDepth, recordTrailingComma, recordUnitStart,
-  forgetLatestUnitStart, contextCues, tokLineCol, spanLoc, renderFail
+  newParseContext, newParseContextWith, runPWith, runP, getPos, expectTok,
+  advance, failP, fatalAtP, orElse as parseOrElse, many, mark, rewind, depthOf,
+  withDepth, recordTrailingComma, recordUnitStart, forgetLatestUnitStart,
+  contextCues, tokLineCol, renderFail
 }
 import frontend.lex_token.{Token(..)}
 import frontend.parse_result.{
   makeParseMetadata, metadataTrailingCommas, metadataUnitStarts
 }
-import test.{expectEqual, expectEach, expectAll}
+import test.{expectEqual, expectEach}
 
 session : Unit -> ParseContext
 session _ =
@@ -118,10 +118,9 @@ test "zero progress preserves its terminal item but discards its writes" =
         writeOk
         deferPure 7))
       0
-  let values = match r
-    POk xs q => (xs, q)
-    _ => ([], -1)
-  expectEqual (([7], 0), ([], [])) (values, contextCues ctx)
+  match r
+    POk xs q => expectEqual (([7], 0), ([], [])) ((xs, q), contextCues ctx)
+    _ => expectEqual "ok" (fst (status r))
 
 test "zero progress restores a popped journal root as well as appended cues" =
   let ctx = session ()

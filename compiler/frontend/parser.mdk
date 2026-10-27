@@ -3,8 +3,8 @@ import frontend.parse_engine.{
   ParseMode(..), newParseContext, newParseContextWith, runPWith, runP,
   contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
   peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
-  fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepThen,
-  sepBy1, mark, rewind, locOfSpan, spanLoc, tokLineCol, depthOf, withDepth,
+  fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepBy1,
+  mark, rewind, locOfSpan, spanLoc, tokLineCol, depthOf, withDepth,
   recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
   unexpectedTokenMsg
 }
@@ -39,9 +39,9 @@ export import frontend.parse_result.{
 }
 import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseDiagnosticKind(..), renderParseProblem,
-  renderParseDiagnostic, diagnosticLoc, locateParseProblem
+  locateParseProblem
 }
-import support.source_index.{SourceIndex, indexSource, lineStartIndex}
+import support.source_index.{SourceIndex, indexSource}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
@@ -113,8 +113,6 @@ import frontend.lexer.{
   offsetToLineCol,
   lineStartsOf,
   offsetToLineColFast,
-  describeToken,
-  isCommaTok,
   isElseTok,
   isThenTok,
 }
@@ -125,11 +123,10 @@ export import frontend.parse_positions.{
 }
 import frontend.parse_positions.{positionsFromSpans}
 import frontend.lex_token.{
-  isNoiseTok, isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok,
-  isEqualTok, isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok,
-  isLetTok, isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok,
-  isRequiresTok, isStarTok, isWhereTok, isLayoutTok, isOpenDelim, isCloseDelim,
-  isTStringTok, isTUpperTok
+  isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
+  isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
+  isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
+  isStarTok, isLayoutTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.util.{reverseL, joinWith}
 import list.{last}
@@ -1807,7 +1804,7 @@ reservedOrPatFail t = match reservedIdentKeyword t
   Some name => fatalP (reservedKeywordMsg name)
   None => failP "expected a pattern"
 
--- #77 F1: shares the invocation depth/`maxNestDepth` with `parseAtom` above — a
+-- Shares the invocation depth/`maxNestDepth` with `parseAtom` above — a
 -- pattern's own recursive re-entry (`parsePatParen`/`parsePatList` calling back
 -- into `parsePat` -> ... -> `parsePatAtom`) was NOT reached by the expression
 -- cap, so pathologically deep pattern nesting (e.g. `((((...(x)...))))` in a
@@ -2396,7 +2393,7 @@ tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
 tyApplyAll head (a :: rest) = tyApplyAll (TyApp head a) rest
 
--- #77 F1: shares the invocation depth/`maxNestDepth` with `parseAtom` above — see
+-- Shares the invocation depth/`maxNestDepth` with `parseAtom` above — see
 -- the comment on `parsePatAtom`'s own wrapper for why a shared counter, and
 -- why it can't move `parseAtom`'s already-verified boundary. The type
 -- parser's own recursive re-entry (`parseTyParen` calling back into

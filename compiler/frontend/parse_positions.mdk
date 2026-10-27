@@ -1,10 +1,8 @@
 import array
 import frontend.ast.{
-  noBinderId,
   unminted,
   negateLiteral,
   DeriveRef(..),
-  Lit(..),
   Ty(..),
   EffAtomTy(..),
   EffParamTy(..),
@@ -31,20 +29,10 @@ import frontend.ast.{
   useMemberOrigin,
   useMemberAlias,
   qualifiedLocal,
-  tyConUnresolved,
   tyConBuiltin,
-  dDataUnresolved,
-  externDataUnresolved,
   kindAnnSource,
   kindAuthorityUnstamped,
-  dTypeAliasUnresolved,
-  dNewtypeUnresolved,
-  dInterfaceUnresolved,
   setDeclNameLoc,
-  dImplUnresolved,
-  constraintUnresolved,
-  superUnresolved,
-  requireUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -64,14 +52,12 @@ import frontend.ast.{
 import frontend.lex_token.{
   Token(..), isCommaTok, isNoiseTok, isColonTok, isConsTok, isDedentTok,
   isDeferTok, isEofTok, isEqualTok, isExportTok, isImplTok, isInTok,
-  isIndentTok, isLBraceTok, isLetTok, isNewlineTok, isOfTok, isPipeTok,
-  isPublicTok, isRBraceTok, isRequiresTok, isStarTok, isWhereTok, isLayoutTok,
-  isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
+  isIndentTok, isLBraceTok, isNewlineTok, isOfTok, isPipeTok, isPublicTok,
+  isRBraceTok, isRequiresTok, isStarTok, isWhereTok, isLayoutTok, isOpenDelim,
+  isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.source_index.{lineStartIndex, offsetToLineColFast}
 import support.util.{reverseL, joinWith}
-import list.{last}
-import support.char.{isUpper}
 
 public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))
 public export data Positions =

@@ -455,10 +455,7 @@ isWhereTok _ = False
 
 export
 isLayoutTok : Token -> Bool
-isLayoutTok TNewline = True
-isLayoutTok TIndent = True
-isLayoutTok TDedent = True
-isLayoutTok _ = False
+isLayoutTok = isNoiseTok
 
 export
 isOpenDelim : Token -> Bool

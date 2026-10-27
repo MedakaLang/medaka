@@ -1,5 +1,5 @@
 # META
-source_lines=892
+source_lines=890
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -62,11 +62,9 @@ import frontend.parser.{
   parseResultPairs,
   prescanErrorPairs,
   ParseError(..),
-  Positions,
   DeclPos,
   positionsDecls,
   positionsVariantLines,
-  positionsLastContentLine,
   declPosLine,
   declPosEndLine,
 }
@@ -898,7 +896,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseSourceSyntaxPairs" false) (mem "parseResultPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" true) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseSourceSyntaxPairs" false) (mem "parseResultPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parsedMetadata" false) (mem "metadataTrailingCommas" false) (mem "metadataUnitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
 (DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())
@@ -1101,7 +1099,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseSourceSyntaxPairs" false) (mem "parseResultPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" true) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseSourceSyntaxPairs" false) (mem "parseResultPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parsedMetadata" false) (mem "metadataTrailingCommas" false) (mem "metadataUnitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
 (DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())

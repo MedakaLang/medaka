@@ -58,11 +58,9 @@ import frontend.parser.{
   parseResultPairs,
   prescanErrorPairs,
   ParseError(..),
-  Positions,
   DeclPos,
   positionsDecls,
   positionsVariantLines,
-  positionsLastContentLine,
   declPosLine,
   declPosEndLine,
 }

@@ -1,6 +1,6 @@
 # frontend/ — source text to resolved, marked AST
 
-**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-15. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at f804ff533441d3691c10e8dcee311e78e02ddaec on 2026-10-27. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The first four stages of the pipeline (`ARCHITECTURE.md` section 1): lexer, parser, desugar,
@@ -13,8 +13,13 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 |---|---|---|
 | `ast.mdk` | The surface (pre-desugar) AST nodes the parser builds; post-parse-only nodes are omitted by design | `Lit`, `Expr`, `Decl`, `Pat` |
 | `ast_codec.mdk` | The compact s-expression codec for elaborated declarations and evidence rows: an `SExp` writer and a cursor reader that fails closed; imports `ast` and `support/` only | `declsSExp`, `readDecls`, `decodeDecls`, `evEntriesSExp`, `decodeEvEntries` |
-| `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize` |
-| `parser.mdk` | Monadic combinator parser over the token list; stratified operator ladder | `parse`, `parseLocated`, `parseResult` |
+| `parse_diagnostic.mdk` | Structured parse problems, locations, edits and rendering | `ParseDiagnostic`, `ParseDiagnosticKind`, `locateParseProblem`, `renderParseDiagnostic` |
+| `lex_token.mdk` | Token and raw-token types, token descriptions and predicates | `Token`, `RawTok`, `describeToken`, `isLayoutTok` |
+| `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize`, `tokenizeWithOffsetPairs` |
+| `parse_positions.mdk` | Derives immutable declaration positions from tokens and spans | `Positions`, `DeclPos`, `positionsFromSpans` |
+| `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
+| `parse_result.mdk` | Immutable parsed declarations, positions, metadata and parse errors | `ParsedSource`, `ParseMetadata`, `ParseError`, `parsedDecls` |
+| `parser.mdk` | Grammar over parse-engine contexts and tokens; stratified operator ladder | `parse`, `parseLocated`, `parseResult`, `parseSource` |
 | `desugar.mdk` | Lowers sugar (guards, sections, interpolation, comprehensions, do, `?`, deriving) to the core AST; runs after parse, before resolve; owns the shared `mapExpr`/`mapDecl` traversal | `desugar` |
 | `resolve.mdk` | Name environment and scope checks: unbound names, duplicates, privacy; single-file and multi-module paths | `resolveProgram`, `resolveModulesToLines` |
 | `visibility.mdk` | A module's export surface, built from its declarations and the surfaces of the modules it re-exports; imports no resolver state | `ModuleExports`, `buildExportsWith`, `coreExports` |

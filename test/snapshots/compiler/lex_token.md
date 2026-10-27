@@ -1,5 +1,5 @@
 # META
-source_lines=493
+source_lines=490
 stages=SOURCE,DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
@@ -459,10 +459,7 @@ isWhereTok _ = False
 
 export
 isLayoutTok : Token -> Bool
-isLayoutTok TNewline = True
-isLayoutTok TIndent = True
-isLayoutTok TDedent = True
-isLayoutTok _ = False
+isLayoutTok = isNoiseTok
 
 export
 isOpenDelim : Token -> Bool
@@ -761,10 +758,7 @@ isCommaTok _ = False
 (DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
 (DFunDef false "isWhereTok" (PWild) (EVar "False"))
 (DTypeSig true "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DFunDef false "isLayoutTok" () (EVar "isNoiseTok"))
 (DTypeSig true "isOpenDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isOpenDelim" ((PCon "TLParen")) (EVar "True"))
 (DFunDef false "isOpenDelim" ((PCon "TLBracket")) (EVar "True"))
@@ -1053,10 +1047,7 @@ isCommaTok _ = False
 (DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
 (DFunDef false "isWhereTok" (PWild) (EVar "False"))
 (DTypeSig true "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DFunDef false "isLayoutTok" () (EVar "isNoiseTok"))
 (DTypeSig true "isOpenDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isOpenDelim" ((PCon "TLParen")) (EVar "True"))
 (DFunDef false "isOpenDelim" ((PCon "TLBracket")) (EVar "True"))

@@ -37,7 +37,7 @@ import frontend.parse_result as R
 import support.util.{joinWith}
 import frontend.parse_diagnostic.{renderParseDiagnostic}
 import string as S
-import tools.fmt.{formatParsed, formatSource}
+import tools.fmt.{formatParsed}
 import tools.codemod.{codemodSource}
 
 -- The rendered message of a recoverable failure, or the marker text for any
@@ -470,8 +470,7 @@ test "parseResult spans do not depend on the located parse before it" =
     (afterLocatedResult "q = 0\n")
 
 locTuple : Option Loc -> Option (Int, Int, Int, Int)
-locTuple None = None
-locTuple (Some (Loc _ l c el ec)) = Some (l, c, el, ec)
+locTuple loc = map ((Loc _ l c el ec) => (l, c, el, ec)) loc
 
 test "position and immutable result projections preserve CRLF and Unicode" =
   let (decls, positions) =
@@ -506,12 +505,20 @@ test "retained P after Q and unlocated parsing equals cold P" =
   expectOkThen
     (p =>
       let before = publishedView p
-      let _ = parsePublished "other = [9,]\n"
       let _ = parse "plain = [0,]\n"
-      let _ = parseResult "checked = Box { field = 7 }\n"
       expectOkThen
-        (cold => expectEqual (publishedView cold) before)
-        (parsePublished "main = [1, 2,]\n"))
+        (_ =>
+          expectOkThen
+            (_ =>
+              expectOkThen
+                (cold => expectEqual (publishedView cold) before)
+                (parsePublished "main = [1, 2,]\n"))
+            (map
+              (ds => length ds)
+              (mapErr
+                parseErrorMessage
+                (parseResult "checked = Box { field = 7 }\n"))))
+        (parsePublished "other = [9,]\n"))
     (parsePublished "main = [1, 2,]\n")
 
 test "discarded variant update speculation contributes exactly one comma" =
@@ -568,8 +575,9 @@ test "retained formatting uses P metadata after another parse" =
   expectOkThen
     (p =>
       let cold = formatParsed src p
-      let _ = parsePublished "other = 9\n"
-      expectEqual cold (formatParsed src p))
+      expectOkThen
+        (_ => expectEqual cold (formatParsed src p))
+        (parsePublished "other = 9\n"))
     (parsePublished src)
 
 test "codemod formatting retains cues across a transform callback parse" =
