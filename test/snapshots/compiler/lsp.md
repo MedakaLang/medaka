@@ -210,7 +210,7 @@ wholeDocRange src =
 
 -- Map an optional Loc to its indexed protocol range, or the whole document.
 rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = optionOr JNull (locToLspRange index loc)
+rangeOfLoc index _ (Some loc) = jRangeOfLoc index loc
 rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
@@ -2545,7 +2545,7 @@ unit = ()
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))
-(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
+(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "jRangeOfLoc") (EVar "index")) (EVar "loc")))
 (DFunDef false "rangeOfLoc" (PWild (PVar "fallback") (PCon "None")) (EVar "fallback"))
 (DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
 (DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
@@ -3033,7 +3033,7 @@ unit = ()
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json")))))
-(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))
+(DFunDef false "rangeOfLoc" ((PVar "index") PWild (PCon "Some" (PVar "loc"))) (EApp (EApp (EVar "jRangeOfLoc") (EMethodRef "index")) (EVar "loc")))
 (DFunDef false "rangeOfLoc" (PWild (PVar "fallback") (PCon "None")) (EVar "fallback"))
 (DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
 (DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))

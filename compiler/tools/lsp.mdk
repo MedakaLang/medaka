@@ -206,7 +206,7 @@ wholeDocRange src =
 
 -- Map an optional Loc to its indexed protocol range, or the whole document.
 rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = optionOr JNull (locToLspRange index loc)
+rangeOfLoc index _ (Some loc) = jRangeOfLoc index loc
 rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as

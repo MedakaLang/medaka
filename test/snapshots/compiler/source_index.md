@@ -66,7 +66,7 @@ indexSource source =
     []
     []
 
--- First index whose value exceeds target, or the array length.
+-- First index in [lo, hi) whose value exceeds target, or hi.
 upperBound : Array Int -> Int -> Int -> Int -> Int
 upperBound values target lo hi =
   if lo >= hi then
