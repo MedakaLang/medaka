@@ -1,0 +1,331 @@
+-- Tests of `types.tc_solve_check`'s own API: the projections of a predicate slot and the
+-- dedup of dictionary slots that decides how many a constrained function has, the slots
+-- and ids a signature's predicates declare, the call-predicate filter, the survivor
+-- and dispatch projections, the ids a checked binder's quantified variables give a
+-- predicate, and quiescence defaulting of live numeric roots (`defaultLiveNumRoots`).  One
+-- property: defaulting twice is defaulting once.  The obligation checks of one whole
+-- check are in `typecheck_test`.
+
+import types.tc_mono.{tconBuiltin}
+import test.{expectAll, expectEqual}
+import frontend.ast.{Loc(..), TyConOrigin(..)}
+import frontend.parser.{parse}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..), ppMono}
+import types.effect_rows.{pureRow}
+import types.tc_solve.{consSiteFn}
+import types.tc_solve_check.{
+  callPredOf,
+  declaredPredicateSlots,
+  dedupSlotVecs,
+  dedupPredicateSlotsTable,
+  defaultLiveNumRoots,
+  dispatchMonosOf,
+  inferredConstraintIds,
+  numConstrainedIds,
+  predicateSlotTableWithoutArgs,
+  predicateSlotView,
+  setFunPredicateSlots,
+  survivorNameOfId,
+}
+import types.tc_test_support.{boolM, fresh, ifaceOf, intM, sigsOf, varM}
+import types.tc_types.{
+  CSlot(..), ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
+}
+import types.tc_unify.{freshVar, unify}
+import list.{drop, lookup}
+import support.ordmap.{omEmpty, omLookup}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+slotOf : String -> PredicateSlotArgs -> List Int -> PredicateSlot
+slotOf name args ids =
+  PredicateSlot { psIface = ifaceOf name, psArgs = args, psBoundIds = ids }
+
+cslotOf : String -> Int -> CSlot
+cslotOf name id = CSlot { csIface = ifaceOf name, csId = id }
+
+-- A slot's interface name, lead id and argument vector, as text.
+viewText : (CSlot, List Mono) -> (String, Int, List String)
+viewText (s, args) = (s.csIface.irName, s.csId, map ppMono args)
+
+-- ── slots ─────────────────────────────────────────────────────────────────
+
+test "a slot's view leads with its first bound id, or zero when it binds none" = expectAll
+  [
+    expectEqual
+      ("A", 4, ["Int"])
+      (viewText (predicateSlotView (slotOf "A" (PSArgsKnown [intM]) [4, 5]))),
+    expectEqual
+      ("A", 0, ["Int"])
+      (viewText (predicateSlotView (slotOf "A" (PSArgsKnown [intM]) []))),
+  ]
+
+test "a slot with an unknown vector views with no arguments" =
+  expectEqual
+    ("A", 4, [])
+    (viewText (predicateSlotView (slotOf "A" PSArgsUnknown [4])))
+
+test "erasing the vectors of a slot table keeps every key and interface and bound id" =
+  let table = [
+    (
+      "f",
+      [
+        slotOf "A" (PSArgsKnown [intM]) [1],
+        slotOf "B" (PSArgsKnown [boolM]) [2, 3],
+      ],
+    ),
+    ("g", [slotOf "A" PSArgsUnknown []]),
+  ]
+  let erased = predicateSlotTableWithoutArgs table
+  expectAll [
+    expectEqual ["f", "g"] (map fst erased),
+    expectEqual
+      [[("A", [1]), ("B", [2, 3])], [("A", [])]]
+      (map (e => map (s => (s.psIface.irName, s.psBoundIds)) (snd e)) erased),
+    expectEqual
+      [[True, True], [True]]
+      (map (e => map (s => argsUnknown s.psArgs) (snd e)) erased),
+  ]
+
+argsUnknown : PredicateSlotArgs -> Bool
+argsUnknown PSArgsUnknown = True
+argsUnknown (PSArgsKnown _) = False
+
+-- ── dictionary slot dedup ─────────────────────────────────────────────────
+
+test "the same predicate written twice is one dictionary slot, the first occurrence kept" =
+  expectEqual
+    [("A", 1, ["Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [(cslotOf "A" 1, [intM]), (cslotOf "A" 1, [intM])]))
+
+test "two predicates of one interface and one lead variable with different vectors are two slots" =
+  expectEqual
+    [("Ix", 1, ["Int", "Bool"]), ("Ix", 1, ["Bool", "Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [
+        (cslotOf "Ix" 1, [intM, boolM]),
+        (cslotOf "Ix" 1, [boolM, intM]),
+        (cslotOf "Ix" 1, [intM, boolM]),
+      ]))
+
+test "predicates of different interfaces or lead variables are separate slots, in order" =
+  expectEqual
+    [("A", 1, ["Int"]), ("B", 1, ["Int"]), ("A", 2, ["Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [
+        (cslotOf "A" 1, [intM]),
+        (cslotOf "B" 1, [intM]),
+        (cslotOf "A" 2, [intM]),
+        (cslotOf "A" 1, [intM]),
+      ]))
+
+test "same-named interfaces of different modules are different slots" =
+  let foreign = CSlot {
+    csIface = IfaceRef { irName = "A", irOrigin = OriginModule "elsewhere" },
+    csId = 1,
+  }
+  expectEqual
+    2
+    (length (dedupSlotVecs [(cslotOf "A" 1, [intM]), (foreign, [intM])]))
+
+-- ── what a signature declares ─────────────────────────────────────────────
+
+test "a declared predicate with an abstract variable is a slot over its first ids and its vector" =
+  let slots =
+    declaredPredicateSlots [(ifaceOf "A", [varM 3, varM 4])] [[varM 3, varM 4]]
+  expectEqual
+    [("A", [3, 4], 2)]
+    (map
+      (s => (s.psIface.irName, s.psBoundIds, length (knownOf s.psArgs)))
+      slots)
+
+knownOf : PredicateSlotArgs -> List Mono
+knownOf PSArgsUnknown = []
+knownOf (PSArgsKnown args) = args
+
+test "a declared predicate with no abstract variable is no slot, and the vectors stay in step" =
+  let slots =
+    declaredPredicateSlots
+      [(ifaceOf "A", [intM]), (ifaceOf "B", [varM 7])]
+      [[intM], [varM 7]]
+  expectEqual [("B", [7])] (map (s => (s.psIface.irName, s.psBoundIds)) slots)
+
+test "a declared predicate with no vector supplied is a slot whose vector is unknown" =
+  let slots = declaredPredicateSlots [(ifaceOf "A", [varM 3])] []
+  expectEqual
+    [("A", [3], 0)]
+    (map
+      (s => (s.psIface.irName, s.psBoundIds, length (knownOf s.psArgs)))
+      slots)
+
+-- ── call predicates, survivors and dispatch ───────────────────────────────
+
+test "a call predicate whose interface has no name is dropped, any other is kept as it was" =
+  let loc = Some (Loc "probe.mdk" 3 1 3 5)
+  expectAll [
+    expectEqual 0 (length (callPredOf (ifaceOf "", [intM], loc))),
+    expectEqual
+      [("A", ["Int"])]
+      (map predText (callPredOf (ifaceOf "A", [intM], loc))),
+  ]
+
+predText : (IfaceRef, List Mono, Option Loc) -> (String, List String)
+predText (iface, args, _) = (iface.irName, map ppMono args)
+
+test "a survivor is named by the signature variable its id belongs to" = expectAll
+  [
+    expectEqual (Some "b") (survivorNameOfId 4 [("a", varM 3), ("b", varM 4)]),
+    expectEqual None (survivorNameOfId 5 [("a", varM 3), ("b", varM 4)]),
+    expectEqual None (survivorNameOfId 3 [("a", intM)]),
+    expectEqual None (survivorNameOfId 3 []),
+  ]
+
+test "the dispatch monos of an occurrence are the types at the interface parameter's positions" =
+  let sig = sigsOf (parse "x : a -> Int")
+  let occ = TFun boolM pureRow intM
+  expectEqual
+    [["Bool"]]
+    (map (t => map ppMono (dispatchMonosOf ["a"] t occ)) sig)
+
+test "an occurrence with no interface parameter position has no dispatch monos" =
+  let sig = sigsOf (parse "x : Int -> Int")
+  expectEqual
+    [0]
+    (map (t => length (dispatchMonosOf ["a"] t (TFun boolM pureRow intM))) sig)
+
+test "no obligation constrains no numeric variable" =
+  expectEqual [] (numConstrainedIds [])
+
+-- ── quiescence defaulting ─────────────────────────────────────────────────
+
+test "a live numeric root nothing grounded defaults to Int and the work list is drained" =
+  let m = fresh ()
+  let a = freshVar m ()
+  m.mcGraph.graphRun.liveNumRoots := [a]
+  defaultLiveNumRoots m
+  expectAll [
+    expectEqual "Int" (ppMono a),
+    expectEqual 0 (length m.mcGraph.graphRun.liveNumRoots.value),
+    expectEqual 0 (length m.mcGraph.graphRun.liveRoots.value),
+  ]
+
+test "a live numeric root a module grounded keeps its type" =
+  let m = fresh ()
+  let a = freshVar m ()
+  unify m a (tconBuiltin "Float")
+  m.mcGraph.graphRun.liveNumRoots := [a]
+  defaultLiveNumRoots m
+  expectEqual "Float" (ppMono a)
+
+-- The numeric roots of the property: how each was left when quiescence began.
+data RootCase = RootCase (List Int)
+
+impl Arbitrary RootCase where
+  arbitrary () = RootCase (draws (randomInt 0 4))
+  shrink (RootCase ks) = match ks
+    _ :: rest => [RootCase rest]
+    [] => []
+
+draws : Int -> <Rand> List Int
+draws n
+  | n <= 0 = []
+  | otherwise = randomInt 0 2 :: draws (n - 1)
+
+-- The variable for a root left open (0), grounded to Int (1) or to Float (2).
+rootFor : ModuleCtx -> Int -> Mono
+rootFor m k =
+  let v = freshVar m ()
+  if k == 1 then
+    unify m v intM
+  else if k == 2 then
+    unify m v (tconBuiltin "Float")
+  v
+
+-- Law: defaulting the live numeric roots twice leaves the same types as defaulting once, an
+-- open root becomes Int, a grounded root is untouched, and the work list is empty after.
+-- Precondition: none; a case with no open root checks that grounded roots stay put.
+prop "defaulting the live numeric roots twice is defaulting them once" (c : RootCase) =
+  let (RootCase kinds) = c
+  let m = fresh ()
+  let roots = map (rootFor m) kinds
+  m.mcGraph.graphRun.liveNumRoots := roots
+  defaultLiveNumRoots m
+  let once = map ppMono roots
+  defaultLiveNumRoots m
+  let twice = map ppMono roots
+  let expected = map (k => if k == 2 then "Float" else "Int") kinds
+  once == twice
+    && once == expected
+    && length m.mcGraph.graphRun.liveNumRoots.value == 0
+
+-- ── the slot table and the inferred ids ───────────────────────────────────
+
+test "the whole-table writer keeps the first-wins index in step with the list" =
+  let m = fresh ()
+  setFunPredicateSlots m [
+    ("f", [slotOf "A" (PSArgsKnown [varM 1]) [1]]),
+    ("g", [slotOf "B" (PSArgsKnown [varM 2]) [2]]),
+    ("f", [slotOf "C" (PSArgsKnown [varM 3]) [3]]),
+  ]
+  let ifacesOf name =
+    map
+      (slots => map (s => s.psIface.irName) slots)
+      (omLookup name m.mcCells.funPredicateSlotsIdxRef.value)
+  expectAll [
+    expectEqual ["f", "g", "f"] (map fst m.mcCells.funPredicateSlotsRef.value),
+    expectEqual (Some ["A"]) (ifacesOf "f"),
+    expectEqual (Some ["B"]) (ifacesOf "g"),
+    expectEqual None (ifacesOf "h"),
+  ]
+
+test "deduping the slot table collapses a predicate written twice and keeps different vectors apart" =
+  let m = fresh ()
+  setFunPredicateSlots m [
+    (
+      "twice",
+      [
+        slotOf "Shw" (PSArgsKnown [varM 1]) [1],
+        slotOf "Shw" (PSArgsKnown [varM 1]) [1],
+      ],
+    ),
+    (
+      "two",
+      [
+        slotOf "Ix" (PSArgsKnown [varM 1, intM]) [1],
+        slotOf "Ix" (PSArgsKnown [varM 1, boolM]) [1],
+      ],
+    ),
+  ]
+  dedupPredicateSlotsTable m ()
+  let table = m.mcCells.funPredicateSlotsRef.value
+  let tailsOf name =
+    map
+      (slots => map (s => map ppMono (drop 1 (knownOf s.psArgs))) slots)
+      (lookup name table)
+  expectAll [
+    expectEqual (Some [[]]) (tailsOf "twice"),
+    expectEqual (Some [["Int"], ["Bool"]]) (tailsOf "two"),
+  ]
+
+test "the inferred constraint ids of a member are its generalized variables at method and call sites" =
+  let m = fresh ()
+  m.mcCells.methodSiteFns :=
+    consSiteFn "f" (varM 3) (consSiteFn "f" (varM 7) omEmpty)
+  m.mcCells.dictAppFns := consSiteFn "f" [varM 4, intM, varM 3] omEmpty
+  expectAll [
+    expectEqual [3, 4] (inferredConstraintIds m "f" [3, 4, 9]),
+    expectEqual [3] (inferredConstraintIds m "f" [3]),
+    expectEqual [] (inferredConstraintIds m "g" [3, 4]),
+    expectEqual [] (inferredConstraintIds m "f" []),
+  ]
+
+test "when the interface parameter occurs at two positions the first one's mono is its dispatch mono" =
+  expectEqual
+    [["Bool"]]
+    (map
+      (t => map ppMono (dispatchMonosOf ["a"] t (TFun boolM pureRow intM)))
+      (sigsOf (parse "x : a -> a")))

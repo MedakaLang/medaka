@@ -1,11 +1,13 @@
 -- Tests of `types.tc_mono`'s own API: the builtin tycon mints, variable ids, substitution,
--- one-sided matching and overlap, and the arrow/head projections.  Properties run over a
+-- one-sided matching and overlap, the arrow/head projections, and the signature-slot and
+-- obligation-argument readings (`abstractSlotIds`, `declaredOblArgOk`, `oblArgKey`).  Properties run over a
 -- model type language (`MTy`) whose reading as a `Mono` is the generator; the expected
 -- answer of each law is computed on the model, never read back from the module under test.
 
 import list.{lookup, nub, zip}
 import test.{
   expectAll,
+  expectEach,
   expectEqual,
   expectFalse,
   expectNotEqual,
@@ -15,16 +17,19 @@ import frontend.ast.{TyConOrigin(..)}
 import types.effect_rows.{pureRow}
 import types.repr.{Mono(..), Tyvar(..), ppMono, tupleSpine}
 import types.tc_mono.{
+  abstractSlotIds,
   anyMember,
   arrowArity,
   cohApply,
   cohEqMono,
   cohOverlap,
   cohOverlapGo,
+  declaredOblArgOk,
   headTyconNameMono,
   monoClosed,
   monoSameGiven,
   monoUnboundIds,
+  oblArgKey,
   peelArrows,
   resultAfterArrows,
   stripArrows,
@@ -304,4 +309,69 @@ test "resultAfterArrows is None past the arrow spine and the rest within it" =
     expectEqual (Some "Bool") (map ppMono (resultAfterArrows 2 fn)),
     expectTrue (isNone (resultAfterArrows 3 fn)),
     expectEqual 2 (arrowArity fn),
+  ]
+
+test "abstractSlotIds lists the variables of a vector in order and skips solved positions" =
+  expectEqual
+    [3, 9]
+    (abstractSlotIds [
+      toMono (MVar 3),
+      tconBuiltin "Int",
+      toMono (MVar 9),
+      TApp (tconFrom (OriginModule "probe") "Box") (toMono (MVar 4)),
+    ])
+
+test "a variable bound to a type is no longer abstract" =
+  let bound = TVar (Ref (Link (tconBuiltin "Int")))
+  expectEqual [9] (abstractSlotIds [bound, toMono (MVar 9)])
+
+test "a declared obligation argument is admitted when its variables are all bound" =
+  let box = tconFrom (OriginModule "probe") "Box"
+  expectEach [
+    (
+      "a bound variable",
+      expectTrue (declaredOblArgOk (i => i == 3) (toMono (MVar 3))),
+    ),
+    (
+      "an unbound variable",
+      expectFalse (declaredOblArgOk (i => i == 3) (toMono (MVar 4))),
+    ),
+    (
+      "an application over bound variables",
+      expectTrue (declaredOblArgOk (i => i == 3) (TApp box (toMono (MVar 3)))),
+    ),
+    (
+      "an application over an unbound variable",
+      expectFalse (declaredOblArgOk (i => i == 3) (TApp box (toMono (MVar 4)))),
+    ),
+    (
+      "a ground type",
+      expectTrue (declaredOblArgOk (_ => False) (tconBuiltin "Int")),
+    ),
+  ]
+
+test "oblArgKey tells heads, applications and arrows apart" =
+  let pairOf a b = toMono (MApp (MApp (MCon "Pair") (MCon a)) (MCon b))
+  let built = pairOf "Int" "Bool"
+  let rebuilt = pairOf "Int" "Bool"
+  expectAll [
+    expectNotEqual
+      (oblArgKey (toMono (MCon "Int")))
+      (oblArgKey (toMono (MCon "Bool"))),
+    expectNotEqual (oblArgKey built) (oblArgKey (pairOf "Bool" "Int")),
+    expectNotEqual
+      (oblArgKey (toMono (MApp (MCon "Int") (MCon "Bool"))))
+      (oblArgKey (toMono (MFun (MCon "Int") (MCon "Bool")))),
+    expectEqual (oblArgKey built) (oblArgKey rebuilt),
+  ]
+
+test "oblArgKey keys a variable by its id and reads a rigid like a constructor of that name" =
+  let named = tconFrom (OriginModule "probe")
+  expectAll [
+    expectEqual "v3." (oblArgKey (toMono (MVar 3))),
+    expectNotEqual (oblArgKey (toMono (MVar 3))) (oblArgKey (toMono (MVar 4))),
+    expectEqual (oblArgKey (TRigid "Int")) (oblArgKey (tconBuiltin "Int")),
+    expectNotEqual
+      (oblArgKey (TApp (named "ab") (named "c")))
+      (oblArgKey (TApp (named "a") (named "bc"))),
   ]

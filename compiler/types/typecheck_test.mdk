@@ -10,23 +10,24 @@ import test.{
   expectFalse,
   expectGreaterThan,
   expectLessThan,
-  expectNotEqual,
   expectSatisfies,
   expectTrue,
   fail,
+  expectNotEqual,
+  pass,
 }
 import frontend.ast.{
   Decl(..),
   EvId(..),
-  EvTable,
-  EvVal(..),
-  Expr(..),
   Loc(..),
   Route(..),
   TyConOrigin(..),
   noDeclLoc,
   noBinderId,
   unminted,
+  Expr(..),
+  EvTable,
+  EvVal(..),
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -54,43 +55,31 @@ import types.evidence.{
   SolverEvidence(..),
 }
 import types.disposition.{
-  DispositionTable,
-  InstId(..),
-  MethodDisposition(..),
-  dispositionIface,
-  dispositionInstance,
-  dispositionMethod,
-  dispositionRows,
-  instIdMid,
+  DispositionTable, InstId(..), MethodDisposition(..), dispositionRows,
+  instIdMid
 }
 import types.repr.{
   IfaceRef(..), Mono(..), Scheme(..), Tyvar(..), ppMono, ppScheme
 }
 import types.runtime_ops.{arithmeticTag}
-import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.tc_types.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
   EvidenceObservationEntry(..),
   EvidenceOutcomeKind(..),
-  MethodReturnMemoView(..),
-  MethodReturnTraceEntry(..),
-  MethodReturnTraceStage(..),
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
-  ModuleCells(..),
-  ModuleCtx(..),
-  TraceSink(..),
+  MethodReturnMemoView(..),
+  MethodReturnTraceEntry(..),
+  MethodReturnTraceStage(..),
 }
 import types.module_interface_test_support.{noValueMain}
-import types.publish.{TcReport(..), CheckedProgram(..)}
 import types.tc_state.{
   beginAssumptionTrace,
   beginEvidenceObservation,
-  beginMethodReturnTrace,
   beginNumericPredicateTrace,
   evCellsSpanProbe,
   finishAssumptionTrace,
@@ -98,18 +87,29 @@ import types.tc_state.{
   finishNumericPredicateTrace,
   scopeFrameStats,
   scopeTraceContext,
+  beginMethodReturnTrace,
+}
+import types.tc_solve_test_support.{
+  absentReturnSource,
+  evidenceEntriesOfKind,
+  modErrorCount,
+  numericPreludeSource,
+  traced,
+  accRenderChecked,
+  checkCodes,
+  checkDiagsOver,
+  expectChecks,
+  expectRejectedWith,
+  linkCount,
+  rendered,
+  routeWordsOf,
+  routeWordsOver,
 }
 import types.typecheck.{
-  defaultDriveInputs,
-  driveInputsFor,
-  ModDiags,
   TcDiag(..),
   cellGoalInnerAliasing,
   cellStoreMisses,
-  checkModulesChainReportForGraph,
   chainArgs,
-  driveArgs,
-  checkModulesChainReportFor,
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
   checkModulesEntryFullReportK,
@@ -120,54 +120,41 @@ import types.typecheck.{
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
   constrainedSigNames,
+  defaultDriveInputs,
+  driveArgs,
+  driveInputsFor,
   elaborateModules,
   elaborateModulesGraph,
-  elaborateOne,
   elaborateOneFacts,
-  finishMethodReturnTrace,
-  isLiveSpan,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
-  methodReturnMemoCurrentViews,
   methodReturnTemplatePresenceProbe,
-  spanKeys,
+  ModDiags,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
-  walkGoalSameProbe,
+  checkModulesChainReportFor,
+  elaborateOne,
+  isLiveSpan,
+  stampMethodArities,
+  stampRoutes,
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
-import support.ordmap.{omEmpty, omFromNames, omKeys}
+import support.ordmap.{omKeys, omEmpty, omFromNames}
 import frontend.exhaust.{buildOracle}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
 }
-import list.{last, nub, sort}
-
--- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
--- profile, the sink as the trace.
-traced : TraceSink -> DriveInputs
-traced sink = { defaultDriveInputs | diTrace = Some sink }
-
--- `elaborateOne`'s decls beside the evidence table of the drive that built them.
-elaborateOneEvidence : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (List Decl, EvTable)
-elaborateOneEvidence inputs runtimeDecls coreDecls prog =
-  let (coreE, modulesE, _, _, evidence, _, _) =
-    elaborateModules inputs runtimeDecls coreDecls [prog]
-  (coreE ++ flatMap snd modulesE, evidence)
-
--- The evidence table a check drive's report carries; an ill-typed drive's report
--- carries none.
-reportEvidence : TcReport -> EvTable
-reportEvidence report = match report.trChecked
-  Some checked => checked.cpEvidence
-  None => []
+import list.{get, last, nub, sort, reverse}
+import types.solver_contract.{SolverOutcome(..), Wanted(..)}
+import types.publish.{TcReport(..)}
+import types.tc_solve.{
+  finishMethodReturnTrace,
+  methodReturnMemoCurrentViews,
+  spanKeys,
+}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -234,14 +221,6 @@ numericTraceView gctx entry =
       _ => False,
     ntvPrerequisites = map numericRouteView entry.nptPrerequisites,
   }
-
-numericPreludeSource : String
-numericPreludeSource = joinNl [
-  "interface Num a where",
-  "  fromInt : Int -> a",
-  "impl Num Int where",
-  "  fromInt n = n",
-]
 
 numericValueSource : Bool -> String
 numericValueSource collision = numericBodySource collision "N n"
@@ -1592,279 +1571,6 @@ test "wrapped return routes survive an intervening failed request" =
     expectEqual before after,
   ]
 
-returnIdentitySource : String
-returnIdentitySource = joinNl [
-  "data Pair a b = Pair a b",
-  "interface Choose a b where",
-  "  choose : Unit -> Pair b a",
-  "impl Choose Int Bool where",
-  "  choose _ = Pair True 41",
-  "value : Pair Bool Int",
-  "value = choose ()",
-]
-
-evIdText : EvId -> String
-evIdText (EvId moduleId ordinal) = "\{moduleId}:\{ordinal}"
-
-methodTraceGoalText : MethodReturnTraceEntry -> String
-methodTraceGoalText entry = match entry.mrtGoal
-  Some ev => evIdText ev
-  None => "none"
-
-methodTraceArgs : MethodReturnTraceEntry -> Option (List String)
-methodTraceArgs entry = map (map ppMono) entry.mrtArguments
-
-methodTracePublishedOne : MethodReturnTraceEntry -> Bool
-methodTracePublishedOne entry = match entry.mrtPublished
-  Some (EvOne _) => True
-  _ => False
-
-data MethodWantedView = MethodWantedView {
-  mwvBody : String,
-  mwvInterface : String,
-  mwvArguments : List String,
-  mwvDestinationShared : Bool,
-  mwvScopeShared : Bool,
-} deriving (Eq, Debug)
-
-data MethodOutcomeView =
-  | MOVGiven EvidenceBinderId
-  | MOVInstance Int (List String) (List (String, List String))
-  | MOVDeferred
-  | MOVInsoluble
-  deriving (Eq, Debug)
-
-methodPrerequisiteView : PrerequisiteEvidence -> (String, List String)
-methodPrerequisiteView prerequisite = (
-  prerequisite.prerequisiteInterface.irName,
-  map ppMono prerequisite.prerequisiteArguments,
-)
-
-methodOutcomeView : MethodReturnTraceEntry -> Option MethodOutcomeView
-methodOutcomeView entry = match entry.mrtOutcome
-  Some (Solved (GivenEvidence binder)) => Some (MOVGiven binder)
-  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites _)) =>
-    Some
-      (MOVInstance
-        identity
-        (map ppMono args)
-        (map methodPrerequisiteView prerequisites))
-  Some (Solved (SuperclassEvidence _ _)) => None
-  Some (Deferred _ _) => Some MOVDeferred
-  Some (Insoluble _ _) => Some MOVInsoluble
-  None => None
-
-methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Bool
-methodTraceUsesOneOutcome trace = match map methodOutcomeView trace
-  [None, Some checked, Some stamped] => checked == stamped
-  _ => False
-
-methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
-methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
-  (Some body, Some wanted) => Some MethodWantedView {
-    mwvBody = ppMono body,
-    mwvInterface = wanted.predicate.predicateInterface.irName,
-    mwvArguments = map ppMono wanted.predicate.predicateArguments,
-    mwvDestinationShared =
-      methodTraceGoalText entry == evIdText wanted.destination,
-    mwvScopeShared = wanted.scope == entry.mrtScope,
-  }
-  _ => None
-
-wantedArgumentStrings : Wanted -> List String
-wantedArgumentStrings wanted = map ppMono wanted.predicate.predicateArguments
-
-methodEvInExpr : String -> Expr -> Option EvId
-methodEvInExpr target (EMethodAt name _ ev)
-  | target == name = Some ev
-  | otherwise = None
-methodEvInExpr target (ELoc _ expr) = methodEvInExpr target expr
-methodEvInExpr target (EApp fn arg) = match methodEvInExpr target fn
-  Some ev => Some ev
-  None => methodEvInExpr target arg
-methodEvInExpr _ _ = None
-
-methodEvInDecls : String -> List Decl -> Option EvId
-methodEvInDecls _ [] = None
-methodEvInDecls target ((DFunDef _ _ _ body _ _) :: rest) =
-  match methodEvInExpr target body
-    Some ev => Some ev
-    None => methodEvInDecls target rest
-methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
-
-test "ordinary return shares declaration identity vector and goal destination" =
-  let sink = beginMethodReturnTrace ()
-  let (typed, evidence) = elaborateOneEvidence (traced sink) [] (desugar
-    (parse numericPreludeSource)) (
-    "identity_return",
-    desugar (parseLocated returnIdentitySource),
-  )
-  let trace =
-    filter
-      (entry => entry.mrtMethod == "choose")
-      (finishMethodReturnTrace sink evidence)
-  let goals = map methodTraceGoalText trace
-  let aggregate = map evIdText (methodEvInDecls "choose" typed)
-  let wanted = map methodWantedView trace
-  let goalDiffers = match (goals, aggregate)
-    (goal :: _, Some methodGoal) => expectNotEqual methodGoal goal
-    _ => fail "expected at least one goal and an aggregate method-level goal"
-  let goalsAgree = match goals
-    first :: second :: third :: [] => expectEach [
-      ("the first and second goals agree", expectEqual first second),
-      ("the second and third goals agree", expectEqual second third),
-    ]
-    _ => fail "expected exactly three return goals in the trace"
-  expectEach [
-    (
-      "trace stages are Produced, Checked, Stamped",
-      expectEqual
-        [MRTProduced, MRTChecked, MRTStamped]
-        (map (entry => entry.mrtStage) trace),
-    ),
-    (
-      "every clause's interface origin is this module",
-      expectEqual
-        ["identity_return", "identity_return", "identity_return"]
-        (map
-          (entry => match entry.mrtInterface.irOrigin
-            OriginModule moduleId => moduleId
-            _ => "<unresolved>")
-          trace),
-    ),
-    (
-      "every clause's method args are Int, Bool",
-      expectEqual
-        [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
-        (map methodTraceArgs trace),
-    ),
-    ("all three goals agree", goalsAgree),
-    ("the goal differs from the aggregate method-level goal", goalDiffers),
-    (
-      "every clause published exactly one outcome",
-      expectEqual [True, True, True] (map methodTracePublishedOne trace),
-    ),
-    (
-      "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
-    ),
-    (
-      "outcomes are None, an instance, then given",
-      expectTrue (match map methodOutcomeView trace
-        [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
-        _ => False),
-    ),
-    (
-      "every clause wants the same Choose view",
-      expectEqual
-        [
-          Some MethodWantedView {
-            mwvBody = "Unit -> Pair Bool Int",
-            mwvInterface = "Choose",
-            mwvArguments = ["Int", "Bool"],
-            mwvDestinationShared = True,
-            mwvScopeShared = True,
-          },
-          Some MethodWantedView {
-            mwvBody = "Unit -> Pair Bool Int",
-            mwvInterface = "Choose",
-            mwvArguments = ["Int", "Bool"],
-            mwvDestinationShared = True,
-            mwvScopeShared = True,
-          },
-          Some MethodWantedView {
-            mwvBody = "Unit -> Pair Bool Int",
-            mwvInterface = "Choose",
-            mwvArguments = ["Int", "Bool"],
-            mwvDestinationShared = True,
-            mwvScopeShared = True,
-          },
-        ]
-        wanted,
-    ),
-  ]
-
-methodCarrierStages : String -> String -> List MethodReturnTraceEntry
-methodCarrierStages method source =
-  let sink = beginMethodReturnTrace ()
-  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
-    (parse numericPreludeSource)) (
-    "method_carrier",
-    desugar (parseLocated source),
-  )
-  filter
-    (entry => entry.mrtMethod == method)
-    (finishMethodReturnTrace sink evidence)
-
-test "ordinary return given evidence feeds checking and route publication" =
-  let trace =
-    methodCarrierStages
-      "choose"
-      (joinNl [
-        "interface GivenChoice a where",
-        "  choose : Unit -> a",
-        "use : GivenChoice a => Unit -> a",
-        "use _ = choose ()",
-      ])
-  expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
-    expectTrue (match map methodOutcomeView trace
-      [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
-        checked == stamped
-      _ => False),
-    expectTrue (match trace
-      [_, _, stamped] => match stamped.mrtRoute
-        Some (RDictFwd _) => listLen stamped.mrtPrerequisites == 0
-        _ => False
-      _ => False),
-  ]
-
-test "return-position standalone shadow bypasses the method-return trace" =
-  let trace =
-    methodCarrierStages
-      "zed"
-      (joinNl [
-        "interface Zed a where",
-        "  zed : a",
-        "impl Zed Int where",
-        "  zed = 777",
-        "zed : Bool",
-        "zed = True",
-        "value : Bool",
-        "value = zed",
-      ])
-  expectEqual 0 (listLen trace)
-
-test "ordinary return instance evidence retains selected prerequisites" =
-  let trace =
-    methodCarrierStages
-      "make"
-      (joinNl [
-        "data Box a = Box a",
-        "interface Need a where",
-        "  need : a -> Int",
-        "impl Need Int where",
-        "  need n = n",
-        "interface Build a where",
-        "  make : Unit -> a",
-        "impl Build (Box a) requires Need a where",
-        "  make _ = Box (need 1)",
-        "value : Box Int",
-        "value = make ()",
-      ])
-  expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
-    expectTrue (match map methodOutcomeView trace
-      [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
-        True
-      _ => False),
-    expectTrue (match trace
-      [_, _, stamped] => match stamped.mrtRoute
-        Some (RKey _ _ _) => listLen stamped.mrtPrerequisites == 1
-        _ => False
-      _ => False),
-  ]
-
 test "ordinary return validation rejects wrong selected instance" =
   let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
   expectTrue rejected
@@ -1881,106 +1587,6 @@ test "ordinary return template records present and absent interface formals" =
   expectEqual
     ([True, True], [True, False])
     (methodReturnTemplatePresenceProbe ())
-
-test "ordinary return carrier distinguishes empty and absent-formal boundaries" =
-  let empty =
-    methodCarrierStages
-      "token"
-      (joinNl [
-        "interface Token where",
-        "  token : b -> Int",
-        "impl Token where",
-        "  token _ = 7",
-        "value : Int",
-        "value = token ()",
-      ])
-  let absent =
-    methodCarrierStages
-      "choose"
-      (joinNl [
-        "data Pair a b = Pair a b",
-        "interface Partial a b where",
-        "  choose : Unit -> a",
-        "impl Partial Int Bool where",
-        "  choose _ = 7",
-        "value : Int",
-        "value = choose ()",
-      ])
-  expectAll [
-    expectEqual
-      [Some [], Some [], Some []]
-      (map (entry => map (map ppMono) entry.mrtArguments) empty),
-    expectEqual
-      [Some [], Some [], Some []]
-      (map (entry => map wantedArgumentStrings entry.mrtWanted) empty),
-    expectEqual
-      [MRTProduced, MRTChecked, MRTStamped]
-      (map (entry => entry.mrtStage) absent),
-    expectEqual
-      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
-      (map methodTraceArgs absent),
-  ]
-
-absentReturnSource : Bool -> Bool -> String
-absentReturnSource reverseImpls ambient =
-  let charImpl = joinNl [
-    "impl Hidden Int Char where",
-    "  hidden _ = 22",
-  ]
-  let boolImpl = joinNl [
-    "impl Hidden Int Bool where",
-    "  hidden _ = 12",
-  ]
-  let impls =
-    if reverseImpls then [boolImpl, charImpl] else [charImpl, boolImpl]
-  joinNl
-    ([
-        "interface Hidden a b where",
-        "  hidden : Unit -> a",
-      ]
-      ++ impls
-      ++ (if ambient then
-        [
-          "useHidden : Hidden a b => b -> a",
-          "useHidden witness = hidden ()",
-          "value : Int",
-          "value = useHidden True : Int",
-        ]
-      else
-        [
-          "value : Int",
-          "value = hidden ()",
-        ]))
-
-test "absent return formal completes from the exact enclosing given" =
-  let trace = methodCarrierStages "hidden" (absentReturnSource False True)
-  expectEach [
-    (
-      "arg trace is complete at every stage",
-      expectEqual
-        [Some ["a", "a"], Some ["a", "a"], Some ["a", "a"]]
-        (map methodTraceArgs trace),
-    ),
-    (
-      "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
-    ),
-    (
-      "the given and stamped outcomes agree",
-      expectTrue (match map methodOutcomeView trace
-        [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
-          checked == stamped
-        _ => False),
-    ),
-    (
-      "the stamped clause routes through a dict-forward",
-      expectTrue (match trace
-        [_, _, stamped] => match stamped.mrtRoute
-          Some (RDictFwd _) => True
-          _ => False
-        _ => False),
-    ),
-  ]
 
 absentReturnCodes : Bool -> List String
 absentReturnCodes reverseImpls =
@@ -2131,457 +1737,6 @@ test "method-body levels reset across failure then success" =
     methodBodyCheck "method_body_level_q" (methodBodyAmbiguitySource False)
   let p2 = methodBodyCheck "method_body_level_p2" methodBodySoleImplSource
   expectEqual ([], [("T-AMBIGUOUS-INSTANCE", True)], []) (p1, q, p2)
-
-test "absent return completion cannot leak from a sibling scope" =
-  let source = joinNl [
-    "interface Hidden a b where",
-    "  hidden : Unit -> a",
-    "useBool : Hidden a Bool => Bool -> a",
-    "useBool witness = hidden ()",
-    "useChar : Hidden a Char => Char -> a",
-    "useChar witness = hidden ()",
-  ]
-  let checkedArgs =
-    map
-      methodTraceSecondArg
-      (filter
-        (entry => entry.mrtStage == MRTChecked)
-        (methodCarrierStages "hidden" source))
-  expectAll [
-    expectEqual 2 (listLen checkedArgs),
-    expectTrue
-      (checkedArgs == ["Bool", "Char"] || checkedArgs == ["Char", "Bool"]),
-  ]
-
-methodTraceSecondArg : MethodReturnTraceEntry -> String
-methodTraceSecondArg entry = match methodTraceArgs entry
-  Some [_, argument] => argument
-  _ => ""
-
-methodTraceOrigin : MethodReturnTraceEntry -> String
-methodTraceOrigin entry = match entry.mrtInterface.irOrigin
-  OriginModule moduleId => moduleId
-  _ => "<unresolved>"
-
-methodOutcomeSemanticView : MethodReturnTraceEntry ->
-  (String, List String, List (String, List String))
-methodOutcomeSemanticView entry = match methodOutcomeView entry
-  None => ("pending", [], [])
-  Some (MOVGiven _) => ("given", [], [])
-  Some (MOVInstance _ args prerequisites) => ("instance", args, prerequisites)
-  Some MOVDeferred => ("deferred", [], [])
-  Some MOVInsoluble => ("insoluble", [], [])
-
-methodRouteKind : MethodReturnTraceEntry -> String
-methodRouteKind entry = match entry.mrtRoute
-  Some (RKey _ _ _) => "instance"
-  Some (RDict _) => "given"
-  Some (RDictFwd _) => "given-forwarded"
-  Some (RProj _ _) => "given-projected"
-  Some (RLocal _ _) => "local"
-  Some (RScalar _) => "scalar"
-  Some RNone => "none"
-  None => "pending"
-
-methodTraceIdentityView : MethodReturnTraceEntry ->
-  (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String)
-methodTraceIdentityView entry = (
-  entry.mrtStage,
-  methodTraceOrigin entry,
-  methodTraceArgs entry,
-  methodOutcomeSemanticView entry,
-  methodRouteKind entry,
-)
-
-importedReturnObserved : Bool ->
-  (Int, List (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String))
-importedReturnObserved reverseOrder =
-  let owner = (
-    "return_owner",
-    joinNl [
-      "export interface OwnerChoice a where",
-      "  choose : Unit -> a",
-      "impl OwnerChoice Int where",
-      "  choose _ = 41",
-    ],
-  )
-  let foreign = (
-    "return_foreign",
-    joinNl [
-      "export interface ForeignChoice a where",
-      "  choose : Unit -> a",
-      "impl ForeignChoice Bool where",
-      "  choose _ = True",
-    ],
-  )
-  let imports =
-    if reverseOrder then
-      ["import return_foreign.{choose}", "import return_owner as O"]
-    else
-      ["import return_owner as O", "import return_foreign.{choose}"]
-  let entry = (
-    "return_importer",
-    joinNl (imports ++ ["value : Int", "value = O.choose ()"]),
-  )
-  let sources =
-    if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
-  let sink = beginMethodReturnTrace ()
-  let (report, _) =
-    checkModulesChainReportFor
-      (traced sink)
-      False
-      None
-      ""
-      []
-      []
-      (desugar (parse numericPreludeSource))
-      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let results = report.trDiagnostics
-  let trace =
-    map
-      methodTraceIdentityView
-      (filter
-        (item => item.mrtMethod == "choose")
-        (finishMethodReturnTrace sink (reportEvidence report)))
-  (modErrorCount results, trace)
-
-test "alias-qualified ordinary returns keep owner identity across import orders" =
-  let forward = importedReturnObserved False
-  let backward = importedReturnObserved True
-  expectAll [
-    expectEqual 0 (fst forward),
-    expectEqual forward backward,
-    expectEqual
-      [
-        (
-          MRTProduced,
-          "return_owner",
-          Some ["Int"],
-          ("pending", [], []),
-          "pending",
-        ),
-        (
-          MRTChecked,
-          "return_owner",
-          Some ["Int"],
-          ("instance", ["Int"], []),
-          "pending",
-        ),
-        (
-          MRTStamped,
-          "return_owner",
-          Some ["Int"],
-          ("instance", ["Int"], []),
-          "instance",
-        ),
-      ]
-      (snd forward),
-  ]
-
-freshMethodReturnStages : String -> List MethodReturnTraceStage
-freshMethodReturnStages moduleId =
-  let sink = beginMethodReturnTrace ()
-  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
-    (parse numericPreludeSource)) (
-    moduleId,
-    desugar (parseLocated returnIdentitySource),
-  )
-  map
-    (entry => entry.mrtStage)
-    (filter
-      (entry => entry.mrtMethod == "choose")
-      (finishMethodReturnTrace sink evidence))
-
-cachedMethodReturnObserved : String -> (Int, List MethodReturnTraceStage)
-cachedMethodReturnObserved entrySource =
-  let prefix = joinNl [
-    "export interface CachedChoice a where",
-    "  cachedChoose : Unit -> a",
-    "impl CachedChoice Int where",
-    "  cachedChoose _ = 41",
-    "export cached : Int",
-    "cached = cachedChoose ()",
-  ]
-  let sink = beginMethodReturnTrace ()
-  let (report, _) =
-    checkModulesChainReportFor
-      (traced sink)
-      False
-      (Some (991, 997))
-      "method-return-identity-cache"
-      [Some "stable-method-return-prefix-v1", None]
-      []
-      (desugar (parse numericPreludeSource))
-      [
-        ("return_cache_prefix", desugar (parseLocated prefix)),
-        ("return_cache_entry", desugar (parseLocated entrySource)),
-      ]
-  let stages =
-    map
-      (entry => entry.mrtStage)
-      (filter
-        (entry => entry.mrtMethod == "cachedChoose")
-        (finishMethodReturnTrace sink (reportEvidence report)))
-  (modErrorCount report.trDiagnostics, stages)
-
-test "ordinary return traces are fresh while cache hits replay no events" =
-  let first = freshMethodReturnStages "return_fresh"
-  let (failedErrors, _) = checkOneDiags defaultDriveInputs [] [] (
-    "return_failed",
-    desugar (parseLocated "value : Int\nvalue = \"wrong\"\n"),
-  )
-  let afterFailure = freshMethodReturnStages "return_fresh"
-  let success = "import return_cache_prefix.{cached}\nentry = cached\n"
-  let cold = cachedMethodReturnObserved success
-  let hit = cachedMethodReturnObserved success
-  let failedHit = cachedMethodReturnObserved "entry : Int\nentry = \"wrong\"\n"
-  let afterFailedHit = cachedMethodReturnObserved success
-  expectEach [
-    (
-      "first's stages are Produced, Checked, Stamped",
-      expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
-    ),
-    ("first == afterFailure", expectEqual first afterFailure),
-    (
-      "a failing declaration produces at least one error",
-      expectGreaterThan 0 (listLen failedErrors),
-    ),
-    (
-      "cold is a fresh 0-error trace",
-      expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
-    ),
-    ("hit is a fresh 0-error trace with no stages", expectEqual (0, []) hit),
-    (
-      "the failed hit records its own error and no stages",
-      expectEach [
-        ("fst failedHit > 0", expectGreaterThan 0 (fst failedHit)),
-        ("snd failedHit == []", expectEqual [] (snd failedHit)),
-      ],
-    ),
-    (
-      "afterFailedHit is a fresh 0-error trace",
-      expectEqual (0, []) afterFailedHit,
-    ),
-  ]
-
-data ReturnMemoRequestView = ReturnMemoRequestView {
-  rmrvModules : List (String, List (String, String), List (String, String)),
-  rmrvReturns : List MethodReturnMemoView,
-  rmrvServed : Int,
-} deriving (Eq, Debug)
-
-returnMemoModuleView : ModDiags ->
-  (String, List (String, String), List (String, String))
-returnMemoModuleView (moduleId, (schemes, errors, warnings)) = (
-  moduleId,
-  map (entry => (fst entry, ppScheme (snd entry).psScheme)) schemes,
-  map (diag => (tcCode diag, tcMsg diag)) (errors ++ warnings),
-)
-
-returnMemoRelevant : MethodReturnMemoView -> Bool
-returnMemoRelevant view =
-  view.mrmvMethod == "cachedChoose" || view.mrmvMethod == "hidden"
-
-returnMemoPrefix : Bool -> String
-returnMemoPrefix useBool =
-  let head = if useBool then "Bool" else "Int"
-  let value = if useBool then "True" else "41"
-  joinNl [
-    "export interface Need a where",
-    "  need : a -> Int",
-    "impl Need \{head} where",
-    "  need _ = 1",
-    "export interface CachedChoice a where",
-    "  cachedChoose : Unit -> a",
-    "impl CachedChoice \{head} requires Need \{head} where",
-    "  cachedChoose _ = \{value}",
-    "export cached : \{head}",
-    "cached = cachedChoose ()",
-    "export interface Hidden a b where",
-    "  hidden : Unit -> a",
-    "export useHidden : Hidden a b => b -> a",
-    "useHidden witness = hidden ()",
-  ]
-
-returnMemoEntry : String
-returnMemoEntry =
-  "import return_memo_prefix.{cached, useHidden}\nentry = cached\n"
-
-returnMemoConflictPrefix : String
-returnMemoConflictPrefix = joinNl [
-  returnMemoPrefix False,
-  "impl CachedChoice Int requires Need Int where",
-  "  cachedChoose _ = 99",
-]
-
-returnMemoObserved : String -> String -> String -> ReturnMemoRequestView
-returnMemoObserved prefixSource entrySource stepKey =
-  fst (returnMemoObservedGraph prefixSource entrySource stepKey)
-
-returnMemoObservedGraph : String ->
-  String ->
-  String ->
-  (ReturnMemoRequestView, GraphCtx)
-returnMemoObservedGraph prefixSource entrySource stepKey =
-  let ((report, outputs), gctx) =
-    checkModulesChainReportForGraph
-      (chainArgs
-        defaultDriveInputs
-        noValueMain
-        (Some (1091, 1093))
-        "method-return-request-fence"
-        [Some stepKey, None]
-        []
-        (desugar (parse numericPreludeSource))
-        [
-          ("return_memo_prefix", desugar (parseLocated prefixSource)),
-          ("return_memo_entry", desugar (parseLocated entrySource)),
-        ])
-  (
-    ReturnMemoRequestView {
-      rmrvModules = map returnMemoModuleView report.trDiagnostics,
-      rmrvReturns =
-        filter returnMemoRelevant (methodReturnMemoCurrentViews gctx),
-      rmrvServed = outputs.doServedModules,
-    },
-    gctx,
-  )
-
-returnMemoErrorCount : ReturnMemoRequestView -> Int
-returnMemoErrorCount view = returnMemoErrorCountRows view.rmrvModules
-
-returnMemoErrorCountRows : List (String, List (String, String), List (String, String)) ->
-  Int
-returnMemoErrorCountRows [] = 0
-returnMemoErrorCountRows ((_, _, diagnostics) :: rest) =
-  listLen diagnostics + returnMemoErrorCountRows rest
-
-returnMemoMethod : String ->
-  ReturnMemoRequestView ->
-  Option MethodReturnMemoView
-returnMemoMethod method view =
-  match filter (entry => entry.mrmvMethod == method) view.rmrvReturns
-    entry :: _ => Some entry
-    [] => None
-
-test "a served prefix reports as the checked one across requests" =
-  let pSource = returnMemoPrefix False
-  let changedSource = returnMemoPrefix True
-  let cold = returnMemoObserved pSource returnMemoEntry pSource
-  let hit = returnMemoObserved pSource returnMemoEntry pSource
-  let failed =
-    returnMemoObserved pSource "entry : Int\nentry = \"wrong\"\n" pSource
-  let afterFailed = returnMemoObserved pSource returnMemoEntry pSource
-  let conflict =
-    returnMemoObserved
-      returnMemoConflictPrefix
-      returnMemoEntry
-      returnMemoConflictPrefix
-  let afterConflict = returnMemoObserved pSource returnMemoEntry pSource
-  let changed = returnMemoObserved changedSource returnMemoEntry changedSource
-  let backToP = returnMemoObserved pSource returnMemoEntry pSource
-  let forcedStale = returnMemoObserved changedSource returnMemoEntry pSource
-  let coldInstance = returnMemoMethod "cachedChoose" cold
-  let changedInstance = returnMemoMethod "cachedChoose" changed
-  let coldGiven = returnMemoMethod "hidden" cold
-  let instancesDiffer = match (coldInstance, changedInstance)
-    (Some before, Some after) => expectEach [
-      (
-        "the cold request recorded an instance",
-        expectEqual "instance" before.mrmvOutcome,
-      ),
-      (
-        "the changed request recorded an instance",
-        expectEqual "instance" after.mrmvOutcome,
-      ),
-      (
-        "the cold instance's prerequisite is Need Int",
-        expectEqual
-          [("return_memo_prefix::Need", ["Int"])]
-          before.mrmvPrerequisites,
-      ),
-      (
-        "the changed instance's prerequisite is Need Bool",
-        expectEqual
-          [("return_memo_prefix::Need", ["Bool"])]
-          after.mrmvPrerequisites,
-      ),
-      (
-        "the cold instance published its evidence",
-        expectNotEqual "unpublished" before.mrmvEvidence,
-      ),
-      (
-        "the changed instance published its evidence",
-        expectNotEqual "unpublished" after.mrmvEvidence,
-      ),
-      (
-        "the two instances rest on different evidence",
-        expectNotEqual before.mrmvEvidence after.mrmvEvidence,
-      ),
-    ]
-    _ => fail "expected both requests to record a cachedChoose memo"
-  let givenMemo = match coldGiven
-    Some given => expectEach [
-      (
-        "the given memo's method arguments are a, a",
-        expectEqual (Some ["a", "a"]) given.mrmvArguments,
-      ),
-      (
-        "it was resolved as a given, not an instance",
-        expectEqual "given" given.mrmvOutcome,
-      ),
-      ("it carries no prerequisites", expectEqual [] given.mrmvPrerequisites),
-      (
-        "it published its evidence",
-        expectNotEqual "unpublished" given.mrmvEvidence,
-      ),
-    ]
-    _ => fail "expected a return memo for the given method 'hidden'"
-  expectEach [
-    ("cold has no errors", expectEqual 0 (returnMemoErrorCount cold)),
-    ("cold checked the prefix", expectEqual 0 cold.rmrvServed),
-    ("hit served the prefix", expectEqual 1 hit.rmrvServed),
-    ("cold == hit", expectEqual cold.rmrvModules hit.rmrvModules),
-    (
-      "cold == afterFailed",
-      expectEqual cold.rmrvModules afterFailed.rmrvModules,
-    ),
-    (
-      "cold == afterConflict",
-      expectEqual cold.rmrvModules afterConflict.rmrvModules,
-    ),
-    ("cold == backToP", expectEqual cold.rmrvModules backToP.rmrvModules),
-    (
-      "a failing entry produces at least one error",
-      expectGreaterThan 0 (returnMemoErrorCount failed),
-    ),
-    (
-      "a conflicting prefix produces at least one error",
-      expectGreaterThan 0 (returnMemoErrorCount conflict),
-    ),
-    (
-      "the changed request re-derives with no errors",
-      expectEach [
-        ("changed /= cold", expectNotEqual cold changed),
-        (
-          "returnMemoErrorCount changed == 0",
-          expectEqual 0 (returnMemoErrorCount changed),
-        ),
-      ],
-    ),
-    (
-      "a reused step key over changed impl heads re-derives, because the chain key fingerprints instance heads",
-      expectEqual changed forcedStale,
-    ),
-    (
-      "cold and changed instances have distinct prerequisites and evidence",
-      instancesDiffer,
-    ),
-    (
-      "the given memo carries the expected arguments and no prerequisites",
-      givenMemo,
-    ),
-  ]
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
@@ -2996,11 +2151,6 @@ chainDiagsGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls modul
         coreDecls
         modules)
   (report.trDiagnostics, gctx)
-
-modErrorCount : List ModDiags -> Int
-modErrorCount [] = 0
-modErrorCount ((_, (_, errors, _)) :: rest) =
-  listLen errors + modErrorCount rest
 
 runCachedObserved : String -> RequestView
 runCachedObserved entrySource =
@@ -3461,201 +2611,6 @@ test "an inherited default is inferred once, as the default body" =
       0,
     )
     (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
-
--- #2095: production-path observation of `evidenceObservation`'s
--- entries, one program per family the mission asks for. `elaborateOne`'s two-
--- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
--- numeric prelude so `intToString` and friends are the same environment those
--- tests already exercise.
-evidenceObservationTrace : String -> List EvidenceObservationEntry
-evidenceObservationTrace source =
-  let sink = beginEvidenceObservation ()
-  let _ = elaborateOne (traced sink) [] (desugar (parse numericPreludeSource)) (
-    "evidence_observation",
-    desugar (parseLocated source),
-  )
-  finishEvidenceObservation sink
-
-evidenceEntriesOfKind : String ->
-  List EvidenceObservationEntry ->
-  List EvidenceObservationEntry
-evidenceEntriesOfKind kind = filter (e => e.eoeGoalKind == kind)
-
-evidenceEntriesWithPredicate : String ->
-  List EvidenceObservationEntry ->
-  List EvidenceObservationEntry
-evidenceEntriesWithPredicate pred = filter (e => e.eoePredicate == Some pred)
-
-scopeOrdinal : ScopeId -> Int
-scopeOrdinal (ScopeId n) = n
-
--- The comparison the pin below is built on: outcome, instance identity,
--- prerequisite identities, and binder scope, exactly the four the mission's
--- mutation checks name. Correct on the real entry; each mutation test shows it
--- FALSE on one deliberately wrong field.
-evidenceEntryMatches : (EvidenceOutcomeKind, Option String, List String, Int) ->
-  EvidenceObservationEntry ->
-  Bool
-evidenceEntryMatches (outcome, instanceKey, prerequisites, scopeN) e =
-  e.eoeOutcome == outcome
-    && e.eoeInstanceKey == instanceKey
-    && e.eoePrerequisites == prerequisites
-    && scopeOrdinal e.eoeScope == scopeN
-
-test "a nested constrained call forwards the enclosing given (#2095 given forwarding)" =
-  let trace =
-    evidenceObservationTrace
-      (joinNl [
-        "interface Give a where",
-        "  give : Unit -> a",
-        "callGive : Give a => Unit -> a",
-        "callGive _ = give ()",
-        "useGive : Give a => Unit -> a",
-        "useGive _ = callGive ()",
-      ])
-  let forwarded = evidenceEntriesOfKind "GKDictApp" trace
-  expectTrue (match forwarded
-    [e] =>
-      e.eoeOutcome == EOKGiven
-        && e.eoeGivenBinder == Some "$dict_useGive_0"
-        && e.eoeArity == 1
-    _ => False)
-
-test "a construction goal packs its prerequisite into the instance route (#2095 instance + prerequisites)" =
-  let trace =
-    evidenceObservationTrace
-      (joinNl [
-        "data Box a = Box a",
-        "interface Need a where",
-        "  need : a -> Int",
-        "impl Need Int where",
-        "  need n = n",
-        "interface Build a where",
-        "  make : Unit -> a",
-        "impl Build (Box a) requires Need a where",
-        "  make _ = Box (need 1)",
-        "topCall : Build a => Unit -> a",
-        "topCall _ = make ()",
-        "useTop : Box Int",
-        "useTop = topCall ()",
-      ])
-  let constructed = evidenceEntriesWithPredicate "Box Int" trace
-  expectTrue (match constructed
-    [e] =>
-      e.eoeOutcome == EOKInstance
-        && e.eoeInstanceKey
-          == Some "evidence_observation::Build|(evidence_observation.Box a)|"
-        && e.eoePrerequisites == ["RKey evidence_observation::Need|Int|"]
-    _ => False)
-
-test "the construction goal's pin is sensitive to identity, prerequisites, and scope (#2095 mutation)" =
-  let trace =
-    evidenceObservationTrace
-      (joinNl [
-        "data Box a = Box a",
-        "interface Need a where",
-        "  need : a -> Int",
-        "impl Need Int where",
-        "  need n = n",
-        "interface Build a where",
-        "  make : Unit -> a",
-        "impl Build (Box a) requires Need a where",
-        "  make _ = Box (need 1)",
-        "topCall : Build a => Unit -> a",
-        "topCall _ = make ()",
-        "useTop : Box Int",
-        "useTop = topCall ()",
-      ])
-  match evidenceEntriesWithPredicate "Box Int" trace
-    [e] =>
-      let scopeN = scopeOrdinal e.eoeScope
-      expectAll [
-        expectTrue
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "SomethingElse",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              [],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN + 1,
-            )
-            e),
-      ]
-    _ => fail "expected exactly one Box Int construction goal"
-
--- The super `A Int` takes no slot of its own: it is solved at this same goal and
--- carried inside the `B Int` dictionary (#993), which `dict_semantics_ir` pins as the
--- constant's super segment.
-test "a super at an instance construction goal rides inside that goal's one slot (#2095, #993, DICT §3 construction)" =
-  let trace =
-    evidenceObservationTrace
-      (joinNl [
-        "interface A a where",
-        "  m1 : a -> Int",
-        "interface B a requires A a where",
-        "  m2 : a -> Int",
-        "impl A Int where",
-        "  m1 _ = 1",
-        "impl B Int where",
-        "  m2 _ = 2",
-        "callB : B a => a -> Int",
-        "callB x = m2 x",
-        "useB : Int",
-        "useB = callB 5",
-      ])
-  let slots = evidenceEntriesOfKind "GKDictApp" trace
-  expectAll [
-    expectEqual 1 (listLen slots),
-    expectTrue
-      (all
-        (e =>
-          e.eoeArity == 1
-            && e.eoeOutcome == EOKInstance
-            && e.eoeInstanceKey == Some "evidence_observation::B|Int|")
-        slots),
-  ]
-
-test "a default body's sibling call is answered by the body's receiver (#2095)" =
-  let trace =
-    evidenceObservationTrace
-      (joinNl [
-        "interface Sz a where",
-        "  sib : a -> Int",
-        "  sz : a -> String",
-        "  sz x = \"sz=\" ++ intToString (sib x)",
-        "impl Sz Int where",
-        "  sib x = x",
-      ])
-  let abstractSibling = evidenceEntriesWithPredicate "a" trace
-  expectEqual
-    [(EOKGiven, Some "$self_sz")]
-    (map (e => (e.eoeOutcome, e.eoeGivenBinder)) abstractSibling)
 
 localUseSiteObserved : String -> (List String, List EvidenceObservationEntry)
 localUseSiteObserved source =
@@ -4406,24 +3361,6 @@ test "every goal that writes a method cell notes into that cell's summary" =
       ["GKArgStamp", "GKMethodDict", "GKReturnSite"]
       (sort (nub (map fst observed))),
   ]
-
--- A drain finding is live when its span is a live goal's.  Goals built after a
--- drain (`pushArithGoal` and its siblings) carry no location, so an unlocated live
--- goal must not make every unlocated finding live.
-test "an unlocated drain finding is never live, even beside an unlocated live goal" =
-  let at = Some (Loc "m.mdk" 3 4 3 9)
-  let live = omFromNames (spanKeys [None, at]) omEmpty
-  expectAll [
-    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
-    expectFalse (isLiveSpan live None),
-    expectTrue (isLiveSpan live at),
-    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
-  ]
-
--- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
--- solving walks' memo must not, in either order.
-test "the solving-walk memo keeps goals that differ only in an effect row apart" =
-  expectEqual [True, True, False, False, True] (walkGoalSameProbe ())
 
 -- ── what `IO` joins follows the selected target profile ──────────────────────
 -- The label set of `wasmgc/node` excludes `Exec`, so there an `<IO>` bound does
@@ -5974,3 +4911,1716 @@ test "a zero-user-module record carries an empty oracle and no match warnings" =
   let hit = firstModuleSeed ()
   let empty = (omKeys (buildOracle []).ctorArity, False)
   expectEqual [empty, empty] [miss, hit]
+
+-- ── what a signature's givens accept and reject through one check ──
+
+sizeable : String
+sizeable =
+  """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz _ = 1
+"""
+
+test "a signature's constraint is a given for its body" =
+  expectChecks (joinNl [sizeable, "g : Sz a => a -> Int", "g x = sz x"])
+
+test "a body that needs a constraint its signature omits is rejected as a missing constraint" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    (joinNl [sizeable, "g : a -> Int", "g x = sz x"])
+
+test "a given's superclass closure answers a goal on the super" =
+  expectChecks
+    """
+\{sizeable}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+h : Sz2 a => a -> Int
+h x = sz x
+"""
+
+test "a given of the super does not answer a goal on the sub" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    """
+\{sizeable}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+h : Sz a => a -> Int
+h x = sz2 x
+"""
+
+test "an impl's requires slot is a given for the impl's methods" =
+  expectChecks
+    """
+\{sizeable}
+data Box a = Box a
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+"""
+
+test "a requires the impl does not declare is rejected at the use" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    """
+\{sizeable}
+data Box a = Box a
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+k : a -> Int
+k v = sz (Box v)
+"""
+
+-- ── what an instance, a given and a superclass entail, through one check ──
+
+sizeableShapes : String
+sizeableShapes =
+  joinNl [sizeable, "data Box a = Box a", "data Pair a b = Pair a b"]
+
+test "a goal an instance answers is entailed" =
+  expectChecks (joinNl [sizeableShapes, "f : Int", "f = sz 1"])
+
+test "a goal no instance answers is rejected as having no impl" =
+  expectRejectedWith
+    ["T-NO-IMPL"]
+    (joinNl [sizeableShapes, "f : Int", "f = sz True"])
+
+test "an instance's prerequisite is owed at the use, and is met by the instance of its argument" = expectEach
+  [
+    (
+      "prerequisite met",
+      expectChecks
+        """
+\{sizeableShapes}
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+f : Int
+f = sz (Box 1)
+""",
+    ),
+    (
+      "prerequisite absent",
+      expectRejectedWith
+        ["T-NO-IMPL"]
+        """
+\{sizeableShapes}
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+f : Int
+f = sz (Box True)
+""",
+    ),
+  ]
+
+test "a given discharges the prerequisite of the instance a goal selects" =
+  expectChecks
+    """
+\{sizeableShapes}
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+h : Sz a => Box a -> Int
+h b = sz b
+"""
+
+test "an instance of a sub-interface without the instance of its super is rejected" =
+  expectRejectedWith
+    ["T-MISSING-SUPER-IMPL"]
+    """
+\{sizeableShapes}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+impl Sz2 Bool where
+  sz2 _ = 1
+"""
+
+test "an instance of a sub-interface beside its super's instance is entailed" =
+  expectChecks
+    """
+\{sizeableShapes}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+impl Sz2 Int where
+  sz2 _ = 1
+f : Int
+f = sz2 1 + sz 2
+"""
+
+overlapping : String
+overlapping =
+  """
+\{sizeableShapes}
+impl Sz (Box a) where
+  sz _ = 2
+impl Sz (Box Int) where
+  sz _ = 3
+"""
+
+test "of two instances that both match, the strictly more specific one is the route" =
+  let specificOnly =
+    routeWordsOf
+      (joinNl [
+        sizeableShapes, "impl Sz (Box Int) where", "  sz _ = 3", "f : Int",
+        "f = sz (Box 1)"
+      ])
+  expectAll [
+    expectChecks (joinNl [overlapping, "f : Int", "f = sz (Box 1)"]),
+    expectEqual
+      specificOnly
+      (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box 1)"])),
+  ]
+
+test "the general instance is the route for a goal only it matches" =
+  let generalOnly =
+    routeWordsOf
+      (joinNl [
+        sizeableShapes, "impl Sz (Box a) where", "  sz _ = 2", "f : Int",
+        "f = sz (Box True)"
+      ])
+  expectEqual
+    generalOnly
+    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box True)"]))
+
+test "the specific and the general instance name different routes" =
+  expectNotEqual
+    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box 1)"]))
+    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box True)"]))
+
+incomparable : String
+incomparable =
+  """
+\{sizeableShapes}
+impl Sz (Pair a Int) where
+  sz _ = 2
+impl Sz (Pair Int b) where
+  sz _ = 3
+"""
+
+test "two matching instances neither of which is more specific are an ambiguous instance" =
+  expectRejectedWith
+    ["T-AMBIGUOUS-INSTANCE"]
+    (joinNl [incomparable, "f : Int", "f = sz (Pair 1 2)"])
+
+test "a goal only one of two incomparable instances matches is not ambiguous" =
+  expectChecks (joinNl [incomparable, "f : Int", "f = sz (Pair True 2)"])
+
+-- ── the law ───────────────────────────────────────────────────────────────
+
+-- The instance heads and goals of the property, as source text.  Each head overlaps some of
+-- the goals; `Pair a Int` and `Pair Int b` are incomparable where both match.
+headPool : List String
+headPool = ["Box a", "Box Int", "Pair a Int", "Pair Int b", "Box Bool"]
+
+goalPool : List String
+goalPool = ["Box 1", "Box True", "Pair 1 2", "Pair True 2", "Pair 1 True"]
+
+data RouteCase = RouteCase (List Int) Int
+
+impl Arbitrary RouteCase where
+  arbitrary () = RouteCase (pickHeads (randomInt 1 5) []) (randomInt 0 4)
+  shrink (RouteCase heads goal) = match heads
+    _ :: rest@(_ :: _) => [RouteCase rest goal]
+    _ => []
+
+-- Up to [n] distinct pool indices, in draw order.
+pickHeads : Int -> List Int -> <Rand> List Int
+pickHeads n acc
+  | n <= 0 = acc
+  | otherwise =
+    let i = randomInt 0 4
+    if elem i acc then pickHeads (n - 1) acc else pickHeads (n - 1) (i :: acc)
+
+-- The program that declares the pool heads [heads] in order and asks for the pool goal
+-- [goal]; `None` when an index lies outside its pool, which fails the property instead of
+-- reading as an empty head.
+programOf : List Int -> Int -> Option String
+programOf heads goal = match (get goal goalPool, implSources heads)
+  (Some g, Some impls) =>
+    Some (joinNl ([sizeableShapes] ++ impls ++ ["f : Int", "f = sz (\{g})"]))
+  _ => None
+
+implSources : List Int -> Option (List String)
+implSources [] = Some []
+implSources (i :: rest) = match (get i headPool, implSources rest)
+  (Some head, Some more) => Some (implSource head i :: more)
+  _ => None
+
+implSource : String -> Int -> String
+implSource head i = """
+impl Sz (\{head}) where
+  sz _ = \{intToString (i + 2)}
+"""
+
+-- Law: the route a goal is stamped with, and whether it is accepted, do not depend on the
+-- order the instances are declared in.  Precondition: the goal is accepted, so that a
+-- route exists to compare; ambiguous draws check the verdict alone.
+prop "a goal's route and verdict do not depend on the order its instances are declared in" (c : RouteCase) =
+  let (RouteCase heads goal) = c
+  match (programOf heads goal, programOf (reverse heads) goal)
+    (Some forward, Some backward) =>
+      checkCodes forward == checkCodes backward
+        && (checkCodes forward /= []
+          || routeWordsOf forward == routeWordsOf backward)
+    _ => False
+
+-- ── what the obligation checks accept and reject through one check ──
+
+base : String
+base = joinNl [
+  "interface Sz a where",
+  "  sz : a -> Int",
+  "interface Make a where",
+  "  make : Unit -> a",
+  "impl Make Int where",
+  "  make _ = 1",
+  "impl Sz Int where",
+  "  sz _ = 1",
+  "data Box a = Box a",
+]
+
+test "a call at a type with no instance is rejected as having no impl" =
+  expectRejectedWith ["T-NO-IMPL"] (joinNl [base, "h : Int", "h = sz True"])
+
+test "a goal on an undetermined type no instance can fix is rejected as having no impl" =
+  expectRejectedWith
+    ["T-NO-IMPL"]
+    (joinNl [
+      "interface Sz a where",
+      "  sz : a -> Int",
+      "interface Make a where",
+      "  make : Unit -> a",
+      "impl Make Int where",
+      "  make _ = 1",
+      "f : Int",
+      "f = sz (make ())",
+    ])
+
+test "a body that uses an interface its signature omits is rejected as a missing constraint" = expectEach
+  [
+    (
+      "a bare variable",
+      expectRejectedWith
+        ["T-MISSING-CONSTRAINT"]
+        (joinNl [base, "k : a -> Int", "k v = sz v"]),
+    ),
+    (
+      "a variable under a constructor",
+      expectRejectedWith
+        ["T-MISSING-CONSTRAINT"]
+        (joinNl [base, "k : Box a -> Int", "k v = sz v"]),
+    ),
+  ]
+
+test "a signature that declares the constraint is accepted" =
+  expectChecks (joinNl [base, "k : Sz a => a -> Int", "k v = sz v"])
+
+test "an inferred constraint is promoted to the binder and met at a use with an instance" =
+  expectChecks (joinNl [base, "g x = sz x", "h : Int", "h = g 1"])
+
+test "an inferred constraint is owed at every use, and unmet at a type with no instance" =
+  expectRejectedWith
+    ["T-NO-IMPL"]
+    (joinNl [base, "g x = sz x", "h : Int", "h = g True"])
+
+test "two instances that can match the same type are a conflicting impl" = expectEach
+  [
+    (
+      "the same head",
+      expectRejectedWith
+        ["T-CONFLICTING-IMPL"]
+        (joinNl [base, "impl Sz Int where", "  sz _ = 2"]),
+    ),
+    (
+      "the same head over a variable",
+      expectRejectedWith
+        ["T-CONFLICTING-IMPL"]
+        (joinNl [
+          base, "impl Sz (Box a) where", "  sz _ = 1", "impl Sz (Box b) where",
+          "  sz _ = 2"
+        ]),
+    ),
+  ]
+
+test "instances whose heads are disjoint do not conflict" =
+  expectChecks (joinNl [base, "impl Sz Bool where", "  sz _ = 2"])
+
+test "an impl whose head variable needs an interface it does not require is rejected" =
+  expectRejectedWith
+    ["T-IMPL-MISSING-REQUIRES"]
+    (joinNl [base, "impl Sz (Box a) where", "  sz (Box x) = sz x"])
+
+test "an impl that declares the requirement is accepted" =
+  expectChecks
+    (joinNl [
+      base, "impl Sz (Box a) requires Sz a where", "  sz (Box x) = sz x"
+    ])
+
+test "two instances that fit one goal and neither is more specific are an ambiguous instance" =
+  expectRejectedWith
+    ["T-AMBIGUOUS-INSTANCE"]
+    (joinNl [
+      base,
+      "data Pair a b = Pair a b",
+      "impl Sz (Pair a Int) where",
+      "  sz _ = 2",
+      "impl Sz (Pair Int b) where",
+      "  sz _ = 3",
+      "f : Int",
+      "f = sz (Pair 1 2)",
+    ])
+
+test "an unconstrained literal defaults to Int and is accepted" =
+  let source = joinNl ["y = 1", "z = (1, 2)"]
+  let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] (desugar
+    (parse numericPreludeSource)) (
+    "probe",
+    desugar (parseLocated source),
+  )
+  expectAll [
+    expectEqual [] (map fst (checkDiagsOver numericPreludeSource source)),
+    expectEqual ["y : Int", "z : (Int, Int)"] (rendered own),
+  ]
+
+test "a body that needs Num its signature omits is rejected as a missing constraint" =
+  expectEqual
+    ["T-MISSING-CONSTRAINT"]
+    (map
+      fst
+      (checkDiagsOver numericPreludeSource (joinNl ["f : a -> a", "f x = 1"])))
+
+test "a body whose signature declares Num is accepted" =
+  expectEqual
+    []
+    (map
+      fst
+      (checkDiagsOver
+        numericPreludeSource
+        (joinNl ["f : Num a => a -> a", "f x = 1"])))
+
+test "a local literal is defaulted at its own boundary and checks" =
+  expectEqual
+    []
+    (map
+      fst
+      (checkDiagsOver numericPreludeSource (joinNl ["main = let z = 2 in z"])))
+
+-- ── the method-return solver, the discharge memo and the route stamps through one check ──
+
+-- `elaborateOne`'s decls beside the evidence table of the drive that built them.
+elaborateOneEvidence : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  (List Decl, EvTable)
+elaborateOneEvidence inputs runtimeDecls coreDecls prog =
+  let (coreE, modulesE, _, _, evidence, _, _) =
+    elaborateModules inputs runtimeDecls coreDecls [prog]
+  (coreE ++ flatMap snd modulesE, evidence)
+
+-- The evidence table a check drive's report carries; an ill-typed drive's report
+-- carries none.
+reportEvidence : TcReport -> EvTable
+reportEvidence report = match report.trChecked
+  Some checked => checked.cpEvidence
+  None => []
+
+returnIdentitySource : String
+returnIdentitySource = joinNl [
+  "data Pair a b = Pair a b",
+  "interface Choose a b where",
+  "  choose : Unit -> Pair b a",
+  "impl Choose Int Bool where",
+  "  choose _ = Pair True 41",
+  "value : Pair Bool Int",
+  "value = choose ()",
+]
+
+evIdText : EvId -> String
+evIdText (EvId moduleId ordinal) = "\{moduleId}:\{ordinal}"
+
+methodTraceGoalText : MethodReturnTraceEntry -> String
+methodTraceGoalText entry = match entry.mrtGoal
+  Some ev => evIdText ev
+  None => "none"
+
+methodTraceArgs : MethodReturnTraceEntry -> Option (List String)
+methodTraceArgs entry = map (map ppMono) entry.mrtArguments
+
+methodTracePublishedOne : MethodReturnTraceEntry -> Bool
+methodTracePublishedOne entry = match entry.mrtPublished
+  Some (EvOne _) => True
+  _ => False
+
+data MethodWantedView = MethodWantedView {
+  mwvBody : String,
+  mwvInterface : String,
+  mwvArguments : List String,
+  mwvDestinationShared : Bool,
+  mwvScopeShared : Bool,
+} deriving (Eq, Debug)
+
+data MethodOutcomeView =
+  | MOVGiven EvidenceBinderId
+  | MOVInstance Int (List String) (List (String, List String))
+  | MOVDeferred
+  | MOVInsoluble
+  deriving (Eq, Debug)
+
+methodPrerequisiteView : PrerequisiteEvidence -> (String, List String)
+methodPrerequisiteView prerequisite = (
+  prerequisite.prerequisiteInterface.irName,
+  map ppMono prerequisite.prerequisiteArguments,
+)
+
+methodOutcomeView : MethodReturnTraceEntry -> Option MethodOutcomeView
+methodOutcomeView entry = match entry.mrtOutcome
+  Some (Solved (GivenEvidence binder)) => Some (MOVGiven binder)
+  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites _)) =>
+    Some
+      (MOVInstance
+        identity
+        (map ppMono args)
+        (map methodPrerequisiteView prerequisites))
+  Some (Solved (SuperclassEvidence _ _)) => None
+  Some (Deferred _ _) => Some MOVDeferred
+  Some (Insoluble _ _) => Some MOVInsoluble
+  None => None
+
+methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Bool
+methodTraceUsesOneOutcome trace = match map methodOutcomeView trace
+  [None, Some checked, Some stamped] => checked == stamped
+  _ => False
+
+methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
+methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
+  (Some body, Some wanted) => Some MethodWantedView {
+    mwvBody = ppMono body,
+    mwvInterface = wanted.predicate.predicateInterface.irName,
+    mwvArguments = map ppMono wanted.predicate.predicateArguments,
+    mwvDestinationShared =
+      methodTraceGoalText entry == evIdText wanted.destination,
+    mwvScopeShared = wanted.scope == entry.mrtScope,
+  }
+  _ => None
+
+wantedArgumentStrings : Wanted -> List String
+wantedArgumentStrings wanted = map ppMono wanted.predicate.predicateArguments
+
+methodEvInExpr : String -> Expr -> Option EvId
+methodEvInExpr target (EMethodAt name _ ev)
+  | target == name = Some ev
+  | otherwise = None
+methodEvInExpr target (ELoc _ expr) = methodEvInExpr target expr
+methodEvInExpr target (EApp fn arg) = match methodEvInExpr target fn
+  Some ev => Some ev
+  None => methodEvInExpr target arg
+methodEvInExpr _ _ = None
+
+methodEvInDecls : String -> List Decl -> Option EvId
+methodEvInDecls _ [] = None
+methodEvInDecls target ((DFunDef _ _ _ body _ _) :: rest) =
+  match methodEvInExpr target body
+    Some ev => Some ev
+    None => methodEvInDecls target rest
+methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
+
+test "ordinary return shares declaration identity vector and goal destination" =
+  let sink = beginMethodReturnTrace ()
+  let (typed, evidence) = elaborateOneEvidence (traced sink) [] (desugar
+    (parse numericPreludeSource)) (
+    "identity_return",
+    desugar (parseLocated returnIdentitySource),
+  )
+  let trace =
+    filter
+      (entry => entry.mrtMethod == "choose")
+      (finishMethodReturnTrace sink evidence)
+  let goals = map methodTraceGoalText trace
+  let aggregate = map evIdText (methodEvInDecls "choose" typed)
+  let wanted = map methodWantedView trace
+  let goalDiffers = match (goals, aggregate)
+    (goal :: _, Some methodGoal) => expectNotEqual methodGoal goal
+    _ => fail "expected at least one goal and an aggregate method-level goal"
+  let goalsAgree = match goals
+    first :: second :: third :: [] => expectEach [
+      ("the first and second goals agree", expectEqual first second),
+      ("the second and third goals agree", expectEqual second third),
+    ]
+    _ => fail "expected exactly three return goals in the trace"
+  expectEach [
+    (
+      "trace stages are Produced, Checked, Stamped",
+      expectEqual
+        [MRTProduced, MRTChecked, MRTStamped]
+        (map (entry => entry.mrtStage) trace),
+    ),
+    (
+      "every clause's interface origin is this module",
+      expectEqual
+        ["identity_return", "identity_return", "identity_return"]
+        (map
+          (entry => match entry.mrtInterface.irOrigin
+            OriginModule moduleId => moduleId
+            _ => "<unresolved>")
+          trace),
+    ),
+    (
+      "every clause's method args are Int, Bool",
+      expectEqual
+        [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+        (map methodTraceArgs trace),
+    ),
+    ("all three goals agree", goalsAgree),
+    ("the goal differs from the aggregate method-level goal", goalDiffers),
+    (
+      "every clause published exactly one outcome",
+      expectEqual [True, True, True] (map methodTracePublishedOne trace),
+    ),
+    (
+      "the trace uses one outcome",
+      expectTrue (methodTraceUsesOneOutcome trace),
+    ),
+    (
+      "outcomes are None, an instance, then given",
+      expectTrue (match map methodOutcomeView trace
+        [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
+        _ => False),
+    ),
+    (
+      "every clause wants the same Choose view",
+      expectEqual
+        [
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+        ]
+        wanted,
+    ),
+  ]
+
+methodCarrierStages : String -> String -> List MethodReturnTraceEntry
+methodCarrierStages method source =
+  let sink = beginMethodReturnTrace ()
+  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
+    (parse numericPreludeSource)) (
+    "method_carrier",
+    desugar (parseLocated source),
+  )
+  filter
+    (entry => entry.mrtMethod == method)
+    (finishMethodReturnTrace sink evidence)
+
+test "ordinary return given evidence feeds checking and route publication" =
+  let trace =
+    methodCarrierStages
+      "choose"
+      (joinNl [
+        "interface GivenChoice a where",
+        "  choose : Unit -> a",
+        "use : GivenChoice a => Unit -> a",
+        "use _ = choose ()",
+      ])
+  expectAll [
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
+      [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
+        checked == stamped
+      _ => False),
+    expectTrue (match trace
+      [_, _, stamped] => match stamped.mrtRoute
+        Some (RDictFwd _) => listLen stamped.mrtPrerequisites == 0
+        _ => False
+      _ => False),
+  ]
+
+test "return-position standalone shadow bypasses the method-return trace" =
+  let trace =
+    methodCarrierStages
+      "zed"
+      (joinNl [
+        "interface Zed a where",
+        "  zed : a",
+        "impl Zed Int where",
+        "  zed = 777",
+        "zed : Bool",
+        "zed = True",
+        "value : Bool",
+        "value = zed",
+      ])
+  expectEqual 0 (listLen trace)
+
+test "ordinary return instance evidence retains selected prerequisites" =
+  let trace =
+    methodCarrierStages
+      "make"
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "value : Box Int",
+        "value = make ()",
+      ])
+  expectAll [
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
+      [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
+        True
+      _ => False),
+    expectTrue (match trace
+      [_, _, stamped] => match stamped.mrtRoute
+        Some (RKey _ _ _) => listLen stamped.mrtPrerequisites == 1
+        _ => False
+      _ => False),
+  ]
+
+test "ordinary return carrier distinguishes empty and absent-formal boundaries" =
+  let empty =
+    methodCarrierStages
+      "token"
+      (joinNl [
+        "interface Token where",
+        "  token : b -> Int",
+        "impl Token where",
+        "  token _ = 7",
+        "value : Int",
+        "value = token ()",
+      ])
+  let absent =
+    methodCarrierStages
+      "choose"
+      (joinNl [
+        "data Pair a b = Pair a b",
+        "interface Partial a b where",
+        "  choose : Unit -> a",
+        "impl Partial Int Bool where",
+        "  choose _ = 7",
+        "value : Int",
+        "value = choose ()",
+      ])
+  expectAll [
+    expectEqual
+      [Some [], Some [], Some []]
+      (map (entry => map (map ppMono) entry.mrtArguments) empty),
+    expectEqual
+      [Some [], Some [], Some []]
+      (map (entry => map wantedArgumentStrings entry.mrtWanted) empty),
+    expectEqual
+      [MRTProduced, MRTChecked, MRTStamped]
+      (map (entry => entry.mrtStage) absent),
+    expectEqual
+      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+      (map methodTraceArgs absent),
+  ]
+
+test "absent return formal completes from the exact enclosing given" =
+  let trace = methodCarrierStages "hidden" (absentReturnSource False True)
+  expectEach [
+    (
+      "arg trace is complete at every stage",
+      expectEqual
+        [Some ["a", "a"], Some ["a", "a"], Some ["a", "a"]]
+        (map methodTraceArgs trace),
+    ),
+    (
+      "the trace uses one outcome",
+      expectTrue (methodTraceUsesOneOutcome trace),
+    ),
+    (
+      "the given and stamped outcomes agree",
+      expectTrue (match map methodOutcomeView trace
+        [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
+          checked == stamped
+        _ => False),
+    ),
+    (
+      "the stamped clause routes through a dict-forward",
+      expectTrue (match trace
+        [_, _, stamped] => match stamped.mrtRoute
+          Some (RDictFwd _) => True
+          _ => False
+        _ => False),
+    ),
+  ]
+
+test "absent return completion cannot leak from a sibling scope" =
+  let source = joinNl [
+    "interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "useBool : Hidden a Bool => Bool -> a",
+    "useBool witness = hidden ()",
+    "useChar : Hidden a Char => Char -> a",
+    "useChar witness = hidden ()",
+  ]
+  let checkedArgs =
+    map
+      methodTraceSecondArg
+      (filter
+        (entry => entry.mrtStage == MRTChecked)
+        (methodCarrierStages "hidden" source))
+  expectAll [
+    expectEqual 2 (listLen checkedArgs),
+    expectTrue
+      (checkedArgs == ["Bool", "Char"] || checkedArgs == ["Char", "Bool"]),
+  ]
+
+methodTraceSecondArg : MethodReturnTraceEntry -> String
+methodTraceSecondArg entry = match methodTraceArgs entry
+  Some [_, argument] => argument
+  _ => ""
+
+methodTraceOrigin : MethodReturnTraceEntry -> String
+methodTraceOrigin entry = match entry.mrtInterface.irOrigin
+  OriginModule moduleId => moduleId
+  _ => "<unresolved>"
+
+methodOutcomeSemanticView : MethodReturnTraceEntry ->
+  (String, List String, List (String, List String))
+methodOutcomeSemanticView entry = match methodOutcomeView entry
+  None => ("pending", [], [])
+  Some (MOVGiven _) => ("given", [], [])
+  Some (MOVInstance _ args prerequisites) => ("instance", args, prerequisites)
+  Some MOVDeferred => ("deferred", [], [])
+  Some MOVInsoluble => ("insoluble", [], [])
+
+methodRouteKind : MethodReturnTraceEntry -> String
+methodRouteKind entry = match entry.mrtRoute
+  Some (RKey _ _ _) => "instance"
+  Some (RDict _) => "given"
+  Some (RDictFwd _) => "given-forwarded"
+  Some (RProj _ _) => "given-projected"
+  Some (RLocal _ _) => "local"
+  Some (RScalar _) => "scalar"
+  Some RNone => "none"
+  None => "pending"
+
+methodTraceIdentityView : MethodReturnTraceEntry ->
+  (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String)
+methodTraceIdentityView entry = (
+  entry.mrtStage,
+  methodTraceOrigin entry,
+  methodTraceArgs entry,
+  methodOutcomeSemanticView entry,
+  methodRouteKind entry,
+)
+
+importedReturnObserved : Bool ->
+  (Int, List (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String))
+importedReturnObserved reverseOrder =
+  let owner = (
+    "return_owner",
+    joinNl [
+      "export interface OwnerChoice a where",
+      "  choose : Unit -> a",
+      "impl OwnerChoice Int where",
+      "  choose _ = 41",
+    ],
+  )
+  let foreign = (
+    "return_foreign",
+    joinNl [
+      "export interface ForeignChoice a where",
+      "  choose : Unit -> a",
+      "impl ForeignChoice Bool where",
+      "  choose _ = True",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      ["import return_foreign.{choose}", "import return_owner as O"]
+    else
+      ["import return_owner as O", "import return_foreign.{choose}"]
+  let entry = (
+    "return_importer",
+    joinNl (imports ++ ["value : Int", "value = O.choose ()"]),
+  )
+  let sources =
+    if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
+  let sink = beginMethodReturnTrace ()
+  let (report, _) =
+    checkModulesChainReportFor
+      (traced sink)
+      False
+      None
+      ""
+      []
+      []
+      (desugar (parse numericPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let results = report.trDiagnostics
+  let trace =
+    map
+      methodTraceIdentityView
+      (filter
+        (item => item.mrtMethod == "choose")
+        (finishMethodReturnTrace sink (reportEvidence report)))
+  (modErrorCount results, trace)
+
+test "alias-qualified ordinary returns keep owner identity across import orders" =
+  let forward = importedReturnObserved False
+  let backward = importedReturnObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [
+        (
+          MRTProduced,
+          "return_owner",
+          Some ["Int"],
+          ("pending", [], []),
+          "pending",
+        ),
+        (
+          MRTChecked,
+          "return_owner",
+          Some ["Int"],
+          ("instance", ["Int"], []),
+          "pending",
+        ),
+        (
+          MRTStamped,
+          "return_owner",
+          Some ["Int"],
+          ("instance", ["Int"], []),
+          "instance",
+        ),
+      ]
+      (snd forward),
+  ]
+
+freshMethodReturnStages : String -> List MethodReturnTraceStage
+freshMethodReturnStages moduleId =
+  let sink = beginMethodReturnTrace ()
+  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
+    (parse numericPreludeSource)) (
+    moduleId,
+    desugar (parseLocated returnIdentitySource),
+  )
+  map
+    (entry => entry.mrtStage)
+    (filter
+      (entry => entry.mrtMethod == "choose")
+      (finishMethodReturnTrace sink evidence))
+
+cachedMethodReturnObserved : String -> (Int, List MethodReturnTraceStage)
+cachedMethodReturnObserved entrySource =
+  let prefix = joinNl [
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice Int where",
+    "  cachedChoose _ = 41",
+    "export cached : Int",
+    "cached = cachedChoose ()",
+  ]
+  let sink = beginMethodReturnTrace ()
+  let (report, _) =
+    checkModulesChainReportFor
+      (traced sink)
+      False
+      (Some (991, 997))
+      "method-return-identity-cache"
+      [Some "stable-method-return-prefix-v1", None]
+      []
+      (desugar (parse numericPreludeSource))
+      [
+        ("return_cache_prefix", desugar (parseLocated prefix)),
+        ("return_cache_entry", desugar (parseLocated entrySource)),
+      ]
+  let stages =
+    map
+      (entry => entry.mrtStage)
+      (filter
+        (entry => entry.mrtMethod == "cachedChoose")
+        (finishMethodReturnTrace sink (reportEvidence report)))
+  (modErrorCount report.trDiagnostics, stages)
+
+test "ordinary return traces are fresh while cache hits replay no events" =
+  let first = freshMethodReturnStages "return_fresh"
+  let (failedErrors, _) = checkOneDiags defaultDriveInputs [] [] (
+    "return_failed",
+    desugar (parseLocated "value : Int\nvalue = \"wrong\"\n"),
+  )
+  let afterFailure = freshMethodReturnStages "return_fresh"
+  let success = "import return_cache_prefix.{cached}\nentry = cached\n"
+  let cold = cachedMethodReturnObserved success
+  let hit = cachedMethodReturnObserved success
+  let failedHit = cachedMethodReturnObserved "entry : Int\nentry = \"wrong\"\n"
+  let afterFailedHit = cachedMethodReturnObserved success
+  expectEach [
+    (
+      "first's stages are Produced, Checked, Stamped",
+      expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
+    ),
+    ("first == afterFailure", expectEqual first afterFailure),
+    (
+      "a failing declaration produces at least one error",
+      expectGreaterThan 0 (listLen failedErrors),
+    ),
+    (
+      "cold is a fresh 0-error trace",
+      expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
+    ),
+    ("hit is a fresh 0-error trace with no stages", expectEqual (0, []) hit),
+    (
+      "the failed hit records its own error and no stages",
+      expectEach [
+        ("fst failedHit > 0", expectGreaterThan 0 (fst failedHit)),
+        ("snd failedHit == []", expectEqual [] (snd failedHit)),
+      ],
+    ),
+    (
+      "afterFailedHit is a fresh 0-error trace",
+      expectEqual (0, []) afterFailedHit,
+    ),
+  ]
+
+data ReturnMemoRequestView = ReturnMemoRequestView {
+  rmrvModules : List (String, List (String, String), List (String, String)),
+  rmrvReturns : List MethodReturnMemoView,
+  rmrvServed : Int,
+} deriving (Eq, Debug)
+
+returnMemoModuleView : ModDiags ->
+  (String, List (String, String), List (String, String))
+returnMemoModuleView (moduleId, (schemes, errors, warnings)) = (
+  moduleId,
+  map (entry => (fst entry, ppScheme (snd entry).psScheme)) schemes,
+  map (diag => (tcCode diag, tcMsg diag)) (errors ++ warnings),
+)
+
+returnMemoRelevant : MethodReturnMemoView -> Bool
+returnMemoRelevant view =
+  view.mrmvMethod == "cachedChoose" || view.mrmvMethod == "hidden"
+
+returnMemoPrefix : Bool -> String
+returnMemoPrefix useBool =
+  let head = if useBool then "Bool" else "Int"
+  let value = if useBool then "True" else "41"
+  joinNl [
+    "export interface Need a where",
+    "  need : a -> Int",
+    "impl Need \{head} where",
+    "  need _ = 1",
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice \{head} requires Need \{head} where",
+    "  cachedChoose _ = \{value}",
+    "export cached : \{head}",
+    "cached = cachedChoose ()",
+    "export interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "export useHidden : Hidden a b => b -> a",
+    "useHidden witness = hidden ()",
+  ]
+
+returnMemoEntry : String
+returnMemoEntry =
+  "import return_memo_prefix.{cached, useHidden}\nentry = cached\n"
+
+returnMemoConflictPrefix : String
+returnMemoConflictPrefix = joinNl [
+  returnMemoPrefix False,
+  "impl CachedChoice Int requires Need Int where",
+  "  cachedChoose _ = 99",
+]
+
+returnMemoObserved : String -> String -> String -> ReturnMemoRequestView
+returnMemoObserved prefixSource entrySource stepKey =
+  fst (returnMemoObservedGraph prefixSource entrySource stepKey)
+
+returnMemoObservedGraph : String ->
+  String ->
+  String ->
+  (ReturnMemoRequestView, GraphCtx)
+returnMemoObservedGraph prefixSource entrySource stepKey =
+  let ((report, outputs), gctx) =
+    checkModulesChainReportForGraph
+      (chainArgs
+        defaultDriveInputs
+        noValueMain
+        (Some (1091, 1093))
+        "method-return-request-fence"
+        [Some stepKey, None]
+        []
+        (desugar (parse numericPreludeSource))
+        [
+          ("return_memo_prefix", desugar (parseLocated prefixSource)),
+          ("return_memo_entry", desugar (parseLocated entrySource)),
+        ])
+  (
+    ReturnMemoRequestView {
+      rmrvModules = map returnMemoModuleView report.trDiagnostics,
+      rmrvReturns =
+        filter returnMemoRelevant (methodReturnMemoCurrentViews gctx),
+      rmrvServed = outputs.doServedModules,
+    },
+    gctx,
+  )
+
+returnMemoErrorCount : ReturnMemoRequestView -> Int
+returnMemoErrorCount view = returnMemoErrorCountRows view.rmrvModules
+
+returnMemoErrorCountRows : List (String, List (String, String), List (String, String)) ->
+  Int
+returnMemoErrorCountRows [] = 0
+returnMemoErrorCountRows ((_, _, diagnostics) :: rest) =
+  listLen diagnostics + returnMemoErrorCountRows rest
+
+returnMemoMethod : String ->
+  ReturnMemoRequestView ->
+  Option MethodReturnMemoView
+returnMemoMethod method view =
+  match filter (entry => entry.mrmvMethod == method) view.rmrvReturns
+    entry :: _ => Some entry
+    [] => None
+
+test "a served prefix reports as the checked one across requests" =
+  let pSource = returnMemoPrefix False
+  let changedSource = returnMemoPrefix True
+  let cold = returnMemoObserved pSource returnMemoEntry pSource
+  let hit = returnMemoObserved pSource returnMemoEntry pSource
+  let failed =
+    returnMemoObserved pSource "entry : Int\nentry = \"wrong\"\n" pSource
+  let afterFailed = returnMemoObserved pSource returnMemoEntry pSource
+  let conflict =
+    returnMemoObserved
+      returnMemoConflictPrefix
+      returnMemoEntry
+      returnMemoConflictPrefix
+  let afterConflict = returnMemoObserved pSource returnMemoEntry pSource
+  let changed = returnMemoObserved changedSource returnMemoEntry changedSource
+  let backToP = returnMemoObserved pSource returnMemoEntry pSource
+  let forcedStale = returnMemoObserved changedSource returnMemoEntry pSource
+  let coldInstance = returnMemoMethod "cachedChoose" cold
+  let changedInstance = returnMemoMethod "cachedChoose" changed
+  let coldGiven = returnMemoMethod "hidden" cold
+  let instancesDiffer = match (coldInstance, changedInstance)
+    (Some before, Some after) => expectEach [
+      (
+        "the cold request recorded an instance",
+        expectEqual "instance" before.mrmvOutcome,
+      ),
+      (
+        "the changed request recorded an instance",
+        expectEqual "instance" after.mrmvOutcome,
+      ),
+      (
+        "the cold instance's prerequisite is Need Int",
+        expectEqual
+          [("return_memo_prefix::Need", ["Int"])]
+          before.mrmvPrerequisites,
+      ),
+      (
+        "the changed instance's prerequisite is Need Bool",
+        expectEqual
+          [("return_memo_prefix::Need", ["Bool"])]
+          after.mrmvPrerequisites,
+      ),
+      (
+        "the cold instance published its evidence",
+        expectNotEqual "unpublished" before.mrmvEvidence,
+      ),
+      (
+        "the changed instance published its evidence",
+        expectNotEqual "unpublished" after.mrmvEvidence,
+      ),
+      (
+        "the two instances rest on different evidence",
+        expectNotEqual before.mrmvEvidence after.mrmvEvidence,
+      ),
+    ]
+    _ => fail "expected both requests to record a cachedChoose memo"
+  let givenMemo = match coldGiven
+    Some given => expectEach [
+      (
+        "the given memo's method arguments are a, a",
+        expectEqual (Some ["a", "a"]) given.mrmvArguments,
+      ),
+      (
+        "it was resolved as a given, not an instance",
+        expectEqual "given" given.mrmvOutcome,
+      ),
+      ("it carries no prerequisites", expectEqual [] given.mrmvPrerequisites),
+      (
+        "it published its evidence",
+        expectNotEqual "unpublished" given.mrmvEvidence,
+      ),
+    ]
+    _ => fail "expected a return memo for the given method 'hidden'"
+  expectEach [
+    ("cold has no errors", expectEqual 0 (returnMemoErrorCount cold)),
+    ("cold checked the prefix", expectEqual 0 cold.rmrvServed),
+    ("hit served the prefix", expectEqual 1 hit.rmrvServed),
+    ("cold == hit", expectEqual cold.rmrvModules hit.rmrvModules),
+    (
+      "cold == afterFailed",
+      expectEqual cold.rmrvModules afterFailed.rmrvModules,
+    ),
+    (
+      "cold == afterConflict",
+      expectEqual cold.rmrvModules afterConflict.rmrvModules,
+    ),
+    ("cold == backToP", expectEqual cold.rmrvModules backToP.rmrvModules),
+    (
+      "a failing entry produces at least one error",
+      expectGreaterThan 0 (returnMemoErrorCount failed),
+    ),
+    (
+      "a conflicting prefix produces at least one error",
+      expectGreaterThan 0 (returnMemoErrorCount conflict),
+    ),
+    (
+      "the changed request re-derives with no errors",
+      expectEach [
+        ("changed /= cold", expectNotEqual cold changed),
+        (
+          "returnMemoErrorCount changed == 0",
+          expectEqual 0 (returnMemoErrorCount changed),
+        ),
+      ],
+    ),
+    (
+      "a reused step key over changed impl heads re-derives, because the chain key fingerprints instance heads",
+      expectEqual changed forcedStale,
+    ),
+    (
+      "cold and changed instances have distinct prerequisites and evidence",
+      instancesDiffer,
+    ),
+    (
+      "the given memo carries the expected arguments and no prerequisites",
+      givenMemo,
+    ),
+  ]
+
+-- #2095: production-path observation of `evidenceObservation`'s
+-- entries, one program per family the mission asks for. `elaborateOne`'s two-
+-- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
+-- numeric prelude so `intToString` and friends are the same environment those
+-- tests already exercise.
+evidenceObservationTrace : String -> List EvidenceObservationEntry
+evidenceObservationTrace source =
+  let sink = beginEvidenceObservation ()
+  let _ = elaborateOne (traced sink) [] (desugar (parse numericPreludeSource)) (
+    "evidence_observation",
+    desugar (parseLocated source),
+  )
+  finishEvidenceObservation sink
+
+evidenceEntriesWithPredicate : String ->
+  List EvidenceObservationEntry ->
+  List EvidenceObservationEntry
+evidenceEntriesWithPredicate pred = filter (e => e.eoePredicate == Some pred)
+
+scopeOrdinal : ScopeId -> Int
+scopeOrdinal (ScopeId n) = n
+
+-- The comparison the pin below is built on: outcome, instance identity,
+-- prerequisite identities, and binder scope, exactly the four the mission's
+-- mutation checks name. Correct on the real entry; each mutation test shows it
+-- FALSE on one deliberately wrong field.
+evidenceEntryMatches : (EvidenceOutcomeKind, Option String, List String, Int) ->
+  EvidenceObservationEntry ->
+  Bool
+evidenceEntryMatches (outcome, instanceKey, prerequisites, scopeN) e =
+  e.eoeOutcome == outcome
+    && e.eoeInstanceKey == instanceKey
+    && e.eoePrerequisites == prerequisites
+    && scopeOrdinal e.eoeScope == scopeN
+
+test "a nested constrained call forwards the enclosing given (#2095 given forwarding)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface Give a where",
+        "  give : Unit -> a",
+        "callGive : Give a => Unit -> a",
+        "callGive _ = give ()",
+        "useGive : Give a => Unit -> a",
+        "useGive _ = callGive ()",
+      ])
+  let forwarded = evidenceEntriesOfKind "GKDictApp" trace
+  expectTrue (match forwarded
+    [e] =>
+      e.eoeOutcome == EOKGiven
+        && e.eoeGivenBinder == Some "$dict_useGive_0"
+        && e.eoeArity == 1
+    _ => False)
+
+test "a construction goal packs its prerequisite into the instance route (#2095 instance + prerequisites)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "topCall : Build a => Unit -> a",
+        "topCall _ = make ()",
+        "useTop : Box Int",
+        "useTop = topCall ()",
+      ])
+  let constructed = evidenceEntriesWithPredicate "Box Int" trace
+  expectTrue (match constructed
+    [e] =>
+      e.eoeOutcome == EOKInstance
+        && e.eoeInstanceKey
+          == Some "evidence_observation::Build|(evidence_observation.Box a)|"
+        && e.eoePrerequisites == ["RKey evidence_observation::Need|Int|"]
+    _ => False)
+
+test "the construction goal's pin is sensitive to identity, prerequisites, and scope (#2095 mutation)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "topCall : Build a => Unit -> a",
+        "topCall _ = make ()",
+        "useTop : Box Int",
+        "useTop = topCall ()",
+      ])
+  match evidenceEntriesWithPredicate "Box Int" trace
+    [e] =>
+      let scopeN = scopeOrdinal e.eoeScope
+      expectAll [
+        expectTrue
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "SomethingElse",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              [],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN + 1,
+            )
+            e),
+      ]
+    _ => fail "expected exactly one Box Int construction goal"
+
+-- The super `A Int` takes no slot of its own: it is solved at this same goal and
+-- carried inside the `B Int` dictionary (#993), which `dict_semantics_ir` pins as the
+-- constant's super segment.
+test "a super at an instance construction goal rides inside that goal's one slot (#2095, #993, DICT §3 construction)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface A a where",
+        "  m1 : a -> Int",
+        "interface B a requires A a where",
+        "  m2 : a -> Int",
+        "impl A Int where",
+        "  m1 _ = 1",
+        "impl B Int where",
+        "  m2 _ = 2",
+        "callB : B a => a -> Int",
+        "callB x = m2 x",
+        "useB : Int",
+        "useB = callB 5",
+      ])
+  let slots = evidenceEntriesOfKind "GKDictApp" trace
+  expectAll [
+    expectEqual 1 (listLen slots),
+    expectTrue
+      (all
+        (e =>
+          e.eoeArity == 1
+            && e.eoeOutcome == EOKInstance
+            && e.eoeInstanceKey == Some "evidence_observation::B|Int|")
+        slots),
+  ]
+
+test "a default body's sibling call is answered by the body's receiver (#2095)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface Sz a where",
+        "  sib : a -> Int",
+        "  sz : a -> String",
+        "  sz x = \"sz=\" ++ intToString (sib x)",
+        "impl Sz Int where",
+        "  sib x = x",
+      ])
+  let abstractSibling = evidenceEntriesWithPredicate "a" trace
+  expectEqual
+    [(EOKGiven, Some "$self_sz")]
+    (map (e => (e.eoeOutcome, e.eoeGivenBinder)) abstractSibling)
+
+-- A drain finding is live when its span is a live goal's.  Goals built after a
+-- drain (`pushArithGoal` and its siblings) carry no location, so an unlocated live
+-- goal must not make every unlocated finding live.
+test "an unlocated drain finding is never live, even beside an unlocated live goal" =
+  let at = Some (Loc "m.mdk" 3 4 3 9)
+  let live = omFromNames (spanKeys [None, at]) omEmpty
+  expectAll [
+    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
+    expectFalse (isLiveSpan live None),
+    expectTrue (isLiveSpan live at),
+    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
+  ]
+
+-- Exports a ground value, a declared-context binding and an inferred-context
+-- binding, so the published context rides three routes.
+accPrefix : Bool -> String
+accPrefix useBool =
+  let head = if useBool then "Bool" else "Int"
+  let value = if useBool then "True" else "41"
+  joinNl [
+    "export interface Need a where",
+    "  need : a -> Int",
+    "impl Need \{head} where",
+    "  need _ = 1",
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice \{head} requires Need \{head} where",
+    "  cachedChoose _ = \{value}",
+    "export cached : \{head}",
+    "cached = cachedChoose ()",
+    "export interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "export useHidden : Hidden a b => b -> a",
+    "useHidden witness = hidden ()",
+    "export useNeed x = need x",
+    "export useLocal : Need a => a -> Int",
+    "useLocal x =",
+    "  let g y = need y",
+    "  g x",
+  ]
+
+accEntry : String
+accEntry = "import acc_prefix.{cached, useHidden, useNeed}\nentry = cached\n"
+
+accConflict : String
+accConflict = joinNl [
+  accPrefix False,
+  "impl CachedChoice Int requires Need Int where",
+  "  cachedChoose _ = 99",
+]
+
+-- (the keyed chain's report, method-return views taken right after the drive)
+accDrive : String ->
+  String ->
+  String ->
+  String ->
+  (TcReport, List MethodReturnMemoView)
+accDrive chainKey prefixSource entrySource stepKey =
+  let (report, views, _) =
+    accDriveServed chainKey prefixSource entrySource stepKey
+  (report, views)
+
+-- `accDrive` beside the number of modules the drive served.
+accDriveServed : String ->
+  String ->
+  String ->
+  String ->
+  (TcReport, List MethodReturnMemoView, Int)
+accDriveServed chainKey prefixSource entrySource stepKey =
+  let ((report, outputs), gctx) =
+    checkModulesChainReportForGraph
+      (chainArgs
+        defaultDriveInputs
+        False
+        (Some (4053, 4055))
+        chainKey
+        [Some stepKey, None]
+        []
+        (desugar (parse numericPreludeSource))
+        [
+          ("acc_prefix", desugar (parseLocated prefixSource)),
+          ("acc_entry", desugar (parseLocated entrySource)),
+        ])
+  (report, methodReturnMemoCurrentViews gctx, outputs.doServedModules)
+
+-- Schemes WITH their context, diagnostics, the memo views, and the checked
+-- program's evidence and dispositions, rendered at the moment of the call.
+accRender : (TcReport, List MethodReturnMemoView) -> List String
+accRender (r, views) =
+  flatMap accRenderMod r.trDiagnostics
+    ++ map debug views
+    ++ accRenderChecked r.trChecked
+
+accRenderMod : ModDiags -> List String
+accRenderMod (mid, (ss, errs, warns)) =
+  ["module \{mid}"]
+    ++ rendered ss
+    ++ map (d => "diag \{tcCode d}: \{tcMsg d}") (errs ++ warns)
+
+-- Each module's schemes and diagnostics alone: what a served module reports as
+-- the checked one does.  Its evidence cells are not carried, so the checked
+-- program's evidence differs.
+accRenderRows : (TcReport, List MethodReturnMemoView) -> List String
+accRenderRows (r, _) = flatMap accRenderMod r.trDiagnostics
+
+accLinks : (TcReport, List MethodReturnMemoView) -> Int
+accLinks (r, _) =
+  fold
+    (acc (_, (ss, _, _)) =>
+      acc + fold (a e => a + linkCount (snd e).psScheme) 0 ss)
+    0
+    r.trDiagnostics
+
+data QKind = QKind String (Unit -> Int)
+
+accQs : List QKind
+accQs = [
+  QKind "clean" (_ =>
+    let _ = accDrive "acc-q" (accPrefix False) "entry = 1\n" (accPrefix False)
+    0),
+  QKind "failing" (_ =>
+    let _ =
+      accDrive
+        "acc-q"
+        (accPrefix False)
+        "entry : Int\nentry = \"wrong\"\n"
+        (accPrefix False)
+    0),
+  QKind "conflicting" (_ =>
+    let _ = accDrive "acc-q" accConflict accEntry accConflict
+    0),
+  QKind "keyed hit over a ground prefix" (_ =>
+    let (_, _, served) =
+      accDriveServed "acc-p" (accPrefix False) accEntry (accPrefix False)
+    served),
+  QKind "keyed miss" (_ =>
+    let _ = accDrive "acc-p" (accPrefix True) accEntry (accPrefix True)
+    0),
+]
+
+accCheck : QKind -> (String, Expectation)
+accCheck (QKind name run) =
+  let pSrc2 = accPrefix False
+  let coldDrive = accDrive "acc-cold-\{name}" pSrc2 accEntry "cold-\{name}"
+  let cold = accRender coldDrive
+  let held = accDrive "acc-p" pSrc2 accEntry pSrc2
+  let heldBefore = accRender held
+  let steps = run ()
+  let after = accRender held
+  let warm = accDrive "acc-p" pSrc2 accEntry pSrc2
+  let recold = accDrive "acc-recold-\{name}" pSrc2 accEntry "recold-\{name}"
+  let hitRetained =
+    if name == "keyed hit over a ground prefix" then
+      expectGreaterThan 0 steps
+    else
+      pass
+  (
+    name,
+    expectEach [
+      ("held P renders as it did", expectEqual heldBefore after),
+      (
+        "re-driven P equals cold P",
+        expectEqual (accRenderRows coldDrive) (accRenderRows warm),
+      ),
+      (
+        "P carries an inferred context",
+        expectEqual
+          ["useNeed : Need a => a -> Int"]
+          (filter (== "useNeed : Need a => a -> Int") cold),
+      ),
+      (
+        "a second cold P, after Q, names its local binders as the first did",
+        expectEqual cold (accRender recold),
+      ),
+      ("a hit really served P", hitRetained),
+      ("held P publishes no Link", expectEqual 0 (accLinks held)),
+      (
+        "cold P is checked",
+        expectEqual ["checked"] (filter (== "checked") cold),
+      ),
+      (
+        "cold P has evidence and dispositions",
+        expectEqual
+          (True, True)
+          (
+            not (isEmpty (filter (startsWith "ev ") cold)),
+            not (isEmpty (filter (startsWith "disp ") cold)),
+          ),
+      ),
+    ],
+  )
+
+test "P -> Q -> P: P rendered after Q equals cold P, for every kind of Q" =
+  expectEach (map accCheck accQs)
+
+test "the keyed chain's report: withheld on an ill-typed graph, checked on a clean one" =
+  let pSrc2 = accPrefix False
+  let (bad, _) =
+    accDrive "acc-chain-bad" pSrc2 "entry : Int\nentry = \"wrong\"\n" pSrc2
+  let (good, _) = accDrive "acc-chain-good" pSrc2 accEntry pSrc2
+  expectEach [
+    ("ill-typed: withheld", expectTrue (isNone bad.trChecked)),
+    ("clean: checked", expectTrue (isSome good.trChecked)),
+  ]
+
+-- The same-module variant: the instance sits in the prefix module whose own step
+-- key changes, so its step misses.  This is a different case from the one above.
+test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
+  let noInst = joinNl [
+    "export interface Speak a where",
+    "  speak : a -> String",
+    "export useSpeak x = speak x",
+  ]
+  let withInst = joinNl [noInst, "impl Speak Int where", "  speak _ = \"int\""]
+  let entry = "import acc_prefix.{useSpeak}\nentry = useSpeak 1\n"
+  let _ = accDrive "acc-inst" noInst entry noInst
+  let warm = accRender (accDrive "acc-inst" withInst entry withInst)
+  let _ = accDrive "acc-inst-other" (accPrefix False) accEntry (accPrefix False)
+  let cold = accRender (accDrive "acc-inst-cold" withInst entry withInst)
+  expectEqual cold warm
+
+localName : Route -> Option String
+localName (RLocal s []) = Some s
+localName _ = None
+
+test "stampRoutes makes each queued route a local route that keeps its mangled symbol" =
+  let a = Ref (RLocal "f$m" [RDict "d"])
+  let b = Ref RNone
+  stampRoutes [a, b]
+  expectEqual [Some "f$m", Some ""] [localName a.value, localName b.value]
+
+test "stampMethodArities writes the arity into every queued cell" =
+  let a = Ref None
+  let b = Ref (Some 9)
+  stampMethodArities [a, b] 2
+  expectEqual [Some 2, Some 2] [a.value, b.value]
+
+makeable : String
+makeable = joinNl [
+  "interface Make a where",
+  "  make : Unit -> a",
+  "impl Make Int where",
+  "  make _ = 1",
+  "impl Make Bool where",
+  "  make _ = True",
+  "interface Sz a where",
+  "  sz : a -> Int",
+  "impl Sz Int where",
+  "  sz _ = 1",
+  "impl Sz Bool where",
+  "  sz _ = 2",
+]
+
+test "a return-position method is routed to the instance its annotation selects" = expectAll
+  [
+    expectChecks (joinNl [makeable, "f : Int", "f = make ()"]),
+    expectEqual
+      (routeWordsOf (joinNl [makeable, "f : Int", "f = make ()"]))
+      (routeWordsOf (joinNl [makeable, "g : Int", "g = make ()"])),
+    expectNotEqual
+      (routeWordsOf (joinNl [makeable, "f : Int", "f = make ()"]))
+      (routeWordsOf (joinNl [makeable, "f : Bool", "f = make ()"])),
+  ]
+
+test "a return-position goal that two instances answer is an ambiguous instance" =
+  expectRejectedWith
+    ["T-AMBIGUOUS-INSTANCE"]
+    (joinNl [makeable, "f : Int", "f = sz (make ())"])
+
+test "a return-position goal is settled by the one instance a consumer allows" =
+  expectChecks
+    (joinNl [
+      "interface Make a where",
+      "  make : Unit -> a",
+      "impl Make Int where",
+      "  make _ = 1",
+      "impl Make Bool where",
+      "  make _ = True",
+      "interface Sz a where",
+      "  sz : a -> Int",
+      "impl Sz Int where",
+      "  sz _ = 1",
+      "f : Int",
+      "f = sz (make ())",
+    ])
+
+numeric : String
+numeric = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt n = n",
+  "data N = N Int",
+  "impl Num N where",
+  "  fromInt n = N n",
+]
+
+-- The binding of [name] at type [ty] to the integer literal [value].
+literalAt : String -> String -> Int -> String
+literalAt name ty value =
+  joinNl ["\{name} : \{ty}", "\{name} = \{intToString value}"]
+
+test "an integer literal is routed to the Num instance of the type it is used at" = expectAll
+  [
+    expectEqual
+      (routeWordsOver numeric (literalAt "y" "N" 1))
+      (routeWordsOver numeric (literalAt "z" "N" 2)),
+    expectNotEqual
+      (routeWordsOver numeric (literalAt "y" "N" 1))
+      (routeWordsOver numeric (literalAt "y" "Int" 1)),
+  ]
+
+test "an integer literal at a type with no Num instance is a type mismatch" =
+  expectEqual
+    ["T-TYPE-MISMATCH"]
+    (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))

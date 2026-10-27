@@ -1,0 +1,248 @@
+-- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
+-- solver through one whole check of a parsed source: its diagnostics and their codes, the
+-- route words it stamps, the schemes it publishes, the evidence and disposition it keeps.
+-- It imports `types.typecheck`, so the solver siblings (`tc_solve_givens_test`,
+-- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`), which sit below it, do
+-- not import it; they build their inputs from `tc_test_support`.  No production module
+-- imports this file.
+
+import list.{sort, filter, sortOn, indexed}
+import test.{Expectation, expectEqual}
+import frontend.ast.{
+  EvEntry(..), EvVal(..), Route(..), TyConOrigin(..), EvId(..), Loc(..)
+}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import support.util.{joinNl, listLen}
+import string.{join}
+import types.tc_types.{
+  DriveInputs(..), EvidenceObservationEntry(..), TraceSink,
+  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..),
+  ElabFacts(..)
+}
+import types.typecheck.{
+  ModDiags, checkOneDiags, defaultDriveInputs, elaborateModules, tcCode, tcMsg,
+  checkOneSchemeFullK
+}
+import types.repr.{Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..)}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), Effvar(..), Atom(..), EffLabel(..)}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.publish.{
+  PubScheme(..), VarKind(..), LiveCell(..), ppPubScheme, TcReport(..),
+  CheckedProgram(..), EntryOutcome(..), PartialAnalysis(..), ModDiags,
+  TcDiag(..)
+}
+import types.disposition.{
+  MethodDisposition(..), dispositionRows, dispositionKey, dispositionInstance,
+  dispositionMethod, dispositionIface
+}
+import types.evidence_coverage.{EvShape(..)}
+import types.capability_manifest.{
+  EntryKey(..), ManifestRequest(..), ManifestSelector(..),
+  InvocationProtocol(..), ManifestLookup(..), FrozenAuthority(..)
+}
+import types.effect_invocation.{InvocationOps(..)}
+
+-- The diagnostics of one check of [src] as the only module, with no stdlib and no profile.
+export
+checkDiags : String -> List (String, String)
+checkDiags = checkDiagsOver ""
+
+-- The diagnostics of one check of [src] over the core declarations [core] (a miniature
+-- prelude; "" is none).
+export
+checkDiagsOver : String -> String -> List (String, String)
+checkDiagsOver core src =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar (parse core)) (
+    "probe",
+    desugar (parseLocated src),
+  )
+  map (d => (tcCode d, tcMsg d)) errors
+
+-- The codes of [checkDiags], in report order.
+export
+checkCodes : String -> List String
+checkCodes src = map fst (checkDiags src)
+
+-- [src] checks with no diagnostic.
+export
+expectChecks : String -> Expectation
+expectChecks src = expectEqual [] (checkCodes src)
+
+-- [src] is rejected with the codes [expected], in report order.
+export
+expectRejectedWith : List String -> String -> Expectation
+expectRejectedWith expected src = expectEqual expected (checkCodes src)
+
+-- The route words the solver stamped for [src] as the only module, sorted: every dictionary
+-- key a site or an instance prerequisite resolved to, with the dictionary variables and
+-- local abstractions it forwards.  A source that does not check has the words of whatever
+-- the drive still stamped, so a test that reads them also asserts the check is clean.
+export
+routeWordsOf : String -> List String
+routeWordsOf = routeWordsOver ""
+
+-- [routeWordsOf] over the core declarations [core] (a miniature prelude).
+export
+routeWordsOver : String -> String -> List String
+routeWordsOver core src =
+  let (_, _, _, _, evidence, _, _) = elaborateModules
+    defaultDriveInputs
+    []
+    (desugar (parse core))
+    [("probe", desugar (parseLocated src))]
+  sort (flatMap evidenceWords evidence)
+
+evidenceWords : EvEntry -> List String
+evidenceWords (EvEntry _ val) = match val
+  EvOne r => routeWords r
+  EvMany rs => flatMap routeWords rs
+  EvMethod _ _ r pre post => routeWords r ++ flatMap routeWords (pre ++ post)
+  EvLit _ r => routeWords r
+  EvHead _ => []
+
+routeWords : Route -> List String
+routeWords RNone = []
+routeWords (RKey word a b) = word :: flatMap routeWords (a ++ b)
+routeWords (RDict name) = ["dict:\{name}"]
+routeWords (RDictFwd name) = ["dictfwd:\{name}"]
+routeWords (RLocal name rs) = "local:\{name}" :: flatMap routeWords rs
+routeWords (RScalar name) = ["scalar:\{name}"]
+routeWords (RProj r path) = routeWords r
+
+-- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
+-- profile, the sink as the trace.
+export
+traced : TraceSink -> DriveInputs
+traced sink = { defaultDriveInputs | diTrace = Some sink }
+
+export
+numericPreludeSource : String
+numericPreludeSource = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt n = n",
+]
+
+export
+absentReturnSource : Bool -> Bool -> String
+absentReturnSource reverseImpls ambient =
+  let charImpl = joinNl [
+    "impl Hidden Int Char where",
+    "  hidden _ = 22",
+  ]
+  let boolImpl = joinNl [
+    "impl Hidden Int Bool where",
+    "  hidden _ = 12",
+  ]
+  let impls =
+    if reverseImpls then [boolImpl, charImpl] else [charImpl, boolImpl]
+  joinNl
+    ([
+        "interface Hidden a b where",
+        "  hidden : Unit -> a",
+      ]
+      ++ impls
+      ++ (if ambient then
+        [
+          "useHidden : Hidden a b => b -> a",
+          "useHidden witness = hidden ()",
+          "value : Int",
+          "value = useHidden True : Int",
+        ]
+      else
+        [
+          "value : Int",
+          "value = hidden ()",
+        ]))
+
+export
+modErrorCount : List ModDiags -> Int
+modErrorCount [] = 0
+modErrorCount ((_, (_, errors, _)) :: rest) =
+  listLen errors + modErrorCount rest
+
+export
+evidenceEntriesOfKind : String ->
+  List EvidenceObservationEntry ->
+  List EvidenceObservationEntry
+evidenceEntriesOfKind kind = filter (e => e.eoeGoalKind == kind)
+
+export
+drive : String -> String -> List (String, PubScheme)
+drive mid src =
+  let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] [] (
+    mid,
+    desugar (parseLocated src),
+  )
+  own
+
+export
+rendered : List (String, PubScheme) -> List String
+rendered ss = map (e => "\{fst e} : \{ppPubScheme (snd e)}") ss
+
+export
+linkCount : Scheme -> Int
+linkCount (Forall _ _ _ _ _ t) = monoLinks t
+
+export
+monoLinks : Mono -> Int
+monoLinks (TVar cell) = match !cell
+  Link t2 => 1 + monoLinks t2
+  Unbound _ _ => 0
+monoLinks (TApp a b) = monoLinks a + monoLinks b
+monoLinks (TFun a _ b) = monoLinks a + monoLinks b
+monoLinks (TQual a _) = monoLinks a
+monoLinks _ = 0
+
+-- The evidence in ordinal order, each id replaced by its rank, then the
+-- disposition rows; `withheld` when there is no checked program.
+export
+accRenderChecked : Option CheckedProgram -> List String
+accRenderChecked None = ["withheld"]
+accRenderChecked (Some c) =
+  let ordered =
+    sortOn
+      (e => match e
+        EvEntry (EvId m i) _ => (m, i))
+      c.cpEvidence
+  "checked"
+    :: map
+        (ie => match ie
+          (rank, EvEntry _ v) => "ev \{debug rank} \{valText v}")
+        (indexed ordered)
+      ++ map dispositionText (dispositionRows c.cpDispositions)
+
+export
+dispositionText : MethodDisposition -> String
+dispositionText d =
+  let kind = match d
+    Supplied {  } => "supplied"
+    InheritedDefault {  } => "inherited"
+  let key = dispositionKey (dispositionInstance d) (dispositionMethod d)
+  "disp \{kind} \{(dispositionIface d).irName} \{key}"
+
+export
+routeText : Route -> String
+routeText RNone = "none"
+routeText (RKey w ds sups) = "key(\{w};\{routesText ds};\{routesText sups})"
+routeText (RDict d) = "dict(\{d})"
+routeText (RDictFwd d) = "fwd(\{d})"
+routeText (RLocal s ds) = "local(\{s};\{routesText ds})"
+routeText (RScalar s) = "scalar(\{s})"
+routeText (RProj r path) = "proj(\{routeText r};\{debug path})"
+
+export
+routesText : List Route -> String
+routesText rs = join "," (map routeText rs)
+
+export
+valText : EvVal -> String
+valText (EvOne r) = routeText r
+valText (EvMany rs) = routesText rs
+valText (EvMethod iface arity r impls meths) =
+  "\{iface}/\{debug arity} \{routeText r} \{routesText impls} \{routesText meths}"
+valText (EvLit f r) = "\{debug f} \{routeText r}"
+valText (EvHead h) = h

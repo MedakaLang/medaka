@@ -107,18 +107,13 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_solve_entail.mdk"
+rule = "rule-orelse-staircase"
+count = 2
+
+[[entry]]
 file = "compiler/types/tc_types.mdk"
 rule = "rule-clone-type"
-count = 2
-
-[[entry]]
-file = "compiler/types/typecheck.mdk"
-rule = "rule-clause-map"
-count = 2
-
-[[entry]]
-file = "compiler/types/typecheck.mdk"
-rule = "rule-orelse-staircase"
 count = 2
 
 [[entry]]

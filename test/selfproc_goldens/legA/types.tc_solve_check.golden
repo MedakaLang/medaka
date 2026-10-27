@@ -1,0 +1,152 @@
+absorbMeeting : Map Int Unit -> List (List Int) -> List (List Int) -> Bool -> (Map Int Unit, List (List Int), Bool)
+armNumGuard : GraphCtx -> NumGuard -> ArmedGuard
+bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
+bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
+callOblsWindow : ModuleCtx -> Int -> List (IfaceRef, List Mono, Option Loc)
+callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
+checkCallObligationsU : ModuleCtx -> Bool -> ImplUniverse -> List UObligation -> Unit
+checkEnteredReqs : SiteCtx -> ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+checkNestedReqs : SiteCtx -> ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+checkOneCallObligation : ModuleCtx -> Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+checkOneCallObligationNoImpl : ModuleCtx -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+checkReqObligations : SiteCtx -> ImplUniverse -> ReqWalk -> Option Loc -> ScopeId -> List (IfaceRef, List Mono) -> Unit
+checkReqOne : SiteCtx -> ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+checkSigVarGoal : ModuleCtx -> DeclaringBinder -> Map String Unit -> List (String, Ty, List (String, Mono)) -> UObligation -> Unit
+checkSigVarGoals : ModuleCtx -> DeclaringBinder -> Map String Unit -> List (String, Ty, List (String, Mono)) -> List UObligation -> Unit
+checkSurvivorDispatchMonos : ModuleCtx -> String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
+checkSurvivorObligations : ModuleCtx -> String -> String -> List String -> Ty -> List (String, Mono) -> List UObligation -> Option Loc -> Unit
+checkUndeterminedObligations : ModuleCtx -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
+connectClosure : Map Int Unit -> List (List Int) -> Map Int Unit
+connectedIds : GraphCtx -> Map Int Unit -> List UObligation -> Map Int Unit
+connectedTiedIds : GraphCtx -> List Int -> List Mono -> List UObligation -> List Int
+consumeExactReturnOutcome : ModuleCtx -> ImplUniverse -> MethodReturnRequest -> MethodReturnResolution -> Unit
+cslotKey : CSlot -> String
+cslotVecKey : (CSlot, List Mono) -> String
+declaredIfacesOn : String -> Ty -> List String
+declaredPredicateSlots : List (IfaceRef, List Mono) -> List (List Mono) -> List PredicateSlot
+dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)
+dedupPredicateSlotsTable : ModuleCtx -> Unit -> Unit
+dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
+defaultAbsentNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultAmbiguousNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Mono -> Unit
+defaultBodyLocalNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Unit
+defaultEachMemberWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultGroupNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultKeepsGoalsSatisfiable : ModuleCtx -> ArmedGuard -> Int -> Bool
+defaultLiveNumRoots : ModuleCtx -> Unit
+directInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+directInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+dispatchMonosOf : List String -> Ty -> Mono -> List Mono
+entailedByDeclared : ModuleCtx -> String -> String -> Ty -> Bool
+finalizeNumBoundary : DynCtx -> NumBoundary -> List Mono
+goalSatisfiable : ModuleCtx -> Map String Unit -> UObligation -> List Mono -> Bool
+goalSatisfiableAfterDefault : ModuleCtx -> ArmedGuard -> Int -> UObligation -> Bool
+groundNumVarsWith : DynCtx -> Option Int -> ArmedGuard -> List UObligation -> List Int -> Unit
+groundOrWithhold : DynCtx -> ArmedGuard -> Int -> Mono -> Unit
+guardsDefaulting : GraphCtx -> UObligation -> Bool
+handOffAbsentNumVars : ModuleCtx -> Int -> Mono -> List UObligation -> Unit
+hasVectorArgs : GraphCtx -> UObligation -> Bool
+idSetOf : List Int -> Map Int Unit -> Map Int Unit
+ifaceAtMonoId : Int -> List Mono -> List IfaceRef -> Option IfaceRef
+ifaceForConstraintId : ModuleCtx -> Int -> IfaceRef
+ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
+ifaceForInferredId : ModuleCtx -> String -> Int -> IfaceRef
+ifaceFromDictApps : Int -> List PendingDictApp -> IfaceRef
+ifaceSelfAndSupers : ModuleCtx -> String -> List String
+ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
+implGoalResiduals : SiteCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+inferredConstraintIds : ModuleCtx -> String -> List Int -> List Int
+inferredPredLead : (IfaceRef, Int, List Mono) -> Int
+inferredPredicatePair : (IfaceRef, Int, List Mono) -> List (CSlot, List Mono)
+inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
+inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
+inferredPredicateSlotProbeRow : Int -> Int -> Int -> PredicateSlot -> (String, List String, List String)
+inferredPredicateSlots : ModuleCtx -> String -> List Int -> List (IfaceRef, Int, List Mono) -> List PredicateSlot
+inferredPredicateSlotsGo : ModuleCtx -> String -> List Int -> Map String (List PredicateSlot) -> Map String Unit -> List PredicateSlot -> List PredicateSlot
+inferredPredicateSlotsProbe : ModuleCtx -> Unit -> List (String, List String, List String)
+inferredSlotBuckets : List PredicateSlot -> Map String (List PredicateSlot) -> Map String (List PredicateSlot)
+inferredSlotCoveredIds : List PredicateSlot -> Map String Unit -> Map String Unit
+keepBoundResidualPred : ModuleCtx -> List Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Int, List Mono)
+leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
+liveNumVarGo : Int -> List UObligation -> Option Mono
+localAbsParams : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> List String
+localAbsSlots : ModuleCtx -> String -> List Int -> Int -> Int -> List PredicateSlot
+localNumGuard : ModuleCtx -> List UObligation -> Int -> NumGuard
+lookupCtxKind : Loc -> List (Loc, JoinContext) -> Option JoinContext
+lookupIfaceById : Int -> List VecObl -> Option IfaceRef
+lookupSchemeIface : String -> Int -> List ((String, Int), List VecObl) -> Option IfaceRef
+maybeInferConstraint : ModuleCtx -> List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
+memberTiedSurvivors : ModuleCtx -> Mono -> List UObligation -> Int -> Map String Unit
+methodDictArityInClassEnv : ModuleCtx -> ClassEnv -> Int -> IfaceRef -> String -> Int
+noteNumericObligationChecked : GraphCtx -> UObligation -> List Mono -> Unit
+numConstrainedIds : List UObligation -> List Int
+numDefaultOwnerAllows : Option Int -> Mono -> Bool
+numObligIds : UObligation -> List Int
+numUnimplementableHead : Mono -> Bool
+numericPredicateTraceOn : GraphCtx -> Unit -> Bool
+numlitCtxKind : ModuleCtx -> Option Loc -> Option JoinContext
+numlitMismatchHint : ModuleCtx -> Option Loc -> List Mono -> String
+numlitMismatchMsg : ModuleCtx -> Option Loc -> List Mono -> String
+numlitMismatchPush : ModuleCtx -> List Mono -> Option Loc -> Unit
+numlitReframeLoc : ModuleCtx -> Option Loc -> Bool
+oblAsTuple : GraphCtx -> UObligation -> (IfaceRef, List Mono, Option Loc)
+oblCallVerdict : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Option Bool
+oblDispatchMonos : UObligation -> List Mono
+oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
+oblPredOf : GraphCtx -> UObligation -> List (IfaceRef, List Mono, Option Loc)
+predicateSlotFromExpanded : Map String PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
+predicateSlotTableWithoutArgs : List (a, List PredicateSlot) -> List (a, List PredicateSlot)
+predicateSlotView : PredicateSlot -> (CSlot, List Mono)
+predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
+predicateSlotsWithoutArgs : List PredicateSlot -> List PredicateSlot
+prependPredicateSlots : List PredicateSlot -> List PredicateSlot -> List PredicateSlot
+prerequisiteObligation : PrerequisiteEvidence -> (IfaceRef, List Mono)
+prerequisiteOnWalk : ModuleCtx -> ReqWalk -> UObligation -> List (UObligation, ReqWalk)
+registerAmbiguousConstraintsOwnedBy : ModuleCtx -> Int -> Option Int -> List UObligation -> List Mono -> Unit
+registerAmbiguousGo : ModuleCtx -> List UObligation -> Int -> List Int -> List Int -> Unit
+registerConstraintRegs : ModuleCtx -> List ConstraintReg -> Unit
+registerDispatchMonos : ModuleCtx -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Int -> List Int -> List Int -> Unit
+registerImplRequires : ModuleCtx -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List String -> List Require -> List ScopedImplMethod -> Unit
+registerInferredConstraints : ModuleCtx -> List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List ScopedScheme -> Unit
+registerInferredFor : ModuleCtx -> String -> ScopeId -> List Int -> List (IfaceRef, Int, List Mono) -> Unit
+registerLocalAbs : ModuleCtx -> String -> ScopeId -> Scheme -> Int -> Int -> Unit
+registerMember : ModuleCtx -> String -> ScopeId -> List (IfaceRef, List Mono) -> List (List Mono) -> Unit
+registerOneAmbiguous : ModuleCtx -> IfaceRef -> List String -> Ty -> Mono -> Option Loc -> ScopeId -> Int -> List Int -> List Int -> Unit
+registerPredicateSlotIds : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Unit
+registerReqSlots : ModuleCtx -> ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
+registersElementDict : ModuleCtx -> String -> List String -> Bool
+rejectUndeterminedVectors : ModuleCtx -> Map String Unit -> Map String Unit -> List UObligation -> List UObligation -> Unit
+rejectWithheldAmbiguity : ModuleCtx -> Map String Unit -> List Mono -> List UObligation -> Unit
+reportMixedGoalAmbiguity : ModuleCtx -> Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
+reportNumOrNoImpl : ModuleCtx -> String -> List Mono -> Option Loc -> Unit
+reportUndeterminedGoal : ModuleCtx -> Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
+reportUndeterminedNoImpl : ModuleCtx -> IfaceRef -> List Mono -> Option Loc -> Unit
+reqObligationsFor : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+reqWalkReported : ModuleCtx -> Option Loc -> ReqStep -> Option ReqWalk
+requiresCycleMsg : ModuleCtx -> IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
+requiresDepthMsg : IfaceRef -> List Mono -> String
+requiringImplLabel : ModuleCtx -> IfaceRef -> List Mono -> String
+residualBoundPreds : SiteCtx -> Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
+residualInferredPredOf : ModuleCtx -> List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+residualInferredPreds : ModuleCtx -> List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+residualMixedPred : ModuleCtx -> List Int -> IfaceRef -> List Mono -> List (IfaceRef, List Int, List Mono)
+residualPredsOf : SiteCtx -> List Int -> ReqWalk -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+residualRefutableNow : ModuleCtx -> IfaceRef -> List Mono -> Bool
+setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
+setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
+superCarriedResiduals : GraphCtx -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+superGoalEntered : ModuleCtx -> ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
+superGoalsEntered : ModuleCtx -> ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
+survivorNameOf : Mono -> List (String, Mono) -> Option String
+survivorNameOfId : Int -> List (String, Mono) -> Option String
+survivorObligationEntailed : ModuleCtx -> String -> List String -> String -> String -> Ty -> Bool
+tiedSurvivors : GraphCtx -> List Mono -> NumGuard -> Map String Unit -> Map String Unit
+undeterminedGoalExempt : ModuleCtx -> IfaceRef -> List Mono -> ScopeId -> Bool
+undeterminedNoImplMsg : GraphCtx -> String -> List Mono -> String
+undeterminedVectorVerdict : ModuleCtx -> Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
+unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
+unroutedGroundReqs : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+unroutedResidual : SiteCtx -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+verdictCandidates : ModuleCtx -> GoalWindow -> List Mono -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
+withheldGoals : GraphCtx -> List Mono -> List UObligation -> List UObligation
+withheldVectorVerdict : ModuleCtx -> Map String Unit -> GoalWindow -> UObligation -> Unit

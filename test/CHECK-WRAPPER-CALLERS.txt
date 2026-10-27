@@ -22,4 +22,5 @@ compiler/types/effect_authority_test.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/law_harness_test.mdk : checkOneDiags
 compiler/types/prop_contract_test.mdk : checkOneDiags
 compiler/types/publish_test.mdk : checkOneReportK,checkOneSchemeFullK
+compiler/types/tc_solve_test_support.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/typecheck_test.mdk : checkOneDiags,checkOneSchemeFullK

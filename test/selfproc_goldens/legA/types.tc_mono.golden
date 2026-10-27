@@ -1,3 +1,4 @@
+abstractSlotIds : List Mono -> List Int
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
@@ -43,6 +44,7 @@ concreteHeadVarIds : Mono -> List Int
 containerParamScalarArg : Mono -> Mono -> Option String
 containsI : Int -> List Int -> Bool
 declaredOblArgId : List Int -> Mono -> List Int
+declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 domainIsTupleOfArity : Mono -> Int -> Bool
@@ -128,6 +130,7 @@ nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
 nthMono : Int -> List Mono -> Option Mono
 nthTy : Int -> List Ty -> Option Ty
+oblArgKey : Mono -> String
 patVarsListTc : List Pat -> List String
 patVarsTc : Pat -> List String
 peelArrows : Int -> Mono -> List Mono
@@ -191,6 +194,7 @@ tySubsumesV : List Ty -> List Ty -> Bool
 tyVarNames : Ty -> List String
 tyvarId : Ref Tyvar -> Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
 walkMonoSame : Mono -> Mono -> Bool
 walkMonosSame : List Mono -> List Mono -> Bool
 xmodOblArgId : Mono -> List Int

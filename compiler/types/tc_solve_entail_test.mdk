@@ -1,0 +1,240 @@
+-- Tests of `types.tc_solve_entail`'s own API: the route walk's step judgment (`reqWalkEnter`:
+-- a goal already on the path is a cycle, a smaller goal is free, a goal that does not shrink
+-- spends the walk's fuel until it is exhausted), the head matching an instance is selected
+-- by (`positionBindings`, `repeatedBindings`, `paramMonoOf`, `goalHeadCon`,
+-- `goalIsProjection`), and the identity word of an instance row (`rowRouteKey`).  The
+-- judgment `P |- pi ~> e` through one whole check, and the property that a goal's route
+-- does not depend on the order its instances are declared in, are in `typecheck_test`.
+
+import types.tc_mono.{tconFrom, tconBuiltin}
+import list.{head, reverse}
+import test.{
+  expectAll,
+  expectFalse,
+  expectEqual,
+  expectNotEqual,
+  expectSatisfies,
+  expectTrue,
+  fail,
+  pass,
+}
+import frontend.ast.{Ty, TyConOrigin(..)}
+import frontend.parser.{parse}
+import support.util.{joinNl, splitOnChar}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..), ppMono}
+import types.tc_solve_entail.{
+  enteredGoalKey, goalHeadCon, goalIsProjection, paramMonoOf, positionBindings,
+  reqWalkEnter, reqWalkSeed, reqWalkStart, repeatedBindings, rowRouteKey
+}
+import types.tc_test_support.{ifaceOf, intM, sigsOf, varM}
+import types.tc_types.{ImplRow(..), InstRef(..), ReqStep(..), ReqWalk}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+boxOf : Mono -> Mono
+boxOf m = TApp (tconFrom (OriginModule "probe") "Box") m
+
+-- The memo bucket key of the goal a step entered: interface, size and fuel left.
+stepKey : ReqStep -> Option String
+stepKey (ReqOn walk) = Some (enteredGoalKey walk)
+stepKey _ = None
+
+-- The fuel left in a bucket key, the last field.
+fuelOf : String -> Option String
+fuelOf key = match reverse (splitOnChar '#' key)
+  fuel :: _ => Some fuel
+  [] => None
+
+-- The walk a step continues with, when it continues.
+onward : ReqStep -> Option ReqWalk
+onward (ReqOn walk) = Some walk
+onward _ = None
+
+-- The walk after entering each goal of [goals] in turn, or nothing as soon as a step stops.
+enterAll : ReqWalk -> List (IfaceRef, List Mono) -> Option ReqWalk
+enterAll walk [] = Some walk
+enterAll walk ((iface, args) :: rest) =
+  match onward (reqWalkEnter walk iface args)
+    Some next => enterAll next rest
+    None => None
+
+-- The head patterns of the types written in [src]'s signatures.
+headsOf : String -> List Ty
+headsOf src = sigsOf (parse src)
+
+rowOf : Int -> String -> String -> ImplRow
+rowOf ordinal iface src =
+  ImplRow
+    ordinal
+    (InstRef "probe" ordinal ordinal)
+    (ifaceOf iface)
+    (headsOf src)
+    []
+    []
+    None
+
+-- ── the route walk ────────────────────────────────────────────────────────
+
+test "a walk seeded with a goal reports that goal's interface with the full fuel" =
+  let key = enteredGoalKey (reqWalkSeed (ifaceOf "A") [intM])
+  expectAll [
+    expectEqual (Some "A") (head (splitOnChar '#' key)),
+    expectEqual (fuelOf (enteredGoalKey (reqWalkStart ()))) (fuelOf key),
+  ]
+
+test "the first goal entered on a walk with none is its seed, and costs no fuel" =
+  let start = reqWalkStart ()
+  expectEqual
+    (Some (enteredGoalKey (reqWalkSeed (ifaceOf "A") [intM])))
+    (stepKey (reqWalkEnter start (ifaceOf "A") [intM]))
+
+test "a goal already on the path is a cycle that names the goal it closes on" =
+  let seed = reqWalkSeed (ifaceOf "A") [intM]
+  match reqWalkEnter seed (ifaceOf "A") [intM]
+    ReqCycle parent parentArgs goal goalArgs =>
+      expectEqual
+        ("A", ["Int"], "A", ["Int"])
+        (parent.irName, map ppMono parentArgs, goal.irName, map ppMono goalArgs)
+    _ => fail "expected a cycle, got another step"
+
+test "the same arguments under another interface are a different goal, not a cycle" =
+  let seed = reqWalkSeed (ifaceOf "A") [intM]
+  expectTrue (isSome (onward (reqWalkEnter seed (ifaceOf "B") [intM])))
+
+test "a goal smaller than the one before it is entered without spending fuel" =
+  let seed = reqWalkSeed (ifaceOf "A") [boxOf intM]
+  expectEqual
+    (fuelOf (enteredGoalKey seed))
+    (stepKey (reqWalkEnter seed (ifaceOf "A") [intM]) |> flatMap fuelOf)
+
+test "a goal that does not shrink spends one unit of fuel" =
+  let seed = reqWalkSeed (ifaceOf "A") [intM]
+  expectEqual
+    (map (n => n - 1) (parseFuel (enteredGoalKey seed)))
+    (stepKey (reqWalkEnter seed (ifaceOf "B") [intM]) |> flatMap parseFuel)
+
+-- The goals `G0 .. G(n-1)` over one argument vector: none is smaller than the one before
+-- it, and no two are the same goal.
+flatGoals : Int -> List (IfaceRef, List Mono)
+flatGoals n
+  | n <= 0 = []
+  | otherwise =
+    flatGoals (n - 1) ++ [(ifaceOf "G\{intToString (n - 1)}", [intM])]
+
+test "a chain of goals that never shrink is cut off by a step that names the goal" =
+  expectTrue
+    (isDeep (firstStop (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 200)))
+
+firstStop : ReqWalk -> List (IfaceRef, List Mono) -> (Int, Option ReqStep)
+firstStop walk goals = firstStopGo 0 walk goals
+
+firstStopGo : Int ->
+  ReqWalk ->
+  List (IfaceRef, List Mono) ->
+  (Int, Option ReqStep)
+firstStopGo n _ [] = (n, None)
+firstStopGo n walk ((iface, args) :: rest) = match reqWalkEnter walk iface args
+  ReqOn next => firstStopGo (n + 1) next rest
+  stop => (n, Some stop)
+
+isDeep : (Int, Option ReqStep) -> Bool
+isDeep (_, Some (ReqDeep _ _)) = True
+isDeep _ = False
+
+test "the steps taken before the cut-off are the fuel the walk starts with" =
+  let (steps, _) =
+    firstStop (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 200)
+  expectEqual
+    (parseFuel (enteredGoalKey (reqWalkSeed (ifaceOf "Seed") [intM])))
+    (Some steps)
+
+parseFuel : String -> Option Int
+parseFuel key = fuelOf key |> flatMap stringToInt
+
+test "a goal that closes on the path is a cycle even when fuel is gone" =
+  match enterAll (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 20)
+    Some walk => match reqWalkEnter walk (ifaceOf "G3") [intM]
+      ReqCycle _ _ _ _ => pass
+      _ => fail "expected a cycle, got another step"
+    None => fail "expected a walk, got none"
+
+-- ── head matching ─────────────────────────────────────────────────────────
+
+test "a head variable binds the whole type at its position" =
+  expectEqual
+    (Some [("a", "Int")])
+    (map
+      (bs => map (b => (fst b, ppMono (snd b))) bs)
+      (positionBindings (headsOf "x : a") [intM] []))
+
+test "a head matches position by position and its bindings follow position order" =
+  expectEqual
+    (Some [("a", "Int"), ("b", "Bool")])
+    (map
+      (bs => map (b => (fst b, ppMono (snd b))) bs)
+      (positionBindings
+        (headsOf (joinNl ["x : a", "y : b"]))
+        [intM, tconBuiltin "Bool"]
+        []))
+
+test "a head and a goal of different lengths do not match" =
+  expectEqual
+    None
+    (map
+      (bs => map fst bs)
+      (positionBindings (headsOf "x : a") [intM, intM] []))
+
+test "a variable the head repeats pairs each later binding with its first" =
+  let pairs =
+    repeatedBindings
+      [
+        ("a", intM),
+        ("b", tconBuiltin "Bool"),
+        ("a", tconBuiltin "Bool"),
+        ("a", tconBuiltin "String"),
+      ]
+      []
+  expectEqual
+    [("Int", "Bool"), ("Int", "String")]
+    (map (p => (ppMono (fst p), ppMono (snd p))) pairs)
+
+test "a head that repeats nothing leaves nothing to equate" =
+  expectEqual
+    0
+    (length (repeatedBindings [("a", intM), ("b", tconBuiltin "Bool")] []))
+
+test "a type parameter the head did not bind reads as a rigid variable of that name" = expectAll
+  [
+    expectEqual "Int" (ppMono (paramMonoOf [("a", intM)] "a")),
+    expectEqual (ppMono (TRigid "b")) (ppMono (paramMonoOf [("a", intM)] "b")),
+  ]
+
+test "a goal is bucketed by the head of its first position" = expectAll [
+  expectEqual None (goalHeadCon []),
+  expectEqual None (goalHeadCon [varM 1]),
+  expectEqual (goalHeadCon [boxOf intM]) (goalHeadCon [boxOf (varM 2), intM]),
+  expectSatisfies "a head" isSome (goalHeadCon [intM]),
+]
+
+test "a goal with fewer positions than an instance head is a projection of a wider goal" =
+  let wide = rowOf 0 "A" (joinNl ["x : a", "y : b"])
+  expectAll [
+    expectTrue (goalIsProjection [intM] [wide]),
+    expectFalse (goalIsProjection [intM] [rowOf 1 "A" "x : Box a"]),
+    expectFalse (goalIsProjection [intM] []),
+  ]
+
+-- ── an instance's identity word ───────────────────────────────────────────
+
+test "an instance row's word is its interface and head, whichever rows surround it" =
+  let first = rowOf 0 "Sz" "x : Box Int"
+  let moved = rowOf 7 "Sz" "x : Box Int"
+  expectAll [
+    expectEqual (rowRouteKey first) (rowRouteKey moved),
+    expectNotEqual
+      (rowRouteKey first)
+      (rowRouteKey (rowOf 0 "Sz" "x : Box Bool")),
+    expectNotEqual
+      (rowRouteKey first)
+      (rowRouteKey (rowOf 0 "Other" "x : Box Int")),
+  ]

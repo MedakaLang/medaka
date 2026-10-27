@@ -1,0 +1,317 @@
+-- Tests of `types.tc_solve`'s own API: the goal-kind tags and names, the interface-reference
+-- mints, the per-function site index, the arithmetic site stamp, the small id and name
+-- projections, the enclosing-variable and return-position projections, the method-slot
+-- projections, the dispatch-mono walk of a declared type against an occurrence, the
+-- discharge memo's goal identity and the span keys of located goals.  Each test builds its
+-- inputs from the parsed signature, a fresh walk or a hand-built slot.  What a whole check
+-- resolves for a return-position method, the method-return trace and memo, the drain's live
+-- spans and the route stamps are observed through `types.typecheck` in `typecheck_test`.
+
+import test.{
+  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+}
+import frontend.ast.{Loc(..), Route(..)}
+import frontend.parser.{parse}
+import types.effect_rows.{pureRow}
+import types.repr.{Mono(..), Tyvar(..), ppMono}
+import types.tc_types.{
+  GoalKind(..), MethodPredicateSlot(..), PredicateSlot(..),
+  PredicateSlotArgs(..)
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omKeys}
+import support.util.{joinNl}
+import types.tc_solve.{
+  collectByParam,
+  consSiteFn,
+  enclosingVarIds,
+  goalKindName,
+  goalKindTag,
+  goalVarsAllHeld,
+  ifaceRefBare,
+  ifaceRefNone,
+  isLocalAbsName,
+  localSourceName,
+  methodSlotArgumentIds,
+  methodSlotBoundIds,
+  methodSlotIdsAtPositions,
+  methodSlotPositions,
+  noteWalkGoalDischarged,
+  occurrenceDispatchMonos,
+  outerRigidIds,
+  predicateSlotKnownArgs,
+  resolveArithSite,
+  returnPosMethodNames,
+  routeLocalSym,
+  sitesFor,
+  spanKeys,
+  walkDispatch,
+  walkGoalDischarged,
+  walkGoalSameProbe,
+}
+import types.tc_solve_entail.{reqWalkSeed}
+import list.{nub, sort}
+import types.tc_mono.{tconBuiltin}
+import types.tc_test_support.{boolM, ifaceOf, intM, sigsOf, varM}
+
+-- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
+-- solving walks' memo must not, in either order.
+test "the solving-walk memo keeps goals that differ only in an effect row apart" =
+  expectEqual [True, True, False, False, True] (walkGoalSameProbe ())
+
+allKinds : List GoalKind
+allKinds = [
+  GKReturnSite,
+  GKArgStamp,
+  GKRLocalSite,
+  GKBinopSite,
+  GKUnopSite,
+  GKArithSite,
+  GKDictApp,
+  GKMethodDict,
+  GKRecDictApp,
+]
+
+test "every goal kind has its own tag" =
+  expectEqual (length allKinds) (length (nub (map goalKindTag allKinds)))
+
+test "a goal kind's name is its constructor's spelling" = expectEach [
+  ("return", expectEqual "GKReturnSite" (goalKindName GKReturnSite)),
+  ("arg", expectEqual "GKArgStamp" (goalKindName GKArgStamp)),
+  ("rlocal", expectEqual "GKRLocalSite" (goalKindName GKRLocalSite)),
+  ("binop", expectEqual "GKBinopSite" (goalKindName GKBinopSite)),
+  ("unop", expectEqual "GKUnopSite" (goalKindName GKUnopSite)),
+  ("arith", expectEqual "GKArithSite" (goalKindName GKArithSite)),
+  ("dictapp", expectEqual "GKDictApp" (goalKindName GKDictApp)),
+  ("methoddict", expectEqual "GKMethodDict" (goalKindName GKMethodDict)),
+  ("recdictapp", expectEqual "GKRecDictApp" (goalKindName GKRecDictApp)),
+]
+
+-- ── interface references and the site index ───────────────────────────────
+
+test "ifaceRefBare carries the spelling it is given and ifaceRefNone carries none" = expectAll
+  [
+    expectEqual "Sz" (ifaceRefBare "Sz").irName,
+    expectEqual "" ifaceRefNone.irName,
+  ]
+
+test "sitesFor reads the sites recorded for a function, most recent first, and none for another" =
+  let idx = consSiteFn "g" 3 (consSiteFn "f" 2 (consSiteFn "f" 1 omEmpty))
+  expectAll [
+    expectEqual [2, 1] (sitesFor "f" idx),
+    expectEqual [3] (sitesFor "g" idx),
+    expectEqual [] (sitesFor "h" idx),
+    expectEqual ["f", "g"] (omKeys idx),
+  ]
+
+-- ── routes and stamps ─────────────────────────────────────────────────────
+
+test "routeLocalSym reads the mangled symbol of a local route and is empty for any other" = expectAll
+  [
+    expectEqual "f$m" (routeLocalSym (RLocal "f$m" [])),
+    expectEqual "" (routeLocalSym RNone),
+    expectEqual "" (routeLocalSym (RDict "d")),
+  ]
+
+routeTag : Route -> String
+routeTag (RScalar tag) = "scalar:\{tag}"
+routeTag RNone = "none"
+routeTag (RDict d) = "dict:\{d}"
+routeTag _ = "other"
+
+test "an arithmetic site is stamped with the scalar tag of a solved numeric type" =
+  let cell = Ref RNone
+  resolveArithSite cell (tconBuiltin "Int")
+  expectEqual "scalar:Int" (routeTag cell.value)
+
+test "an arithmetic site stays unstamped at a type with no scalar tag and keeps a route it already has" =
+  let open = Ref RNone
+  let stamped = Ref (RDict "d")
+  resolveArithSite open (tconBuiltin "String")
+  resolveArithSite stamped (tconBuiltin "Int")
+  expectEqual ["none", "dict:d"] [routeTag open.value, routeTag stamped.value]
+
+-- ── small projections ─────────────────────────────────────────────────────
+
+test "a local abstraction's name ends in the local suffix and reads back as its source name" = expectAll
+  [
+    expectTrue (isLocalAbsName "f$m$3$lb"),
+    expectFalse (isLocalAbsName "f"),
+    expectEqual "f" (localSourceName "f$m$3$lb"),
+    expectEqual "f" (localSourceName "f"),
+  ]
+
+test "predicateSlotKnownArgs is the known vector and empty for an unknown one" = expectAll
+  [
+    expectEqual
+      ["Int", "Bool"]
+      (map ppMono (predicateSlotKnownArgs (PSArgsKnown [intM, boolM]))),
+    expectEqual [] (map ppMono (predicateSlotKnownArgs PSArgsUnknown)),
+  ]
+
+varAtLevel : Int -> Int -> Mono
+varAtLevel id level = TVar (Ref (Unbound id level))
+
+test "the variables an enclosing binder owns are those below its level" =
+  let args = [varAtLevel 3 1, varAtLevel 4 5, tconBuiltin "Int"]
+  expectAll [
+    expectEqual [3] (enclosingVarIds (Some 2) args),
+    expectEqual [3, 4] (enclosingVarIds (Some 6) args),
+    expectEqual [] (enclosingVarIds (Some 0) args),
+    expectEqual [] (enclosingVarIds None args),
+  ]
+
+test "outerRigidIds adds the enclosing variables to the base set and keeps what was there" =
+  let base = omInsert "99" () omEmpty
+  let args = [varAtLevel 3 1, varAtLevel 4 5]
+  expectAll [
+    expectEqual ["3", "99"] (sortedKeys (outerRigidIds (Some 2) args base)),
+    expectEqual ["99"] (sortedKeys (outerRigidIds None args base)),
+  ]
+
+sortedKeys : OrdMap Unit -> List String
+sortedKeys m = sort (omKeys m)
+
+test "a method is return-position when its interface parameter occurs only in its result" =
+  expectEqual
+    ["make"]
+    (returnPosMethodNames
+      (parse
+        (joinNl [
+          "interface Make a where",
+          "  make : Unit -> a",
+          "  size : a -> Int",
+        ])))
+
+-- ── method slots ──────────────────────────────────────────────────────────
+
+-- A method slot for interface [name] over [args], bound to [ids] and read at [positions].
+methodSlot : String ->
+  PredicateSlotArgs ->
+  List Int ->
+  List Int ->
+  MethodPredicateSlot
+methodSlot name args ids positions = MethodPredicateSlot {
+  mpsPredicate = PredicateSlot {
+    psIface = ifaceOf name,
+    psArgs = args,
+    psBoundIds = ids,
+  },
+  mpsPositions = positions,
+}
+
+methodSlots : List MethodPredicateSlot
+methodSlots = [
+  methodSlot "A" (PSArgsKnown [varM 3]) [3] [0],
+  methodSlot "B" (PSArgsKnown [varM 4, varM 5]) [4, 5] [0, 1],
+]
+
+test "a method slot's bound ids and positions are read slot by slot" = expectAll
+  [
+    expectEqual [[3], [4, 5]] (methodSlotBoundIds methodSlots),
+    expectEqual [[0], [0, 1]] (methodSlotPositions methodSlots),
+    expectEqual [] (methodSlotBoundIds []),
+  ]
+
+test "a method slot's argument ids are the variables of its known vector, none for an unknown one" = expectAll
+  [
+    expectEqual [[3], [4, 5]] (methodSlotArgumentIds methodSlots),
+    expectEqual
+      [[]]
+      (methodSlotArgumentIds [methodSlot "A" PSArgsUnknown [3] [0]]),
+    expectEqual
+      [[2, 7]]
+      (methodSlotArgumentIds [
+        methodSlot "A" (PSArgsKnown [TApp (varM 2) (varM 7), intM]) [2] [0],
+      ]),
+  ]
+
+test "the ids at a slot's positions are read from the id list, and minus one past its end" =
+  expectEqual
+    [[10, 30], [20, 0 - 1]]
+    (methodSlotIdsAtPositions
+      [10, 20, 30]
+      [
+        methodSlot "A" PSArgsUnknown [] [0, 2],
+        methodSlot "B" PSArgsUnknown [] [1, 5],
+      ])
+
+-- ── goals and dispatch monos ──────────────────────────────────────────────
+
+test "a goal's variables are all held when every one is in the rigid set" =
+  let rigid = omInsert "3" () (omInsert "4" () omEmpty)
+  expectEach [
+    (
+      "all held",
+      expectTrue (goalVarsAllHeld rigid [varM 3, TApp intM (varM 4)]),
+    ),
+    ("one free", expectFalse (goalVarsAllHeld rigid [varM 3, varM 5])),
+    ("ground", expectTrue (goalVarsAllHeld rigid [intM])),
+    ("no goal", expectTrue (goalVarsAllHeld rigid [])),
+  ]
+
+test "collectByParam gives one mono per parameter in declaration order, and none when one has no binding" = expectAll
+  [
+    expectEqual
+      ["Int", "Bool"]
+      (map ppMono (collectByParam ["a", "b"] [("b", boolM), ("a", intM)])),
+    expectEqual [] (map ppMono (collectByParam ["a", "b"] [("a", intM)])),
+    expectEqual [] (map ppMono (collectByParam ["a"] [])),
+  ]
+
+-- The (parameter, type) bindings of [src]'s signature walked against [occurrence].
+walked : List String -> String -> Mono -> List (List (String, String))
+walked params src occurrence =
+  map
+    (t => map (p => (fst p, ppMono (snd p))) (walkDispatch params t occurrence))
+    (sigsOf (parse src))
+
+test "walkDispatch binds the interface parameter wherever the declared type has it" =
+  let occurrence = TFun boolM pureRow (TApp intM boolM)
+  expectAll [
+    expectEqual [[("a", "Bool")]] (walked ["a"] "x : a -> Box b" occurrence),
+    expectEqual [[]] (walked ["z"] "x : a -> Int" occurrence),
+    expectEqual [[]] (walked ["a"] "x : a -> Int" intM),
+  ]
+
+test "an occurrence's dispatch monos keep every interface position, an omitted one read from the occurrence" =
+  let occurrence = TFun boolM pureRow intM
+  expectEqual
+    [["Bool", "Int"]]
+    (map
+      (t =>
+        map
+          ppMono
+          (occurrenceDispatchMonos ["a", "b"] t occurrence [("b", intM)]))
+      (sigsOf (parse "x : a -> Int")))
+
+test "a walk has discharged the goal it noted, under the same interface and arguments only" =
+  let walk = reqWalkSeed (ifaceOf "A") [intM]
+  let before = walkGoalDischarged walk (ifaceOf "A") [intM]
+  noteWalkGoalDischarged walk (ifaceOf "A") [intM]
+  expectEach [
+    ("before noting", expectFalse before),
+    (
+      "the same goal",
+      expectTrue (walkGoalDischarged walk (ifaceOf "A") [intM]),
+    ),
+    (
+      "another interface",
+      expectFalse (walkGoalDischarged walk (ifaceOf "B") [intM]),
+    ),
+    (
+      "other arguments",
+      expectFalse (walkGoalDischarged walk (ifaceOf "A") [boolM]),
+    ),
+  ]
+
+test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
+  let first = Some (Loc "probe.mdk" 3 1 3 5)
+  let second = Some (Loc "probe.mdk" 9 1 9 5)
+  expectAll [
+    expectEqual [] (spanKeys [None, None]),
+    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
+    expectNotEqual (spanKeys [first]) (spanKeys [second]),
+    expectEqual
+      (spanKeys [first] ++ spanKeys [second])
+      (spanKeys [first, None, second]),
+  ]

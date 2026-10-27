@@ -1,18 +1,22 @@
 # META
-source_lines=92
+source_lines=114
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
--- module record, the codes it has been given, the signatures of a parsed source, and the
--- alias table and declared parameter kinds a source's declarations register.  Test siblings
--- import it and no production module does.  The last two are the fixture-side twins of
--- `tc_decls`' `graphAliasRow` and `withDeclParamKinds`: a test of a module below `tc_decls`
--- cannot import those, and its fixtures need the same tables.
+-- module record, the codes it has been given, the signatures of a parsed source, the
+-- alias table and declared parameter kinds a source's declarations register, and the
+-- interface reference and the monos of the probe module (`ifaceOf`, `intM`, `boolM`,
+-- `varM`).  Test siblings import it and no production module does.  `aliasTableOf` and
+-- `recordKindsOf` are the fixture-side twins of `tc_decls`' `graphAliasRow` and
+-- `withDeclParamKinds`: a test of a module below `tc_decls` cannot import those, and its
+-- fixtures need the same tables.
 
 import list.{reverse}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
 import frontend.ast.{Decl(..), TabKey, Ty(..), TyConOrigin(..)}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
+import types.tc_mono.{tconBuiltin}
 import support.ordmap.{omInsert}
 import types.publish.{tcCode}
 import types.tc_env.{declParamKinds, tyTabKey}
@@ -55,6 +59,24 @@ export
 intTy : Ty
 intTy =
   TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- An interface reference named [name], declared in the module "probe".
+export
+ifaceOf : String -> IfaceRef
+ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
+
+export
+intM : Mono
+intM = tconBuiltin "Int"
+
+export
+boolM : Mono
+boolM = tconBuiltin "Bool"
+
+-- A free type variable with id [id] at level 0.
+export
+varM : Int -> Mono
+varM id = TVar (Ref (Unbound id 0))
 
 -- The alias table of [ds]: each alias keyed by its identity, with its parameters and
 -- right-hand side.
@@ -99,6 +121,8 @@ kindIsDeclared _ = True
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "TabKey" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Tyvar" true))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declParamKinds" false) (mem "tyTabKey" false))))
@@ -118,6 +142,14 @@ kindIsDeclared _ = True
 (DFunDef false "withFirstSig" ((PVar "src") (PVar "k")) (EMatch (EApp (EVar "firstSig") (EVar "src")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "k") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "expectEqual") (ELit (LString "a source with a signature"))) (EVar "src")))))
 (DTypeSig true "intTy" (TyCon "Ty"))
 (DFunDef false "intTy" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginBuiltin")))))
+(DTypeSig true "ifaceOf" (TyFun (TyCon "String") (TyCon "IfaceRef")))
+(DFunDef false "ifaceOf" ((PVar "name")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "probe")))))))
+(DTypeSig true "intM" (TyCon "Mono"))
+(DFunDef false "intM" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
+(DTypeSig true "boolM" (TyCon "Mono"))
+(DFunDef false "boolM" () (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
+(DTypeSig true "varM" (TyFun (TyCon "Int") (TyCon "Mono")))
+(DFunDef false "varM" ((PVar "id")) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EVar "id")) (ELit (LInt 0))))))
 (DTypeSig true "aliasTableOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))))
 (DFunDef false "aliasTableOf" ((PList)) (EListLit))
 (DFunDef false "aliasTableOf" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs"))) (EApp (EVar "aliasTableOf") (EVar "rest"))))
@@ -138,6 +170,8 @@ kindIsDeclared _ = True
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "TabKey" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Tyvar" true))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declParamKinds" false) (mem "tyTabKey" false))))
@@ -157,6 +191,14 @@ kindIsDeclared _ = True
 (DFunDef false "withFirstSig" ((PVar "src") (PVar "k")) (EMatch (EApp (EVar "firstSig") (EVar "src")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "k") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "expectEqual") (ELit (LString "a source with a signature"))) (EVar "src")))))
 (DTypeSig true "intTy" (TyCon "Ty"))
 (DFunDef false "intTy" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginBuiltin")))))
+(DTypeSig true "ifaceOf" (TyFun (TyCon "String") (TyCon "IfaceRef")))
+(DFunDef false "ifaceOf" ((PVar "name")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "probe")))))))
+(DTypeSig true "intM" (TyCon "Mono"))
+(DFunDef false "intM" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
+(DTypeSig true "boolM" (TyCon "Mono"))
+(DFunDef false "boolM" () (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
+(DTypeSig true "varM" (TyFun (TyCon "Int") (TyCon "Mono")))
+(DFunDef false "varM" ((PVar "id")) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EVar "id")) (ELit (LInt 0))))))
 (DTypeSig true "aliasTableOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))))
 (DFunDef false "aliasTableOf" ((PList)) (EListLit))
 (DFunDef false "aliasTableOf" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs"))) (EApp (EVar "aliasTableOf") (EVar "rest"))))

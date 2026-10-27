@@ -1,0 +1,68 @@
+activeDictPredOf : GraphCtx -> PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
+activeDictVarAnswering : GraphCtx -> Mono -> ScopeId -> (EvidenceBinderId -> Bool) -> Option EvidenceBinderId
+activeDictVarOf : GraphCtx -> Mono -> ScopeId -> Option EvidenceBinderId
+activeDictVarOfEncl : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
+activeFunDictPredOf : GraphCtx -> PredicateRequest -> ScopeId -> Option AssumAnswer
+activeFunDictPredOfResidual : GraphCtx -> String -> List Mono -> ScopeId -> Option AssumAnswer
+anyGivenMatches : GraphCtx -> PredicateRequest -> ScopeId -> List GivenEntry -> Bool
+anyGivenOnChain : PredicateRequest -> List Int -> List GivenEntry -> Bool
+assumAnswerBinder : AssumAnswer -> EvidenceBinderId
+assumAnswerEvidence : AssumAnswer -> SolverEvidence
+assumAnswerKind : AssumAnswer -> AssumptionTraceKind
+assumAnswerRoute : GraphCtx -> AssumAnswer -> Option IfaceRef -> ScopeId -> (String -> Route) -> Route
+directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
+enclDictVarOf : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option EvidenceBinderId
+enclPreds : ModuleCtx -> String -> List PredicateSlot
+enclSlot : ModuleCtx -> String -> Mono -> Option Int
+enclSlotIds : ModuleCtx -> String -> List Int
+enclSlotIndex : ModuleCtx -> Option PredicateRequest -> Int -> String -> Option Int
+firstDictForEncl : GraphCtx -> Int -> ScopeId -> List (Int, EvidenceBinderId) -> Option EvidenceBinderId
+firstPredAtOnChain : GivenScope -> Int -> PredicateRequest -> List Int -> List GivenEntry -> Option AssumAnswer
+firstPredForEncl : GraphCtx -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer
+firstPredForEnclAt : GraphCtx -> GivenScope -> Int -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer
+firstPredForEnclResidual : GraphCtx -> String -> List Mono -> ScopeId -> List GivenEntry -> Option AssumAnswer
+firstPredOnChain : PredicateRequest -> List Int -> List GivenEntry -> Option AssumAnswer
+givenAnswerExact : GivenEntry -> AssumAnswer
+givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
+givenAnswerResidual : GivenEntry -> AssumAnswer
+givenAnswers : IfaceRef -> List Mono -> PredicateSlot -> Bool
+givenEvidenceBinder : SolverEvidence -> EvidenceBinderId
+givenInScope : GivenScope -> GivenEntry -> Bool
+givenRoute : GraphCtx -> Bool -> EvidenceBinderId -> Route
+givensForScope : GraphCtx -> ScopeId -> List GivenEntry
+goalGivenAt : GraphCtx -> IfaceRef -> List Mono -> ScopeId -> Bool
+goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
+implReqDictVarOf : GraphCtx -> Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
+indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
+indexOfPredGo : Int -> Int -> PredicateRequest -> List PredicateSlot -> Option Int
+lookupPredicateSlots : String -> Map String (List PredicateSlot) -> Option (List PredicateSlot)
+methodLevelPredicateSlot : ModuleCtx -> List String -> List (String, Mono) -> Constraint -> List PredicateSlot
+methodLevelPredicateSlots : ModuleCtx -> List String -> Ty -> List (String, Mono) -> List PredicateSlot
+noteAssumption : GraphCtx -> ScopeId -> AssumAnswer -> Unit
+predicateNodeKey : IfaceRef -> List Mono -> String
+predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
+predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+predicateSlotIds : List PredicateSlot -> List Int
+predicateSlotIdsAt : String -> Map String (List PredicateSlot) -> List Int
+predicateSlotKnownSupers : GraphCtx -> PredicateSlot -> List (PredicateSlot, List Int)
+predicateSlotOfNode : SuperNode (List Mono) -> PredicateSlot
+predicateSuperStep : List String -> List Mono -> Super -> Option (List Mono)
+predicateTargetId : Mono -> Option Int
+projectedGivenOf : GraphCtx -> EvidenceBinderId -> List Int -> Option GivenEntry
+publishMethodPredGivens : ModuleCtx -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
+pushGiven : GraphCtx -> GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit
+registerActiveDictVars : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Unit
+registerEachActive : GraphCtx -> List Int -> EvidenceBinderId -> Unit
+registerFunPredGiven : GraphCtx -> PredicateSlot -> EvidenceBinderId -> Unit
+registerFunPredGivenSlots : GraphCtx -> List (PredicateSlot, List Int) -> EvidenceBinderId -> Unit
+registerImplMethodDictOne : GraphCtx -> ScopeId -> Int -> String -> List (String, Mono) -> Unit
+registerImplMethodDicts : GraphCtx -> ScopeId -> List String -> Ty -> List (String, Mono) -> Unit
+registerImplMethodDictsGo : GraphCtx -> ScopeId -> Int -> List String -> List (String, Mono) -> Unit
+registerMethodDictSlots : GraphCtx -> ScopeId -> Int -> List Int -> List (Int, Mono) -> Unit
+registerOneMethodDict : GraphCtx -> ScopeId -> Int -> Int -> List (Int, Mono) -> Unit
+registerPredGiven : GraphCtx -> IfaceRef -> List Mono -> EvidenceBinderId -> Unit
+registerSlotPredGivens : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Unit
+sameIfaceOrUnresolved : IfaceRef -> IfaceRef -> Bool
+scalarGivenAnswers : GraphCtx -> EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
+scalarGivenProjection : GraphCtx -> EvidenceBinderId -> IfaceRef -> ScopeId -> Option (List Int)
+visibleDictsFor : GraphCtx -> Int -> ScopeId -> List (Int, EvidenceBinderId) -> List EvidenceBinderId
