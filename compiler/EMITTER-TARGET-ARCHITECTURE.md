@@ -89,7 +89,7 @@ Every claim below was re-derived on 2026-09-03; the commands are the evidence.
   2026-08-21 and 2026-08-27; `backend/wasm_reach.mdk` added a second
   whole-program reachability pass on one backend; `lowerProgramEmit` grew an
   `EmitTarget` parameter that threads a physical fact (tag width) up into the
-  shared seam, against L4. Eighty-nine named LLVM/Wasm twin functions exist,
+  shared seam, against L4. Eighty-six named LLVM/Wasm twin functions exist,
   forty of them in dispatch, evidence rewriting, arity, and impl indexing.
 - **Cost.** Three new representations (V, ANF, AP) plus an ANF interpreter, a
   second S-expression form, an equivalence chain, and a plan-and-renderer split
@@ -108,9 +108,8 @@ Every claim below was re-derived on 2026-09-03; the commands are the evidence.
   `implSymbolCollisionGuard`, `dictWitnessTagGuard`).
 - The verification doctrine (section 13), with 13.3's malformed-plan tests
   re-pointed at the Core validator in R6.
-- `draft_semantic_program.mdk`'s `pendingFacts` list as the inventory of what
-  Core still lacks (R4 is that list, re-ordered by open-bug pressure). The
-  module itself is subject to R9's consumer-or-delete rule.
+- The inventory of what Core still lacks is R4's list, re-ordered by open-bug
+  pressure; no draft module carries it.
 
 ### R3. Replacement component model
 
@@ -229,15 +228,15 @@ warn-first policy, which governs user-program type errors reaching
 
 | Stage | Issue | Disposition |
 |---|---|---|
-| X-0 | #1399 | X-0V retired. X-0D (`ir/draft_semantic_program.mdk`) has one consumer, its own probe; it either gains a product consumer within one sprint or is deleted with its probe and gate (R9). |
-| X-A | #1400 | Retired. No ANF, no AP. `ir/anf_identity.mdk` and its probe follow the same consumer-or-delete rule. Generated-callable identity, if ever needed, is a Core fact, not a new IR. |
+| X-0 | #1399 | X-0V retired. X-0D, the draft semantic program, is deleted with its probe and gate (R9). |
+| X-A | #1400 | Retired. No ANF, no AP; the identity modules are deleted. Generated-callable identity, if ever needed, is a Core fact, not a new IR. |
 | X-I | #1401 | Re-scoped to F1 and F3. `private_mangle` keeps its binding-set responsibility until ruling 3 decides whether the emitter process runs resolve. |
 | X-T | #353 | Adopted unchanged as F5. |
 | X-C | #1402 | Re-scoped to F2. |
 | X-E | #1403 | CLOSED 2026-09-28: X-E.C (PR #3542) made every engine read the published dispositions and canonical dictionary words. The F6 Core carrier passes to #3966. `RNone` (ruling 4) stays a validated, pinned optimization datum, and a fresh site that reaches it is a bug. |
 | X-G | #1404 | Re-scoped to F4 plus the globals and TRMC fields of R5. |
 | X-L | #1405 | X-L.H landed (injectivity guards). Abstract `LinkId` retired; the linkage field of R5 and the validator arms in R6 are what remains. |
-| X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised move into R6. |
+| X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised live in the per-emission physical registries (`compiler/backend/llvm_symbols.mdk`, `compiler/backend/wasm_symbols.mdk`), because the names they judge exist only after physical lowering; R6 keeps the Core-level checks. |
 | X-W | #1407 | X-W.H complete. X-W.C retired. Residual scope: the scalar-mode decision (section 8.1, unchanged), host-ABI requirement derivation from R5's extern field, and product-input parity with `playground_main` (R9). |
 | X-X | #1408 | Kept, with the deletion set reduced to what R4 rows delete plus the two consumer-or-delete modules; the ratchet requirement is unchanged. |
 
@@ -290,12 +289,9 @@ links back here.
    compiler passes `[]` today, so a user FFI extern dies as an unbound variable
    instead of the named WasmGC rejection). Re-derive `EMITTER-ARCHITECTURE.md`
    and `EMITTER-ARCH-BUG-FIT.md` (done in the same PR as this revision).
-2. **Done 2026-10-11** (S-draft-carrier-delete: all deleted).
-   **Consumer-or-delete, one sprint:** `ir/draft_semantic_program.mdk`,
-   `ir/anf_identity.mdk`, `ir/anf_identity_sexp.mdk`, their two probe entries,
-   and gates `diff_compiler_draft_semantic.sh` / `diff_compiler_anf_identity.sh`.
-   Default outcome is deletion; a product consumer is the only thing that keeps
-   them.
+2. **Done.** The draft semantic program, the ANF identity modules, their probe
+   entries and their gates are deleted. R9's rule stands for any future carrier:
+   consumer-or-delete within one sprint, and only a product consumer keeps one.
 3. **R5 plan record** (no dependency; can run beside F1).
 4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
    R6 validator arm and L7 fixture.

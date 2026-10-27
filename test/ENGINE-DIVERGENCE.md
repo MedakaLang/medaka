@@ -631,8 +631,8 @@ it.** Core IR is deliberately type-erased, and each backend re-derives numeric t
 saturation facts in its own value representation (native: low-bit-tagged i64 + the `LTy`
 lattice; wasm: `(ref eq)` with `i31`/`$float`/`$boxint` + boolean predicate refs). There
 is no shared place to put these fixes short of a *typed* Core IR — so they are correctly
-per-backend. What IS shared is now shared: `isDictParamName` moved to
-`backend/emit_support.mdk`, since both backends need it for the same reason.
+per-backend. What IS shared is shared: the leading dictionary count is
+`leadingDictParams` in `ir/core_ir_lower.mdk`, which both backends read.
 
 Note the wasm runtime helpers these route to (`$mdk_value_add/sub/mul/div/mod`, the peers
 of native's `@mdk_num_*`) **already existed** — the bug was never a missing helper, only a
