@@ -1258,17 +1258,14 @@ runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
-  andThen xs f = concatRev (revAcc xs []) []
+  andThen xs f = splice [] xs
     where
-      -- Tail-recursive reverse (core has no `reverse`; that lives in `list.mdk`).
-      revAcc [] acc = acc
-      revAcc (x :: rest) acc = revAcc rest (x :: acc)
-      -- `concatRev` folds `f x ++ acc` over the REVERSED input, rebuilding
-      -- `f a ++ f b ++ f c` by `++` associativity.  Its recursive call is the
-      -- whole body (tail ⇒ no stack growth — depth was previously the outer-list
-      -- length under the non-tail `f x ++ andThen xs f`); the `++` is iterative.
-      concatRev [] acc = acc
-      concatRev (x :: rest) acc = concatRev rest (f x ++ acc)
+      -- One self-recursive function so the `::` arm is tail-modulo-cons (stack
+      -- safe for long inputs and long inner lists); `f` runs once per element,
+      -- left to right, when the previous inner list is exhausted.
+      splice [] [] = []
+      splice [] (x :: rest) = splice (f x) rest
+      splice (y :: ys) rest = y :: splice ys rest
 
 export impl Thenable Option where
   andThen None _ = None
