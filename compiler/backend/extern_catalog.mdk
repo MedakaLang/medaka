@@ -547,6 +547,8 @@ wasmUseRows = [
   ("charToStr", [UseStrLeaf]),
   ("charFromCode", [UseCharFromCode]),
   ("stringSlice", [UseStrLeaf]),
+  ("stringCodepointAtByte", [UseStrLeaf]),
+  ("stringSliceBytes", [UseStrLeaf]),
   ("stringConcat", [UseStrLeaf]),
   ("stringIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringStartsWith", [UseStr, UseStrLeaf]),
@@ -1441,6 +1443,16 @@ catalogRows = [
   ExternRow
     "stringSlice"
     (CSymbol LlvmStrChar "mdk_string_slice")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringCodepointAtByte"
+    (CSymbol LlvmStrChar "mdk_string_codepoint_at_byte")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringSliceBytes"
+    (CSymbol LlvmStrChar "mdk_string_slice_bytes")
     (Inline WasmStr)
     Interpreted,
   ExternRow

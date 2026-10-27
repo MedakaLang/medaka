@@ -2166,6 +2166,26 @@ ARROW
 UPPER "String"
 NEWLINE
 EXTERN
+IDENT "stringCodepointAtByte"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "stringSliceBytes"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+EXTERN
 IDENT "stringConcat"
 COLON
 UPPER "List"

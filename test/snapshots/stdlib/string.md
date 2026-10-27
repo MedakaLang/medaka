@@ -1,5 +1,5 @@
 # META
-source_lines=814
+source_lines=865
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -816,6 +816,57 @@ center n c s =
   else
     let k = n - stringLength s
     repeat (k / 2) (charToStr c) ++ s ++ repeat (k - k / 2) (charToStr c)
+
+-- # Cursors
+
+{- | A position in a string, on a codepoint boundary.
+
+   Walk a string with `nextChar` and cut pieces out with `sliceBetween`.
+   The position is a UTF-8 byte offset, so a step costs the width of one
+   character however long the string is. A cursor can only come from
+   `startCursor` and `nextChar`, never from a number. -}
+export data StrCursor = StrCursor String Int
+
+-- | A cursor at the start of the string.
+export
+startCursor : String -> StrCursor
+startCursor s = StrCursor s 0
+
+{- | The character at the cursor and the cursor after it, or `None` at the
+   end of the string.
+
+   > isNone (nextChar (startCursor ""))
+   True -}
+export
+nextChar : StrCursor -> Option (Char, StrCursor)
+nextChar (StrCursor s off) =
+  if off >= stringByteLength s then
+    None
+  else
+    let (c, w) = codepointAt s off
+    Some (c, StrCursor s (off + w))
+
+-- The codepoint at byte offset `off` and its width in bytes; `off` must lie
+-- inside the string. The extern packs both as `codepoint * 8 + width`.
+codepointAt : String -> Int -> (Char, Int)
+codepointAt s off =
+  let packed = stringCodepointAtByte s off
+  let cp = packed / 8
+  match charFromCode cp
+    Some c => (c, packed - cp * 8)
+    None => panic "string.nextChar: the string holds a non-scalar codepoint"
+
+{- | The text between two cursors, from the first up to the second.
+
+   Both cursors must come from the same string. Cursors from different
+   strings that happen to bound a valid range of this one give that slice;
+   otherwise this panics, and the result is never an invalid string.
+
+   > sliceBetween (startCursor "héllo") (startCursor "héllo")
+   "" -}
+export
+sliceBetween : StrCursor -> StrCursor -> String
+sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -974,6 +1025,15 @@ center n c s =
 (DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))))))
 (DTypeSig true "center" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s")) (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "k") (EBinOp "/" (EVar "k") (ELit (LInt 2))))) (EApp (EVar "charToStr") (EVar "c"))))))))
+(DData Abstract "StrCursor" () ((variant "StrCursor" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DTypeSig true "startCursor" (TyFun (TyCon "String") (TyCon "StrCursor")))
+(DFunDef false "startCursor" ((PVar "s")) (EApp (EApp (EVar "StrCursor") (EVar "s")) (ELit (LInt 0))))
+(DTypeSig true "nextChar" (TyFun (TyCon "StrCursor") (TyApp (TyCon "Option") (TyTuple (TyCon "Char") (TyCon "StrCursor")))))
+(DFunDef false "nextChar" ((PCon "StrCursor" (PVar "s") (PVar "off"))) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "stringByteLength") (EVar "s"))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "c") (PVar "w")) (EApp (EApp (EVar "codepointAt") (EVar "s")) (EVar "off"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "c") (EApp (EApp (EVar "StrCursor") (EVar "s")) (EBinOp "+" (EVar "off") (EVar "w")))))))))
+(DTypeSig false "codepointAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyTuple (TyCon "Char") (TyCon "Int")))))
+(DFunDef false "codepointAt" ((PVar "s") (PVar "off")) (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "off"))) (DoLet false false (PVar "cp") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EMatch (EApp (EVar "charFromCode") (EVar "cp")) (arm (PCon "Some" (PVar "c")) () (ETuple (EVar "c") (EBinOp "-" (EVar "packed") (EBinOp "*" (EVar "cp") (ELit (LInt 8)))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "string.nextChar: the string holds a non-scalar codepoint"))))))))
+(DTypeSig true "sliceBetween" (TyFun (TyCon "StrCursor") (TyFun (TyCon "StrCursor") (TyCon "String"))))
+(DFunDef false "sliceBetween" ((PCon "StrCursor" (PVar "s") (PVar "a")) (PCon "StrCursor" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "a")) (EVar "b")) (EVar "s")))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1132,3 +1192,12 @@ center n c s =
 (DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))))))
 (DTypeSig true "center" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s")) (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "k") (EBinOp "/" (EVar "k") (ELit (LInt 2))))) (EApp (EVar "charToStr") (EVar "c"))))))))
+(DData Abstract "StrCursor" () ((variant "StrCursor" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DTypeSig true "startCursor" (TyFun (TyCon "String") (TyCon "StrCursor")))
+(DFunDef false "startCursor" ((PVar "s")) (EApp (EApp (EVar "StrCursor") (EVar "s")) (ELit (LInt 0))))
+(DTypeSig true "nextChar" (TyFun (TyCon "StrCursor") (TyApp (TyCon "Option") (TyTuple (TyCon "Char") (TyCon "StrCursor")))))
+(DFunDef false "nextChar" ((PCon "StrCursor" (PVar "s") (PVar "off"))) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "stringByteLength") (EVar "s"))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "c") (PVar "w")) (EApp (EApp (EVar "codepointAt") (EVar "s")) (EVar "off"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "c") (EApp (EApp (EVar "StrCursor") (EVar "s")) (EBinOp "+" (EVar "off") (EVar "w")))))))))
+(DTypeSig false "codepointAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyTuple (TyCon "Char") (TyCon "Int")))))
+(DFunDef false "codepointAt" ((PVar "s") (PVar "off")) (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "off"))) (DoLet false false (PVar "cp") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EMatch (EApp (EVar "charFromCode") (EVar "cp")) (arm (PCon "Some" (PVar "c")) () (ETuple (EVar "c") (EBinOp "-" (EVar "packed") (EBinOp "*" (EVar "cp") (ELit (LInt 8)))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "string.nextChar: the string holds a non-scalar codepoint"))))))))
+(DTypeSig true "sliceBetween" (TyFun (TyCon "StrCursor") (TyFun (TyCon "StrCursor") (TyCon "String"))))
+(DFunDef false "sliceBetween" ((PCon "StrCursor" (PVar "s") (PVar "a")) (PCon "StrCursor" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "a")) (EVar "b")) (EVar "s")))

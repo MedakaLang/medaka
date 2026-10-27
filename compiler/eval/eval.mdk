@@ -3627,6 +3627,8 @@ externBindings _ = [
   ("stringReverse", prim1 pStringReverse),
   ("stringJoin", prim2 pStringJoin),
   ("stringSlice", prim3 pStringSlice),
+  ("stringCodepointAtByte", prim2 pStringCodepointAtByte),
+  ("stringSliceBytes", prim3 pStringSliceBytes),
   ("arrayLength", prim1 pArrayLength),
   ("arrayFromList", prim1 pArrayFromList),
   ("arrayGetUnsafe", prim2 pArrayGetUnsafe),
@@ -4102,6 +4104,15 @@ evalLastIndexOfGo n h from acc =
 pStringSlice : Value e -> Value e -> Value e -> <e> Value e
 pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)
 pStringSlice _ _ _ = panic "stringSlice: bad operands"
+
+pStringCodepointAtByte : Value e -> Value e -> <e> Value e
+pStringCodepointAtByte (VString s) (VInt b) = VInt (stringCodepointAtByte s b)
+pStringCodepointAtByte _ _ = panic "stringCodepointAtByte: bad operands"
+
+pStringSliceBytes : Value e -> Value e -> Value e -> <e> Value e
+pStringSliceBytes (VInt lo) (VInt hi) (VString s) =
+  VString (stringSliceBytes lo hi s)
+pStringSliceBytes _ _ _ = panic "stringSliceBytes: bad operands"
 
 -- indexErrorAt idx: the coded E-INDEX-OOB abort an Index/IndexMut impl raises,
 -- carrying the offending index.  Kept as a NAMED helper rather than an inline
