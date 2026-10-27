@@ -101,11 +101,14 @@ flip|PASS
 foldThen|PASS
 forEach|PASS
 optionOr|PASS
+optionOrElse|PASS
 optionOrPanic|PASS
 option|PASS
 fromResult|PASS
 resultOr|PASS
+resultOrElse|PASS
 resultOrPanic|PASS
+bestEffort|PASS
 result|PASS
 fst|PASS
 guard|PASS

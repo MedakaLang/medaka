@@ -17,7 +17,7 @@ test "the complete generated ABI is the runtime source projection in both direct
         expectEqual projected runtimeAbiRows,
         expectEqual runtimeAbiRows projected,
         expectEqual (listLen projected) (listLen keys),
-        expectEqual 211 (listLen projected),
+        expectEqual 213 (listLen projected),
         expectEqual
           (renderRuntimeAbi projected)
           (renderRuntimeAbi (runtimeRowsFromSource (parse src))),

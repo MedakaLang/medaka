@@ -913,10 +913,10 @@ test "nextChar walks 1-, 2-, 3- and 4-byte codepoints" =
   expectEqual [97, 233, 26085, 128512] (cursorCodes (startCursor "aé日😀"))
 
 test "nextChar on the empty string is None" =
-  expectEqual 0 (length (cursorCodes (startCursor "")))
+  expectEqual [] (cursorCodes (startCursor ""))
 
 test "nextChar at the end of the string is None" =
-  expectTrue (isNone (nextChar (advance 4 (startCursor "aé日😀"))))
+  startCursor "aé日😀" |> advance 4 |> nextChar |> isNone |> expectTrue
 
 test "walking with nextChar rebuilds the string" =
   expectEqual "aé日😀 end" (cursorRebuild (startCursor "aé日😀 end"))
