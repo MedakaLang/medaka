@@ -287,3 +287,22 @@ test "record mode keeps a gap's census and finds no physical defect" =
         (any (e => isSome (stringIndexOf "notDefinedAnywhere" e)))
         events
     Err defects => expectEqual [] (map defectFacts defects)
+
+-- #4528: a parameter named like a top-level function is a local, not a value use
+-- of the function, so no `$codety` wrapper is written for a module that declares
+-- no closure types.
+test "a local named like a top-level function needs no closure wrapper" = expectAll
+  [
+    labelFail
+      "inc shadowed by twice's parameter"
+      (expectEqual
+        []
+        (strictDefects
+          "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\ntwice : Int -> Int\ntwice inc = inc + inc\nmain = twice 4\n")),
+    labelFail
+      "inc passed as a value still gets its wrapper"
+      (expectEqual
+        []
+        (strictDefects
+          "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\napply : (Int -> Int) -> Int -> Int\napply f x = f x\nmain = apply inc 4\n")),
+  ]

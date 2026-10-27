@@ -2038,9 +2038,13 @@ cFieldExpr (CField _ _ e) = e
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
+-- `locals` is the scope's locally-bound names (parameters, let, lambda and
+-- let-group binders): a local named like a top-level fn shadows it, so it is not a
+-- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
+-- rule `exprUsesClosures` applies.
 scanFnValueUses : OrdMap Unit -> List (String, Int) -> List CBind -> List String
 scanFnValueUses fnNames ctorArs groups =
-  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs) groups)
+  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs envEmpty) groups)
 
 -- W9: the impl method bodies + interface defaults also use top-level fns as values
 -- (e.g. `toList = identity` in `impl Foldable List`), so their fn-value uses must seed
@@ -2056,23 +2060,43 @@ scanImplEntryValueUses : OrdMap Unit ->
   List (String, Int) ->
   CImplEntry ->
   List String
-scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
-  CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
+scanImplEntryValueUses fnNames ctorArs (ent@(CImplEntry _ _ _ body)) =
+  let locals =
+    envExtendUnstamped (flatMap patVars (implEntryPatsW ent)) envEmpty
+  match body
+    CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
+    CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
 
-scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
-scanBindValueUses fnNames ctorArs (CBind _ clauses _ _) =
-  flatMap (c => scanExprValueUses fnNames ctorArs (clauseBodyOf c)) clauses
+scanBindValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CBind ->
+  List String
+scanBindValueUses fnNames ctorArs locals (CBind _ clauses _ _) =
+  flatMap
+    ((CClause pats body) =>
+      scanExprValueUses
+        fnNames
+        ctorArs
+        (envExtendUnstamped (flatMap patVars pats) locals)
+        body)
+    clauses
 
-scanExprValueUses : OrdMap Unit -> List (String, Int) -> CExpr -> List String
-scanExprValueUses fnNames ctorArs (CVar x _) =
-  if fnMemberIndexW fnNames x then
+scanExprValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CExpr ->
+  List String
+scanExprValueUses fnNames ctorArs locals (CVar x _) =
+  if envHas x locals then
+    []
+  else if fnMemberIndexW fnNames x then
     [x]
   else if fnMemberIndexW fnNames ("core__" ++ x) then
     ["core__" ++ x]
   else
     []
-scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
+scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
   let (hd, args, mode) = appParts app
   let here = match hd
     CVar fn0 _ =>
@@ -2083,7 +2107,12 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
           "core__" ++ fn0
         else
           fn0
-      if fnMemberIndexW fnNames fn && not (isExactCall mode) then [fn] else []
+      if not (envHas fn0 locals)
+        && fnMemberIndexW fnNames fn
+        && not (isExactCall mode) then
+        [fn]
+      else
+        []
     -- P1: an RLocal method-ref head is a DIRECT call to a shadowing standalone top-level
     -- fn — the same direct call the CVar arm above describes, reached by a different
     -- route.  So it needs the SAME rule: when the call is not exact, emitMethodRef
@@ -2100,77 +2129,115 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
         [target]
       else
         []
-    _ => scanExprValueUses fnNames ctorArs hd
-  here ++ flatMap (scanExprValueUses fnNames ctorArs) args
-scanExprValueUses fnNames ctorArs (CLam _ b) =
-  scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBinPrim _ l r _ _) =
-  scanExprValueUses fnNames ctorArs l ++ scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CUnOp _ x) =
-  scanExprValueUses fnNames ctorArs x
-scanExprValueUses fnNames ctorArs (CIf c t f) =
-  scanExprValueUses fnNames ctorArs c
-    ++ scanExprValueUses fnNames ctorArs t
-    ++ scanExprValueUses fnNames ctorArs f
-scanExprValueUses fnNames ctorArs (CLet _ _ a b) =
-  scanExprValueUses fnNames ctorArs a ++ scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBlock stmts) =
-  flatMap (s => scanStmtValueUses fnNames ctorArs s) stmts
-scanExprValueUses fnNames ctorArs (CDecision scrut arms _) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CMatch scrut arms) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CLetGroup binds b) =
-  flatMap (bd => scanBindValueUses fnNames ctorArs bd) binds
-    ++ scanExprValueUses fnNames ctorArs b
+    _ => scanExprValueUses fnNames ctorArs locals hd
+  here ++ flatMap (scanExprValueUses fnNames ctorArs locals) args
+scanExprValueUses fnNames ctorArs locals (CLam pats b) =
+  scanExprValueUses
+    fnNames
+    ctorArs
+    (envExtendUnstamped (flatMap patVars pats) locals)
+    b
+scanExprValueUses fnNames ctorArs locals (CBinPrim _ l r _ _) =
+  scanExprValueUses fnNames ctorArs locals l
+    ++ scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CUnOp _ x) =
+  scanExprValueUses fnNames ctorArs locals x
+scanExprValueUses fnNames ctorArs locals (CIf c t f) =
+  scanExprValueUses fnNames ctorArs locals c
+    ++ scanExprValueUses fnNames ctorArs locals t
+    ++ scanExprValueUses fnNames ctorArs locals f
+scanExprValueUses fnNames ctorArs locals (CLet _ pat a b) =
+  scanExprValueUses fnNames ctorArs locals a
+    ++ scanExprValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      b
+scanExprValueUses fnNames ctorArs locals (CBlock stmts) =
+  scanBlockValueUses fnNames ctorArs locals stmts
+scanExprValueUses fnNames ctorArs locals (CDecision scrut arms _) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CMatch scrut arms) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CLetGroup binds b) =
+  let inGroup = envExtendUnstamped (map bindName binds) locals
+  flatMap (bd => scanBindValueUses fnNames ctorArs inGroup bd) binds
+    ++ scanExprValueUses fnNames ctorArs inGroup b
 -- Composite arms emitVarRef descends into at emit time — each can hold a fn-VALUE
 -- use (`map (mapIfaceMethod f) ms` lives in a CRecordUpdate; `map (substField s) fs`
 -- in a CTuple; `flatMap dataArity prog` in a CRecord field).  Missing these here
 -- under-counted fn-value uses → the closure wrapper `$mdk_w_<f>` was referenced
 -- (ref.func emitted) but never DEFINED → "unknown func" at assemble.
-scanExprValueUses fnNames ctorArs (CTuple xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CList xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CArray xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CRecord _ fs) =
-  flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CFieldAccess r _ _ _) =
-  scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CRecordUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CVariantUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CRangeList lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs (CRangeArray lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs _ = []
+scanExprValueUses fnNames ctorArs locals (CTuple xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CList xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CArray xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CRecord _ fs) =
+  flatMap (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd)) fs
+scanExprValueUses fnNames ctorArs locals (CFieldAccess r _ _ _) =
+  scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CRecordUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CVariantUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CRangeList lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses fnNames ctorArs locals (CRangeArray lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses _ _ _ _ = []
 
 -- scan an arm's guards (refutable `Pat <- e` / boolean `if e`) AND its body — a
 -- guard scrutinee can carry a fn-value use just like the body.
-scanArmValueUses : OrdMap Unit -> List (String, Int) -> CArm -> List String
-scanArmValueUses fnNames ctorArs (CArm _ guards body) =
-  flatMap (g => scanGuardValueUses fnNames ctorArs g) guards
-    ++ scanExprValueUses fnNames ctorArs body
+scanArmValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CArm ->
+  List String
+scanArmValueUses fnNames ctorArs locals (CArm _ guards body) =
+  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
+    ++ scanExprValueUses fnNames ctorArs locals body
 
-scanGuardValueUses : OrdMap Unit -> List (String, Int) -> CGuard -> List String
-scanGuardValueUses fnNames ctorArs (CGBool e) =
-  scanExprValueUses fnNames ctorArs e
-scanGuardValueUses fnNames ctorArs (CGBind _ e) =
-  scanExprValueUses fnNames ctorArs e
+scanGuardValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CGuard ->
+  List String
+scanGuardValueUses fnNames ctorArs locals (CGBool e) =
+  scanExprValueUses fnNames ctorArs locals e
+scanGuardValueUses fnNames ctorArs locals (CGBind _ e) =
+  scanExprValueUses fnNames ctorArs locals e
 
-scanStmtValueUses : OrdMap Unit -> List (String, Int) -> CStmt -> List String
-scanStmtValueUses fnNames ctorArs (CSExpr e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses fnNames ctorArs (CSLet _ _ e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses _ _ _ = []
+-- a block's statements, each later one seeing the names an earlier `let` bound
+scanBlockValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  List CStmt ->
+  List String
+scanBlockValueUses _ _ _ [] = []
+scanBlockValueUses fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      rest
+scanBlockValueUses fnNames ctorArs locals ((CSExpr e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses fnNames ctorArs locals rest
+scanBlockValueUses fnNames ctorArs locals (_ :: rest) =
+  scanBlockValueUses fnNames ctorArs locals rest
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
@@ -3594,9 +3661,9 @@ clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 -- Prog's invocation-private index; lookup is O(log n) with no ambient authority.
 -- Never in raw mode: a raw program declares no closure types, and the demand
 -- planner routes every genuine value use of a function to ref mode.  The scan
--- behind the index is keyed by bare name, so in raw mode a hit can only be a
--- local that shadows the function's name (`twice inc = inc + inc`), whose
--- wrapper would reference the undeclared `$codety`.
+-- behind the index does not see match-arm binders, so in raw mode a hit can only
+-- be such a local shadowing the function's name, whose wrapper would reference
+-- the undeclared `$codety`.
 needsClosWrapper : Prog -> String -> Bool
 needsClosWrapper prog name =
   not (rawProgramW prog)

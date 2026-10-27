@@ -1,5 +1,5 @@
 # META
-source_lines=11173
+source_lines=11240
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_repr.{
@@ -2042,9 +2042,13 @@ cFieldExpr (CField _ _ e) = e
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
+-- `locals` is the scope's locally-bound names (parameters, let, lambda and
+-- let-group binders): a local named like a top-level fn shadows it, so it is not a
+-- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
+-- rule `exprUsesClosures` applies.
 scanFnValueUses : OrdMap Unit -> List (String, Int) -> List CBind -> List String
 scanFnValueUses fnNames ctorArs groups =
-  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs) groups)
+  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs envEmpty) groups)
 
 -- W9: the impl method bodies + interface defaults also use top-level fns as values
 -- (e.g. `toList = identity` in `impl Foldable List`), so their fn-value uses must seed
@@ -2060,23 +2064,43 @@ scanImplEntryValueUses : OrdMap Unit ->
   List (String, Int) ->
   CImplEntry ->
   List String
-scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
-  CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
+scanImplEntryValueUses fnNames ctorArs (ent@(CImplEntry _ _ _ body)) =
+  let locals =
+    envExtendUnstamped (flatMap patVars (implEntryPatsW ent)) envEmpty
+  match body
+    CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
+    CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
 
-scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
-scanBindValueUses fnNames ctorArs (CBind _ clauses _ _) =
-  flatMap (c => scanExprValueUses fnNames ctorArs (clauseBodyOf c)) clauses
+scanBindValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CBind ->
+  List String
+scanBindValueUses fnNames ctorArs locals (CBind _ clauses _ _) =
+  flatMap
+    ((CClause pats body) =>
+      scanExprValueUses
+        fnNames
+        ctorArs
+        (envExtendUnstamped (flatMap patVars pats) locals)
+        body)
+    clauses
 
-scanExprValueUses : OrdMap Unit -> List (String, Int) -> CExpr -> List String
-scanExprValueUses fnNames ctorArs (CVar x _) =
-  if fnMemberIndexW fnNames x then
+scanExprValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CExpr ->
+  List String
+scanExprValueUses fnNames ctorArs locals (CVar x _) =
+  if envHas x locals then
+    []
+  else if fnMemberIndexW fnNames x then
     [x]
   else if fnMemberIndexW fnNames ("core__" ++ x) then
     ["core__" ++ x]
   else
     []
-scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
+scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
   let (hd, args, mode) = appParts app
   let here = match hd
     CVar fn0 _ =>
@@ -2087,7 +2111,12 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
           "core__" ++ fn0
         else
           fn0
-      if fnMemberIndexW fnNames fn && not (isExactCall mode) then [fn] else []
+      if not (envHas fn0 locals)
+        && fnMemberIndexW fnNames fn
+        && not (isExactCall mode) then
+        [fn]
+      else
+        []
     -- P1: an RLocal method-ref head is a DIRECT call to a shadowing standalone top-level
     -- fn — the same direct call the CVar arm above describes, reached by a different
     -- route.  So it needs the SAME rule: when the call is not exact, emitMethodRef
@@ -2104,77 +2133,115 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
         [target]
       else
         []
-    _ => scanExprValueUses fnNames ctorArs hd
-  here ++ flatMap (scanExprValueUses fnNames ctorArs) args
-scanExprValueUses fnNames ctorArs (CLam _ b) =
-  scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBinPrim _ l r _ _) =
-  scanExprValueUses fnNames ctorArs l ++ scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CUnOp _ x) =
-  scanExprValueUses fnNames ctorArs x
-scanExprValueUses fnNames ctorArs (CIf c t f) =
-  scanExprValueUses fnNames ctorArs c
-    ++ scanExprValueUses fnNames ctorArs t
-    ++ scanExprValueUses fnNames ctorArs f
-scanExprValueUses fnNames ctorArs (CLet _ _ a b) =
-  scanExprValueUses fnNames ctorArs a ++ scanExprValueUses fnNames ctorArs b
-scanExprValueUses fnNames ctorArs (CBlock stmts) =
-  flatMap (s => scanStmtValueUses fnNames ctorArs s) stmts
-scanExprValueUses fnNames ctorArs (CDecision scrut arms _) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CMatch scrut arms) =
-  scanExprValueUses fnNames ctorArs scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs a) arms
-scanExprValueUses fnNames ctorArs (CLetGroup binds b) =
-  flatMap (bd => scanBindValueUses fnNames ctorArs bd) binds
-    ++ scanExprValueUses fnNames ctorArs b
+    _ => scanExprValueUses fnNames ctorArs locals hd
+  here ++ flatMap (scanExprValueUses fnNames ctorArs locals) args
+scanExprValueUses fnNames ctorArs locals (CLam pats b) =
+  scanExprValueUses
+    fnNames
+    ctorArs
+    (envExtendUnstamped (flatMap patVars pats) locals)
+    b
+scanExprValueUses fnNames ctorArs locals (CBinPrim _ l r _ _) =
+  scanExprValueUses fnNames ctorArs locals l
+    ++ scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CUnOp _ x) =
+  scanExprValueUses fnNames ctorArs locals x
+scanExprValueUses fnNames ctorArs locals (CIf c t f) =
+  scanExprValueUses fnNames ctorArs locals c
+    ++ scanExprValueUses fnNames ctorArs locals t
+    ++ scanExprValueUses fnNames ctorArs locals f
+scanExprValueUses fnNames ctorArs locals (CLet _ pat a b) =
+  scanExprValueUses fnNames ctorArs locals a
+    ++ scanExprValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      b
+scanExprValueUses fnNames ctorArs locals (CBlock stmts) =
+  scanBlockValueUses fnNames ctorArs locals stmts
+scanExprValueUses fnNames ctorArs locals (CDecision scrut arms _) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CMatch scrut arms) =
+  scanExprValueUses fnNames ctorArs locals scrut
+    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
+scanExprValueUses fnNames ctorArs locals (CLetGroup binds b) =
+  let inGroup = envExtendUnstamped (map bindName binds) locals
+  flatMap (bd => scanBindValueUses fnNames ctorArs inGroup bd) binds
+    ++ scanExprValueUses fnNames ctorArs inGroup b
 -- Composite arms emitVarRef descends into at emit time — each can hold a fn-VALUE
 -- use (`map (mapIfaceMethod f) ms` lives in a CRecordUpdate; `map (substField s) fs`
 -- in a CTuple; `flatMap dataArity prog` in a CRecord field).  Missing these here
 -- under-counted fn-value uses → the closure wrapper `$mdk_w_<f>` was referenced
 -- (ref.func emitted) but never DEFINED → "unknown func" at assemble.
-scanExprValueUses fnNames ctorArs (CTuple xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CList xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CArray xs) =
-  flatMap (scanExprValueUses fnNames ctorArs) xs
-scanExprValueUses fnNames ctorArs (CRecord _ fs) =
-  flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CFieldAccess r _ _ _) =
-  scanExprValueUses fnNames ctorArs r
-scanExprValueUses fnNames ctorArs (CRecordUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CVariantUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs r
-    ++ flatMap (fd => scanExprValueUses fnNames ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs (CRangeList lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs (CRangeArray lo hi _) =
-  scanExprValueUses fnNames ctorArs lo ++ scanExprValueUses fnNames ctorArs hi
-scanExprValueUses fnNames ctorArs _ = []
+scanExprValueUses fnNames ctorArs locals (CTuple xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CList xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CArray xs) =
+  flatMap (scanExprValueUses fnNames ctorArs locals) xs
+scanExprValueUses fnNames ctorArs locals (CRecord _ fs) =
+  flatMap (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd)) fs
+scanExprValueUses fnNames ctorArs locals (CFieldAccess r _ _ _) =
+  scanExprValueUses fnNames ctorArs locals r
+scanExprValueUses fnNames ctorArs locals (CRecordUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CVariantUpdate _ r fs) =
+  scanExprValueUses fnNames ctorArs locals r
+    ++ flatMap
+      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
+      fs
+scanExprValueUses fnNames ctorArs locals (CRangeList lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses fnNames ctorArs locals (CRangeArray lo hi _) =
+  scanExprValueUses fnNames ctorArs locals lo
+    ++ scanExprValueUses fnNames ctorArs locals hi
+scanExprValueUses _ _ _ _ = []
 
 -- scan an arm's guards (refutable `Pat <- e` / boolean `if e`) AND its body — a
 -- guard scrutinee can carry a fn-value use just like the body.
-scanArmValueUses : OrdMap Unit -> List (String, Int) -> CArm -> List String
-scanArmValueUses fnNames ctorArs (CArm _ guards body) =
-  flatMap (g => scanGuardValueUses fnNames ctorArs g) guards
-    ++ scanExprValueUses fnNames ctorArs body
+scanArmValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CArm ->
+  List String
+scanArmValueUses fnNames ctorArs locals (CArm _ guards body) =
+  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
+    ++ scanExprValueUses fnNames ctorArs locals body
 
-scanGuardValueUses : OrdMap Unit -> List (String, Int) -> CGuard -> List String
-scanGuardValueUses fnNames ctorArs (CGBool e) =
-  scanExprValueUses fnNames ctorArs e
-scanGuardValueUses fnNames ctorArs (CGBind _ e) =
-  scanExprValueUses fnNames ctorArs e
+scanGuardValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  CGuard ->
+  List String
+scanGuardValueUses fnNames ctorArs locals (CGBool e) =
+  scanExprValueUses fnNames ctorArs locals e
+scanGuardValueUses fnNames ctorArs locals (CGBind _ e) =
+  scanExprValueUses fnNames ctorArs locals e
 
-scanStmtValueUses : OrdMap Unit -> List (String, Int) -> CStmt -> List String
-scanStmtValueUses fnNames ctorArs (CSExpr e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses fnNames ctorArs (CSLet _ _ e) =
-  scanExprValueUses fnNames ctorArs e
-scanStmtValueUses _ _ _ = []
+-- a block's statements, each later one seeing the names an earlier `let` bound
+scanBlockValueUses : OrdMap Unit ->
+  List (String, Int) ->
+  Env ->
+  List CStmt ->
+  List String
+scanBlockValueUses _ _ _ [] = []
+scanBlockValueUses fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses
+      fnNames
+      ctorArs
+      (envExtendUnstamped (patVars pat) locals)
+      rest
+scanBlockValueUses fnNames ctorArs locals ((CSExpr e) :: rest) =
+  scanExprValueUses fnNames ctorArs locals e
+    ++ scanBlockValueUses fnNames ctorArs locals rest
+scanBlockValueUses fnNames ctorArs locals (_ :: rest) =
+  scanBlockValueUses fnNames ctorArs locals rest
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
@@ -3598,9 +3665,9 @@ clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 -- Prog's invocation-private index; lookup is O(log n) with no ambient authority.
 -- Never in raw mode: a raw program declares no closure types, and the demand
 -- planner routes every genuine value use of a function to ref mode.  The scan
--- behind the index is keyed by bare name, so in raw mode a hit can only be a
--- local that shadows the function's name (`twice inc = inc + inc`), whose
--- wrapper would reference the undeclared `$codety`.
+-- behind the index does not see match-arm binders, so in raw mode a hit can only
+-- be such a local shadowing the function's name, whose wrapper would reference
+-- the undeclared `$codety`.
 needsClosWrapper : Prog -> String -> Bool
 needsClosWrapper prog name =
   not (rawProgramW prog)
@@ -11521,44 +11588,45 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "cFieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "cFieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
 (DTypeSig false "scanFnValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "groups"))))
+(DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "envEmpty"))) (EVar "groups"))))
 (DTypeSig false "scanImplValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "scanImplValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "impls")) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "flatMap") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "scanImplEntryValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))) (EVar "impls"))))
 (DTypeSig false "scanImplEntryValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanImplEntryValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CImplEntry" PWild PWild PWild (PVar "body"))) (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))) (arm (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b")))))
-(DTypeSig false "scanBindValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanBindValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses")))
-(DTypeSig false "scanExprValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "x")) (EListLit (EVar "x")) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoLet false false (PVar "here") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fn0") PWild) () (EBlock (DoLet false false (PVar "fn") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn0")) (EVar "fn0") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0"))) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0")) (EVar "fn0")))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn")) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "fn")) (EListLit))))) (arm (PCon "CMethod" (PVar "mname") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) () (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "mname") (EVar "sym"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmpty") (EVar "dicts")) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "target"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "target")) (EListLit))))) (arm PWild () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hd"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "args"))))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "l")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "x")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "c")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "t"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "f"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLet" PWild PWild (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EApp (EApp (EVar "scanStmtValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "s")))) (EVar "stmts")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")))) (EVar "arms"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")))) (EVar "arms"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "bd")) (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "bd")))) (EVar "binds")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CTuple" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CList" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CArray" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CFieldAccess" (PVar "r") PWild PWild PWild)) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRecordUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CVariantUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hi"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hi"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") PWild) (EListLit))
-(DTypeSig false "scanArmValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanArmValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EVar "scanGuardValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "g")))) (EVar "guards")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "body"))))
-(DTypeSig false "scanGuardValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DTypeSig false "scanStmtValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanStmtValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanStmtValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanStmtValueUses" (PWild PWild PWild) (EListLit))
+(DFunDef false "scanImplEntryValueUses" ((PVar "fnNames") (PVar "ctorArs") (PAs "ent" (PCon "CImplEntry" PWild PWild PWild (PVar "body")))) (EBlock (DoLet false false (PVar "locals") (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EApp (EVar "implEntryPatsW") (EVar "ent")))) (EVar "envEmpty"))) (DoExpr (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "b"))) (arm (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "b")))))))
+(DTypeSig false "scanBindValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanBindValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "pats"))) (EVar "locals"))) (EVar "body")))) (EVar "clauses")))
+(DTypeSig false "scanExprValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "envHas") (EVar "x")) (EVar "locals")) (EListLit) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "x")) (EListLit (EVar "x")) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit)))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoLet false false (PVar "here") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fn0") PWild) () (EBlock (DoLet false false (PVar "fn") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn0")) (EVar "fn0") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0"))) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0")) (EVar "fn0")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "envHas") (EVar "fn0")) (EVar "locals"))) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "fn")) (EListLit))))) (arm (PCon "CMethod" (PVar "mname") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) () (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "mname") (EVar "sym"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmpty") (EVar "dicts")) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "target"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "target")) (EListLit))))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hd"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "args"))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "pats"))) (EVar "locals"))) (EVar "b")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "x")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "t"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "f"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EVar "patVars") (EVar "pat"))) (EVar "locals"))) (EVar "b"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "stmts")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")))) (EVar "arms"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")))) (EVar "arms"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inGroup") (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds"))) (EVar "locals"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "bd")) (EApp (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "inGroup")) (EVar "bd")))) (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "inGroup")) (EVar "b"))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CTuple" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CList" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CArray" (PVar "xs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CFieldAccess" (PVar "r") PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRecordUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CVariantUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hi"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hi"))))
+(DFunDef false "scanExprValueUses" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "scanArmValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanArmValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "scanGuardValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "g")))) (EVar "guards")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "body"))))
+(DTypeSig false "scanGuardValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")))
+(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")))
+(DTypeSig false "scanBlockValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanBlockValueUses" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EVar "patVars") (EVar "pat"))) (EVar "locals"))) (EVar "rest"))))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "rest"))))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "rest")))
 (DTypeSig false "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyList" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EVar "True") (EApp (EApp (EVar "anyList") (EVar "p")) (EVar "xs"))))
@@ -13610,44 +13678,45 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "cFieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "cFieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
 (DTypeSig false "scanFnValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "groups"))))
+(DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "envEmpty"))) (EVar "groups"))))
 (DTypeSig false "scanImplValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "scanImplValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "impls")) (EApp (EVar "dedupKeep") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "scanImplEntryValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))) (EVar "impls"))))
 (DTypeSig false "scanImplEntryValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanImplEntryValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CImplEntry" PWild PWild PWild (PVar "body"))) (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))) (arm (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b")))))
-(DTypeSig false "scanBindValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanBindValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses")))
-(DTypeSig false "scanExprValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "x")) (EListLit (EVar "x")) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoLet false false (PVar "here") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fn0") PWild) () (EBlock (DoLet false false (PVar "fn") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn0")) (EVar "fn0") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0"))) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0")) (EVar "fn0")))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn")) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "fn")) (EListLit))))) (arm (PCon "CMethod" (PVar "mname") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) () (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "mname") (EVar "sym"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EVar "dicts")) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "target"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "target")) (EListLit))))) (arm PWild () (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hd"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "args"))))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "l")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "x")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "c")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "t"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "f"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLet" PWild PWild (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EApp (EApp (EVar "scanStmtValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "s")))) (EVar "stmts")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")))) (EVar "arms"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "a")))) (EVar "arms"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "bd")) (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "bd")))) (EVar "binds")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "b"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CTuple" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CList" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CArray" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "xs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CFieldAccess" (PVar "r") PWild PWild PWild)) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRecordUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CVariantUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hi"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "hi"))))
-(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") PWild) (EListLit))
-(DTypeSig false "scanArmValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanArmValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EVar "scanGuardValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "g")))) (EVar "guards")) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "body"))))
-(DTypeSig false "scanGuardValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DTypeSig false "scanStmtValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "scanStmtValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanStmtValueUses" ((PVar "fnNames") (PVar "ctorArs") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "e")))
-(DFunDef false "scanStmtValueUses" (PWild PWild PWild) (EListLit))
+(DFunDef false "scanImplEntryValueUses" ((PVar "fnNames") (PVar "ctorArs") (PAs "ent" (PCon "CImplEntry" PWild PWild PWild (PVar "body")))) (EBlock (DoLet false false (PVar "locals") (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EApp (EVar "implEntryPatsW") (EVar "ent")))) (EVar "envEmpty"))) (DoExpr (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "b"))) (arm (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "b")) () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "b")))))))
+(DTypeSig false "scanBindValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanBindValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "pats"))) (EVar "locals"))) (EVar "body")))) (EVar "clauses")))
+(DTypeSig false "scanExprValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "envHas") (EVar "x")) (EVar "locals")) (EListLit) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "x")) (EListLit (EVar "x")) (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EListLit)))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoLet false false (PVar "here") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fn0") PWild) () (EBlock (DoLet false false (PVar "fn") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn0")) (EVar "fn0") (EIf (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0"))) (EBinOp "++" (ELit (LString "core__")) (EVar "fn0")) (EVar "fn0")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "envHas") (EVar "fn0")) (EVar "locals"))) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "fn"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "fn")) (EListLit))))) (arm (PCon "CMethod" (PVar "mname") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) () (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "mname") (EVar "sym"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EVar "dicts")) (EApp (EApp (EVar "fnMemberIndexW") (EVar "fnNames")) (EVar "target"))) (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode")))) (EListLit (EVar "target")) (EListLit))))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hd"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "args"))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "pats"))) (EVar "locals"))) (EVar "b")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "x")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "t"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "f"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EVar "patVars") (EVar "pat"))) (EVar "locals"))) (EVar "b"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "stmts")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")))) (EVar "arms"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "scanArmValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "a")))) (EVar "arms"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inGroup") (EApp (EApp (EVar "envExtendUnstamped") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds"))) (EVar "locals"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "bd")) (EApp (EApp (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "inGroup")) (EVar "bd")))) (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "inGroup")) (EVar "b"))))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CTuple" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CList" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CArray" (PVar "xs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals"))) (EVar "xs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CFieldAccess" (PVar "r") PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRecordUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CVariantUpdate" PWild (PVar "r") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "fd")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EApp (EVar "cFieldExpr") (EVar "fd"))))) (EVar "fs"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hi"))))
+(DFunDef false "scanExprValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "hi"))))
+(DFunDef false "scanExprValueUses" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "scanArmValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanArmValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "scanGuardValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "g")))) (EVar "guards")) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "body"))))
+(DTypeSig false "scanGuardValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")))
+(DFunDef false "scanGuardValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")))
+(DTypeSig false "scanBlockValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "scanBlockValueUses" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EApp (EApp (EVar "envExtendUnstamped") (EApp (EVar "patVars") (EVar "pat"))) (EVar "locals"))) (EVar "rest"))))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "scanExprValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "rest"))))
+(DFunDef false "scanBlockValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "locals") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "scanBlockValueUses") (EVar "fnNames")) (EVar "ctorArs")) (EVar "locals")) (EVar "rest")))
 (DTypeSig false "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyList" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EVar "True") (EApp (EApp (EVar "anyList") (EVar "p")) (EVar "xs"))))
