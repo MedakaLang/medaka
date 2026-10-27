@@ -260,12 +260,11 @@ import support.util.{
   isEmptyL,
   isNonEmptyL,
   isSome,
-  joinWith,
   lenKey,
   listLen,
-  reverseL,
 }
-import list.{head, indexed}
+import list.{head, indexed, reverse}
+import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
 import types.superclass.{superClosure}
 import types.scopes as Scopes
@@ -383,10 +382,7 @@ registerLocalAbs mctx name lscope sch oblN0 callN0 =
         laParams = localAbsParams mctx.mcGraph lscope 0 slots,
       }
       st.lasBinders := omInsert name (Some la) st.lasBinders.value
-      fold
-        (_ occ => pushLocalDictApp mctx name (fst occ) la [] (snd occ))
-        ()
-        recOccs
+      each (occ => pushLocalDictApp mctx name (fst occ) la [] (snd occ)) recOccs
 
 localAbsSlots : ModuleCtx ->
   String ->
@@ -432,7 +428,7 @@ export
 setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
 setFunPredicateSlots mctx table =
   mctx.mcCells.funPredicateSlotsRef := table
-  mctx.mcCells.funPredicateSlotsIdxRef := omFromPairs (reverseL table) omEmpty
+  mctx.mcCells.funPredicateSlotsIdxRef := omFromPairs (reverse table) omEmpty
 
 dedupPredicateSlotEntry : (String, List PredicateSlot) ->
   (String, List PredicateSlot)
@@ -498,7 +494,7 @@ cslotKey s =
 -- that path's slot sequence byte-identical.  It is also why widening on a PARTIAL vector
 -- supply degrades to today's collapse rather than to a wrong slot count.
 cslotVecKey : (CSlot, List Mono) -> String
-cslotVecKey (s, vec) = "\{cslotKey s}|\{joinWith "," (map oblArgKey vec)}"
+cslotVecKey (s, vec) = "\{cslotKey s}|\{join "," (map oblArgKey vec)}"
 
 -- [iface] plus its transitive `requires` supers (a `Ord a =>` constraint also supplies
 -- the `Eq` dict, which its dictionary carries).  Prelude and user super chains alike.
@@ -667,14 +663,13 @@ finalizeNumBoundary dyn boundary =
 handOffAbsentNumVars : ModuleCtx -> Int -> Mono -> List UObligation -> Unit
 handOffAbsentNumVars mctx owner member obls =
   let inT = monoUnboundIds member
-  fold
-    (_ id =>
+  each
+    (id =>
       if containsI id inT then
         ()
       else match liveNumVarGo id obls
         Some m => lowerOwnedRoot mctx owner m
         None => ())
-    ()
     (dedupI (numConstrainedIds obls))
 
 defaultAmbiguousNumWith : DynCtx ->
@@ -1206,24 +1201,14 @@ bucketRecvMatch ((tys, _) :: rest) dm = match tys
 -- deferrableVarIds instead is UNSOUND: it is shared with the call channel's scheme exemption, and
 -- the RETPOS-registered ambiguous var must stay OUT of it or the genuine ambiguity would
 -- defer too.  So the disposition is per-channel, byte-identical to each retired checker.
--- #838 I4 (S0 fix, PR #863 review): a CHECK-level [dedup] flag used to be the SECOND
--- per-channel fact here — the CALL channel skipped a repeat of an already-checked
--- (iface, every-arg-head-tycon) key, because the SAME call obligation is recorded by
--- more than one path (EVar + EDictAt).  That CHECK-level skip was itself the #1330 S0:
--- a tuple's head tycon is `__tuple2__` regardless of element types, so `Debug (Color,3)`
--- and `Debug (1,2)` shared a key, and skipping the second (a different-verdict sibling)
--- meant its checkNestedReqs `No impl Debug Color` reject never ran → check-green,
--- run-CRASH.  #1330 fixed it by running `checkOneCallObligation` on EVERY obligation on
--- both channels — the flag, the `seen` accumulator threaded to carry it, and the
--- `oblDedupKey` call that fed `seen` were left in place but unread (#1925: removed).
--- The ONLY dedup left is at EMISSION: `checkOneCallObligation`'s `pushTypeErrorOnceAt`
--- collapses two IDENTICAL rendered messages to one report — DICT-SEMANTICS §4.2 OD5.
--- #1925: the CHECK-level dedup key that used to be minted here (`oblDedupKey`,
--- A-2.2b #1111's identity-keyed encoding through `dispKeyRender`/`regKeyNTabAt`) fed
--- only a `seen` accumulator that #1330 (above) left unread — every obligation is
--- checked now, so there is nothing left to key.  Removed along with `oblKeyParts`
--- (its sole helper).  `dispKeyRender`/`dispHeadTab`/`regKeyNTabAt` stay — they are
--- general `types/registry.mdk` machinery with other callers.
+-- Neither channel skips a repeat obligation: `checkOneCallObligation` runs on EVERY
+-- obligation (#1330).  A skip keyed on (iface, every-arg-head-tycon) is unsound, because a
+-- tuple's head tycon is `__tuple2__` regardless of element types: `Debug (Color,3)` and
+-- `Debug (1,2)` would share a key, and skipping the second (a different-verdict sibling)
+-- would suppress its checkNestedReqs `No impl Debug Color` reject → check-green,
+-- run-CRASH.  The ONLY dedup is at EMISSION: `checkOneCallObligation`'s
+-- `pushTypeErrorOnceAt` collapses two IDENTICAL rendered messages to one report —
+-- DICT-SEMANTICS §4.2 OD5.
 export
 checkCallObligationsU : ModuleCtx ->
   Bool ->
@@ -1468,7 +1453,7 @@ checkOneCallObligationNoImpl mctx iface args loc scope =
   -- #1939 / #1938 (OPEN WORLD): `allConcreteHeads` is not groundness, and only
   -- GROUNDNESS LICENSES A REJECT HERE.  It asks whether every argument has a head
   -- TYCON, which `Wrap a` satisfies while still carrying a variable — so a goal like
-  -- `Tag (Wrap a)` walks past the defer gate above and is refuted against the impls of
+  -- `Tag (Wrap a)` walks past the defer gate above and is rejected against the impls of
   -- THIS load graph, which never contains the module's dependents.  This is the SAME
   -- closed-world reading `residualRefutableNow` carries, reached by the other channel,
   -- and it owns the SINGLE-PARAMETER half of both issues (a 1-ary goal is discharged
@@ -1685,10 +1670,7 @@ rejectUndeterminedVectors mctx rigidIds liveIds implObls callObls =
   let obls = implObls ++ callObls
   if isNonEmptyL obls then
     let window = goalWindowOf mctx.mcGraph obls
-    fold
-      (_ o => undeterminedVectorVerdict mctx rigidIds liveIds window o)
-      ()
-      obls
+    each (o => undeterminedVectorVerdict mctx rigidIds liveIds window o) obls
 
 -- [window] is the boundary's goal window.  A goal on a live variable waits for
 -- quiescence (`judgeQuiescentGoals`) with the boundary's [rigidIds] and [window].
@@ -1734,11 +1716,10 @@ defaultLiveNumRoots mctx =
       ngRigidIds = omEmpty,
       ngOuterBelow = None,
     }
-    fold
-      (_ m => match normalize m
+    each
+      (m => match normalize m
         TVar cell => groundOrWithhold (dynFor mctx) guard (tyvarId cell) m
         _ => ())
-      ()
       roots
   g.liveRoots := []
   g.liveNumRoots := []
@@ -1802,7 +1783,7 @@ rejectWithheldAmbiguity mctx rigidIds withheld obls =
     [] => ()
     held =>
       let window = goalWindowOf mctx.mcGraph obls
-      fold (_ o => withheldVectorVerdict mctx rigidIds window o) () held
+      each (o => withheldVectorVerdict mctx rigidIds window o) held
 
 -- The goals of [obls] that mention a still-open variable of [withheld].
 withheldGoals : GraphCtx -> List Mono -> List UObligation -> List UObligation
@@ -1850,13 +1831,13 @@ undeterminedNoImplMsg gctx iface args =
   let head = "no impl of \{iface} for \{ppPredArgsShared shown}"
   if isNonEmptyL fixed && allList (p => isBareTyvarMono (snd p)) open then
     let has =
-      joinWith
+      join
         " and "
         (map
           (p =>
             "`\{ppMonosShared [snd p]}` in its \{ordinalWord (fst p)} position")
           fixed)
-    let free = joinWith " and " (map (p => ordinalWord (fst p)) open)
+    let free = join " and " (map (p => ordinalWord (fst p)) open)
     let noun = if listLen open == 1 then "position" else "positions"
     "\{head}; no impl of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it"
   else
@@ -1885,8 +1866,7 @@ checkSigVarGoals : ModuleCtx ->
   Unit
 checkSigVarGoals mctx binder sigIds sigTvMaps obls
   | omSize sigIds == 0 = ()
-  | otherwise =
-    fold (_ o => checkSigVarGoal mctx binder sigIds sigTvMaps o) () obls
+  | otherwise = each (o => checkSigVarGoal mctx binder sigIds sigTvMaps o) obls
 
 checkSigVarGoal : ModuleCtx ->
   DeclaringBinder ->
@@ -1953,10 +1933,8 @@ checkNestedReqs sx univ walk iface args loc scope =
     Some next =>
       let (erred, _) = erredDuring sx.sxModule (_ =>
         let _ = checkEnteredReqs sx univ next iface args loc scope
-        fold
-          (_ e =>
-            checkEnteredReqs sx univ e.sgWalk e.sgIface e.sgArgs loc scope)
-          ()
+        each
+          (e => checkEnteredReqs sx univ e.sgWalk e.sgIface e.sgArgs loc scope)
           (superGoalsEntered sx.sxModule univ walk loc [] iface args))
       if erred then () else noteWalkGoalDischarged next iface args
 
@@ -2059,10 +2037,7 @@ reqObligationsFor sx univ iface args =
 -- (`checkOneCallObligation` -> `checkNestedReqs` -> this function), which has the SAME
 -- split.  `oblCallVerdict` accepts over the graph-global `IE` while
 -- `findMatchingImplReqsU`'s evidence legs could not recover the requires.  ARCH
--- B-2.1-b2/-d: this sentence used to name the CONCRETE leg
--- (`concreteReqMatchByIface`) reading `shadowKeyTableRef`, the CUMULATIVE
--- `universeKeyBucketsRef` prefix.  That leg is graph-global now and both refs are
--- deleted; the surviving prefix read is the HEADLESS fallback `firstReqMatch
+-- The only prefix read left is the HEADLESS fallback `firstReqMatch
 -- (univHeadless univ iface)` over `residualUnivRef` — see Door 4's block for the full
 -- narrowing.  The split is narrower, not closed — so the impl's
 -- `requires` are never recovered, no dict is built, and the emitted call is one
@@ -2628,10 +2603,9 @@ setFunConstraintEntry mctx m slots =
   -- slot past the real declared prefix and mark the first APPENDED super slot as declared —
   -- the unsafe direction, silently.
   -- S-slot-key-vector (#1866): it must be the SAME dedup the expansion runs, and that
-  -- is now `dedupSlotVecs` over the slots paired with their vectors.  Keeping the
-  -- vector-free dedup that used to stand here (`dedupSlots`, now deleted — see
-  -- `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
-  -- where the expansion now yields two) and re-introduce the same off-by-one in the other
+  -- is `dedupSlotVecs` over the slots paired with their vectors.  A vector-free dedup
+  -- (`dedupSlots`; see `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
+  -- where the expansion yields two) and re-introduce the same off-by-one in the other
   -- direction.  [argsOpt] is the very prefix `expandSupersEntry` reads back out of
   -- `funConstraintArgsRef`, so the two dedups see identical input; `None` (no vector row
   -- at all) yields `[]` per slot, i.e. exactly the pre-widening count.
@@ -2683,9 +2657,9 @@ registerMember mctx m scope ifaceMonos argVecs =
 -- `setFunConstraintEntry`.
 -- A constraint variable forced concrete by the body takes no dict slot.
 --
--- #994 (B-3-a): emits `CSlot`s, not a bare id list.  The iface half used to be recovered
--- by a SECOND traversal (`keptConstraintIfaces`, deleted) applying the identical
--- `normalize mono` is-a-`TVar` filter to the identical list; one traversal carrying the
+-- #994 (B-3-a): emits `CSlot`s, not a bare id list.  Recovering the iface half by a
+-- SECOND traversal applying the identical `normalize mono` is-a-`TVar` filter to the
+-- identical list would be a comment two functions apart; one traversal carrying the
 -- pair makes "the iface list is filtered the same way" unrepresentable-otherwise instead
 -- of a comment two functions apart.
 -- S-dict-arity-contract: ONE slot per PREDICATE.  [monos] is NOT the predicate's own
@@ -2891,7 +2865,7 @@ keepBoundResidualPred mctx boundIds (iface, args) =
     None => residualMixedPred mctx boundIds iface args
 
 -- ── #1905: the INFERRED twin of `declaredOblMixed` (#1161 SYMPTOM 2) ─────────────
--- A residual that is not ALL bare bound tyvars used to be dropped here, and that drop is
+-- Dropping a residual that is not ALL bare bound tyvars is
 -- #1549's exact defect one shape over: `useIx x = ix x 'z'` leaves the residual
 -- `Ix t Char`, `boundTyvarIds` answered `None` on the `Char`, and the predicate reached
 -- neither `useIx`'s scheme nor its callers' obligation lists — `check` printed
@@ -3038,9 +3012,7 @@ residualPredsOf sx chosen walk iface args
 --       still reject.  The prefix-read fallbacks are `B-2.1-b2`'s own Item 3 residual,
 --       re-confirmed untouched by `B-2.1-g`, and no probe has yet reached them in a way
 --       that DIVERGES; that is a negative result, not a clearance.
--- (b) used to be impossible: before A-3.6 the same import order that starved the
--- evidence registry also starved candidacy, so the program was REJECTED (that is
--- issue 1564's false reject).  Afterwards it was ACCEPTED and MISCOMPILED — MEASURED on
+-- (b) is a MISCOMPILE, not a false reject — MEASURED on
 -- `test/must_fail_fixtures/1564-import-order-decides-conditional-impl-candidacy`:
 -- `check` exit 0 (`main : Unit`), `run` exit 1 `E-PANIC: putStrLn: not a String`,
 -- `build` exit 0, and the built binary exit **139**, because `@mdk_impl_Wrap_tagOf` is
@@ -3233,7 +3205,7 @@ requiringImplLabel mctx iface args =
     iface
     args)
     Some row =>
-      "`impl \{iface.irName} \{joinWith " " (map ppTyAtom (ieRowTys row))}`"
+      "`impl \{iface.irName} \{join " " (map ppTyAtom (ieRowTys row))}`"
     None => "the matching `impl \{iface.irName} ...`"
 
 -- the residual predicates a group's recorded deltas leave over [boundIds], for the
@@ -3329,7 +3301,7 @@ inferredPredicateSlots : ModuleCtx ->
 inferredPredicateSlots mctx m ids vecs =
   let pairs = dedupSlotVecs (flatMap inferredPredicatePair vecs)
   let slots = map (predicateSlotFromExpanded omEmpty) pairs
-  let buckets = inferredSlotBuckets (reverseL slots) omEmpty
+  let buckets = inferredSlotBuckets (reverse slots) omEmpty
   let covered = inferredSlotCoveredIds slots omEmpty
   inferredPredicateSlotsGo mctx m ids buckets covered []
 
@@ -3368,7 +3340,7 @@ inferredPredicateSlotsGo : ModuleCtx ->
   OrdMap Unit ->
   List PredicateSlot ->
   List PredicateSlot
-inferredPredicateSlotsGo mctx _ [] _ _ acc = reverseL acc
+inferredPredicateSlotsGo mctx _ [] _ _ acc = reverse acc
 inferredPredicateSlotsGo mctx m (id :: rest) buckets covered acc =
   match omLookup (intToString id) buckets
     Some bucket =>

@@ -107,11 +107,6 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
-file = "compiler/types/tc_solve.mdk"
-rule = "rule-clause-map"
-count = 2
-
-[[entry]]
 file = "compiler/types/tc_solve_entail.mdk"
 rule = "rule-orelse-staircase"
 count = 2

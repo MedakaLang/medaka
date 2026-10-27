@@ -1,5 +1,5 @@
 # META
-source_lines=2203
+source_lines=2198
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -132,13 +132,11 @@ import support.util.{
   isSome,
   listLen,
   lookupAssoc,
-  reverseL,
-  zipL,
 }
 import types.runtime_ops.{arithmeticTag}
 import types.route_key.{implRouteKeyWord}
 import types.superclass.{lookupPos, mapAll, superIfaceRef}
-import list.{take}
+import list.{reverse, take, zip}
 import map as IdMap
 
 export
@@ -786,10 +784,9 @@ goalHeadCon [] = None
 -- **Only ⊑-INCOMPARABLE OVERLAP lands here** (confirmed on
 -- test/typecheck_error_fixtures/overlapping_impls.mdk, whose equal heads stay silent).
 --
--- #1155 (F-3c): that arm used to return `Some e` in silence, so DECLARATION ORDER
--- decided the program's meaning — swap two `impl` blocks and the answer changes, at
--- exit 0 on every engine (#1154, #1162).  It now also REPORTS, under the goal-site
--- half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
+-- #1155 (F-3c): returning `Some e` in silence would let DECLARATION ORDER decide the
+-- program's meaning — swap two `impl` blocks and the answer changes, at exit 0 on every
+-- engine (#1154, #1162).  So the arm also REPORTS, under the goal-site half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
 -- `inst` decides rather than over ground goals.
 --
 -- The winner is still `Some e`, deliberately.  `recordTypeError` arms
@@ -823,9 +820,8 @@ pickMostSpecificEntry sx goals (e :: rest) =
 --     `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` (ground goal) and
 --     `…/s6-2-t4-open-goal-deferred.mdk` (open goal): both reject at their goal.
 --
---  🚦 ONE INTERFACE.  `ieEntriesForMethod` used to filter by METHOD NAME alone, so
---     two impls of two DIFFERENT interfaces that happen to share a method name could
---     arrive together.  Their head vectors are ⊑-incomparable for a reason that has
+--  🚦 ONE INTERFACE.  A filter by METHOD NAME alone would let two impls of two
+--     DIFFERENT interfaces that happen to share a method name arrive together.  Their head vectors are ⊑-incomparable for a reason that has
 --     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
 --     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
@@ -1608,9 +1604,8 @@ entailInst sx _ m encl useScope _ (EKNestedTop iface _ walk rest) =
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
 -- selected impl's own `requires`-context routes.  That is not a tidiness point — §6
 -- C2 requires the impl dispatched to and the impl whose context is discharged to be
--- the SAME impl, and the first cut of this fix computed the vector here and then
--- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
--- differently at n≥2.  Sharing one binding makes them agree by construction.
+-- the SAME impl; computing the vector here but handing the scalar `m` to
+-- argImplDictRoutesForEncl would let the two arms select differently at n≥2.  Sharing one binding makes them agree by construction.
 entailInst sx name m encl useScope tag (EKArg fullMono omitted) =
   let goals =
     optionOr [m] (occurrenceParamMonos sx.sxModule name fullMono omitted)
@@ -2005,9 +2000,9 @@ argReqRoute : SiteCtx ->
   ReqWalk ->
   Route
 argReqRoute sx _ _ _ _ [] _ = noteInnerRoute sx RNone
--- #1154 (F-3a): `(arg::_)` used to drop every argument past arg 0, so a multi-param
--- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
--- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
+-- #1154 (F-3a): matching `(arg::_)` would drop every argument past arg 0, so a
+-- multi-param `requires Ix a Char` would reach the selector as the singleton `[Int]` and
+-- match every `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
 argReqRoute sx iface encl useScope subst (arg :: more) walk =
   noteInnerRoute
@@ -2052,7 +2047,7 @@ determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
 determinedEntryAnswers iface goals (row, committed) =
   ieRowOfIface iface row
     && listLen committed == listLen goals
-    && allList (pair => cohEqMono (fst pair) (snd pair)) (zipL committed goals)
+    && allList (pair => cohEqMono (fst pair) (snd pair)) (zip committed goals)
 
 -- The rows of [iface] a goal can unify with: those filed under the goal's first
 -- head constructor or under none, or every row of [iface] when the goal's first
@@ -2114,7 +2109,7 @@ distinctPrefixes : Int ->
   List (ImplRow, List (Int, Mono)) ->
   List (ImplRow, List (Int, Mono)) ->
   List (ImplRow, List (Int, Mono))
-distinctPrefixes _ [] kept = reverseL kept
+distinctPrefixes _ [] kept = reverse kept
 distinctPrefixes k (cand :: rest) kept =
   let prefix = take k (ieRowTys (fst cand))
   if anyList (seen => tyHeadEqV prefix (take k (ieRowTys (fst seen)))) kept then
@@ -2222,11 +2217,11 @@ stableGoalReach mctx chosen iface args =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "isBoxed64Head" false) (mem "isFixedIntHead" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "lookupPos" false) (mem "mapAll" false) (mem "superIfaceRef" false))))
-(DUse false (UseGroup ("list") ((mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "noteNumericPredicateTrace" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "gctx") (PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EMatch (EFieldAccess (EVar "gctx") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
@@ -2440,7 +2435,7 @@ stableGoalReach mctx chosen iface args =
 (DTypeSig true "superParamsOf" (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "superParamsOf" ((PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EVar "params"))
 (DTypeSig false "determinedEntryAnswers" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "Bool")))))
-(DFunDef false "determinedEntryAnswers" ((PVar "iface") (PVar "goals") (PTuple (PVar "row") (PVar "committed"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowOfIface") (EVar "iface")) (EVar "row")) (EBinOp "==" (EApp (EVar "listLen") (EVar "committed")) (EApp (EVar "listLen") (EVar "goals")))) (EApp (EApp (EVar "allList") (ELam ((PVar "pair")) (EApp (EApp (EVar "cohEqMono") (EApp (EVar "fst") (EVar "pair"))) (EApp (EVar "snd") (EVar "pair"))))) (EApp (EApp (EVar "zipL") (EVar "committed")) (EVar "goals")))))
+(DFunDef false "determinedEntryAnswers" ((PVar "iface") (PVar "goals") (PTuple (PVar "row") (PVar "committed"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowOfIface") (EVar "iface")) (EVar "row")) (EBinOp "==" (EApp (EVar "listLen") (EVar "committed")) (EApp (EVar "listLen") (EVar "goals")))) (EApp (EApp (EVar "allList") (ELam ((PVar "pair")) (EApp (EApp (EVar "cohEqMono") (EApp (EVar "fst") (EVar "pair"))) (EApp (EVar "snd") (EVar "pair"))))) (EApp (EApp (EVar "zip") (EVar "committed")) (EVar "goals")))))
 (DTypeSig true "goalRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "ImplRow"))))))
 (DFunDef false "goalRows" ((PVar "mctx") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoLet false false (PVar "pool") (EMatch (EApp (EVar "goalHeadCon") (EVar "args")) (arm (PCon "Some" (PVar "hk")) () (EBinOp "++" (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env")) (EApp (EApp (EVar "ieHeadRows") (EVar "None")) (EVar "env")))) (arm (PCon "None") () (EApp (EVar "ieRowsAll") (EVar "env"))))) (DoExpr (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EVar "pool")))))
 (DTypeSig true "goalIsProjection" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyCon "Bool"))))
@@ -2450,7 +2445,7 @@ stableGoalReach mctx chosen iface args =
 (DTypeSig false "rowPrefixSubstRigid" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))))))))
 (DFunDef false "rowPrefixSubstRigid" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "row")) (EApp (EApp (EVar "map") (ELam ((PVar "scratch")) (EUnOp "!" (EVar "scratch")))) (EApp (EApp (EApp (EApp (EVar "headsUnifier") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "rigidIds")) (EVar "args")) (EApp (EApp (EVar "freshRowHeads") (EVar "mctx")) (EVar "row")))))
 (DTypeSig false "distinctPrefixes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))))))))
-(DFunDef false "distinctPrefixes" (PWild (PList) (PVar "kept")) (EApp (EVar "reverseL") (EVar "kept")))
+(DFunDef false "distinctPrefixes" (PWild (PList) (PVar "kept")) (EApp (EVar "reverse") (EVar "kept")))
 (DFunDef false "distinctPrefixes" ((PVar "k") (PCons (PVar "cand") (PVar "rest")) (PVar "kept")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "take") (EVar "k")) (EApp (EVar "ieRowTys") (EApp (EVar "fst") (EVar "cand"))))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "seen")) (EApp (EApp (EVar "tyHeadEqV") (EVar "prefix")) (EApp (EApp (EVar "take") (EVar "k")) (EApp (EVar "ieRowTys") (EApp (EVar "fst") (EVar "seen"))))))) (EVar "kept")) (EApp (EApp (EApp (EVar "distinctPrefixes") (EVar "k")) (EVar "rest")) (EVar "kept")) (EApp (EApp (EApp (EVar "distinctPrefixes") (EVar "k")) (EVar "rest")) (EBinOp "::" (EVar "cand") (EVar "kept")))))))
 (DTypeSig true "goalReach" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyCon "GoalReach")))))
 (DFunDef false "goalReach" ((PVar "mctx") PWild (PList)) (EVar "ReachNone"))
@@ -2493,11 +2488,11 @@ stableGoalReach mctx chosen iface args =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "isBoxed64Head" false) (mem "isFixedIntHead" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "lookupPos" false) (mem "mapAll" false) (mem "superIfaceRef" false))))
-(DUse false (UseGroup ("list") ((mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "noteNumericPredicateTrace" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "gctx") (PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EMatch (EFieldAccess (EVar "gctx") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
@@ -2711,7 +2706,7 @@ stableGoalReach mctx chosen iface args =
 (DTypeSig true "superParamsOf" (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "superParamsOf" ((PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EVar "params"))
 (DTypeSig false "determinedEntryAnswers" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "Bool")))))
-(DFunDef false "determinedEntryAnswers" ((PVar "iface") (PVar "goals") (PTuple (PVar "row") (PVar "committed"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowOfIface") (EVar "iface")) (EVar "row")) (EBinOp "==" (EApp (EVar "listLen") (EVar "committed")) (EApp (EVar "listLen") (EVar "goals")))) (EApp (EApp (EVar "allList") (ELam ((PVar "pair")) (EApp (EApp (EVar "cohEqMono") (EApp (EVar "fst") (EVar "pair"))) (EApp (EVar "snd") (EVar "pair"))))) (EApp (EApp (EVar "zipL") (EVar "committed")) (EVar "goals")))))
+(DFunDef false "determinedEntryAnswers" ((PVar "iface") (PVar "goals") (PTuple (PVar "row") (PVar "committed"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowOfIface") (EVar "iface")) (EVar "row")) (EBinOp "==" (EApp (EVar "listLen") (EVar "committed")) (EApp (EVar "listLen") (EVar "goals")))) (EApp (EApp (EVar "allList") (ELam ((PVar "pair")) (EApp (EApp (EVar "cohEqMono") (EApp (EVar "fst") (EVar "pair"))) (EApp (EVar "snd") (EVar "pair"))))) (EApp (EApp (EVar "zip") (EVar "committed")) (EVar "goals")))))
 (DTypeSig true "goalRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "ImplRow"))))))
 (DFunDef false "goalRows" ((PVar "mctx") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "env") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef") "value")) (DoLet false false (PVar "pool") (EMatch (EApp (EVar "goalHeadCon") (EVar "args")) (arm (PCon "Some" (PVar "hk")) () (EBinOp "++" (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env")) (EApp (EApp (EVar "ieHeadRows") (EVar "None")) (EVar "env")))) (arm (PCon "None") () (EApp (EVar "ieRowsAll") (EVar "env"))))) (DoExpr (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EVar "pool")))))
 (DTypeSig true "goalIsProjection" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyCon "Bool"))))
@@ -2721,7 +2716,7 @@ stableGoalReach mctx chosen iface args =
 (DTypeSig false "rowPrefixSubstRigid" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))))))))
 (DFunDef false "rowPrefixSubstRigid" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "row")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "scratch")) (EUnOp "!" (EVar "scratch")))) (EApp (EApp (EApp (EApp (EVar "headsUnifier") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "rigidIds")) (EVar "args")) (EApp (EApp (EVar "freshRowHeads") (EVar "mctx")) (EVar "row")))))
 (DTypeSig false "distinctPrefixes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))))))))
-(DFunDef false "distinctPrefixes" (PWild (PList) (PVar "kept")) (EApp (EVar "reverseL") (EVar "kept")))
+(DFunDef false "distinctPrefixes" (PWild (PList) (PVar "kept")) (EApp (EVar "reverse") (EVar "kept")))
 (DFunDef false "distinctPrefixes" ((PVar "k") (PCons (PVar "cand") (PVar "rest")) (PVar "kept")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "take") (EVar "k")) (EApp (EVar "ieRowTys") (EApp (EVar "fst") (EVar "cand"))))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "seen")) (EApp (EApp (EVar "tyHeadEqV") (EVar "prefix")) (EApp (EApp (EVar "take") (EVar "k")) (EApp (EVar "ieRowTys") (EApp (EVar "fst") (EVar "seen"))))))) (EVar "kept")) (EApp (EApp (EApp (EVar "distinctPrefixes") (EVar "k")) (EVar "rest")) (EVar "kept")) (EApp (EApp (EApp (EVar "distinctPrefixes") (EVar "k")) (EVar "rest")) (EBinOp "::" (EVar "cand") (EVar "kept")))))))
 (DTypeSig true "goalReach" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyCon "GoalReach")))))
 (DFunDef false "goalReach" ((PVar "mctx") PWild (PList)) (EVar "ReachNone"))

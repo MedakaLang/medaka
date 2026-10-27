@@ -55,10 +55,9 @@ import types.evidence.{EvidenceBinderId(..), ScopeId(..), SolverEvidence(..)}
 import types.repr.{IfaceRef(..), Mono(..), lookupAssocI, normalize}
 import support.ordmap.{omInsert, omLookup, OrdMap}
 import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
-import support.util.{
-  allList, isSome, joinWith, lenKey, listLen, lookupAssoc, orElseOpt
-}
+import support.util.{allList, isSome, lenKey, listLen, lookupAssoc, orElseOpt}
 import list.{drop}
+import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
 import types.scopes as Scopes
 
@@ -430,12 +429,12 @@ implReqDictVarOf gctx (Some request) m useScope = match peelQual m
 -- #1177: A use site is resolved by its predicate, not by its constraint var'S ID.
 -- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
 -- interfaces over ONE type variable — `useIx : (Dbg a, Ix a Char) => a -> Int` —
--- registers TWO slots carrying the SAME id.  The old body asked `indexOfId (tyvarId
--- cell) ids`, whose FIRST match is slot 0 whichever predicate the site belongs to, so
--- EVERY method use in the body read slot 0: `ix` read the `Dbg` dict, its route
--- degraded to the bare head tag, and first-declared-`impl` won.  Swapping the two
--- predicates — a meaning-preserving edit — moved the answer from 116 to the correct
--- 227, on both engines, at exit 0, with `check --json` clean.
+-- registers TWO slots carrying the SAME id.  A lookup by `indexOfId (tyvarId cell) ids`
+-- would take its FIRST match, slot 0 whichever predicate the site belongs to, so EVERY
+-- method use in the body would read slot 0: `ix` would read the `Dbg` dict, its route
+-- would degrade to the bare head tag, and first-declared-`impl` would win.  Swapping the
+-- two predicates — a meaning-preserving edit — would then move the answer from the
+-- correct 227 to 116, on both engines, at exit 0, with `check --json` clean.
 --
 -- `funPredicateSlotsRef` carries the authoritative slots in order, so this lookup
 -- never has to reconstruct a predicate from parallel scalar tables.
@@ -697,14 +696,15 @@ registerImplMethodDictOne gctx scope slot vname tvMap =
 -- structure-blind, and matched by `monoVecSameGiven` — pointwise `monoSameGiven`,
 -- structural, on rigid-tyvar IDENTITY, never unification.
 --
--- #1956 / #1937: the key is the vector, not the lead argument.  This arm used to
--- match `[subject]` and return `()` for any longer vector, so a MULTI-PARAMETER
--- declared context (`f : Conv (Wrap a) b => …`) had no consumption-side answer at all:
--- `entailAssum` could never see it, `entail` fell through to `entailInst`, and the body
--- was statically committed to whichever impl was most specific at ABSTRACTION time while
--- the caller's correctly-built dict went unread — so `f (Wrap 5) True` and `f (Wrap 'c')
--- 7` both took the SAME impl, and swapping the two `impl` blocks changed which one, at
--- exit 0 (DICT-SEMANTICS §3 forbids selection by declaration order outright).
+-- #1956 / #1937: the key is the vector, not the lead argument.  Matching only
+-- `[subject]` and returning `()` for any longer vector would leave a MULTI-PARAMETER
+-- declared context (`f : Conv (Wrap a) b => …`) with no consumption-side answer at all:
+-- `entailAssum` could never see it, `entail` would fall through to `entailInst`, and the
+-- body would be statically committed to whichever impl was most specific at ABSTRACTION
+-- time while the caller's correctly-built dict went unread — so `f (Wrap 5) True` and
+-- `f (Wrap 'c') 7` would both take the SAME impl, and swapping the two `impl` blocks
+-- would change which one, at exit 0 (DICT-SEMANTICS §3 forbids selection by declaration
+-- order outright).
 -- The answer to "when are two predicate argument vectors the same predicate?" IS
 -- Pointwise structural identity over the vector: equal length, and `monoSameGiven` at
 -- every position, in order.  `goalMatchesGiven`/`goalSlotStillOpen` follow this shape
@@ -1002,7 +1002,7 @@ predicateSlotKnownSupers gctx slot = match slot.psArgs
 -- One predicate by interface identity and structural argument vector.
 predicateNodeKey : IfaceRef -> List Mono -> String
 predicateNodeKey iface monos =
-  "\{regKeyRender (regKeyOfTab (oblIfaceKey iface))}|\{joinWith "," (map oblArgKey monos)}"
+  "\{regKeyRender (regKeyOfTab (oblIfaceKey iface))}|\{join "," (map oblArgKey monos)}"
 
 predicateSuperStep : List String -> List Mono -> Super -> Option (List Mono)
 predicateSuperStep typarams args (Super { superParams = params, ... })
@@ -1126,8 +1126,9 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DTypeSig true "predicateSlotIds" (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "List") (TyCon "Int"))))
@@ -1299,7 +1300,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DTypeSig true "predicateSlotKnownSupers" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PredicateSlot") (TyApp (TyCon "List") (TyTuple (TyCon "PredicateSlot") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "predicateSlotKnownSupers" ((PVar "gctx") (PVar "slot")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EListLit)) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "predicateSlotOfNode") (EVar "n")) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "n") "superPath"))))) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "n") "superPath")) (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "superClosure") (EApp (EVar "superLookup") (EVar "gctx"))) (EVar "predicateSuperStep")) (EVar "predicateNodeKey")) (EListLit (ETuple (EFieldAccess (EVar "slot") "psIface") (EVar "args")))))))))
 (DTypeSig false "predicateNodeKey" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String"))))
-(DFunDef false "predicateNodeKey" ((PVar "iface") (PVar "monos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EVar "monos"))))) (ELit (LString ""))))
+(DFunDef false "predicateNodeKey" ((PVar "iface") (PVar "monos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EVar "monos"))))) (ELit (LString ""))))
 (DTypeSig false "predicateSuperStep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "predicateSuperStep" ((PVar "typarams") (PVar "args") (PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "typarams"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EVar "typarams")) (EVar "args")))) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "predicateSlotOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PredicateSlot")))
@@ -1329,8 +1330,9 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DTypeSig true "predicateSlotIds" (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "List") (TyCon "Int"))))
@@ -1502,7 +1504,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DTypeSig true "predicateSlotKnownSupers" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PredicateSlot") (TyApp (TyCon "List") (TyTuple (TyCon "PredicateSlot") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "predicateSlotKnownSupers" ((PVar "gctx") (PVar "slot")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EListLit)) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "predicateSlotOfNode") (EVar "n")) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "n") "superPath"))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "n") "superPath")) (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "superClosure") (EApp (EVar "superLookup") (EVar "gctx"))) (EVar "predicateSuperStep")) (EVar "predicateNodeKey")) (EListLit (ETuple (EFieldAccess (EVar "slot") "psIface") (EVar "args")))))))))
 (DTypeSig false "predicateNodeKey" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String"))))
-(DFunDef false "predicateNodeKey" ((PVar "iface") (PVar "monos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "oblArgKey")) (EVar "monos"))))) (ELit (LString ""))))
+(DFunDef false "predicateNodeKey" ((PVar "iface") (PVar "monos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "oblArgKey")) (EVar "monos"))))) (ELit (LString ""))))
 (DTypeSig false "predicateSuperStep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "predicateSuperStep" ((PVar "typarams") (PVar "args") (PRec "Super" ((rf "superParams" (PVar "params"))) true)) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "typarams"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EVar "typarams")) (EVar "args")))) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "predicateSlotOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PredicateSlot")))

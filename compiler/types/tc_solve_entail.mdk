@@ -128,13 +128,11 @@ import support.util.{
   isSome,
   listLen,
   lookupAssoc,
-  reverseL,
-  zipL,
 }
 import types.runtime_ops.{arithmeticTag}
 import types.route_key.{implRouteKeyWord}
 import types.superclass.{lookupPos, mapAll, superIfaceRef}
-import list.{take}
+import list.{reverse, take, zip}
 import map as IdMap
 
 export
@@ -782,10 +780,9 @@ goalHeadCon [] = None
 -- **Only ⊑-INCOMPARABLE OVERLAP lands here** (confirmed on
 -- test/typecheck_error_fixtures/overlapping_impls.mdk, whose equal heads stay silent).
 --
--- #1155 (F-3c): that arm used to return `Some e` in silence, so DECLARATION ORDER
--- decided the program's meaning — swap two `impl` blocks and the answer changes, at
--- exit 0 on every engine (#1154, #1162).  It now also REPORTS, under the goal-site
--- half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
+-- #1155 (F-3c): returning `Some e` in silence would let DECLARATION ORDER decide the
+-- program's meaning — swap two `impl` blocks and the answer changes, at exit 0 on every
+-- engine (#1154, #1162).  So the arm also REPORTS, under the goal-site half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
 -- `inst` decides rather than over ground goals.
 --
 -- The winner is still `Some e`, deliberately.  `recordTypeError` arms
@@ -819,9 +816,8 @@ pickMostSpecificEntry sx goals (e :: rest) =
 --     `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` (ground goal) and
 --     `…/s6-2-t4-open-goal-deferred.mdk` (open goal): both reject at their goal.
 --
---  🚦 ONE INTERFACE.  `ieEntriesForMethod` used to filter by METHOD NAME alone, so
---     two impls of two DIFFERENT interfaces that happen to share a method name could
---     arrive together.  Their head vectors are ⊑-incomparable for a reason that has
+--  🚦 ONE INTERFACE.  A filter by METHOD NAME alone would let two impls of two
+--     DIFFERENT interfaces that happen to share a method name arrive together.  Their head vectors are ⊑-incomparable for a reason that has
 --     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
 --     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
@@ -1604,9 +1600,8 @@ entailInst sx _ m encl useScope _ (EKNestedTop iface _ walk rest) =
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
 -- selected impl's own `requires`-context routes.  That is not a tidiness point — §6
 -- C2 requires the impl dispatched to and the impl whose context is discharged to be
--- the SAME impl, and the first cut of this fix computed the vector here and then
--- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
--- differently at n≥2.  Sharing one binding makes them agree by construction.
+-- the SAME impl; computing the vector here but handing the scalar `m` to
+-- argImplDictRoutesForEncl would let the two arms select differently at n≥2.  Sharing one binding makes them agree by construction.
 entailInst sx name m encl useScope tag (EKArg fullMono omitted) =
   let goals =
     optionOr [m] (occurrenceParamMonos sx.sxModule name fullMono omitted)
@@ -2001,9 +1996,9 @@ argReqRoute : SiteCtx ->
   ReqWalk ->
   Route
 argReqRoute sx _ _ _ _ [] _ = noteInnerRoute sx RNone
--- #1154 (F-3a): `(arg::_)` used to drop every argument past arg 0, so a multi-param
--- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
--- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
+-- #1154 (F-3a): matching `(arg::_)` would drop every argument past arg 0, so a
+-- multi-param `requires Ix a Char` would reach the selector as the singleton `[Int]` and
+-- match every `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
 argReqRoute sx iface encl useScope subst (arg :: more) walk =
   noteInnerRoute
@@ -2048,7 +2043,7 @@ determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
 determinedEntryAnswers iface goals (row, committed) =
   ieRowOfIface iface row
     && listLen committed == listLen goals
-    && allList (pair => cohEqMono (fst pair) (snd pair)) (zipL committed goals)
+    && allList (pair => cohEqMono (fst pair) (snd pair)) (zip committed goals)
 
 -- The rows of [iface] a goal can unify with: those filed under the goal's first
 -- head constructor or under none, or every row of [iface] when the goal's first
@@ -2110,7 +2105,7 @@ distinctPrefixes : Int ->
   List (ImplRow, List (Int, Mono)) ->
   List (ImplRow, List (Int, Mono)) ->
   List (ImplRow, List (Int, Mono))
-distinctPrefixes _ [] kept = reverseL kept
+distinctPrefixes _ [] kept = reverse kept
 distinctPrefixes k (cand :: rest) kept =
   let prefix = take k (ieRowTys (fst cand))
   if anyList (seen => tyHeadEqV prefix (take k (ieRowTys (fst seen)))) kept then

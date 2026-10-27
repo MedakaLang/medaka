@@ -655,36 +655,6 @@ class = "history"
 count = 1
 
 [[entry]]
-file = "compiler/types/tc_solve.mdk"
-class = "history"
-count = 3
-
-[[entry]]
-file = "compiler/types/tc_solve_check.mdk"
-class = "history"
-count = 7
-
-[[entry]]
-file = "compiler/types/tc_solve_check.mdk"
-class = "ruling"
-count = 1
-
-[[entry]]
-file = "compiler/types/tc_solve_entail.mdk"
-class = "history"
-count = 3
-
-[[entry]]
-file = "compiler/types/tc_solve_entail.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/types/tc_solve_givens.mdk"
-class = "history"
-count = 2
-
-[[entry]]
 file = "compiler/types/tc_state.mdk"
 class = "history"
 count = 1

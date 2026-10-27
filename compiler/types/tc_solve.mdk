@@ -261,16 +261,14 @@ import support.util.{
   isEmptyL,
   isNonEmptyL,
   isSome,
-  joinWith,
   listLen,
   lookupAssoc,
   orElseOpt,
-  reverseL,
   splitOnChar,
-  zipL,
 }
 import types.runtime_ops.{arithmeticTag}
-import list.{drop, head, indexed, take}
+import list.{drop, head, indexed, reverse, take, zip}
+import string.{join}
 import types.route_key.{ifaceWordOf}
 import types.evidence_complete.{innerNone, innerOr}
 import types.scopes as Scopes
@@ -497,10 +495,9 @@ methodReturnWanted mctx request = match methodReturnInstantiation mctx request
 
 -- an interface occurrence whose identity is not (yet) recoverable at the site.
 --
--- U1b (#1482) RETIRED the two sites this comment used to name.
--- `recordCallObligations` and `recordSchemeCallObligations` now carry an `IfaceRef`
+-- `recordCallObligations` and `recordSchemeCallObligations` carry an `IfaceRef`
 -- end to end (`funConstraintIfacesRef`'s payload is `List IfaceRef`,
--- `schemeObligationsRef`'s is `List VecObl`), so neither mints a bare goal any more.
+-- `schemeObligationsRef`'s is `List VecObl`), so neither mints a bare goal.
 -- What is LEFT — grep this name for the live worklist, do not trust this list:
 --   * `recordImplObligation`'s METHOD-OCCURRENCE goal, which is a decl-layer /
 --     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
@@ -754,7 +751,7 @@ dedupWalkGoalsGo : List (IfaceRef, List Mono) ->
   OrdMap (List (IfaceRef, List Mono)) ->
   List (IfaceRef, List Mono) ->
   List (IfaceRef, List Mono)
-dedupWalkGoalsGo [] _ acc = reverseL acc
+dedupWalkGoalsGo [] _ acc = reverse acc
 dedupWalkGoalsGo ((iface, args) :: rest) seen acc =
   let key = "\{iface.irName}#\{intToString (monoSizes args)}"
   let bucket = optionOr [] (omLookup key seen)
@@ -1393,15 +1390,7 @@ routeOf sx iface encl useScope policy m =
 -- dictArityOf, dictPass, scopePredicateSlots, and the cross-module snapshot all read
 -- the same predicate carrier, whose slot count this leaves untouched.
 --
--- #1909 rewrites the invariant this header used to state.  It read: the widening is
--- "GATED ON `listLen v > 1` (topRouteV's two-cons pattern), so a 1-ary `=>` constraint —
--- which is every `=>` constraint in compiler + stdlib + sqlite — takes the SAME `routeOf`
--- call routesOfMonosTop makes, term for term.  The 1-ary path is therefore byte-identical
--- BY CONSTRUCTION."  That was the #1161 (F-3a-ii) gate, and #1909 is the case its own
--- closing caveat predicted: byte-identity held for the compiler's bare-tyvar constraints
--- and never held for a STRUCTURED single-subject one.
---
--- The corrected invariant.  There is no length gate; `vectorGoal` declines only an EMPTY
+-- The invariant (#1909).  There is no length gate; `vectorGoal` declines only an EMPTY
 -- vector or an unknown interface.  Byte-identity with routesOfMonosTop is now a property
 -- of the VECTOR'S CONTENT, not of its length:
 --   • vector `[m]` where the recorded argument IS the slot's own mono (every bare-tyvar
@@ -1502,10 +1491,8 @@ methodPredicateRoutes : SiteCtx ->
   ScopeId ->
   List PredicateSlot ->
   List Route
-methodPredicateRoutes sx _ _ [] = []
-methodPredicateRoutes sx encl scope (slot :: rest) =
-  methodPredicateRoute sx encl scope slot
-    :: methodPredicateRoutes sx encl scope rest
+methodPredicateRoutes sx encl scope slots =
+  map (methodPredicateRoute sx encl scope) slots
 
 methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoute sx encl scope slot = match slot.psArgs
@@ -1538,9 +1525,7 @@ recRoutes : SiteCtx ->
   Mono ->
   List PredicateSlot ->
   List Route
-recRoutes sx _ _ _ [] = []
-recRoutes sx encl scope mono (slot :: rest) =
-  recRoute sx encl scope mono slot :: recRoutes sx encl scope mono rest
+recRoutes sx encl scope mono slots = map (recRoute sx encl scope mono) slots
 
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
@@ -1749,8 +1734,7 @@ firstReqMatch mctx ((tys, reqs) :: rest) args =
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
 -- identity — this is the row the concrete bucket's `"<iface>|<tag>"` key is
--- built from, on both sides (`insertUnivImpl` is the impl side; the bucket used to
--- be cited as `obUnivConcreteRef`, retired by #1112 A-3.4 PR2).  The tag is
+-- built from, on both sides (`insertUnivImpl` is the impl side).  The tag is
 -- still that key's bare NAME, so every bucket lookup answers exactly as before.
 -- A-2.2b (#1111): the `"\{iface}|\{tag}"` string splice is gone — this is a
 -- structured two-component key (`RegKey`), so a `|` inside either half can no
@@ -2151,7 +2135,7 @@ determineHeldGoal mctx rigidIds window o args
         let _ = enterLevel mctx ()
         let heads = freshRowHeads mctx row
         let _ = exitLevel mctx ()
-        let _ = commitImprovement (dynFor mctx) rigidIds (zipL args heads)
+        let _ = commitImprovement (dynFor mctx) rigidIds (zip args heads)
         let _ = fileDeterminedRow mctx row args
         let _ = refileGoals mctx.mcGraph window oldIds
         monoSizes args /= sizeBefore
@@ -2248,7 +2232,7 @@ rowHeadSubstRigid mctx rigidIds args row =
   if listLen heads == listLen args
     && cohOverlapGo
       scratch
-      (rigidSigPairs mctx.mcGraph rigidIds (zipL args heads)) then
+      (rigidSigPairs mctx.mcGraph rigidIds (zip args heads)) then
     Some !scratch
   else
     None
@@ -2313,12 +2297,11 @@ commitImprovement dyn sigIds pairs =
   let rigidPairs = rigidSigPairs dyn.dcModule.mcGraph sigIds pairs
   let cellsById = map (c => (tyvarId c, c)) cells
   if cohOverlapGo scratch rigidPairs then
-    fold
-      (_ binding => match lookupAssocI (fst binding) cellsById
+    each
+      (binding => match lookupAssocI (fst binding) cellsById
         Some cell => unifyIn dyn (TVar cell) (unrigidSig sigCells (snd binding))
         None => ())
-      ()
-      (reverseL !scratch)
+      (reverse !scratch)
 
 -- [t] with the rigid stand-in of each of [sigCells] replaced by that variable.
 export
@@ -2391,7 +2374,7 @@ superGoalClosureGo : GraphCtx ->
   List IfaceRef ->
   List (IfaceRef, List Mono) ->
   List (IfaceRef, List Mono)
-superGoalClosureGo gctx [] _ acc = reverseL acc
+superGoalClosureGo gctx [] _ acc = reverse acc
 superGoalClosureGo gctx ((iface, args) :: rest) seen acc =
   let step =
     st sg => match sg
@@ -2399,7 +2382,7 @@ superGoalClosureGo gctx ((iface, args) :: rest) seen acc =
         (sup :: fst st, (sup, supArgs) :: snd st)
       _ => st
   let (seen2, found) = fold step (seen, []) (directSuperGoals gctx iface args)
-  let fresh = reverseL found
+  let fresh = reverse found
   superGoalClosureGo gctx (rest ++ fresh) seen2 (found ++ acc)
 
 -- does SOME impl of [iface] matching [args] carry a non-empty `requires`?  The
@@ -2476,7 +2459,7 @@ walkDispatch typarams (TyApp a b) m = match peelQual m
   TApp ma mb => walkDispatch typarams a ma ++ walkDispatch typarams b mb
   _ => []
 walkDispatch typarams (TyTuple ts) m = match tupleSpine m
-  Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zipL ts ms)
+  Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
   _ => []
 walkDispatch _ _ _ = []
 
@@ -2775,7 +2758,7 @@ finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
 finishMethodReturnTrace sink evidence =
   map
     (publishMethodReturnTrace evidence)
-    (reverseL sink.tsMethodReturnEntries.value)
+    (reverse sink.tsMethodReturnEntries.value)
 
 publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
@@ -2813,7 +2796,7 @@ sealMethodReturnGoals : GraphCtx ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView)
 sealMethodReturnGoals gctx evidence goals =
-  sealMethodReturnGoalsFrom gctx evidence (reverseL goals) ([], [])
+  sealMethodReturnGoalsFrom gctx evidence (reverse goals) ([], [])
 
 -- Walks the goals last to first so each result list is built in input order, with
 -- no recursion before the cons: the goal list of a program that imports `async` is
@@ -2884,7 +2867,7 @@ methodReturnMemoPrerequisites _ = []
 methodReturnMemoEvidence : EvId -> EvTable -> String
 methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
   Some (EvOne route) => methodReturnMemoRoute route
-  Some (EvMany routes) => joinWith "," (map methodReturnMemoRoute routes)
+  Some (EvMany routes) => join "," (map methodReturnMemoRoute routes)
   Some (EvLit _ route) => methodReturnMemoRoute route
   Some (EvHead head) => "head:\{head}"
   None => "unpublished"
@@ -2892,18 +2875,18 @@ methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
 methodReturnMemoRoute : Route -> String
 methodReturnMemoRoute RNone = "none"
 methodReturnMemoRoute (RKey key prerequisites supers) =
-  "key:\{key}[\{joinWith "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
+  "key:\{key}[\{join "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
 methodReturnMemoRoute (RDict name) = "given:\{name}"
 methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
 methodReturnMemoRoute (RLocal name _) = "local:\{name}"
 methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
 methodReturnMemoRoute (RProj r path) =
-  "projected:\{methodReturnMemoRoute r}.\{joinWith "." (map intToString path)}"
+  "projected:\{methodReturnMemoRoute r}.\{join "." (map intToString path)}"
 
 methodReturnMemoSupers : List Route -> String
 methodReturnMemoSupers [] = ""
 methodReturnMemoSupers supers =
-  "{\{joinWith "," (map methodReturnMemoRoute supers)}}"
+  "{\{join "," (map methodReturnMemoRoute supers)}}"
 
 -- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
 -- carry different effect rows are one predicate to `monoVecSameGiven` and two to
