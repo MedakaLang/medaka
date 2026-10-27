@@ -1,5 +1,5 @@
 # META
-source_lines=6878
+source_lines=6876
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -849,8 +849,7 @@ intLitTooBigMsg = PositiveIntOverflow
 -- A literal above 2^62 (`TWideInt`) is a `U64` or `I64` literal or nothing: no
 -- sign makes it fit `Int`, and a literal PATTERN is typed `Int`/`U8`/`U16`/`U32`/
 -- `I32` only (INTEGER-TYPES-DESIGN §3.2 item 5; `U64` and `I64` patterns are not
--- built).  The message keeps the "integer literal too large" prefix
--- `parseErrCode` keys `L-INT-OVERFLOW` on.  A negated one is an ordinary `-`
+-- built). A negated one is an ordinary `-`
 -- applied to it, which the typechecker accepts only at `I64`.
 widePatMsg : String -> ParseDiagnosticKind
 widePatMsg lx = WidePattern lx
@@ -3086,8 +3085,7 @@ afterPublic = defer
 -- mistake, not a grammar gap.  The error is reported at `pubPos` — the
 -- `public` token itself, captured before it was consumed — rather than at
 -- whatever token follows `public export`, so the caret lands on the actual
--- problem and `parseErrHelpFix` (`compiler/driver/diagnostics.mdk`) can offer
--- a `fix` that deletes exactly the `public` token at that same location.
+-- problem and its edit deletes exactly the `public` token at that location.
 afterPublicFor : Int -> Token -> Parser Decl
 afterPublicFor _ TData = parseData VisPublic
 afterPublicFor pubPos TExtern = fatalProblemAtP (PublicDataOnly True) pubPos

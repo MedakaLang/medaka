@@ -1,5 +1,5 @@
 # META
-source_lines=3268
+source_lines=3255
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -832,9 +832,6 @@ scanRadix src len pos depth id =
   let e = radixEnd src len (pos + 2) k
   radixTok src len pos e k depth id
 
--- Mirrors `numFinish`'s shape, and shares its message verbatim: `parseErrCode`
--- keys L-INT-OVERFLOW on the "integer literal too large" prefix, and one
--- user-facing defect should not need two diagnostic codes.
 radixTok : Array Char -> Int -> Int -> Int -> Char -> Int -> Int -> List RawTok
 radixTok src len pos e k depth id
   | radixLitOverflows src (pos + 2) e k =
@@ -1669,9 +1666,6 @@ uniEscChar src len p
 uniIsSurrogate : Int -> Bool
 uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 
--- WHY `uniEscChar` said `None`. `parseErrCode` keys L-BAD-UNICODE-ESCAPE on the
--- "unicode escape" prefix, so both arms share it verbatim: one user-facing defect
--- should not need two diagnostic codes (same reasoning as `radixTok`'s message).
 -- The `_` arm covers BOTH an in-range-Int-but-not-a-codepoint value and the `None`
 -- (too many digits to parse exactly) case: to the user both are "too big".
 --
@@ -1753,13 +1747,6 @@ uHexEnd src len p
 -- brace was ever written, so there is nothing to diagnose about the escape's
 -- CONTENT, only its SPELLING.
 --
--- The message embeds both spellings as the first two backtick-quoted words
--- (`` `\uXXXX` `` then `` `\u{XXXX}` ``), so `parseErrHelpFix`
--- (`compiler/driver/diagnostics.mdk`) can reuse the SAME `twoBacktickWords`/
--- `oldNewFixOf` machinery the malformed-radix/malformed-float diagnostics
--- already use instead of needing bespoke plumbing — a machine `fix` falls out
--- for free: replace exactly what was written with a brace-wrapped copy of the
--- same hex digits.
 --
 -- Triggered ONLY when the hex run is EXACTLY 4 digits long (the fixed-width
 -- form the issue names, #515) — i.e. `uHexEnd` naturally stops at 4, not

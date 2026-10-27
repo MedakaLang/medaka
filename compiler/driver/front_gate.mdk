@@ -1,3 +1,4 @@
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
 -- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
 -- when the `build` verb asks for it (`frontGateEnv`).  Nothing here reads the
@@ -11,9 +12,7 @@ import frontend.parser.{
   parseLocated,
   parseResult,
   ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
 }
 import frontend.desugar.{desugarIn}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -36,8 +35,6 @@ import driver.diagnostics.{
   ppDiagCliSrc,
   ppMainEntryError,
   ppResolveErrorsByFile,
-  parseErrHelpFix,
-  parseErrCode,
   srcLinesArr,
   stdlibExportsReader,
   surfaceErrors,
@@ -66,33 +63,10 @@ export
 cliStdlibExports : String -> List String -> <IO> List (String, List String)
 cliStdlibExports stdlibDir names = stdlibExportsReader stdlibDir names
 
--- PARSE-ERROR-LOCATION Stage 1: render a located `ParseError` through the SAME
--- caret-aware `ppDiagCliSrc` + `Diag` machinery the typecheck/resolve text paths
--- use, so EVERY CLI-text parse error gets `file:L:C:` + a source snippet + caret
--- + the stable `P-*`/`L-*` code (and, for the clean single-token hints, a `help`).
--- `parseErrorLine` is 1-based, `parseErrorCol` 0-based — the exact convention
--- `ppDiagCliSrc`/`parseErrHelpFix` expect (matching the `--json` inline build).
 export
 ppParseError : String -> String -> ParseError -> String
 ppParseError src file e =
-  let ploc =
-    Loc
-      file
-      (parseErrorLine e)
-      (parseErrorCol e)
-      (parseErrorLine e)
-      (parseErrorCol e + 1)
-  let (h, fx) = parseErrHelpFix (parseErrorMessage e) ploc
-  ppDiagCliSrc
-    src
-    file
-    (Diag
-      SevError
-      (parseErrCode (parseErrorMessage e))
-      (parseErrorMessage e)
-      (Some ploc)
-      h
-      fx)
+  ppDiagCliSrc src file (parseDiagnosticToDiag file (parseErrorDiagnostic e))
 
 -- F3 Chunk B (R-MODULE-LOAD): the loader's `Err "unknown module: X"` carries no
 -- location (see loader.mdk's entry-scan doc comment).  `tsrc` is already known

@@ -1,0 +1,26 @@
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
+  diagnosticLoc, diagnosticHelp, diagnosticEdits, renderParseDiagnostic
+}
+import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+
+withPath : String -> Loc -> Loc
+withPath path (Loc _ sl sc el ec) = Loc path sl sc el ec
+
+machineFix : String -> List ParseEdit -> Option Fix
+machineFix _ [] = None
+machineFix path ((ParseEdit loc _ replacement MachineApplicable) :: _) =
+  Some (Fix (withPath path loc) replacement)
+machineFix path (_ :: rest) = machineFix path rest
+
+export
+parseDiagnosticToDiag : String -> ParseDiagnostic -> Diag
+parseDiagnosticToDiag path diagnostic =
+  Diag
+    SevError
+    (diagnosticCode diagnostic)
+    (renderParseDiagnostic diagnostic)
+    (Some (withPath path (diagnosticLoc diagnostic)))
+    (diagnosticHelp diagnostic)
+    (machineFix path (diagnosticEdits diagnostic))

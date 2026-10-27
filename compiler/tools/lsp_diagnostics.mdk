@@ -1,0 +1,50 @@
+import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+import support.source_index.{SourceIndex}
+import tools.lsp_positions.{locToLspRange}
+import json.{Json(..), jObject}
+
+severityCode : Severity -> Int
+severityCode SevError = 1
+severityCode SevWarning = 2
+
+fields : Json -> Diag -> List (String, Json)
+fields range (Diag sev code msg _ help _) =
+  [
+      ("range", range),
+      ("severity", JInt (severityCode sev)),
+      ("source", JString "medaka"),
+      ("message", JString msg),
+      ("code", JString code),
+    ]
+    ++ (match help
+      Some h => [("help", JString h)]
+      None => [])
+
+export
+diagnosticWithRange : Json -> Diag -> Json
+diagnosticWithRange range d = jObject (fields range d)
+
+fixField : SourceIndex -> Option Fix -> List (String, Json)
+fixField index (Some (Fix loc replacement)) = [
+  (
+    "fix",
+    jObject [
+      ("range", optionOr JNull (locToLspRange index loc)),
+      ("replacement", JString replacement),
+    ],
+  ),
+]
+fixField _ None = []
+
+export
+diagnosticJson : SourceIndex -> Diag -> Json
+diagnosticJson index d = diagnosticJsonOr index JNull d
+
+export
+diagnosticJsonOr : SourceIndex -> Json -> Diag -> Json
+diagnosticJsonOr index fallback (Diag sev code msg loc help fix) =
+  let range = match loc
+    Some l => optionOr JNull (locToLspRange index l)
+    None => fallback
+  let d = Diag sev code msg loc help fix
+  jObject (fields range d ++ fixField index fix)

@@ -1,3 +1,5 @@
+import tools.lsp_diagnostics.{diagnosticJsonOr, diagnosticWithRange}
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- lint-disable-file rule-duplicate-body
 -- (A handful of small pure cursor/env helpers here — identifierAt/
 --  prefixBefore/lookupSchemeL/jHover/… — are intentionally mirrored in
@@ -61,9 +63,7 @@ import frontend.parser.{
   ParseError,
   parseResult,
   parseLocatedResult,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
   parseWithPositions,
   parseWithPositionsOpt,
   positionsDecls,
@@ -174,40 +174,12 @@ jRange : Int -> Int -> Int -> Int -> Json
 jRange sl sc el ec =
   jObject [("start", jPosition sl sc), ("end", jPosition el ec)]
 
--- A single LSP Diagnostic object.  severity: 1=Error, 2=Warning (LSP spec).
-jDiagnostic : Int -> Json -> String -> Json
-jDiagnostic sev range msg = jObject [
-  ("range", range),
-  ("severity", JInt sev),
-  ("source", JString "medaka"),
-  ("message", JString msg),
-]
-
-severityCode : Severity -> Int
-severityCode SevError = 1
-severityCode SevWarning = 2
-
--- ── diagnostics → LSP (expr-level) ──────────────────────────────────────────
---
--- B.10.2b: type-error Diags now carry the ELoc span captured at the push site
--- (`Some Loc`), so they map to an expr-level LSP range:
--- a 1-based `Loc` line maps to a
--- 0-based LSP line and UTF-16 column.  Resolve / guard /
--- match diagnostics carry `None` (the compiler pipeline doesn't locate them) and
--- fall back to the whole-document range.  Parse errors keep using parseResult's
--- located line/col (below).
-
 -- Loc-less diagnostics retain their whole-line range.
 wholeDocRange : String -> Json
 wholeDocRange src =
   match offsetToUtf16Position (indexSource src) (stringLength src)
     Some (line, _) => jRange 0 0 line 0
     None => JNull
-
--- Map an optional Loc to its indexed protocol range, or the whole document.
-rangeOfLoc : SourceIndex -> Json -> Option Loc -> Json
-rangeOfLoc index _ (Some loc) = jRangeOfLoc index loc
-rangeOfLoc _ fallback None = fallback
 
 -- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
 -- `rangeOfLoc`'s `Some` arm, factored out for the #331 decl-NAME-span callers
@@ -216,21 +188,10 @@ rangeOfLoc _ fallback None = fallback
 jRangeOfLoc : SourceIndex -> Loc -> Json
 jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
--- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
--- (B.10.2b) for an expr-level range, falling back to whole-document for
--- loc-less diagnostics.
-diagToJson : SourceIndex -> Json -> Diag -> Json
-diagToJson index fallback (Diag sev _ msg loc _ _) =
-  jDiagnostic (severityCode sev) (rangeOfLoc index fallback loc) msg
-
-diagWithoutSource : Json -> Diag -> Json
-diagWithoutSource range (Diag sev _ msg _ _ _) =
-  jDiagnostic (severityCode sev) range msg
-
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =
   let index = indexSource src
-  map (diagToJson index (wholeDocRange src)) diags
+  map (diagnosticJsonOr index (wholeDocRange src)) diags
 
 -- ── document store accessor (request handlers) ──────────────────────────────
 -- Look up an open document's source by uri.  Request handlers (formatting/
@@ -1727,18 +1688,13 @@ initializeResultFor serverVersion = jObject [
   ),
 ]
 
--- The single located diagnostic for an unparseable buffer.  The parser's line
--- is 1-based and col 0-based; LSP wants 0-based lines.
 parseErrorDiags : String -> ParseError -> List Json
-parseErrorDiags src e =
-  let index = indexSource src
-  let ln = parseErrorLine e
-  let col = parseErrorCol e
-  let end = match sourcePositionToOffset index ln (col + 1)
-    Some _ => col + 1
-    None => col
-  let r = jRangeOfLoc index (Loc "" ln col ln end)
-  [jDiagnostic 1 r (parseErrorMessage e)]
+parseErrorDiags src e = [
+  diagnosticJsonOr
+    (indexSource src)
+    (wholeDocRange src)
+    (parseDiagnosticToDiag "" (parseErrorDiagnostic e)),
+]
 
 publishDiagnosticsList : String -> List Json -> <IO> Unit
 publishDiagnosticsList uri diags =
@@ -1917,7 +1873,7 @@ publishEach docs sources ((file, ds) :: rest) =
       "diagnostics",
       jArray (match src
         Some text => diagsToJson text ds
-        None => map (diagWithoutSource (jRange 0 0 0 0)) ds),
+        None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
     ),
   ]
   let _ =

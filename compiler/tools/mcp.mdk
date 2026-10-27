@@ -38,7 +38,6 @@ import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
   clampSourcePositionToOffset
 }
-import tools.lsp_positions.{clampedLocToLspRange}
 import driver.diagnostics.{
   stdlibExportsReader,
   checkJsonSingle,
@@ -496,7 +495,7 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
       Ok _ =>
         let (json, hasErr) =
           checkJsonFile False runtimeSrc coreSrc path stdlibDir
-        toolTextResult (mcpDiagnosticJson json None) hasErr
+        toolTextResult json hasErr
   (None, Some src) =>
     -- Inline source belongs to no project, and this server has analyzed other
     -- projects' files before it.
@@ -510,78 +509,7 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
         coreSrc
         syntheticSourceName
         src
-    toolTextResult (mcpDiagnosticJson json (Some src)) hasErr
-
--- The check/lint serializer owns the shared JSON envelope; MCP projects its
--- source-coordinate ranges to protocol coordinates using the file's source.
-mcpDiagnosticJson : String -> Option String -> <IO> String
-mcpDiagnosticJson text inlineSrc = match parse text
-  Err _ => text
-  Ok (JObject fields) =>
-    stringify (jObject (map (mcpFilesField inlineSrc) (toList fields)))
-  Ok _ => text
-
-mcpFilesField : Option String -> (String, Json) -> <IO> (String, Json)
-mcpFilesField inlineSrc ("files", JArray files) =
-  ("files", jArray (map (mcpDiagnosticFile inlineSrc) (toList files)))
-mcpFilesField _ pair = pair
-
-mcpDiagnosticFile : Option String -> Json -> <IO> Json
-mcpDiagnosticFile inlineSrc file = match fieldStr "file" file
-  None => file
-  Some path =>
-    let source =
-      if path == syntheticSourceName then
-        inlineSrc
-      else match readFile path
-        Ok src => Some src
-        Err _ => None
-    match file
-      JObject fields =>
-        jObject
-          (map (mcpDiagnosticField (map indexSource source)) (toList fields))
-      _ => file
-
-mcpDiagnosticField : Option SourceIndex -> (String, Json) -> (String, Json)
-mcpDiagnosticField source ("diagnostics", JArray ds) =
-  ("diagnostics", jArray (map (mcpDiagnosticValue source) (toList ds)))
-mcpDiagnosticField _ pair = pair
-
-mcpDiagnosticValue : Option SourceIndex -> Json -> Json
-mcpDiagnosticValue source (JObject fields) =
-  jObject (map (mcpDiagnosticPair source) (toList fields))
-mcpDiagnosticValue _ value = value
-
-mcpDiagnosticPair : Option SourceIndex -> (String, Json) -> (String, Json)
-mcpDiagnosticPair source ("range", range) = ("range", mcpRange source range)
-mcpDiagnosticPair source ("fix", fix) = ("fix", mcpDiagnosticValue source fix)
-mcpDiagnosticPair _ pair = pair
-
-mcpRange : Option SourceIndex -> Json -> Json
-mcpRange _ JNull = JNull
-mcpRange None _ = JNull
-mcpRange (Some index) range = match (get "start" range, get "end" range)
-  (Some start, Some end) => match (
-    fieldInt "line" start,
-    fieldInt "character" start,
-    fieldInt "line" end,
-    fieldInt "character" end,
-  )
-    (Some sl, Some sc, Some el, Some ec) =>
-      match clampedLocToLspRange index (Loc "" (sl + 1) sc (el + 1) ec)
-        None => JNull
-        Some converted => jObject [
-          ("end", mcpOrderedPosition (fieldOr "end" converted)),
-          ("start", mcpOrderedPosition (fieldOr "start" converted)),
-        ]
-    _ => JNull
-  _ => JNull
-
-mcpOrderedPosition : Json -> Json
-mcpOrderedPosition pos = jObject [
-  ("character", fieldOr "character" pos),
-  ("line", fieldOr "line" pos),
-]
+    toolTextResult json hasErr
 
 -- ── symbol-name addressing (#849) ───────────────────────────────────────────
 -- `medaka_type_at`/`medaka_definition` accept an alternative to a numeric
@@ -1505,9 +1433,7 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let triples = map dropQuadParse quads
     let cross = crossFileMcpFindings disable only deny quads
     let merged = mergeCrossFileIntoTriples cross triples
-    toolTextResult
-      (mcpDiagnosticJson (cjAllToJson merged) None)
-      (anyTripleHasErr merged)
+    toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 
@@ -1716,10 +1642,7 @@ testDiagnosticMessages (_, _, diags) =
   map ((Diag _ _ message _ _ _) => message) (filter diagIsError diags)
 
 testDiagnosticFile : (String, String, List Diag) -> Json
-testDiagnosticFile (path, src, diags) = match cjFileEntry path src diags
-  JObject fields =>
-    jObject (map (mcpDiagnosticField (Some (indexSource src))) (toList fields))
-  value => value
+testDiagnosticFile (path, src, diags) = cjFileEntry path src diags
 
 -- F7 (#1680/#1443): a distinct boolean field, present only when True — the
 -- human `medaka test` arm announces this on stderr (`typecheckSkipNotice`,

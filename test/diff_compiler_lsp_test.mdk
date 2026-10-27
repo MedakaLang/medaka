@@ -1814,3 +1814,37 @@ test "the bless tool mints exactly the goldens this file reads" =
       else
         fail
           "test/lsp_bless.sh and this file disagree about the golden set.\n  the tool mints:\n\{indentAll minted}  this gate reads:\n\{indentAll ownGoldens}"
+
+test "parse diagnostic carries typed code and UTF-16 edit" =
+  let uri = "file:///parse-unicode.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "main = (\"😀\", 1 != 2)\n",
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => match publishes objs
+      [pub] => match diagsOf pub
+        [d] => expectEach [
+          ("process", expectEqual [] errors),
+          ("code", expectEqual (Some (JString "P-BAD-NEQ")) (get "code" d)),
+          (
+            "message",
+            expectEqual
+              (Some (JString "unexpected `!=`; did you mean `/=`?"))
+              (get "message" d),
+          ),
+          (
+            "help",
+            expectEqual (Some (JString "replace `!=` with `/=`")) (get "help" d),
+          ),
+          ("start", expectEqual "0:16" (endpoint "start" d)),
+          ("end", expectEqual "0:18" (endpoint "end" d)),
+          (
+            "fix",
+            expectEqual (Some (JString "/=")) (dig ["fix", "replacement"] d),
+          ),
+          ("fix range", expectEqual (get "range" d) (dig ["fix", "range"] d)),
+        ]
+        _ => fail "expected one parse diagnostic"
+      _ => fail "expected one publish"

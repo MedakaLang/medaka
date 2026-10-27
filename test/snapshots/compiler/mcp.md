@@ -1,5 +1,5 @@
 # META
-source_lines=2013
+source_lines=1936
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -42,7 +42,6 @@ import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
   clampSourcePositionToOffset
 }
-import tools.lsp_positions.{clampedLocToLspRange}
 import driver.diagnostics.{
   stdlibExportsReader,
   checkJsonSingle,
@@ -500,7 +499,7 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
       Ok _ =>
         let (json, hasErr) =
           checkJsonFile False runtimeSrc coreSrc path stdlibDir
-        toolTextResult (mcpDiagnosticJson json None) hasErr
+        toolTextResult json hasErr
   (None, Some src) =>
     -- Inline source belongs to no project, and this server has analyzed other
     -- projects' files before it.
@@ -514,78 +513,7 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
         coreSrc
         syntheticSourceName
         src
-    toolTextResult (mcpDiagnosticJson json (Some src)) hasErr
-
--- The check/lint serializer owns the shared JSON envelope; MCP projects its
--- source-coordinate ranges to protocol coordinates using the file's source.
-mcpDiagnosticJson : String -> Option String -> <IO> String
-mcpDiagnosticJson text inlineSrc = match parse text
-  Err _ => text
-  Ok (JObject fields) =>
-    stringify (jObject (map (mcpFilesField inlineSrc) (toList fields)))
-  Ok _ => text
-
-mcpFilesField : Option String -> (String, Json) -> <IO> (String, Json)
-mcpFilesField inlineSrc ("files", JArray files) =
-  ("files", jArray (map (mcpDiagnosticFile inlineSrc) (toList files)))
-mcpFilesField _ pair = pair
-
-mcpDiagnosticFile : Option String -> Json -> <IO> Json
-mcpDiagnosticFile inlineSrc file = match fieldStr "file" file
-  None => file
-  Some path =>
-    let source =
-      if path == syntheticSourceName then
-        inlineSrc
-      else match readFile path
-        Ok src => Some src
-        Err _ => None
-    match file
-      JObject fields =>
-        jObject
-          (map (mcpDiagnosticField (map indexSource source)) (toList fields))
-      _ => file
-
-mcpDiagnosticField : Option SourceIndex -> (String, Json) -> (String, Json)
-mcpDiagnosticField source ("diagnostics", JArray ds) =
-  ("diagnostics", jArray (map (mcpDiagnosticValue source) (toList ds)))
-mcpDiagnosticField _ pair = pair
-
-mcpDiagnosticValue : Option SourceIndex -> Json -> Json
-mcpDiagnosticValue source (JObject fields) =
-  jObject (map (mcpDiagnosticPair source) (toList fields))
-mcpDiagnosticValue _ value = value
-
-mcpDiagnosticPair : Option SourceIndex -> (String, Json) -> (String, Json)
-mcpDiagnosticPair source ("range", range) = ("range", mcpRange source range)
-mcpDiagnosticPair source ("fix", fix) = ("fix", mcpDiagnosticValue source fix)
-mcpDiagnosticPair _ pair = pair
-
-mcpRange : Option SourceIndex -> Json -> Json
-mcpRange _ JNull = JNull
-mcpRange None _ = JNull
-mcpRange (Some index) range = match (get "start" range, get "end" range)
-  (Some start, Some end) => match (
-    fieldInt "line" start,
-    fieldInt "character" start,
-    fieldInt "line" end,
-    fieldInt "character" end,
-  )
-    (Some sl, Some sc, Some el, Some ec) =>
-      match clampedLocToLspRange index (Loc "" (sl + 1) sc (el + 1) ec)
-        None => JNull
-        Some converted => jObject [
-          ("end", mcpOrderedPosition (fieldOr "end" converted)),
-          ("start", mcpOrderedPosition (fieldOr "start" converted)),
-        ]
-    _ => JNull
-  _ => JNull
-
-mcpOrderedPosition : Json -> Json
-mcpOrderedPosition pos = jObject [
-  ("character", fieldOr "character" pos),
-  ("line", fieldOr "line" pos),
-]
+    toolTextResult json hasErr
 
 -- ── symbol-name addressing (#849) ───────────────────────────────────────────
 -- `medaka_type_at`/`medaka_definition` accept an alternative to a numeric
@@ -1509,9 +1437,7 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let triples = map dropQuadParse quads
     let cross = crossFileMcpFindings disable only deny quads
     let merged = mergeCrossFileIntoTriples cross triples
-    toolTextResult
-      (mcpDiagnosticJson (cjAllToJson merged) None)
-      (anyTripleHasErr merged)
+    toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 
@@ -1720,10 +1646,7 @@ testDiagnosticMessages (_, _, diags) =
   map ((Diag _ _ message _ _ _) => message) (filter diagIsError diags)
 
 testDiagnosticFile : (String, String, List Diag) -> Json
-testDiagnosticFile (path, src, diags) = match cjFileEntry path src diags
-  JObject fields =>
-    jObject (map (mcpDiagnosticField (Some (indexSource src))) (toList fields))
-  value => value
+testDiagnosticFile (path, src, diags) = cjFileEntry path src diags
 
 -- F7 (#1680/#1443): a distinct boolean field, present only when True — the
 -- human `medaka test` arm announces this on stderr (`typecheckSkipNotice`,
@@ -2019,7 +1942,6 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "clampedLocToLspRange" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "definitionResultsWithIndex" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
@@ -2088,30 +2010,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "toolArgError" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "toolArgError" ((PVar "msg")) (EApp (EApp (EVar "toolTextResult") (EVar "msg")) (EVar "True")))
 (DTypeSig false "runCheckTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runCheckTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (ETuple (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (EApp (EApp (EVar "fieldStr") (ELit (LString "source"))) (EVar "args"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: provide exactly one of 'file' or 'source', not both")))) (arm (PTuple (PCon "None") (PCon "None")) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: missing argument — provide exactly one of 'file' or 'source'")))) (arm (PTuple (PCon "Some" (PVar "path")) (PCon "None")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_check: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "toolArgError") (EBinOp "++" (ELit (LString "medaka_check: error: ")) (EVar "m")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "stdlibDir"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EVar "json")) (EVar "None"))) (EVar "hasErr"))))))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "src"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingle") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ELit (LString ""))) (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "syntheticSourceName")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EVar "json")) (EApp (EVar "Some") (EVar "src")))) (EVar "hasErr")))))))
-(DTypeSig false "mcpDiagnosticJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "mcpDiagnosticJson" ((PVar "text") (PVar "inlineSrc")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "text")) (arm (PCon "Ok" (PCon "JObject" (PVar "fields"))) () (EApp (EVar "stringify") (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EVar "mcpFilesField") (EVar "inlineSrc"))) (EApp (EVar "toList") (EVar "fields")))))) (arm (PCon "Ok" PWild) () (EVar "text"))))
-(DTypeSig false "mcpFilesField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "mcpFilesField" ((PVar "inlineSrc") (PTuple (PLit (LString "files")) (PCon "JArray" (PVar "files")))) (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticFile") (EVar "inlineSrc"))) (EApp (EVar "toList") (EVar "files"))))))
-(DFunDef false "mcpFilesField" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpDiagnosticFile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticFile" ((PVar "inlineSrc") (PVar "file")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "file")) (arm (PCon "None") () (EVar "file")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false (PVar "source") (EIf (EBinOp "==" (EVar "path") (EVar "syntheticSourceName")) (EVar "inlineSrc") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Some") (EVar "src"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "file") (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticField") (EApp (EApp (EVar "map") (EVar "indexSource")) (EVar "source")))) (EApp (EVar "toList") (EVar "fields"))))) (arm PWild () (EVar "file"))))))))
-(DTypeSig false "mcpDiagnosticField" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticField" ((PVar "source") (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticValue") (EVar "source"))) (EApp (EVar "toList") (EVar "ds"))))))
-(DFunDef false "mcpDiagnosticField" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpDiagnosticValue" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "mcpDiagnosticValue" ((PVar "source") (PCon "JObject" (PVar "fields"))) (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticPair") (EVar "source"))) (EApp (EVar "toList") (EVar "fields")))))
-(DFunDef false "mcpDiagnosticValue" (PWild (PVar "value")) (EVar "value"))
-(DTypeSig false "mcpDiagnosticPair" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticPair" ((PVar "source") (PTuple (PLit (LString "range")) (PVar "range"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "mcpRange") (EVar "source")) (EVar "range"))))
-(DFunDef false "mcpDiagnosticPair" ((PVar "source") (PTuple (PLit (LString "fix")) (PVar "fix"))) (ETuple (ELit (LString "fix")) (EApp (EApp (EVar "mcpDiagnosticValue") (EVar "source")) (EVar "fix"))))
-(DFunDef false "mcpDiagnosticPair" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpRange" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "mcpRange" (PWild (PCon "JNull")) (EVar "JNull"))
-(DFunDef false "mcpRange" ((PCon "None") PWild) (EVar "JNull"))
-(DFunDef false "mcpRange" ((PCon "Some" (PVar "index")) (PVar "range")) (EMatch (ETuple (EApp (EApp (EVar "get") (ELit (LString "start"))) (EVar "range")) (EApp (EApp (EVar "get") (ELit (LString "end"))) (EVar "range"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end"))) () (EMatch (ETuple (EApp (EApp (EVar "fieldInt") (ELit (LString "line"))) (EVar "start")) (EApp (EApp (EVar "fieldInt") (ELit (LString "character"))) (EVar "start")) (EApp (EApp (EVar "fieldInt") (ELit (LString "line"))) (EVar "end")) (EApp (EApp (EVar "fieldInt") (ELit (LString "character"))) (EVar "end"))) (arm (PTuple (PCon "Some" (PVar "sl")) (PCon "Some" (PVar "sc")) (PCon "Some" (PVar "el")) (PCon "Some" (PVar "ec"))) () (EMatch (EApp (EApp (EVar "clampedLocToLspRange") (EVar "index")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "+" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "converted")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "end")) (EApp (EVar "mcpOrderedPosition") (EApp (EApp (EVar "fieldOr") (ELit (LString "end"))) (EVar "converted")))) (ETuple (ELit (LString "start")) (EApp (EVar "mcpOrderedPosition") (EApp (EApp (EVar "fieldOr") (ELit (LString "start"))) (EVar "converted"))))))))) (arm PWild () (EVar "JNull")))) (arm PWild () (EVar "JNull"))))
-(DTypeSig false "mcpOrderedPosition" (TyFun (TyCon "Json") (TyCon "Json")))
-(DFunDef false "mcpOrderedPosition" ((PVar "pos")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "character")) (EApp (EApp (EVar "fieldOr") (ELit (LString "character"))) (EVar "pos"))) (ETuple (ELit (LString "line")) (EApp (EApp (EVar "fieldOr") (ELit (LString "line"))) (EVar "pos"))))))
+(DFunDef false "runCheckTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (ETuple (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (EApp (EApp (EVar "fieldStr") (ELit (LString "source"))) (EVar "args"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: provide exactly one of 'file' or 'source', not both")))) (arm (PTuple (PCon "None") (PCon "None")) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: missing argument — provide exactly one of 'file' or 'source'")))) (arm (PTuple (PCon "Some" (PVar "path")) (PCon "None")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_check: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "toolArgError") (EBinOp "++" (ELit (LString "medaka_check: error: ")) (EVar "m")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "stdlibDir"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EVar "json")) (EVar "hasErr"))))))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "src"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingle") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ELit (LString ""))) (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "syntheticSourceName")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EVar "json")) (EVar "hasErr")))))))
 (DTypeSig false "fieldSymbol" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "fieldSymbol" ((PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "symbol"))) (EVar "args")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "lineTextAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -2213,7 +2112,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "anyDiagErr" ((PList)) (EVar "False"))
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EVar "None"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
+(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
 (DTypeSig false "mcpTestDefaultEngines" (TyApp (TyCon "List") (TyCon "Engine")))
 (DFunDef false "mcpTestDefaultEngines" () (EListLit (EVar "EngNative")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
@@ -2270,7 +2169,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "testDiagnosticMessages" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "testDiagnosticFile" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
-(DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EMatch (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")) (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticField") (EApp (EVar "Some") (EApp (EVar "indexSource") (EVar "src"))))) (EApp (EVar "toList") (EVar "fields"))))) (arm (PVar "value") () (EVar "value"))))
+(DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")))
 (DTypeSig false "typecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "typecheckSkippedField" ((PCon "False")) (EListLit))
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
@@ -2296,7 +2195,6 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "clampedLocToLspRange" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "definitionResultsWithIndex" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
@@ -2365,30 +2263,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "toolArgError" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "toolArgError" ((PVar "msg")) (EApp (EApp (EVar "toolTextResult") (EVar "msg")) (EVar "True")))
 (DTypeSig false "runCheckTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runCheckTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (ETuple (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (EApp (EApp (EVar "fieldStr") (ELit (LString "source"))) (EVar "args"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: provide exactly one of 'file' or 'source', not both")))) (arm (PTuple (PCon "None") (PCon "None")) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: missing argument — provide exactly one of 'file' or 'source'")))) (arm (PTuple (PCon "Some" (PVar "path")) (PCon "None")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_check: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "toolArgError") (EBinOp "++" (ELit (LString "medaka_check: error: ")) (EVar "m")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "stdlibDir"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EVar "json")) (EVar "None"))) (EVar "hasErr"))))))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "src"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingle") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ELit (LString ""))) (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "syntheticSourceName")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EVar "json")) (EApp (EVar "Some") (EVar "src")))) (EVar "hasErr")))))))
-(DTypeSig false "mcpDiagnosticJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "mcpDiagnosticJson" ((PVar "text") (PVar "inlineSrc")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "text")) (arm (PCon "Ok" (PCon "JObject" (PVar "fields"))) () (EApp (EVar "stringify") (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpFilesField") (EVar "inlineSrc"))) (EApp (EMethodRef "toList") (EVar "fields")))))) (arm (PCon "Ok" PWild) () (EVar "text"))))
-(DTypeSig false "mcpFilesField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "mcpFilesField" ((PVar "inlineSrc") (PTuple (PLit (LString "files")) (PCon "JArray" (PVar "files")))) (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticFile") (EVar "inlineSrc"))) (EApp (EMethodRef "toList") (EVar "files"))))))
-(DFunDef false "mcpFilesField" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpDiagnosticFile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticFile" ((PVar "inlineSrc") (PVar "file")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "file")) (arm (PCon "None") () (EVar "file")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false (PVar "source") (EIf (EBinOp "==" (EVar "path") (EVar "syntheticSourceName")) (EVar "inlineSrc") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Some") (EVar "src"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "file") (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticField") (EApp (EApp (EMethodRef "map") (EVar "indexSource")) (EVar "source")))) (EApp (EMethodRef "toList") (EVar "fields"))))) (arm PWild () (EVar "file"))))))))
-(DTypeSig false "mcpDiagnosticField" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticField" ((PVar "source") (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticValue") (EVar "source"))) (EApp (EMethodRef "toList") (EVar "ds"))))))
-(DFunDef false "mcpDiagnosticField" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpDiagnosticValue" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "mcpDiagnosticValue" ((PVar "source") (PCon "JObject" (PVar "fields"))) (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticPair") (EVar "source"))) (EApp (EMethodRef "toList") (EVar "fields")))))
-(DFunDef false "mcpDiagnosticValue" (PWild (PVar "value")) (EVar "value"))
-(DTypeSig false "mcpDiagnosticPair" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "mcpDiagnosticPair" ((PVar "source") (PTuple (PLit (LString "range")) (PVar "range"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "mcpRange") (EVar "source")) (EVar "range"))))
-(DFunDef false "mcpDiagnosticPair" ((PVar "source") (PTuple (PLit (LString "fix")) (PVar "fix"))) (ETuple (ELit (LString "fix")) (EApp (EApp (EVar "mcpDiagnosticValue") (EVar "source")) (EVar "fix"))))
-(DFunDef false "mcpDiagnosticPair" (PWild (PVar "pair")) (EVar "pair"))
-(DTypeSig false "mcpRange" (TyFun (TyApp (TyCon "Option") (TyCon "SourceIndex")) (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "mcpRange" (PWild (PCon "JNull")) (EVar "JNull"))
-(DFunDef false "mcpRange" ((PCon "None") PWild) (EVar "JNull"))
-(DFunDef false "mcpRange" ((PCon "Some" (PVar "index")) (PVar "range")) (EMatch (ETuple (EApp (EApp (EVar "get") (ELit (LString "start"))) (EVar "range")) (EApp (EApp (EVar "get") (ELit (LString "end"))) (EVar "range"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end"))) () (EMatch (ETuple (EApp (EApp (EVar "fieldInt") (ELit (LString "line"))) (EVar "start")) (EApp (EApp (EVar "fieldInt") (ELit (LString "character"))) (EVar "start")) (EApp (EApp (EVar "fieldInt") (ELit (LString "line"))) (EVar "end")) (EApp (EApp (EVar "fieldInt") (ELit (LString "character"))) (EVar "end"))) (arm (PTuple (PCon "Some" (PVar "sl")) (PCon "Some" (PVar "sc")) (PCon "Some" (PVar "el")) (PCon "Some" (PVar "ec"))) () (EMatch (EApp (EApp (EVar "clampedLocToLspRange") (EMethodRef "index")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "+" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "converted")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "end")) (EApp (EVar "mcpOrderedPosition") (EApp (EApp (EVar "fieldOr") (ELit (LString "end"))) (EVar "converted")))) (ETuple (ELit (LString "start")) (EApp (EVar "mcpOrderedPosition") (EApp (EApp (EVar "fieldOr") (ELit (LString "start"))) (EVar "converted"))))))))) (arm PWild () (EVar "JNull")))) (arm PWild () (EVar "JNull"))))
-(DTypeSig false "mcpOrderedPosition" (TyFun (TyCon "Json") (TyCon "Json")))
-(DFunDef false "mcpOrderedPosition" ((PVar "pos")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "character")) (EApp (EApp (EVar "fieldOr") (ELit (LString "character"))) (EVar "pos"))) (ETuple (ELit (LString "line")) (EApp (EApp (EVar "fieldOr") (ELit (LString "line"))) (EVar "pos"))))))
+(DFunDef false "runCheckTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (ETuple (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (EApp (EApp (EVar "fieldStr") (ELit (LString "source"))) (EVar "args"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: provide exactly one of 'file' or 'source', not both")))) (arm (PTuple (PCon "None") (PCon "None")) () (EApp (EVar "toolArgError") (ELit (LString "medaka_check: missing argument — provide exactly one of 'file' or 'source'")))) (arm (PTuple (PCon "Some" (PVar "path")) (PCon "None")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_check: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "toolArgError") (EBinOp "++" (ELit (LString "medaka_check: error: ")) (EVar "m")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "stdlibDir"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EVar "json")) (EVar "hasErr"))))))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "src"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingle") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ELit (LString ""))) (EVar "False")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "syntheticSourceName")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EVar "json")) (EVar "hasErr")))))))
 (DTypeSig false "fieldSymbol" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "fieldSymbol" ((PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "symbol"))) (EVar "args")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "lineTextAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -2490,7 +2365,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "anyDiagErr" ((PList)) (EVar "False"))
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "mcpDiagnosticJson") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EVar "None"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
+(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
 (DTypeSig false "mcpTestDefaultEngines" (TyApp (TyCon "List") (TyCon "Engine")))
 (DFunDef false "mcpTestDefaultEngines" () (EListLit (EVar "EngNative")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
@@ -2547,7 +2422,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "testDiagnosticMessages" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EMethodRef "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "testDiagnosticFile" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
-(DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EMatch (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")) (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticField") (EApp (EVar "Some") (EApp (EVar "indexSource") (EVar "src"))))) (EApp (EMethodRef "toList") (EVar "fields"))))) (arm (PVar "value") () (EVar "value"))))
+(DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")))
 (DTypeSig false "typecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "typecheckSkippedField" ((PCon "False")) (EListLit))
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
