@@ -6,6 +6,7 @@
 -- counts codepoints, not bytes.
 
 import test.{expectEqual, expectTrue, expectFalse}
+import map.{Map}
 
 -- # Debug and Display of lists
 
@@ -295,3 +296,114 @@ test "orElseWith on None calls the fallback once" =
 
 test "orElseWith on List appends the fallback" =
   expectEqual [1, 2, 3] (orElseWith [1, 2] (u => [3]))
+
+-- # Short-circuiting folds
+
+-- Each probe returns the answer and how many times the predicate ran.
+countedAny : Foldable t => Int -> t Int -> (Bool, Int)
+countedAny target xs =
+  let calls = Ref 0
+  let r = any (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+countedAll : Foldable t => Int -> t Int -> (Bool, Int)
+countedAll limit xs =
+  let calls = Ref 0
+  let r = all (x => (calls := !calls + 1) |> (u => x < limit)) xs
+  (r, !calls)
+
+countedFind : Foldable t => Int -> t Int -> (Option Int, Int)
+countedFind target xs =
+  let calls = Ref 0
+  let r = find (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+test "any on a list stops at the hit and runs n times on a miss" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(True, 1), (True, 5), (True, 10), (False, 10)]
+    [countedAny 1 xs, countedAny 5 xs, countedAny 10 xs, countedAny 99 xs]
+
+test "any on an array stops at the hit and runs n times on a miss" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(True, 1), (True, 5), (True, 10), (False, 10)]
+    [countedAny 1 xs, countedAny 5 xs, countedAny 10 xs, countedAny 99 xs]
+
+test "all on a list stops at the first failure and runs n times on success" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(False, 1), (False, 5), (False, 10), (True, 10)]
+    [countedAll 1 xs, countedAll 5 xs, countedAll 10 xs, countedAll 99 xs]
+
+test "all on an array stops at the first failure and runs n times on success" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(False, 1), (False, 5), (False, 10), (True, 10)]
+    [countedAll 1 xs, countedAll 5 xs, countedAll 10 xs, countedAll 99 xs]
+
+test "find on a list returns the first hit and stops there" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [(Some 1, 1), (Some 5, 5), (Some 10, 10), (None, 10)]
+    [countedFind 1 xs, countedFind 5 xs, countedFind 10 xs, countedFind 99 xs]
+
+test "find on an array returns the first hit and stops there" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [(Some 1, 1), (Some 5, 5), (Some 10, 10), (None, 10)]
+    [countedFind 1 xs, countedFind 5 xs, countedFind 10 xs, countedFind 99 xs]
+
+test "find returns the first of several matches" =
+  expectEqual (Some 4) (find (x => x > 3) [1, 4, 9])
+
+test "elem on a list finds early, middle, late and misses" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "elem on an array finds early, middle, late and misses" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "any, all, elem and find on empty containers" =
+  expectEqual
+    (False, True, False, None)
+    (
+      any (x => x > 0) ([] : List Int),
+      all (x => x > 0) ([||] : Array Int),
+      elem 1 ([] : List Int),
+      find (x => x > 0) ([||] : Array Int),
+    )
+
+test "foldUntil on a list breaks with the payload and skips the rest" =
+  let calls = Ref 0
+  let step =
+    acc x =>
+      (calls := !calls + 1)
+        |> (u => if x > 2 then Break (acc * 100) else Continue (acc + x))
+  expectEqual (300, 3) (foldUntil step 0 [1, 2, 3, 4, 5], !calls)
+
+test "foldUntil on an array that never breaks folds everything" =
+  expectEqual 10 (foldUntil (acc x => Continue (acc + x)) 0 [|1, 2, 3, 4|])
+
+test "foldUntil default on Option and Result" =
+  expectEqual
+    (7, 3, 0)
+    (
+      foldUntil (acc x => Continue (acc + x)) 0 (Some 7),
+      foldUntil (acc x => Break (acc + x)) 0 (Ok 3 : Result String Int),
+      foldUntil (acc x => Continue (acc + x)) 0 (Err "e" : Result String Int),
+    )
+
+test "foldUntil default on a Map stops early" =
+  let m : Map Int Int = Map { 1 => 10, 2 => 20, 3 => 30 }
+  expectEqual
+    30
+    (foldUntil
+      (acc x => if acc + x >= 30 then Break (acc + x) else Continue (acc + x))
+      0
+      m)
