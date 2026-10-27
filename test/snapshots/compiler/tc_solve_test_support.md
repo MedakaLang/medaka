@@ -1,12 +1,14 @@
 # META
-source_lines=259
+source_lines=248
 stages=DESUGAR,MARK
 # SOURCE
--- tc_solve_test_support: the drive the four solver siblings (`tc_solve_givens_test`,
--- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`) share.  The solver modules
--- read a site context only a whole check mints, so a test of a judgment past the pure
--- projections observes it through one check of a parsed source.  Test siblings import this
--- file and no production module does.
+-- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
+-- solver through one whole check of a parsed source: its diagnostics and their codes, the
+-- route words it stamps, the schemes it publishes, the evidence and disposition it keeps.
+-- It imports `types.typecheck`, so the solver siblings (`tc_solve_givens_test`,
+-- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`), which sit below it, do
+-- not import it; they build their inputs from `tc_test_support`.  No production module
+-- imports this file.
 
 import list.{sort, filter, sortOn, indexed}
 import test.{Expectation, expectEqual}
@@ -15,8 +17,8 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import support.util.{joinNl, listLen, joinWith}
-import types.tc_mono.{tconBuiltin}
+import support.util.{joinNl, listLen}
+import string.{join}
 import types.tc_types.{
   DriveInputs(..), EvidenceObservationEntry(..), TraceSink,
   MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..),
@@ -173,10 +175,6 @@ evidenceEntriesOfKind : String ->
 evidenceEntriesOfKind kind = filter (e => e.eoeGoalKind == kind)
 
 export
-int : Mono
-int = tconBuiltin "Int"
-
-export
 drive : String -> String -> List (String, PubScheme)
 drive mid src =
   let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] [] (
@@ -202,15 +200,6 @@ monoLinks (TApp a b) = monoLinks a + monoLinks b
 monoLinks (TFun a _ b) = monoLinks a + monoLinks b
 monoLinks (TQual a _) = monoLinks a
 monoLinks _ = 0
-
-export
-numPrelude : String
-numPrelude = joinNl [
-  "interface Num a where",
-  "  fromInt : Int -> a",
-  "impl Num Int where",
-  "  fromInt _ = 0",
-]
 
 -- The evidence in ordinal order, each id replaced by its rank, then the
 -- disposition rows; `withheld` when there is no checked program.
@@ -251,7 +240,7 @@ routeText (RProj r path) = "proj(\{routeText r};\{debug path})"
 
 export
 routesText : List Route -> String
-routesText rs = joinWith "," (map routeText rs)
+routesText rs = join "," (map routeText rs)
 
 export
 valText : EvVal -> String
@@ -267,8 +256,8 @@ valText (EvHead h) = h
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false))))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "TraceSink" false) (mem "MethodReturnMemoView" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ModDiags" false) (mem "checkOneDiags" false) (mem "defaultDriveInputs" false) (mem "elaborateModules" false) (mem "tcCode" false) (mem "tcMsg" false) (mem "checkOneSchemeFullK" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "IfaceRef" true) (mem "VecObl" true))))
@@ -315,8 +304,6 @@ valText (EvHead h) = h
 (DFunDef false "modErrorCount" ((PCons (PTuple PWild (PTuple PWild (PVar "errors") PWild)) (PVar "rest"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "errors")) (EApp (EVar "modErrorCount") (EVar "rest"))))
 (DTypeSig true "evidenceEntriesOfKind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry")) (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry")))))
 (DFunDef false "evidenceEntriesOfKind" ((PVar "kind")) (EApp (EVar "filter") (ELam ((PVar "e")) (EBinOp "==" (EFieldAccess (EVar "e") "eoeGoalKind") (EVar "kind")))))
-(DTypeSig true "int" (TyCon "Mono"))
-(DFunDef false "int" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
 (DTypeSig true "drive" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "drive" ((PVar "mid") (PVar "src")) (EBlock (DoLet false false (PTuple PWild (PVar "own")) (EApp (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "defaultDriveInputs")) (EVar "None")) (EListLit)) (EListLit)) (ETuple (EVar "mid") (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EVar "own"))))
 (DTypeSig true "rendered" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -329,8 +316,6 @@ valText (EvHead h) = h
 (DFunDef false "monoLinks" ((PCon "TFun" (PVar "a") PWild (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TQual" (PVar "a") PWild)) (EApp (EVar "monoLinks") (EVar "a")))
 (DFunDef false "monoLinks" (PWild) (ELit (LInt 0)))
-(DTypeSig true "numPrelude" (TyCon "String"))
-(DFunDef false "numPrelude" () (EApp (EVar "joinNl") (EListLit (ELit (LString "interface Num a where")) (ELit (LString "  fromInt : Int -> a")) (ELit (LString "impl Num Int where")) (ELit (LString "  fromInt _ = 0")))))
 (DTypeSig true "accRenderChecked" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedProgram")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "accRenderChecked" ((PCon "None")) (EListLit (ELit (LString "withheld"))))
 (DFunDef false "accRenderChecked" ((PCon "Some" (PVar "c"))) (EBlock (DoLet false false (PVar "ordered") (EApp (EApp (EVar "sortOn") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild) () (ETuple (EVar "m") (EVar "i")))))) (EFieldAccess (EVar "c") "cpEvidence"))) (DoExpr (EBinOp "::" (ELit (LString "checked")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "ie")) (EMatch (EVar "ie") (arm (PTuple (PVar "rank") (PCon "EvEntry" PWild (PVar "v"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ev ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "rank")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "valText") (EVar "v")))) (ELit (LString ""))))))) (EApp (EVar "indexed") (EVar "ordered"))) (EApp (EApp (EVar "map") (EVar "dispositionText")) (EApp (EVar "dispositionRows") (EFieldAccess (EVar "c") "cpDispositions"))))))))
@@ -345,7 +330,7 @@ valText (EvHead h) = h
 (DFunDef false "routeText" ((PCon "RScalar" (PVar "s"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar(")) (EApp (EVar "display") (EVar "s"))) (ELit (LString ")"))))
 (DFunDef false "routeText" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "proj(")) (EApp (EVar "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString ";"))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "path")))) (ELit (LString ")"))))
 (DTypeSig true "routesText" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
-(DFunDef false "routesText" ((PVar "rs")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "routeText")) (EVar "rs"))))
+(DFunDef false "routesText" ((PVar "rs")) (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "routeText")) (EVar "rs"))))
 (DTypeSig true "valText" (TyFun (TyCon "EvVal") (TyCon "String")))
 (DFunDef false "valText" ((PCon "EvOne" (PVar "r"))) (EApp (EVar "routeText") (EVar "r")))
 (DFunDef false "valText" ((PCon "EvMany" (PVar "rs"))) (EApp (EVar "routesText") (EVar "rs")))
@@ -358,8 +343,8 @@ valText (EvHead h) = h
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false))))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "TraceSink" false) (mem "MethodReturnMemoView" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ModDiags" false) (mem "checkOneDiags" false) (mem "defaultDriveInputs" false) (mem "elaborateModules" false) (mem "tcCode" false) (mem "tcMsg" false) (mem "checkOneSchemeFullK" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "IfaceRef" true) (mem "VecObl" true))))
@@ -406,8 +391,6 @@ valText (EvHead h) = h
 (DFunDef false "modErrorCount" ((PCons (PTuple PWild (PTuple PWild (PVar "errors") PWild)) (PVar "rest"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "errors")) (EApp (EVar "modErrorCount") (EVar "rest"))))
 (DTypeSig true "evidenceEntriesOfKind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry")) (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry")))))
 (DFunDef false "evidenceEntriesOfKind" ((PVar "kind")) (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EBinOp "==" (EFieldAccess (EVar "e") "eoeGoalKind") (EVar "kind")))))
-(DTypeSig true "int" (TyCon "Mono"))
-(DFunDef false "int" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
 (DTypeSig true "drive" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "drive" ((PVar "mid") (PVar "src")) (EBlock (DoLet false false (PTuple PWild (PVar "own")) (EApp (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "defaultDriveInputs")) (EVar "None")) (EListLit)) (EListLit)) (ETuple (EVar "mid") (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EVar "own"))))
 (DTypeSig true "rendered" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -420,8 +403,6 @@ valText (EvHead h) = h
 (DFunDef false "monoLinks" ((PCon "TFun" (PVar "a") PWild (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TQual" (PVar "a") PWild)) (EApp (EVar "monoLinks") (EVar "a")))
 (DFunDef false "monoLinks" (PWild) (ELit (LInt 0)))
-(DTypeSig true "numPrelude" (TyCon "String"))
-(DFunDef false "numPrelude" () (EApp (EVar "joinNl") (EListLit (ELit (LString "interface Num a where")) (ELit (LString "  fromInt : Int -> a")) (ELit (LString "impl Num Int where")) (ELit (LString "  fromInt _ = 0")))))
 (DTypeSig true "accRenderChecked" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedProgram")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "accRenderChecked" ((PCon "None")) (EListLit (ELit (LString "withheld"))))
 (DFunDef false "accRenderChecked" ((PCon "Some" (PVar "c"))) (EBlock (DoLet false false (PVar "ordered") (EApp (EApp (EVar "sortOn") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild) () (ETuple (EVar "m") (EVar "i")))))) (EFieldAccess (EVar "c") "cpEvidence"))) (DoExpr (EBinOp "::" (ELit (LString "checked")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "ie")) (EMatch (EVar "ie") (arm (PTuple (PVar "rank") (PCon "EvEntry" PWild (PVar "v"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ev ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "rank")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "valText") (EVar "v")))) (ELit (LString ""))))))) (EApp (EVar "indexed") (EVar "ordered"))) (EApp (EApp (EMethodRef "map") (EVar "dispositionText")) (EApp (EVar "dispositionRows") (EFieldAccess (EVar "c") "cpDispositions"))))))))
@@ -436,7 +417,7 @@ valText (EvHead h) = h
 (DFunDef false "routeText" ((PCon "RScalar" (PVar "s"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar(")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ")"))))
 (DFunDef false "routeText" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "proj(")) (EApp (EMethodRef "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString ";"))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "path")))) (ELit (LString ")"))))
 (DTypeSig true "routesText" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
-(DFunDef false "routesText" ((PVar "rs")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "routeText")) (EVar "rs"))))
+(DFunDef false "routesText" ((PVar "rs")) (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "routeText")) (EVar "rs"))))
 (DTypeSig true "valText" (TyFun (TyCon "EvVal") (TyCon "String")))
 (DFunDef false "valText" ((PCon "EvOne" (PVar "r"))) (EApp (EVar "routeText") (EVar "r")))
 (DFunDef false "valText" ((PCon "EvMany" (PVar "rs"))) (EApp (EVar "routesText") (EVar "rs")))

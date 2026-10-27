@@ -1,16 +1,19 @@
 -- Tests of `types.tc_solve_givens`'s own API: the pure projections of predicate slots, the
 -- request-against-slot match that routes a goal to a given, the given store (`pushGiven`,
 -- `givensForScope`, `goalMatchesGiven`, `projectedGivenOf`) with its scope visibility, the
--- route a binder stamps, the slot position of an enclosing function's tyvar, and `oblArgKey`;
--- then the rejections and acceptances a signature's givens produce through one whole check.
+-- route a binder stamps, and the slot position of an enclosing function's tyvar.
 -- One property: adding a given never removes a goal a given already answered.  Each test
--- mints its own graph record.
+-- mints its own graph record.  The rejections and acceptances a signature's givens
+-- produce through one whole check are in `typecheck_test`.
 
-import types.tc_mono.{tconFrom, tconBuiltin, oblArgKey}
-import list.{lookup, reverse, zip}
-import support.util.{joinNl}
+import types.tc_mono.{tconFrom}
+import list.{reverse}
 import test.{
-  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectTrue,
 }
 import frontend.ast.{Route(..), TyConOrigin(..)}
 import support.ordmap.{omEmpty, omInsert}
@@ -27,7 +30,6 @@ import types.tc_solve_givens.{
   givenRoute,
   givensForScope,
   goalMatchesGiven,
-  indexOfId,
   predicateRequestMatchesSlot,
   predicateSlotIds,
   predicateSlotIdsAt,
@@ -35,9 +37,8 @@ import types.tc_solve_givens.{
   pushGiven,
   assumAnswerEvidence,
 }
-import types.tc_solve_test_support.{expectChecks, expectRejectedWith}
 import types.tc_state.{currentScopeStore, dictParamName, probeGraphCtx}
-import types.tc_test_support.{fresh}
+import types.tc_test_support.{boolM, fresh, ifaceOf, intM, varM}
 import types.tc_types.{
   AssumAnswer(..), GivenEntry(..), GivenMatch(..), GivenProvenance(..),
   GivenScope(..), GraphCtx, PredicateRequest(..), PredicateSlot(..),
@@ -45,18 +46,6 @@ import types.tc_types.{
 }
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
-
-ifaceOf : String -> IfaceRef
-ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
-
-intM : Mono
-intM = tconBuiltin "Int"
-
-boolM : Mono
-boolM = tconBuiltin "Bool"
-
-varM : Int -> Mono
-varM id = TVar (Ref (Unbound id 0))
 
 slotOf : String -> List Mono -> List Int -> PredicateSlot
 slotOf name args ids = PredicateSlot {
@@ -109,14 +98,6 @@ test "predicateSlotIdsAt reads the named function's slots and nothing for an unk
   expectAll [
     expectEqual [3, 7] (predicateSlotIdsAt "f" idx),
     expectEqual [] (predicateSlotIdsAt "g" idx),
-  ]
-
-test "indexOfId gives the first position of an id and nothing when it is absent" = expectAll
-  [
-    expectEqual (Some 0) (indexOfId 5 [5, 6, 5]),
-    expectEqual (Some 2) (indexOfId 7 [5, 6, 7]),
-    expectEqual None (indexOfId 8 [5, 6, 7]),
-    expectEqual None (indexOfId 1 []),
   ]
 
 test "enclSlot is the position of a tyvar among the enclosing function's slot ids" =
@@ -389,99 +370,6 @@ test "givenRoute reads the binder's dictionary parameter, forwarding in return p
       (dictRead (givenRoute gctx True binder)),
   ]
 
--- ── oblArgKey ─────────────────────────────────────────────────────────────
-
-test "oblArgKey tells heads, applications and arrows apart" =
-  let pair = TApp (TApp (tconFrom (OriginModule "probe") "Pair") intM) boolM
-  expectAll [
-    expectNotEqual (oblArgKey intM) (oblArgKey boolM),
-    expectNotEqual
-      (oblArgKey pair)
-      (oblArgKey
-        (TApp (TApp (tconFrom (OriginModule "probe") "Pair") boolM) intM)),
-    expectNotEqual
-      (oblArgKey (TApp intM boolM))
-      (oblArgKey (TFun intM pureRow boolM)),
-    expectEqual (oblArgKey pair) (oblArgKey pair),
-  ]
-
-test "oblArgKey keys a variable by its id and reads a rigid like a constructor of that name" = expectAll
-  [
-    expectEqual (oblArgKey (varM 3)) (oblArgKey (varM 3)),
-    expectNotEqual (oblArgKey (varM 3)) (oblArgKey (varM 4)),
-    expectEqual (oblArgKey (TRigid "Int")) (oblArgKey intM),
-    expectNotEqual
-      (oblArgKey
-        (TApp
-          (tconFrom (OriginModule "probe") "ab")
-          (tconFrom (OriginModule "probe") "c")))
-      (oblArgKey
-        (TApp
-          (tconFrom (OriginModule "probe") "a")
-          (tconFrom (OriginModule "probe") "bc"))),
-  ]
-
--- ── what a signature's givens accept and reject through one check ─────────
-
-sizeable : String
-sizeable =
-  """
-interface Sz a where
-  sz : a -> Int
-impl Sz Int where
-  sz _ = 1
-"""
-
-test "a signature's constraint is a given for its body" =
-  expectChecks (joinNl [sizeable, "g : Sz a => a -> Int", "g x = sz x"])
-
-test "a body that needs a constraint its signature omits is rejected as a missing constraint" =
-  expectRejectedWith
-    ["T-MISSING-CONSTRAINT"]
-    (joinNl [sizeable, "g : a -> Int", "g x = sz x"])
-
-test "a given's superclass closure answers a goal on the super" =
-  expectChecks
-    """
-\{sizeable}
-interface Sz2 a requires Sz a where
-  sz2 : a -> Int
-h : Sz2 a => a -> Int
-h x = sz x
-"""
-
-test "a given of the super does not answer a goal on the sub" =
-  expectRejectedWith
-    ["T-MISSING-CONSTRAINT"]
-    """
-\{sizeable}
-interface Sz2 a requires Sz a where
-  sz2 : a -> Int
-h : Sz a => a -> Int
-h x = sz2 x
-"""
-
-test "an impl's requires slot is a given for the impl's methods" =
-  expectChecks
-    """
-\{sizeable}
-data Box a = Box a
-impl Sz (Box a) requires Sz a where
-  sz (Box x) = sz x
-"""
-
-test "a requires the impl does not declare is rejected at the use" =
-  expectRejectedWith
-    ["T-MISSING-CONSTRAINT"]
-    """
-\{sizeable}
-data Box a = Box a
-impl Sz (Box a) requires Sz a where
-  sz (Box x) = sz x
-k : a -> Int
-k v = sz (Box v)
-"""
-
 -- ── the law ───────────────────────────────────────────────────────────────
 
 -- A given, as the model sees it: an interface index and a closed argument type.
@@ -537,7 +425,7 @@ pushAll gctx scope ordinal ((i, t) :: rest) =
   pushAll gctx scope (ordinal + 1) rest
 
 ifaceName : Int -> String
-ifaceName i = optionOr "I" (lookup i (zip [0, 1, 2] ["I0", "I1", "I2"]))
+ifaceName i = "I\{intToString i}"
 
 -- Law: a goal a set of givens answers is still answered after one more given is added.
 -- Precondition: the goal is answered by the first set, which the generator makes likely

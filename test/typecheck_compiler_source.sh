@@ -1000,9 +1000,9 @@ goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
 goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
 activeDictVarOfEncl mctx None m encl useScope =
-map LegacyScalar (activeDictVarForEncl mctx.mcGraph m useScope)
+map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
-enclSlotIndex mctx None target encl = indexOfId target (enclSlotIds mctx encl)
+enclSlotIndex mctx None target encl = elemIndex target (enclSlotIds mctx encl)
 enclSlotIndex mctx (Some request) target encl =
 implReqDictVarOf mctx.mcGraph (Some request) m useScope
 entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
@@ -1148,12 +1148,12 @@ printf '%s\n' "$method_row_types_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$predicate_slot_rows_src")"
+method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$tc_union_src")"
 if [ "$method_row_current_count" -ne 1 ]; then
   echo "FAIL: expected exactly one current-module ifaceMethodSchemeRows construction, got $method_row_current_count"
   exit 1
 fi
-method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$predicate_slot_rows_src")"
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$tc_union_src")"
 if [ "$method_row_module_count" -ne 1 ]; then
   echo "FAIL: expected exactly one visible-module ifaceMethodSchemeRows construction, got $method_row_module_count"
   exit 1
@@ -1626,24 +1626,20 @@ done || exit 1
 # body's dict: every hit is gated on the binder's scope being visible from the site
 # (`firstDictForEncl`'s `givenVisibleFrom`), which is what also lets a test or prop
 # body -- no enclosing declaration name -- read a local binding's own givens.
-lexical_dict_block="$(slice_rows activeDictVarForEncl firstDictForEncl)"
+lexical_dict_block="$(slice_rows activeDictVarOf activeDictVarAnswering)"
 first_dict_block="$(sed -n '/^firstDictForEncl :/,/^$/p' "$tc_solve_givens_src")"
 printf '%s\n' "$first_dict_block" | grep -Fq 'Scopes.givenVisibleFrom' || {
   echo "FAIL: firstDictForEncl must gate every hit on lexical scope visibility"
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {
-  echo "FAIL: activeDictVarForEncl must retain its type-variable lookup arm"
+  echo "FAIL: activeDictVarOf must retain its type-variable lookup arm"
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'firstDictForEncl' || {
-  echo "FAIL: activeDictVarForEncl must use the scoped binder lookup"
+  echo "FAIL: activeDictVarOf must use the scoped binder lookup"
   exit 1
 }
-if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
-  echo "FAIL: activeDictVarForEncl retains a non-lexical global fallback"
-  exit 1
-fi
 
 operator_owner_required='argImplDictRoutesForEncl sx encl useScope dictName tag subject goals
 entailInst sx name m encl useScope tag (EKOp isBinop _) =
@@ -1679,7 +1675,7 @@ printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDi
 # `firstPredForEnclAt`'s; merging the two tables into `gGiven` merged the two scans, so
 # the drop from six to five is the split authority going away, not a consumer losing the
 # relation.
-predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_rows_src" \
+predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$tc_union_src" \
   | grep -cvE '^[[:space:]]*--')
 if [ "$predicate_relation_uses" -ne 5 ]; then
   echo "FAIL: #1318 shared request/slot relation must serve all four identity consumers plus its definition (got $predicate_relation_uses)"

@@ -39,8 +39,9 @@ import types.typecheck.{
   elaborateModulesReport, elaborateModulesWithReport, tcCode, tcConfigOf, tcMsg
 }
 import types.tc_solve_test_support.{
-  int, drive, rendered, linkCount, numPrelude, accRenderChecked
+  drive, rendered, linkCount, numericPreludeSource, accRenderChecked
 }
+import types.tc_test_support.{intM}
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}
@@ -325,7 +326,7 @@ test "changed requests publish after warm prefix replay and profile changes" =
   ]
 
 test "checked scheme indexes preserve the first published row in own and core scopes" =
-  let first = pub (plainScheme int)
+  let first = pub (plainScheme intM)
   let later =
     pub
       (Forall
@@ -334,7 +335,7 @@ test "checked scheme indexes preserve the first published row in own and core sc
         []
         []
         (EffRow [Atom (EffLabel "Clock" OriginBuiltin) (AConst PUnit)] None)
-        int)
+        intM)
   let rows = [("same", first), ("same", later)]
   let ops = InvocationOps {
     headVariances = _ => None,
@@ -379,7 +380,7 @@ test "frozen selected manifests survive source cell mutation and P U P publicati
       [5500]
       []
       (EffRow [Atom (EffLabel "Net" OriginBuiltin) (AVar cell)] None)
-      int
+      intM
   let ops = InvocationOps {
     headVariances = _ => None,
     appliedFields = _ => [],
@@ -399,7 +400,7 @@ test "frozen selected manifests survive source cell mutation and P U P publicati
   let before = map manifestAtoms frozen
   let _ =
     cell := ALink 5500 (PPrefix None) (AConst (PPrefix (Some "changed/*")))
-  let (_, unrelated, _) = select [("p", pub (plainScheme int))]
+  let (_, unrelated, _) = select [("p", pub (plainScheme intM))]
   let (_, republished, _) = select [("p", pub s)]
   expectEach [
     ("P", expectEqual [[("Net", "variable:path")]] before),
@@ -635,7 +636,7 @@ frozenBody : PubScheme -> Mono
 frozenBody (PubScheme { psScheme = (Forall _ _ _ _ _ t) }) = t
 
 test "a Link chain is followed and no live cell remains" =
-  let inner = Ref (Link int)
+  let inner = Ref (Link intM)
   let outer = Ref (Link (TVar inner))
   let (_, s) = zonkScheme emptyZonk (plainScheme (TVar outer))
   expectEach [
@@ -649,12 +650,12 @@ test "a Link chain is followed and no live cell remains" =
 
 test "a free Unbound is re-minted with its id and reported as FreeMeta" =
   let src = Ref (Unbound 7 3)
-  let p = freezePub (plainScheme (TFun (TVar src) pureRow int)) []
+  let p = freezePub (plainScheme (TFun (TVar src) pureRow intM)) []
   let reminted = match frozenBody p
     TFun (TVar c) _ _ => c
     _ => src
   let found = liveCells "f" p
-  let _ = reminted := Link int
+  let _ = reminted := Link intM
   expectEach [
     (
       "source cell not written",
@@ -675,7 +676,7 @@ test "a quantified id is not a live cell" =
 test "an ELink tail is followed to the unbound cell" =
   let leaf = Ref (EUnbound 4 1)
   let link = Ref (ELink 3 (EffRow [] (Some leaf)))
-  let body = TFun int (EffRow [] (Some link)) int
+  let body = TFun intM (EffRow [] (Some link)) intM
   let (_, Forall _ _ _ _ _ t) = zonkScheme emptyZonk (plainScheme body)
   let p = freezePub (scheme [] [4] [] pureRow body) []
   expectEach [
@@ -685,11 +686,11 @@ test "an ELink tail is followed to the unbound cell" =
 
 test "an unlinked ELink in tail position is a LinkCell" =
   let link = Ref (ELink 3 (EffRow [] None))
-  let p = pub (plainScheme (TFun int (EffRow [] (Some link)) int))
+  let p = pub (plainScheme (TFun intM (EffRow [] (Some link)) intM))
   expectEqual [LinkCell "f" EffVarK (Some 3)] (liveCells "f" p)
 
 test "a type-variable Link left in a scheme is a LinkCell with no id" =
-  let p = pub (plainScheme (TFun (TVar (Ref (Link int))) pureRow int))
+  let p = pub (plainScheme (TFun (TVar (Ref (Link intM))) pureRow intM))
   expectEqual [LinkCell "f" TyVarK None] (liveCells "f" p)
 
 test "a rebuilt EJoin keeps one frozen cell per member id" =
@@ -697,7 +698,8 @@ test "a rebuilt EJoin keeps one frozen cell per member id" =
   let m2 = Ref (EUnbound 2 1)
   let j1 = Ref (EJoin 10 1 [m1, m2])
   let j2 = Ref (EJoin 11 1 [m2, m1])
-  let body = TFun int (EffRow [] (Some j1)) (TFun int (EffRow [] (Some j2)) int)
+  let body =
+    TFun intM (EffRow [] (Some j1)) (TFun intM (EffRow [] (Some j2)) intM)
   let p = freezePub (scheme [] [1, 2] [] pureRow body) []
   let (r1, r2) = match frozenBody p
     TFun _ a (TFun _ b _) => (a, b)
@@ -722,7 +724,7 @@ test "a rebuilt EJoin keeps one frozen cell per member id" =
 test "an AVar link is followed and an unbound AVar is re-minted" =
   let inner = Ref (AUnbound 6 1 PUnit False None)
   let linked = Ref (ALink 5 PUnit (AVar inner))
-  let body = TQual int (AVar linked)
+  let body = TQual intM (AVar linked)
   let (_, Forall _ _ _ _ _ t) = zonkScheme emptyZonk (plainScheme body)
   let id = match t
     TQual _ (AVar c) => authvarId c
@@ -739,7 +741,7 @@ test "an AVar link is followed and an unbound AVar is re-minted" =
 
 test "an unsolved ESummary is an OpenSummary" =
   let sum = Ref (ESummary 12 0 0)
-  let p = freezePub (plainScheme (TFun int (EffRow [] (Some sum)) int)) []
+  let p = freezePub (plainScheme (TFun intM (EffRow [] (Some sum)) intM)) []
   expectEqual [OpenSummary "f" 12] (liveCells "f" p)
 
 test "freeze shares one cell per id between a scheme and its context" =
@@ -754,7 +756,7 @@ test "freeze shares one cell per id between a scheme and its context" =
     [VecObl { voArgs = [TVar c] }] => Some c
     _ => None
   let _ = match schemeCell
-    Some c => c := Link int
+    Some c => c := Link intM
     None => ()
   let seen = match ctxCell
     Some c => match !c
@@ -1057,7 +1059,7 @@ checkedWeak mods residual =
       noEntryTables).trChecked
 
 weakScheme : PubScheme
-weakScheme = pub (plainScheme (TFun (tvar 7) pureRow int))
+weakScheme = pub (plainScheme (TFun (tvar 7) pureRow intM))
 
 someDiag : TcDiag
 someDiag = TcDiag "E0001" 1 None "boom" None None
@@ -1074,12 +1076,13 @@ test "graphReport: a residual diagnostic withholds the checked program" =
   expectEqual None (checkedWeak [modOf [] []] [("m", someDiag)])
 
 test "graphReport: a left LinkCell withholds the checked program" =
-  let linked = pub (plainScheme (TFun (TVar (Ref (Link int))) pureRow int))
+  let linked = pub (plainScheme (TFun (TVar (Ref (Link intM))) pureRow intM))
   expectEqual None (checkedWeak [modOf [("f", linked)] []] [])
 
 test "graphReport: an open summary withholds the checked program" =
   let unsolved =
-    pub (plainScheme (TFun int (EffRow [] (Some (Ref (ESummary 12 0 0)))) int))
+    pub
+      (plainScheme (TFun intM (EffRow [] (Some (Ref (ESummary 12 0 0)))) intM))
   expectEqual None (checkedWeak [modOf [("f", unsolved)] []] [])
 
 -- ── checkModules freezes its result ────────────────────────────────────────
@@ -1558,7 +1561,7 @@ ownDrive owned =
       "own-chain"
       [Some "m-step", None]
       (desugar (parse ownRuntime))
-      (desugar (parse numPrelude))
+      (desugar (parse numericPreludeSource))
       [
         ("m", desugar (parseLocated ownMod)),
         (
@@ -1794,7 +1797,7 @@ test "missing selected owner view withholds checked manifests" =
           EntryKey { moduleId = "dep", binding = "make" }
           HostInvocation,
       ]
-      [("dep", ([("make", pub (plainScheme int))], [], []))]
+      [("dep", ([("make", pub (plainScheme intM))], [], []))]
       []
       noEntryOutcome
       None

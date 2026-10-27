@@ -1,5 +1,5 @@
 # META
-source_lines=2898
+source_lines=2883
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -58,7 +58,6 @@ import types.tc_types.{
   GraphCtx,
   ImplEnv,
   ImplRow,
-  ImplUniverse,
   LocalAbs,
   MethodPredicateSlot,
   MethodPredicateTemplate,
@@ -103,7 +102,6 @@ import types.tc_mono.{
   rigidSigPairs,
   sigCellsOf,
   sigRigidBindings,
-  sigStandIn,
   stripArrows,
   stripTyConstraints,
   substMono,
@@ -126,7 +124,6 @@ import types.tc_state.{
 import types.tc_env.{
   anyArgMentions,
   dispatchTyparams,
-  dispHeadTab,
   ieHeadRows,
   ieRowIfaceMatches,
   ieRowOfIface,
@@ -137,7 +134,6 @@ import types.tc_env.{
   methodRowIface,
   methodRowTestIface,
   methodSlotKey,
-  oblIfaceKey,
   originMethodName,
   sameIfaceDecl,
 }
@@ -188,7 +184,6 @@ import types.tc_solve_entail.{
   goalRows,
   ieSelectRowByIface,
   implDictRoutesForRow,
-  implHeadSubst,
   paramMonoOf,
   positionBindings,
   repeatedBindings,
@@ -244,7 +239,8 @@ import types.evidence.{
   goalIdForDestination,
 }
 import types.registry.{
-  HeadKey(..), headKeyTag, mregLookupK, regKeyNTab, regKeyOfTab
+  HeadKey(..),
+  headKeyTag,
 }
 import types.repr.{
   IfaceRef(..), Mono(..), Tyvar(..), lookupAssocI, normalize, ppMono, tupleSpine
@@ -270,7 +266,7 @@ import support.util.{
   splitOnChar,
 }
 import types.runtime_ops.{arithmeticTag}
-import list.{drop, head, indexed, reverse, take, zip}
+import list.{drop, get, head, indexed, reverse, take, zip}
 import string.{join}
 import types.route_key.{ifaceWordOf}
 import types.evidence_complete.{innerNone, innerOr}
@@ -499,8 +495,8 @@ methodReturnWanted mctx request = match methodReturnInstantiation mctx request
 -- an interface occurrence whose identity is not (yet) recoverable at the site.
 --
 -- `recordCallObligations` and `recordSchemeCallObligations` carry an `IfaceRef`
--- end to end (`funConstraintIfacesRef`'s payload is `List IfaceRef`,
--- `schemeObligationsRef`'s is `List VecObl`), so neither mints a bare goal.
+-- end to end (a `funPredicateSlotsRef` slot names its `IfaceRef`,
+-- `schemeObligationsRef`'s payload is `List VecObl`), so neither mints a bare goal.
 -- What is LEFT — grep this name for the live worklist, do not trust this list:
 --   * `recordImplObligation`'s METHOD-OCCURRENCE goal, which is a decl-layer /
 --     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
@@ -513,8 +509,7 @@ export
 ifaceRefBare : String -> IfaceRef
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 
--- U1b (#1482): the ABSENT-interface sentinel for the slot-parallel iface channels.
--- `funConstraintIfacesRef` has always used `""` to mean "this slot has no recoverable
+-- The ABSENT-interface sentinel: the empty name means "this slot has no recoverable
 -- interface" (see `ifaceForInferredId`), and every reader tests it and skips.  It is
 -- deliberately NOT spelled `ifaceRefBare ""`: that name is the residual worklist for a
 -- goal whose identity is UNRECOVERABLE, and "no interface at all" is a different fact
@@ -796,12 +791,6 @@ walkGoalSame iface args otherIface otherArgs =
   sameIfaceDecl iface otherIface && walkMonosSame args otherArgs
 
 export
-nthInt : Int -> List Int -> Int
-nthInt _ [] = 0 - 1
-nthInt 0 (x :: _) = x
-nthInt i (_ :: xs) = nthInt (i - 1) xs
-
-export
 isLocalAbsName : String -> Bool
 isLocalAbsName n = endsWith "$lb" n
 
@@ -933,10 +922,6 @@ isUndecided _ = False
 isSelection : AdmittedAnswer -> Bool
 isSelection (Selects _ _ _) = True
 isSelection _ = False
-
-export
-anyIn : List Int -> List Int -> Bool
-anyIn xs ys = anyList (x => containsI x ys) xs
 
 -- [base] plus each variable of [args] whose level is below [level].
 export
@@ -1487,7 +1472,7 @@ methodPredicateRoute sx encl scope slot = match slot.psArgs
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
 -- A deferred recursive call records one route per the CALLEE's constraint slot
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
--- ENCLOSING fn's own dict param.  Run after inference, when funConstraintsRef is
+-- ENCLOSING fn's own dict param.  Run after inference, when `funPredicateSlotsRef` is
 -- fully populated.
 export
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
@@ -2074,7 +2059,7 @@ siblingStaysSatisfiable : ModuleCtx ->
   Bool
 siblingStaysSatisfiable mctx scratch bound s =
   let args = map normalize (uOblArgs mctx.mcGraph s)
-  if not (anyIn (flatMap monoUnboundIds args) bound) then
+  if not (any (i => elem i bound) (flatMap monoUnboundIds args)) then
     True
   else
     let after = map (cohApply scratch) args
@@ -2281,7 +2266,7 @@ residualSelectionStable : ModuleCtx ->
   List Mono ->
   Bool
 residualSelectionStable mctx chosen context iface args
-  | not (anyIn (flatMap monoUnboundIds args) chosen) = True
+  | not (any (i => elem i chosen) (flatMap monoUnboundIds args)) = True
   | otherwise =
     goalSelectionStable mctx chosen iface args
       && allList
@@ -2298,7 +2283,7 @@ residualSelectionStable mctx chosen context iface args
 -- become a type another instance head needs.
 goalSelectionStable : ModuleCtx -> List Int -> IfaceRef -> List Mono -> Bool
 goalSelectionStable mctx chosen iface args =
-  if not (anyIn (flatMap monoUnboundIds args) chosen) then
+  if not (any (i => elem i chosen) (flatMap monoUnboundIds args)) then
     True
   else match stableGoalReach mctx chosen iface args
     ReachMany => False
@@ -2355,7 +2340,7 @@ goalSelectionStable mctx chosen iface args =
 -- library module reaches this gate BEFORE its own generalization has registered anything
 -- (MEASURED on `test/dict_fixtures/s-open-world-library-dependent-impl/lib.mdk`: the
 -- second check pass reaches the goal `Tag (Wrap α)` with an EMPTY given registry and no
--- `funConstraintArgsRef` row for `describe`), so its scheme is still open and the goal
+-- `funPredicateSlotsRef` row for `describe`), so its scheme is still open and the goal
 -- is what will populate it.  A binding whose constraint set is already REGISTERED is
 -- fixed — declared or inferred — and a goal claiming its variables must be in it.
 --
@@ -2381,13 +2366,11 @@ goalDefersOpenWorld mctx scope iface args =
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
 --   * NON-EMPTY.  It returns `()` for the empty vector and registers nothing, so an
---     empty goal can never acquire an answer.  (This used to read "ARITY 1", because the
---     registry matched `[subject]` only — #1956 replaced that narrowing with the whole
+--     empty goal can never acquire an answer.  (The registry matches the whole argument
 --     vector on all three channels (`requires`, declared, inferred), so a MULTI-PARAMETER
---     structured goal now DOES have a consumption-side answer and this arm no longer
---     withholds it.  The programs that pinned the old wording — `e1_inf_multi.mdk`
---     (`h x = conv (Wrap x) 0`, no signature) and its signatured twin `a2_twoarg.mdk` —
---     are re-measured against this widening, not assumed: see the S-nary-given report.)
+--     structured goal has a consumption-side answer and this arm withholds none.
+--     `e1_inf_multi.mdk` (`h x = conv (Wrap x) 0`, no signature) and its signatured twin
+--     `a2_twoarg.mdk` pin it.)
 --   * UNCLAIMED.  See below; this is the arm that keeps #1939 shape (2) accepted.
 --     Asked of the vector's WHOLE unbound-id set, for the same reason the match above is
 --     pointwise: a slot is open only if NO binding has already fixed a context claiming
@@ -2400,7 +2383,7 @@ goalSlotStillOpen mctx args =
 -- has some binding's constraint set ALREADY been registered against one of [ids]?  If
 -- so that binding's context is fixed and this goal must be part of it; if not, the
 -- binding is still generalizing and this goal is what will open its slot.  Reads
--- `funConstraintArgsRef`, which both channels write (`registerMember` for a declared
+-- `funPredicateSlotsRef`, which both channels write (`registerMember` for a declared
 -- context, `registerInferredFor` for an inferred one), so the test does not distinguish
 -- them — the fixedness, not the channel, is what decides.
 goalIdsClaimed : ModuleCtx -> List Int -> Bool
@@ -2412,7 +2395,7 @@ anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClaimRow _ [] = False
 anyClaimRow ids ((_, slots) :: rest) =
   anyList
-      (v => anyList (m => anyIn (monoTyvarIds m) ids) v)
+      (v => anyList (m => any (i => elem i ids) (monoTyvarIds m)) v)
       (predicateSlotArgs slots)
     || anyClaimRow ids rest
 
@@ -2781,7 +2764,9 @@ methodSlotIdsAtPositions : List Int ->
   List MethodPredicateSlot ->
   List (List Int)
 methodSlotIdsAtPositions ids slots =
-  map (slot => map (pos => nthInt pos ids) slot.mpsPositions) slots
+  map
+    (slot => map (pos => optionOr (0 - 1) (get pos ids)) slot.mpsPositions)
+    slots
 
 export
 methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)
@@ -2901,28 +2886,28 @@ methodReturnMemoCurrentViews gctx =
       gctx.graphRun.evTable.value
       gctx.graphRun.goals.value)
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EntailKind" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "StampCtx" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ImplUniverse" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false) (mem "TraceSink" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "sigStandIn" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EntailKind" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "StampCtx" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false) (mem "TraceSink" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "locKey" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "initialModuleCtx" false) (mem "moduleCtxFrom" false) (mem "moduleWindow" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "dispHeadTab" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "oblIfaceKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "anyGivenMatches" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "firstPredForEncl" false) (mem "firstPredForEnclAt" false) (mem "firstPredForEnclResidual" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "lookupPredicateSlots" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false) (mem "pushGiven" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "entail" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "implDictRoutesForRow" false) (mem "implHeadSubst" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "entail" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "implDictRoutesForRow" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SuperEvidence" true) (mem "goalIdForDestination" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregLookupK" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false) (mem "innerOr" false))))
@@ -3040,10 +3025,6 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "noteWalkGoalFollowed" ((PVar "walk") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoLet false false (PVar "key") (EApp (EVar "enteredGoalKey") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmFollowed")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "iface") (EVar "args")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmFollowed") "value"))))) (EFieldAccess (EFieldAccess (EVar "memo") "wmFollowed") "value"))))))
 (DTypeSig false "walkGoalSame" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "walkGoalSame" ((PVar "iface") (PVar "args") (PVar "otherIface") (PVar "otherArgs")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EVar "iface")) (EVar "otherIface")) (EApp (EApp (EVar "walkMonosSame") (EVar "args")) (EVar "otherArgs"))))
-(DTypeSig true "nthInt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int"))))
-(DFunDef false "nthInt" (PWild (PList)) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))
-(DFunDef false "nthInt" ((PLit (LInt 0)) (PCons (PVar "x") PWild)) (EVar "x"))
-(DFunDef false "nthInt" ((PVar "i") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "nthInt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "isLocalAbsName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isLocalAbsName" ((PVar "n")) (EApp (EApp (EVar "endsWith") (ELit (LString "$lb"))) (EVar "n")))
 (DTypeSig true "localSourceName" (TyFun (TyCon "String") (TyCon "String")))
@@ -3072,8 +3053,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "isSelection" (TyFun (TyCon "AdmittedAnswer") (TyCon "Bool")))
 (DFunDef false "isSelection" ((PCon "Selects" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isSelection" (PWild) (EVar "False"))
-(DTypeSig true "anyIn" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "anyIn" ((PVar "xs") (PVar "ys")) (EApp (EApp (EVar "anyList") (ELam ((PVar "x")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig true "outerRigidIds" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "outerRigidIds" ((PVar "outerBelow") (PVar "args") (PVar "base")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "intToString")) (EApp (EApp (EVar "enclosingVarIds") (EVar "outerBelow")) (EVar "args")))) (EVar "base")))
 (DTypeSig true "enclosingVarIds" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3249,7 +3228,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "siblingsStaySatisfiable" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GoalWindow") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Bool")))))
 (DFunDef false "siblingsStaySatisfiable" ((PVar "mctx") (PVar "window") (PVar "subst")) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "subst"))) (DoLet false false (PVar "scratch") (EApp (EVar "Ref") (EVar "subst"))) (DoExpr (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EFieldAccess (EVar "window") "gwByIndex")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EVar "siblingStaysSatisfiable") (EVar "mctx")) (EVar "scratch")) (EVar "bound")) (EVar "s"))) (arm (PCon "None") () (EVar "True"))))) (EApp (EVar "dedupI") (EApp (EApp (EVar "flatMap") (EApp (EVar "goalsOnVar") (EVar "window"))) (EVar "bound")))))))
 (DTypeSig false "siblingStaysSatisfiable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UObligation") (TyCon "Bool"))))))
-(DFunDef false "siblingStaysSatisfiable" ((PVar "mctx") (PVar "scratch") (PVar "bound") (PVar "s")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "bound"))) (EVar "True") (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "map") (EApp (EVar "cohApply") (EVar "scratch"))) (EVar "args"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "after"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "ieRowTys") (EVar "row"))) (EApp (EVar "listLen") (EVar "after"))) (EApp (EApp (EApp (EVar "rowHeadMatches") (EVar "mctx")) (EVar "after")) (EVar "row"))))) (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EFieldAccess (EFieldAccess (EVar "s") "pred") "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "after")))))))))))
+(DFunDef false "siblingStaysSatisfiable" ((PVar "mctx") (PVar "scratch") (PVar "bound") (PVar "s")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "any") (ELam ((PVar "i")) (EApp (EApp (EVar "elem") (EVar "i")) (EVar "bound")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "map") (EApp (EVar "cohApply") (EVar "scratch"))) (EVar "args"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "after"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "ieRowTys") (EVar "row"))) (EApp (EVar "listLen") (EVar "after"))) (EApp (EApp (EApp (EVar "rowHeadMatches") (EVar "mctx")) (EVar "after")) (EVar "row"))))) (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EFieldAccess (EFieldAccess (EVar "s") "pred") "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "after")))))))))))
 (DTypeSig false "improveGoal" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))
 (DFunDef false "improveGoal" ((PVar "dyn") (PVar "sigIds") (PVar "iface") (PVar "args")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "monoVectorClosed") (EVar "args"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EApp (EApp (EVar "improvementPool") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "rowHeadMatches") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args"))) (EVar "rows")) (arm (PList (PVar "row")) () (EMatch (EApp (EApp (EVar "repeatedGoalPairs") (EApp (EVar "ieRowTys") (EVar "row"))) (EVar "args")) (arm (PList) () (ELit LUnit)) (arm (PVar "pairs") () (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "rowHeadUnifies") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args"))) (EVar "rows"))) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "commitImprovement") (EVar "dyn")) (EVar "sigIds")) (EVar "pairs")) (ELit LUnit))))) (arm PWild () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "commitImprovement" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Unit")))))
@@ -3285,9 +3264,9 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "answeredOnlyByBindingHead" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "answeredOnlyByBindingHead" ((PVar "mctx") (PVar "headIds") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "args")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "rowHeadUnifies") (EVar "mctx")) (EVar "args"))) (EVar "rows")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rowHeadSubstRigid") (EVar "mctx")) (EVar "headIds")) (EVar "args")) (EVar "row"))))) (EVar "rows")))))))
 (DTypeSig true "residualSelectionStable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
-(DFunDef false "residualSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "context") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "chosen"))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "sg")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalAnsweredBy") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "context")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg"))) (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg")))))) (EApp (EApp (EApp (EVar "superGoalClosure") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "residualSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "context") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "any") (ELam ((PVar "i")) (EApp (EApp (EVar "elem") (EVar "i")) (EVar "chosen")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "sg")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalAnsweredBy") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "context")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg"))) (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg")))))) (EApp (EApp (EApp (EVar "superGoalClosure") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "goalSelectionStable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
-(DFunDef false "goalSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "chosen"))) (EVar "True") (EMatch (EApp (EApp (EApp (EApp (EVar "stableGoalReach") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (arm (PCon "ReachMany") () (EVar "False")) (arm (PCon "ReachOne" PWild) () (EVar "True")) (arm (PCon "ReachNone") () (EVar "True")))))
+(DFunDef false "goalSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "any") (ELam ((PVar "i")) (EApp (EApp (EVar "elem") (EVar "i")) (EVar "chosen")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EMatch (EApp (EApp (EApp (EApp (EVar "stableGoalReach") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (arm (PCon "ReachMany") () (EVar "False")) (arm (PCon "ReachOne" PWild) () (EVar "True")) (arm (PCon "ReachNone") () (EVar "True")))))
 (DTypeSig true "goalDefersOpenWorld" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "goalDefersOpenWorld" ((PVar "mctx") (PVar "scope") (PVar "iface") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalMatchesGiven") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "goalSlotStillOpen") (EVar "mctx")) (EVar "args")))))
 (DTypeSig false "goalSlotStillOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -3298,7 +3277,7 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "goalIdsClaimed" ((PVar "mctx") (PVar "ids")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))
 (DTypeSig false "anyClaimRow" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyCon "Bool"))))
 (DFunDef false "anyClaimRow" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "slots")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyIn") (EApp (EVar "monoTyvarIds") (EVar "m"))) (EVar "ids")))) (EVar "v")))) (EApp (EVar "predicateSlotArgs") (EVar "slots"))) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
+(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "slots")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "any") (ELam ((PVar "i")) (EApp (EApp (EVar "elem") (EVar "i")) (EVar "ids")))) (EApp (EVar "monoTyvarIds") (EVar "m"))))) (EVar "v")))) (EApp (EVar "predicateSlotArgs") (EVar "slots"))) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx")))))))
 (DFunDef false "stampCtxOf" ((PVar "mctx") (PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (EBlock (DoLet false false (PVar "dropped") (EApp (EApp (EVar "blankModuleCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "dropped") "mcCells") "superDeclsRef")) (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (DoExpr (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "mctx")) (EVar "dropped")) (EVar "dropped")) (EVar "dropped"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EApp (EVar "liveLocsOf") (EVar "mctx")) (EVar "goals"))))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -3383,7 +3362,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotPositions" ((PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EFieldAccess (EVar "slot") "mpsPositions"))) (EVar "slots")))
 (DTypeSig true "methodSlotIdsAtPositions" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "methodSlotIdsAtPositions" ((PVar "ids") (PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EApp (EApp (EVar "nthInt") (EVar "pos")) (EVar "ids")))) (EFieldAccess (EVar "slot") "mpsPositions")))) (EVar "slots")))
+(DFunDef false "methodSlotIdsAtPositions" ((PVar "ids") (PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EApp (EApp (EVar "map") (ELam ((PVar "pos")) (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "get") (EVar "pos")) (EVar "ids"))))) (EFieldAccess (EVar "slot") "mpsPositions")))) (EVar "slots")))
 (DTypeSig true "methodSlotArgumentIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotArgumentIds" ((PVar "slots")) (EApp (EApp (EVar "map") (EVar "methodSlotArgumentIdsOne")) (EVar "slots")))
 (DTypeSig false "methodSlotArgumentIdsOne" (TyFun (TyCon "MethodPredicateSlot") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -3418,28 +3397,28 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "methodReturnMemoCurrentViews" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))
 (DFunDef false "methodReturnMemoCurrentViews" ((PVar "gctx")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "sealMethodReturnGoals") (EVar "gctx")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evTable") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "goals") "value"))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EntailKind" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "StampCtx" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ImplUniverse" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false) (mem "TraceSink" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "sigStandIn" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EntailKind" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "StampCtx" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false) (mem "TraceSink" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "locKey" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "initialModuleCtx" false) (mem "moduleCtxFrom" false) (mem "moduleWindow" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "dispHeadTab" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "oblIfaceKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "anyGivenMatches" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "firstPredForEncl" false) (mem "firstPredForEnclAt" false) (mem "firstPredForEnclResidual" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "lookupPredicateSlots" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false) (mem "pushGiven" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "entail" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "implDictRoutesForRow" false) (mem "implHeadSubst" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "entail" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "implDictRoutesForRow" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SuperEvidence" true) (mem "goalIdForDestination" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregLookupK" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false) (mem "innerOr" false))))
@@ -3557,10 +3536,6 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "noteWalkGoalFollowed" ((PVar "walk") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoLet false false (PVar "key") (EApp (EVar "enteredGoalKey") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmFollowed")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "iface") (EVar "args")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmFollowed") "value"))))) (EFieldAccess (EFieldAccess (EVar "memo") "wmFollowed") "value"))))))
 (DTypeSig false "walkGoalSame" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "walkGoalSame" ((PVar "iface") (PVar "args") (PVar "otherIface") (PVar "otherArgs")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EVar "iface")) (EVar "otherIface")) (EApp (EApp (EVar "walkMonosSame") (EVar "args")) (EVar "otherArgs"))))
-(DTypeSig true "nthInt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int"))))
-(DFunDef false "nthInt" (PWild (PList)) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))
-(DFunDef false "nthInt" ((PLit (LInt 0)) (PCons (PVar "x") PWild)) (EVar "x"))
-(DFunDef false "nthInt" ((PVar "i") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "nthInt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "isLocalAbsName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isLocalAbsName" ((PVar "n")) (EApp (EApp (EVar "endsWith") (ELit (LString "$lb"))) (EVar "n")))
 (DTypeSig true "localSourceName" (TyFun (TyCon "String") (TyCon "String")))
@@ -3589,8 +3564,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "isSelection" (TyFun (TyCon "AdmittedAnswer") (TyCon "Bool")))
 (DFunDef false "isSelection" ((PCon "Selects" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isSelection" (PWild) (EVar "False"))
-(DTypeSig true "anyIn" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "anyIn" ((PVar "xs") (PVar "ys")) (EApp (EApp (EVar "anyList") (ELam ((PVar "x")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig true "outerRigidIds" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "outerRigidIds" ((PVar "outerBelow") (PVar "args") (PVar "base")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EApp (EApp (EVar "enclosingVarIds") (EVar "outerBelow")) (EVar "args")))) (EVar "base")))
 (DTypeSig true "enclosingVarIds" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3766,7 +3739,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "siblingsStaySatisfiable" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GoalWindow") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Bool")))))
 (DFunDef false "siblingsStaySatisfiable" ((PVar "mctx") (PVar "window") (PVar "subst")) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "subst"))) (DoLet false false (PVar "scratch") (EApp (EVar "Ref") (EVar "subst"))) (DoExpr (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EFieldAccess (EVar "window") "gwByIndex")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EVar "siblingStaysSatisfiable") (EVar "mctx")) (EVar "scratch")) (EVar "bound")) (EVar "s"))) (arm (PCon "None") () (EVar "True"))))) (EApp (EVar "dedupI") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "goalsOnVar") (EVar "window"))) (EVar "bound")))))))
 (DTypeSig false "siblingStaysSatisfiable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UObligation") (TyCon "Bool"))))))
-(DFunDef false "siblingStaysSatisfiable" ((PVar "mctx") (PVar "scratch") (PVar "bound") (PVar "s")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "bound"))) (EVar "True") (EBlock (DoLet false false (PVar "after") (EApp (EApp (EMethodRef "map") (EApp (EVar "cohApply") (EVar "scratch"))) (EVar "args"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "after"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "ieRowTys") (EVar "row"))) (EApp (EVar "listLen") (EVar "after"))) (EApp (EApp (EApp (EVar "rowHeadMatches") (EVar "mctx")) (EVar "after")) (EVar "row"))))) (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EFieldAccess (EFieldAccess (EVar "s") "pred") "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "after")))))))))))
+(DFunDef false "siblingStaysSatisfiable" ((PVar "mctx") (PVar "scratch") (PVar "bound") (PVar "s")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EDictApp "any") (ELam ((PVar "i")) (EApp (EApp (EDictApp "elem") (EVar "i")) (EVar "bound")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EBlock (DoLet false false (PVar "after") (EApp (EApp (EMethodRef "map") (EApp (EVar "cohApply") (EVar "scratch"))) (EVar "args"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "after"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "ieRowTys") (EVar "row"))) (EApp (EVar "listLen") (EVar "after"))) (EApp (EApp (EApp (EVar "rowHeadMatches") (EVar "mctx")) (EVar "after")) (EVar "row"))))) (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EFieldAccess (EFieldAccess (EVar "s") "pred") "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "after")))))))))))
 (DTypeSig false "improveGoal" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))
 (DFunDef false "improveGoal" ((PVar "dyn") (PVar "sigIds") (PVar "iface") (PVar "args")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "monoVectorClosed") (EVar "args"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EApp (EApp (EVar "improvementPool") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "rowHeadMatches") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args"))) (EVar "rows")) (arm (PList (PVar "row")) () (EMatch (EApp (EApp (EVar "repeatedGoalPairs") (EApp (EVar "ieRowTys") (EVar "row"))) (EVar "args")) (arm (PList) () (ELit LUnit)) (arm (PVar "pairs") () (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "rowHeadUnifies") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "args"))) (EVar "rows"))) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "commitImprovement") (EVar "dyn")) (EVar "sigIds")) (EVar "pairs")) (ELit LUnit))))) (arm PWild () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "commitImprovement" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Unit")))))
@@ -3802,9 +3775,9 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "answeredOnlyByBindingHead" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "answeredOnlyByBindingHead" ((PVar "mctx") (PVar "headIds") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "filterList") (EApp (EVar "ieRowOfIface") (EVar "iface"))) (EApp (EApp (EVar "improvementPool") (EVar "mctx")) (EVar "args")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "rowHeadUnifies") (EVar "mctx")) (EVar "args"))) (EVar "rows")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "row")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rowHeadSubstRigid") (EVar "mctx")) (EVar "headIds")) (EVar "args")) (EVar "row"))))) (EVar "rows")))))))
 (DTypeSig true "residualSelectionStable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
-(DFunDef false "residualSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "context") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "chosen"))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "sg")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalAnsweredBy") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "context")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg"))) (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg")))))) (EApp (EApp (EApp (EVar "superGoalClosure") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "residualSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "context") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EDictApp "any") (ELam ((PVar "i")) (EApp (EApp (EDictApp "elem") (EVar "i")) (EVar "chosen")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "sg")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalAnsweredBy") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "context")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg"))) (EApp (EApp (EApp (EApp (EVar "goalSelectionStable") (EVar "mctx")) (EVar "chosen")) (EApp (EVar "fst") (EVar "sg"))) (EApp (EVar "snd") (EVar "sg")))))) (EApp (EApp (EApp (EVar "superGoalClosure") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "goalSelectionStable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
-(DFunDef false "goalSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyIn") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EVar "chosen"))) (EVar "True") (EMatch (EApp (EApp (EApp (EApp (EVar "stableGoalReach") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (arm (PCon "ReachMany") () (EVar "False")) (arm (PCon "ReachOne" PWild) () (EVar "True")) (arm (PCon "ReachNone") () (EVar "True")))))
+(DFunDef false "goalSelectionStable" ((PVar "mctx") (PVar "chosen") (PVar "iface") (PVar "args")) (EIf (EApp (EVar "not") (EApp (EApp (EDictApp "any") (ELam ((PVar "i")) (EApp (EApp (EDictApp "elem") (EVar "i")) (EVar "chosen")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EVar "True") (EMatch (EApp (EApp (EApp (EApp (EVar "stableGoalReach") (EVar "mctx")) (EVar "chosen")) (EVar "iface")) (EVar "args")) (arm (PCon "ReachMany") () (EVar "False")) (arm (PCon "ReachOne" PWild) () (EVar "True")) (arm (PCon "ReachNone") () (EVar "True")))))
 (DTypeSig true "goalDefersOpenWorld" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))))
 (DFunDef false "goalDefersOpenWorld" ((PVar "mctx") (PVar "scope") (PVar "iface") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "goalMatchesGiven") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (EVar "iface")) (EVar "args")) (EApp (EApp (EVar "goalSlotStillOpen") (EVar "mctx")) (EVar "args")))))
 (DTypeSig false "goalSlotStillOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -3815,7 +3788,7 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "goalIdsClaimed" ((PVar "mctx") (PVar "ids")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))
 (DTypeSig false "anyClaimRow" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyCon "Bool"))))
 (DFunDef false "anyClaimRow" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "slots")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyIn") (EApp (EVar "monoTyvarIds") (EVar "m"))) (EVar "ids")))) (EVar "v")))) (EApp (EVar "predicateSlotArgs") (EVar "slots"))) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
+(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "slots")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EDictApp "any") (ELam ((PVar "i")) (EApp (EApp (EDictApp "elem") (EVar "i")) (EVar "ids")))) (EApp (EVar "monoTyvarIds") (EVar "m"))))) (EVar "v")))) (EApp (EVar "predicateSlotArgs") (EVar "slots"))) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx")))))))
 (DFunDef false "stampCtxOf" ((PVar "mctx") (PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (EBlock (DoLet false false (PVar "dropped") (EApp (EApp (EVar "blankModuleCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "dropped") "mcCells") "superDeclsRef")) (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (DoExpr (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "mctx")) (EVar "dropped")) (EVar "dropped")) (EVar "dropped"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EApp (EVar "liveLocsOf") (EVar "mctx")) (EVar "goals"))))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -3900,7 +3873,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotPositions" ((PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EFieldAccess (EVar "slot") "mpsPositions"))) (EVar "slots")))
 (DTypeSig true "methodSlotIdsAtPositions" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "methodSlotIdsAtPositions" ((PVar "ids") (PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EApp (EApp (EVar "nthInt") (EVar "pos")) (EVar "ids")))) (EFieldAccess (EVar "slot") "mpsPositions")))) (EVar "slots")))
+(DFunDef false "methodSlotIdsAtPositions" ((PVar "ids") (PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pos")) (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "get") (EVar "pos")) (EVar "ids"))))) (EFieldAccess (EVar "slot") "mpsPositions")))) (EVar "slots")))
 (DTypeSig true "methodSlotArgumentIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotArgumentIds" ((PVar "slots")) (EApp (EApp (EMethodRef "map") (EVar "methodSlotArgumentIdsOne")) (EVar "slots")))
 (DTypeSig false "methodSlotArgumentIdsOne" (TyFun (TyCon "MethodPredicateSlot") (TyApp (TyCon "List") (TyCon "Int"))))

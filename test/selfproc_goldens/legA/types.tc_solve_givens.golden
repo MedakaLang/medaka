@@ -1,6 +1,5 @@
 activeDictPredOf : GraphCtx -> PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 activeDictVarAnswering : GraphCtx -> Mono -> ScopeId -> (EvidenceBinderId -> Bool) -> Option EvidenceBinderId
-activeDictVarForEncl : GraphCtx -> Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOf : GraphCtx -> Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOfEncl : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
 activeFunDictPredOf : GraphCtx -> PredicateRequest -> ScopeId -> Option AssumAnswer
@@ -34,8 +33,6 @@ givensForScope : GraphCtx -> ScopeId -> List GivenEntry
 goalGivenAt : GraphCtx -> IfaceRef -> List Mono -> ScopeId -> Bool
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 implReqDictVarOf : GraphCtx -> Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
-indexOfId : Int -> List Int -> Option Int
-indexOfIdGo : Int -> Int -> List Int -> Option Int
 indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
 indexOfPredGo : Int -> Int -> PredicateRequest -> List PredicateSlot -> Option Int
 lookupPredicateSlots : String -> Map String (List PredicateSlot) -> Option (List PredicateSlot)
@@ -56,7 +53,6 @@ publishMethodPredGivens : ModuleCtx -> List String -> Ty -> MethodBodyInstance -
 pushGiven : GraphCtx -> GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit
 registerActiveDictVars : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Unit
 registerEachActive : GraphCtx -> List Int -> EvidenceBinderId -> Unit
-registerEachActiveId : GraphCtx -> List Int -> EvidenceBinderId -> Unit
 registerFunPredGiven : GraphCtx -> PredicateSlot -> EvidenceBinderId -> Unit
 registerFunPredGivenSlots : GraphCtx -> List (PredicateSlot, List Int) -> EvidenceBinderId -> Unit
 registerImplMethodDictOne : GraphCtx -> ScopeId -> Int -> String -> List (String, Mono) -> Unit

@@ -1,8 +1,10 @@
--- tc_solve_test_support: the drive the four solver siblings (`tc_solve_givens_test`,
--- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`) share.  The solver modules
--- read a site context only a whole check mints, so a test of a judgment past the pure
--- projections observes it through one check of a parsed source.  Test siblings import this
--- file and no production module does.
+-- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
+-- solver through one whole check of a parsed source: its diagnostics and their codes, the
+-- route words it stamps, the schemes it publishes, the evidence and disposition it keeps.
+-- It imports `types.typecheck`, so the solver siblings (`tc_solve_givens_test`,
+-- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`), which sit below it, do
+-- not import it; they build their inputs from `tc_test_support`.  No production module
+-- imports this file.
 
 import list.{sort, filter, sortOn, indexed}
 import test.{Expectation, expectEqual}
@@ -11,8 +13,8 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import support.util.{joinNl, listLen, joinWith}
-import types.tc_mono.{tconBuiltin}
+import support.util.{joinNl, listLen}
+import string.{join}
 import types.tc_types.{
   DriveInputs(..), EvidenceObservationEntry(..), TraceSink,
   MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..),
@@ -169,10 +171,6 @@ evidenceEntriesOfKind : String ->
 evidenceEntriesOfKind kind = filter (e => e.eoeGoalKind == kind)
 
 export
-int : Mono
-int = tconBuiltin "Int"
-
-export
 drive : String -> String -> List (String, PubScheme)
 drive mid src =
   let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] [] (
@@ -198,15 +196,6 @@ monoLinks (TApp a b) = monoLinks a + monoLinks b
 monoLinks (TFun a _ b) = monoLinks a + monoLinks b
 monoLinks (TQual a _) = monoLinks a
 monoLinks _ = 0
-
-export
-numPrelude : String
-numPrelude = joinNl [
-  "interface Num a where",
-  "  fromInt : Int -> a",
-  "impl Num Int where",
-  "  fromInt _ = 0",
-]
 
 -- The evidence in ordinal order, each id replaced by its rank, then the
 -- disposition rows; `withheld` when there is no checked program.
@@ -247,7 +236,7 @@ routeText (RProj r path) = "proj(\{routeText r};\{debug path})"
 
 export
 routesText : List Route -> String
-routesText rs = joinWith "," (map routeText rs)
+routesText rs = join "," (map routeText rs)
 
 export
 valText : EvVal -> String

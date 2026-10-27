@@ -1140,7 +1140,6 @@ import types.tc_foreign.{
 import types.tc_solve_givens.{
   givenAnswers,
   goalGivenAt,
-  indexOfId,
   lookupPredicateSlots,
   predicateSlotIds,
   predicateSlotIdsAt,
@@ -1170,7 +1169,6 @@ import types.tc_solve_entail.{
 import types.tc_solve.{
   admittedSelection,
   answeredOnlyByBindingHead,
-  anyIn,
   arithEntry,
   builtinClassPresent,
   consSiteFn,
@@ -1209,7 +1207,6 @@ import types.tc_solve.{
   methodSlotPositions,
   noteMethodReturnTrace,
   noteWalkGoalFollowed,
-  nthInt,
   numAnchorObservationView,
   openScope,
   outerRigidIds,
@@ -4660,7 +4657,8 @@ instantiatedMethodPredicate gctx slot subst slotSubst =
   PredicateSlot {
     psIface = slot.mpsPredicate.psIface,
     psArgs = args2,
-    psBoundIds = map (p => nthInt p (map fst subst)) slot.mpsPositions,
+    psBoundIds =
+      map (p => optionOr (0 - 1) (get p (map fst subst))) slot.mpsPositions,
   }
 
 instantiatedMethodPredicateArgs : GraphCtx ->
@@ -14574,13 +14572,13 @@ resolveDictApps sx (app :: rest) =
 
 -- ── dict_pass: prepend dict parameters to constrained function definitions ──
 -- For each top-level def of a name in [dictNames], prepend one `$dict_<fn>_<slot>`
--- parameter per constraint (arity from funConstraintsRef, populated during
+-- parameter per constraint (arity from `funPredicateSlotsRef`, populated during
 -- inference), matching the dicts EDictAt applies at call sites.  Multi-clause
 -- functions are several DFunDef decls; each clause gets the same leading params.
--- ⚠️ #2189: [names] is the dict-passed set, which grows with the program, and this
--- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
--- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
--- with `omHasKey`.  Membership semantics unchanged.
+-- #2189: [names] is the dict-passed set, which grows with the program, and this
+-- maps over every decl, so a `contains n names` scan inside `dictPassDecl` is
+-- O(decls x names).  The set is indexed once here; `dictPassDecl`/`dictPassLetBind`
+-- probe it with `omHasKey`.
 dictPass : ModuleCtx ->
   EvIndex ->
   String ->
@@ -15345,7 +15343,7 @@ grantParamFor gctx (b :: rest) i =
     TopGrantBinder mid n => (n, topGrantIds gctx mid n)
     LocalGrantBinder n => (n, localGrantIds gctx n)
     BodyGrantBinder n bound => (n, bound)
-  match indexOfId i ids
+  match elemIndex i ids
     Some k => Some (grantParamName name k)
     None => grantParamFor gctx rest i
 
@@ -17074,7 +17072,9 @@ recordLiveRoots mctx _ =
       g.liveNumGoals :=
         filterList
             (o =>
-              anyIn (flatMap monoUnboundIds (uOblArgs mctx.mcGraph o)) numIds)
+              any
+                (i => elem i numIds)
+                (flatMap monoUnboundIds (uOblArgs mctx.mcGraph o)))
             goals
           ++ g.liveNumGoals.value
 
@@ -18724,7 +18724,8 @@ checkImplHeadGoal : SiteCtx ->
   Unit
 checkImplHeadGoal sx subject roots givens (iface, ds, loc) =
   let args = map normalize ds
-  if anyIn (flatMap monoUnboundIds args) (map snd roots) then
+  let rootIds = map snd roots
+  if any (i => elem i rootIds) (flatMap monoUnboundIds args) then
     let headIds = omFromNames (map (r => intToString (snd r)) roots) omEmpty
     let leaves =
       implGoalResiduals

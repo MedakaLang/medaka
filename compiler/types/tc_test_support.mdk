@@ -1,14 +1,18 @@
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
--- module record, the codes it has been given, the signatures of a parsed source, and the
--- alias table and declared parameter kinds a source's declarations register.  Test siblings
--- import it and no production module does.  The last two are the fixture-side twins of
--- `tc_decls`' `graphAliasRow` and `withDeclParamKinds`: a test of a module below `tc_decls`
--- cannot import those, and its fixtures need the same tables.
+-- module record, the codes it has been given, the signatures of a parsed source, the
+-- alias table and declared parameter kinds a source's declarations register, and the
+-- interface reference and the monos of the probe module (`ifaceOf`, `intM`, `boolM`,
+-- `varM`).  Test siblings import it and no production module does.  `aliasTableOf` and
+-- `recordKindsOf` are the fixture-side twins of `tc_decls`' `graphAliasRow` and
+-- `withDeclParamKinds`: a test of a module below `tc_decls` cannot import those, and its
+-- fixtures need the same tables.
 
 import list.{reverse}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
 import frontend.ast.{Decl(..), TabKey, Ty(..), TyConOrigin(..)}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
+import types.tc_mono.{tconBuiltin}
 import support.ordmap.{omInsert}
 import types.publish.{tcCode}
 import types.tc_env.{declParamKinds, tyTabKey}
@@ -51,6 +55,24 @@ export
 intTy : Ty
 intTy =
   TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- An interface reference named [name], declared in the module "probe".
+export
+ifaceOf : String -> IfaceRef
+ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
+
+export
+intM : Mono
+intM = tconBuiltin "Int"
+
+export
+boolM : Mono
+boolM = tconBuiltin "Bool"
+
+-- A free type variable with id [id] at level 0.
+export
+varM : Int -> Mono
+varM id = TVar (Ref (Unbound id 0))
 
 -- The alias table of [ds]: each alias keyed by its identity, with its parameters and
 -- right-hand side.

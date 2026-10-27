@@ -2139,10 +2139,9 @@ unrigidSig sigCells t = match normalize t
   other => other
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
--- `declaredPredicateSlots` and `keptConstraintArgs` must agree on, factored so the two
--- cannot drift (they decide, respectively, whether a slot exists and whether its
--- argument vector is recorded — a disagreement desynchronizes `funConstraintArgsRef`
--- from `funConstraintsRef`).
+-- `declaredPredicateSlots` keeps a slot by, factored so that the slot's existence and
+-- its argument vector are decided by one test (a disagreement desynchronizes a
+-- slot's `psBoundIds` from its `psArgs` in `funPredicateSlotsRef`).
 export
 abstractSlotIds : List Mono -> List Int
 abstractSlotIds [] = []

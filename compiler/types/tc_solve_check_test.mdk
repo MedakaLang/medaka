@@ -2,52 +2,40 @@
 -- dedup of dictionary slots that decides how many a constrained function has, the slots
 -- and ids a signature's predicates declare, the call-predicate filter, the survivor
 -- and dispatch projections, the ids a checked binder's quantified variables give a
--- predicate, and quiescence defaulting of live numeric roots (`defaultLiveNumRoots`);
--- then the obligation checks of one whole check: an absent instance, an omitted
--- constraint, an inferred constraint met and unmet, overlapping instances, an impl that
--- omits a required prerequisite, and a numeric literal's defaulting.  One property:
--- defaulting twice is defaulting once.
+-- predicate, and quiescence defaulting of live numeric roots (`defaultLiveNumRoots`).  One
+-- property: defaulting twice is defaulting once.  The obligation checks of one whole
+-- check are in `typecheck_test`.
 
-import types.tc_mono.{tconFrom, tconBuiltin, abstractSlotIds, declaredOblArgOk}
-import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
+import types.tc_mono.{tconBuiltin}
+import test.{expectAll, expectEqual}
 import frontend.ast.{Loc(..), TyConOrigin(..)}
 import frontend.parser.{parse}
-import support.util.{joinNl}
 import types.repr.{IfaceRef(..), Mono(..), Tyvar(..), ppMono}
 import types.effect_rows.{pureRow}
+import types.tc_solve.{consSiteFn}
 import types.tc_solve_check.{
   callPredOf,
   declaredPredicateSlots,
   dedupSlotVecs,
+  dedupPredicateSlotsTable,
   defaultLiveNumRoots,
   dispatchMonosOf,
+  inferredConstraintIds,
   numConstrainedIds,
   predicateSlotTableWithoutArgs,
   predicateSlotView,
+  setFunPredicateSlots,
   survivorNameOfId,
 }
-import types.tc_solve_test_support.{
-  checkDiagsOver, expectChecks, expectRejectedWith, numericPreludeSource
-}
-import types.tc_test_support.{fresh, sigsOf}
+import types.tc_test_support.{boolM, fresh, ifaceOf, intM, sigsOf, varM}
 import types.tc_types.{
   CSlot(..), ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
 }
 import types.tc_unify.{freshVar, unify}
+import list.{drop, lookup}
+import support.ordmap.{omEmpty, omLookup}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
-
-ifaceOf : String -> IfaceRef
-ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
-
-intM : Mono
-intM = tconBuiltin "Int"
-
-boolM : Mono
-boolM = tconBuiltin "Bool"
-
-varM : Int -> Mono
-varM id = TVar (Ref (Unbound id 0))
 
 slotOf : String -> PredicateSlotArgs -> List Int -> PredicateSlot
 slotOf name args ids =
@@ -146,23 +134,6 @@ test "same-named interfaces of different modules are different slots" =
 
 -- ── what a signature declares ─────────────────────────────────────────────
 
-test "abstractSlotIds lists the variables of a vector in order and skips solved positions" =
-  expectEqual
-    [3, 9]
-    (abstractSlotIds [
-      varM 3,
-      intM,
-      varM 9,
-      TApp (tconFrom (OriginModule "probe") "Box") (varM 4),
-    ])
-
-test "a variable bound to a type is no longer abstract" =
-  let m = fresh ()
-  let a = freshVar m ()
-  let b = freshVar m ()
-  unify m a intM
-  expectEqual 1 (length (abstractSlotIds [a, b]))
-
 test "a declared predicate with an abstract variable is a slot over its first ids and its vector" =
   let slots =
     declaredPredicateSlots [(ifaceOf "A", [varM 3, varM 4])] [[varM 3, varM 4]]
@@ -190,30 +161,6 @@ test "a declared predicate with no vector supplied is a slot whose vector is unk
     (map
       (s => (s.psIface.irName, s.psBoundIds, length (knownOf s.psArgs)))
       slots)
-
-test "a declared obligation argument is admitted when its variables are all bound" = expectEach
-  [
-    ("a bound variable", expectTrue (declaredOblArgOk (i => i == 3) (varM 3))),
-    (
-      "an unbound variable",
-      expectFalse (declaredOblArgOk (i => i == 3) (varM 4)),
-    ),
-    (
-      "an application over bound variables",
-      expectTrue
-        (declaredOblArgOk
-          (i => i == 3)
-          (TApp (tconFrom (OriginModule "probe") "Box") (varM 3))),
-    ),
-    (
-      "an application over an unbound variable",
-      expectFalse
-        (declaredOblArgOk
-          (i => i == 3)
-          (TApp (tconFrom (OriginModule "probe") "Box") (varM 4))),
-    ),
-    ("a ground type", expectTrue (declaredOblArgOk (_ => False) intM)),
-  ]
 
 -- ── call predicates, survivors and dispatch ───────────────────────────────
 
@@ -315,138 +262,70 @@ prop "defaulting the live numeric roots twice is defaulting them once" (c : Root
     && once == expected
     && length m.mcGraph.graphRun.liveNumRoots.value == 0
 
--- ── what the obligation checks accept and reject through one check ────────
+-- ── the slot table and the inferred ids ───────────────────────────────────
 
-base : String
-base = joinNl [
-  "interface Sz a where",
-  "  sz : a -> Int",
-  "interface Make a where",
-  "  make : Unit -> a",
-  "impl Make Int where",
-  "  make _ = 1",
-  "impl Sz Int where",
-  "  sz _ = 1",
-  "data Box a = Box a",
-]
-
-test "a call at a type with no instance is rejected as having no impl" =
-  expectRejectedWith ["T-NO-IMPL"] (joinNl [base, "h : Int", "h = sz True"])
-
-test "a goal on an undetermined type no instance can fix is rejected as having no impl" =
-  expectRejectedWith
-    ["T-NO-IMPL"]
-    (joinNl [
-      "interface Sz a where",
-      "  sz : a -> Int",
-      "interface Make a where",
-      "  make : Unit -> a",
-      "impl Make Int where",
-      "  make _ = 1",
-      "f : Int",
-      "f = sz (make ())",
-    ])
-
-test "a body that uses an interface its signature omits is rejected as a missing constraint" = expectEach
-  [
-    (
-      "a bare variable",
-      expectRejectedWith
-        ["T-MISSING-CONSTRAINT"]
-        (joinNl [base, "k : a -> Int", "k v = sz v"]),
-    ),
-    (
-      "a variable under a constructor",
-      expectRejectedWith
-        ["T-MISSING-CONSTRAINT"]
-        (joinNl [base, "k : Box a -> Int", "k v = sz v"]),
-    ),
+test "the whole-table writer keeps the first-wins index in step with the list" =
+  let m = fresh ()
+  setFunPredicateSlots m [
+    ("f", [slotOf "A" (PSArgsKnown [varM 1]) [1]]),
+    ("g", [slotOf "B" (PSArgsKnown [varM 2]) [2]]),
+    ("f", [slotOf "C" (PSArgsKnown [varM 3]) [3]]),
+  ]
+  let ifacesOf name =
+    map
+      (slots => map (s => s.psIface.irName) slots)
+      (omLookup name m.mcCells.funPredicateSlotsIdxRef.value)
+  expectAll [
+    expectEqual ["f", "g", "f"] (map fst m.mcCells.funPredicateSlotsRef.value),
+    expectEqual (Some ["A"]) (ifacesOf "f"),
+    expectEqual (Some ["B"]) (ifacesOf "g"),
+    expectEqual None (ifacesOf "h"),
   ]
 
-test "a signature that declares the constraint is accepted" =
-  expectChecks (joinNl [base, "k : Sz a => a -> Int", "k v = sz v"])
-
-test "an inferred constraint is promoted to the binder and met at a use with an instance" =
-  expectChecks (joinNl [base, "g x = sz x", "h : Int", "h = g 1"])
-
-test "an inferred constraint is owed at every use, and unmet at a type with no instance" =
-  expectRejectedWith
-    ["T-NO-IMPL"]
-    (joinNl [base, "g x = sz x", "h : Int", "h = g True"])
-
-test "two instances that can match the same type are a conflicting impl" = expectEach
-  [
+test "deduping the slot table collapses a predicate written twice and keeps different vectors apart" =
+  let m = fresh ()
+  setFunPredicateSlots m [
     (
-      "the same head",
-      expectRejectedWith
-        ["T-CONFLICTING-IMPL"]
-        (joinNl [base, "impl Sz Int where", "  sz _ = 2"]),
+      "twice",
+      [
+        slotOf "Shw" (PSArgsKnown [varM 1]) [1],
+        slotOf "Shw" (PSArgsKnown [varM 1]) [1],
+      ],
     ),
     (
-      "the same head over a variable",
-      expectRejectedWith
-        ["T-CONFLICTING-IMPL"]
-        (joinNl [
-          base, "impl Sz (Box a) where", "  sz _ = 1", "impl Sz (Box b) where",
-          "  sz _ = 2"
-        ]),
+      "two",
+      [
+        slotOf "Ix" (PSArgsKnown [varM 1, intM]) [1],
+        slotOf "Ix" (PSArgsKnown [varM 1, boolM]) [1],
+      ],
     ),
   ]
+  dedupPredicateSlotsTable m ()
+  let table = m.mcCells.funPredicateSlotsRef.value
+  let tailsOf name =
+    map
+      (slots => map (s => map ppMono (drop 1 (knownOf s.psArgs))) slots)
+      (lookup name table)
+  expectAll [
+    expectEqual (Some [[]]) (tailsOf "twice"),
+    expectEqual (Some [["Int"], ["Bool"]]) (tailsOf "two"),
+  ]
 
-test "instances whose heads are disjoint do not conflict" =
-  expectChecks (joinNl [base, "impl Sz Bool where", "  sz _ = 2"])
+test "the inferred constraint ids of a member are its generalized variables at method and call sites" =
+  let m = fresh ()
+  m.mcCells.methodSiteFns :=
+    consSiteFn "f" (varM 3) (consSiteFn "f" (varM 7) omEmpty)
+  m.mcCells.dictAppFns := consSiteFn "f" [varM 4, intM, varM 3] omEmpty
+  expectAll [
+    expectEqual [3, 4] (inferredConstraintIds m "f" [3, 4, 9]),
+    expectEqual [3] (inferredConstraintIds m "f" [3]),
+    expectEqual [] (inferredConstraintIds m "g" [3, 4]),
+    expectEqual [] (inferredConstraintIds m "f" []),
+  ]
 
-test "an impl whose head variable needs an interface it does not require is rejected" =
-  expectRejectedWith
-    ["T-IMPL-MISSING-REQUIRES"]
-    (joinNl [base, "impl Sz (Box a) where", "  sz (Box x) = sz x"])
-
-test "an impl that declares the requirement is accepted" =
-  expectChecks
-    (joinNl [
-      base, "impl Sz (Box a) requires Sz a where", "  sz (Box x) = sz x"
-    ])
-
-test "two instances that fit one goal and neither is more specific are an ambiguous instance" =
-  expectRejectedWith
-    ["T-AMBIGUOUS-INSTANCE"]
-    (joinNl [
-      base,
-      "data Pair a b = Pair a b",
-      "impl Sz (Pair a Int) where",
-      "  sz _ = 2",
-      "impl Sz (Pair Int b) where",
-      "  sz _ = 3",
-      "f : Int",
-      "f = sz (Pair 1 2)",
-    ])
-
-test "an unconstrained literal defaults and is accepted" =
+test "when the interface parameter occurs at two positions the first one's mono is its dispatch mono" =
   expectEqual
-    []
+    [["Bool"]]
     (map
-      fst
-      (checkDiagsOver numericPreludeSource (joinNl ["y = 1", "z = (1, 2)"])))
-
-test "a body that needs Num its signature omits is rejected as a missing constraint" =
-  expectEqual
-    ["T-MISSING-CONSTRAINT"]
-    (map
-      fst
-      (checkDiagsOver numericPreludeSource (joinNl ["f : a -> a", "f x = 1"])))
-
-test "a body whose signature declares Num is accepted" =
-  expectEqual
-    []
-    (map
-      fst
-      (checkDiagsOver
-        numericPreludeSource
-        (joinNl ["f : Num a => a -> a", "f x = 1"])))
-
-test "a local literal is defaulted at its own boundary and checks" =
-  expectEqual
-    []
-    (map
-      fst
-      (checkDiagsOver numericPreludeSource (joinNl ["main = let z = 2 in z"])))
+      (t => map ppMono (dispatchMonosOf ["a"] t (TFun boolM pureRow intM)))
+      (sigsOf (parse "x : a -> a")))

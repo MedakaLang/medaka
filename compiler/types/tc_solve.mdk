@@ -54,7 +54,6 @@ import types.tc_types.{
   GraphCtx,
   ImplEnv,
   ImplRow,
-  ImplUniverse,
   LocalAbs,
   MethodPredicateSlot,
   MethodPredicateTemplate,
@@ -99,7 +98,6 @@ import types.tc_mono.{
   rigidSigPairs,
   sigCellsOf,
   sigRigidBindings,
-  sigStandIn,
   stripArrows,
   stripTyConstraints,
   substMono,
@@ -122,7 +120,6 @@ import types.tc_state.{
 import types.tc_env.{
   anyArgMentions,
   dispatchTyparams,
-  dispHeadTab,
   ieHeadRows,
   ieRowIfaceMatches,
   ieRowOfIface,
@@ -133,7 +130,6 @@ import types.tc_env.{
   methodRowIface,
   methodRowTestIface,
   methodSlotKey,
-  oblIfaceKey,
   originMethodName,
   sameIfaceDecl,
 }
@@ -184,7 +180,6 @@ import types.tc_solve_entail.{
   goalRows,
   ieSelectRowByIface,
   implDictRoutesForRow,
-  implHeadSubst,
   paramMonoOf,
   positionBindings,
   repeatedBindings,
@@ -240,7 +235,8 @@ import types.evidence.{
   goalIdForDestination,
 }
 import types.registry.{
-  HeadKey(..), headKeyTag, mregLookupK, regKeyNTab, regKeyOfTab
+  HeadKey(..),
+  headKeyTag,
 }
 import types.repr.{
   IfaceRef(..), Mono(..), Tyvar(..), lookupAssocI, normalize, ppMono, tupleSpine
@@ -266,7 +262,7 @@ import support.util.{
   splitOnChar,
 }
 import types.runtime_ops.{arithmeticTag}
-import list.{drop, head, indexed, reverse, take, zip}
+import list.{drop, get, head, indexed, reverse, take, zip}
 import string.{join}
 import types.route_key.{ifaceWordOf}
 import types.evidence_complete.{innerNone, innerOr}
@@ -495,8 +491,8 @@ methodReturnWanted mctx request = match methodReturnInstantiation mctx request
 -- an interface occurrence whose identity is not (yet) recoverable at the site.
 --
 -- `recordCallObligations` and `recordSchemeCallObligations` carry an `IfaceRef`
--- end to end (`funConstraintIfacesRef`'s payload is `List IfaceRef`,
--- `schemeObligationsRef`'s is `List VecObl`), so neither mints a bare goal.
+-- end to end (a `funPredicateSlotsRef` slot names its `IfaceRef`,
+-- `schemeObligationsRef`'s payload is `List VecObl`), so neither mints a bare goal.
 -- What is LEFT — grep this name for the live worklist, do not trust this list:
 --   * `recordImplObligation`'s METHOD-OCCURRENCE goal, which is a decl-layer /
 --     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
@@ -509,8 +505,7 @@ export
 ifaceRefBare : String -> IfaceRef
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 
--- U1b (#1482): the ABSENT-interface sentinel for the slot-parallel iface channels.
--- `funConstraintIfacesRef` has always used `""` to mean "this slot has no recoverable
+-- The ABSENT-interface sentinel: the empty name means "this slot has no recoverable
 -- interface" (see `ifaceForInferredId`), and every reader tests it and skips.  It is
 -- deliberately NOT spelled `ifaceRefBare ""`: that name is the residual worklist for a
 -- goal whose identity is UNRECOVERABLE, and "no interface at all" is a different fact
@@ -792,12 +787,6 @@ walkGoalSame iface args otherIface otherArgs =
   sameIfaceDecl iface otherIface && walkMonosSame args otherArgs
 
 export
-nthInt : Int -> List Int -> Int
-nthInt _ [] = 0 - 1
-nthInt 0 (x :: _) = x
-nthInt i (_ :: xs) = nthInt (i - 1) xs
-
-export
 isLocalAbsName : String -> Bool
 isLocalAbsName n = endsWith "$lb" n
 
@@ -929,10 +918,6 @@ isUndecided _ = False
 isSelection : AdmittedAnswer -> Bool
 isSelection (Selects _ _ _) = True
 isSelection _ = False
-
-export
-anyIn : List Int -> List Int -> Bool
-anyIn xs ys = anyList (x => containsI x ys) xs
 
 -- [base] plus each variable of [args] whose level is below [level].
 export
@@ -1483,7 +1468,7 @@ methodPredicateRoute sx encl scope slot = match slot.psArgs
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
 -- A deferred recursive call records one route per the CALLEE's constraint slot
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
--- ENCLOSING fn's own dict param.  Run after inference, when funConstraintsRef is
+-- ENCLOSING fn's own dict param.  Run after inference, when `funPredicateSlotsRef` is
 -- fully populated.
 export
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
@@ -2070,7 +2055,7 @@ siblingStaysSatisfiable : ModuleCtx ->
   Bool
 siblingStaysSatisfiable mctx scratch bound s =
   let args = map normalize (uOblArgs mctx.mcGraph s)
-  if not (anyIn (flatMap monoUnboundIds args) bound) then
+  if not (any (i => elem i bound) (flatMap monoUnboundIds args)) then
     True
   else
     let after = map (cohApply scratch) args
@@ -2277,7 +2262,7 @@ residualSelectionStable : ModuleCtx ->
   List Mono ->
   Bool
 residualSelectionStable mctx chosen context iface args
-  | not (anyIn (flatMap monoUnboundIds args) chosen) = True
+  | not (any (i => elem i chosen) (flatMap monoUnboundIds args)) = True
   | otherwise =
     goalSelectionStable mctx chosen iface args
       && allList
@@ -2294,7 +2279,7 @@ residualSelectionStable mctx chosen context iface args
 -- become a type another instance head needs.
 goalSelectionStable : ModuleCtx -> List Int -> IfaceRef -> List Mono -> Bool
 goalSelectionStable mctx chosen iface args =
-  if not (anyIn (flatMap monoUnboundIds args) chosen) then
+  if not (any (i => elem i chosen) (flatMap monoUnboundIds args)) then
     True
   else match stableGoalReach mctx chosen iface args
     ReachMany => False
@@ -2351,7 +2336,7 @@ goalSelectionStable mctx chosen iface args =
 -- library module reaches this gate BEFORE its own generalization has registered anything
 -- (MEASURED on `test/dict_fixtures/s-open-world-library-dependent-impl/lib.mdk`: the
 -- second check pass reaches the goal `Tag (Wrap α)` with an EMPTY given registry and no
--- `funConstraintArgsRef` row for `describe`), so its scheme is still open and the goal
+-- `funPredicateSlotsRef` row for `describe`), so its scheme is still open and the goal
 -- is what will populate it.  A binding whose constraint set is already REGISTERED is
 -- fixed — declared or inferred — and a goal claiming its variables must be in it.
 --
@@ -2377,13 +2362,11 @@ goalDefersOpenWorld mctx scope iface args =
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
 --   * NON-EMPTY.  It returns `()` for the empty vector and registers nothing, so an
---     empty goal can never acquire an answer.  (This used to read "ARITY 1", because the
---     registry matched `[subject]` only — #1956 replaced that narrowing with the whole
+--     empty goal can never acquire an answer.  (The registry matches the whole argument
 --     vector on all three channels (`requires`, declared, inferred), so a MULTI-PARAMETER
---     structured goal now DOES have a consumption-side answer and this arm no longer
---     withholds it.  The programs that pinned the old wording — `e1_inf_multi.mdk`
---     (`h x = conv (Wrap x) 0`, no signature) and its signatured twin `a2_twoarg.mdk` —
---     are re-measured against this widening, not assumed: see the S-nary-given report.)
+--     structured goal has a consumption-side answer and this arm withholds none.
+--     `e1_inf_multi.mdk` (`h x = conv (Wrap x) 0`, no signature) and its signatured twin
+--     `a2_twoarg.mdk` pin it.)
 --   * UNCLAIMED.  See below; this is the arm that keeps #1939 shape (2) accepted.
 --     Asked of the vector's WHOLE unbound-id set, for the same reason the match above is
 --     pointwise: a slot is open only if NO binding has already fixed a context claiming
@@ -2396,7 +2379,7 @@ goalSlotStillOpen mctx args =
 -- has some binding's constraint set ALREADY been registered against one of [ids]?  If
 -- so that binding's context is fixed and this goal must be part of it; if not, the
 -- binding is still generalizing and this goal is what will open its slot.  Reads
--- `funConstraintArgsRef`, which both channels write (`registerMember` for a declared
+-- `funPredicateSlotsRef`, which both channels write (`registerMember` for a declared
 -- context, `registerInferredFor` for an inferred one), so the test does not distinguish
 -- them — the fixedness, not the channel, is what decides.
 goalIdsClaimed : ModuleCtx -> List Int -> Bool
@@ -2408,7 +2391,7 @@ anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClaimRow _ [] = False
 anyClaimRow ids ((_, slots) :: rest) =
   anyList
-      (v => anyList (m => anyIn (monoTyvarIds m) ids) v)
+      (v => anyList (m => any (i => elem i ids) (monoTyvarIds m)) v)
       (predicateSlotArgs slots)
     || anyClaimRow ids rest
 
@@ -2777,7 +2760,9 @@ methodSlotIdsAtPositions : List Int ->
   List MethodPredicateSlot ->
   List (List Int)
 methodSlotIdsAtPositions ids slots =
-  map (slot => map (pos => nthInt pos ids) slot.mpsPositions) slots
+  map
+    (slot => map (pos => optionOr (0 - 1) (get pos ids)) slot.mpsPositions)
+    slots
 
 export
 methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)

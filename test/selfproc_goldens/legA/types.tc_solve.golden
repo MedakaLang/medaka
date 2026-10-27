@@ -2,7 +2,6 @@ admittedDeclAnswer : SiteCtx -> ImplEnv -> List MethodRow -> Mono -> IfaceRef ->
 admittedSelection : SiteCtx -> ImplEnv -> String -> Mono -> AdmittedAnswer
 answeredOnlyByBindingHead : ModuleCtx -> Map String Unit -> IfaceRef -> List Mono -> Bool
 anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
-anyIn : List Int -> List Int -> Bool
 arithEntry : Obligation -> List (Ref Route, Mono)
 builtinClassPresent : GraphCtx -> BuiltinClass -> Bool
 collectByParam : List String -> List (String, Mono) -> List Mono
@@ -117,7 +116,6 @@ methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry
 noteMethodReturnTrace : ModuleCtx -> MethodReturnTraceStage -> MethodReturnRequest -> Option Route -> List Route -> Unit
 noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
 noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
-nthInt : Int -> List Int -> Int
 numAnchorObservationView : NumAnchorTestObservation -> (String, Bool, Bool, String, String)
 numericReturnRoute : Route -> List Route -> Route
 numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)

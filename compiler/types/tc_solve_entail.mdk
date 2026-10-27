@@ -460,7 +460,7 @@ binopBuiltinHead method tag =
 -- String-keyed `:browse` sort).  But a legitimately-constrained TOP-LEVEL operator
 -- (`f x y = x == y` under `Eq a =>`) must STILL forward the enclosing fn's own class
 -- dict, exactly as the direct `eq x y` arg-stamp path does.  enclDictVarOf draws that
--- line PRECISELY: it consults `funConstraintsRef[encl]` (the enclosing fn's OWN
+-- line PRECISELY: it consults `funPredicateSlotsRef[encl]` (the enclosing fn's OWN
 -- declared constraint slots, keyed by fn name) — NOT the global activeDictVars — so
 -- it fires ONLY when the operand var is genuinely one of encl's constraint vars, and
 -- can never pick up a stale cross-impl element-var id.  A concrete operand (no active
@@ -600,13 +600,13 @@ stampOpRouteVal sx isBinop encl useScope method operandMono tag =
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
     let (siteKey, selected) = keyForSite sx method [operandMono]
-    -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
+    -- Graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
     -- same mono, and on the nominal heads `TCon`/`TRigid` that carry a name the two
     -- classifiers agree; they differ only on `TFun`, which `headTyconMono` keys and
     -- `headTyconNameMono` does not), so the LOOKUP is the same question at the same
-    -- key strength — only the POPULATION moved.
+    -- key strength.
     let dictMethod =
       if isBinop then
         if ieDefinesReqMethodAt
@@ -762,11 +762,9 @@ rowRouteKey (ImplRow _ _ ir tys _ _ _) =
 -- the same bucket for the min⊑ comparison to see them at all.  The vector is
 -- consulted by the MATCH (entryHeadMatches) and by ⊑ (entryCovers), both O(head
 -- size) per bucket entry — a constant factor on an unchanged O(bucket) scan.
--- A-2.2b (#1111): `headTyconMono`, not the deleted `monoHeadCon` — so the GOAL
--- side of this table now carries the same `HeadKey` the IMPL side (`keyEntryOf`
--- via `headTyconTy`) does, and the two can be compared as identities instead of
--- as spellings.  Extensionally unchanged: the two projections had identical
--- arms (see `monoHeadCon`'s obituary above `mainIsAsyncNow`).
+-- The projection is `headTyconMono`, so the GOAL side of this table carries the
+-- same `HeadKey` the IMPL side (`keyEntryOf` via `headTyconTy`) does, and the two
+-- compare as identities instead of as spellings.
 export
 goalHeadCon : List Mono -> Option HeadKey
 goalHeadCon (g :: _) = headTyconMono g
@@ -790,7 +788,8 @@ goalHeadCon [] = None
 --
 -- #1155 (F-3c): returning `Some e` in silence would let DECLARATION ORDER decide the
 -- program's meaning — swap two `impl` blocks and the answer changes, at exit 0 on every
--- engine (#1154, #1162).  So the arm also REPORTS, under the goal-site half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
+-- engine (#1154, #1162).  So the arm also REPORTS, under the goal-site half of §6 C1: at
+-- most one ⊑-minimal matching instance, quantified over the goals
 -- `inst` decides rather than over ground goals.
 --
 -- The winner is still `Some e`, deliberately.  `recordTypeError` arms
@@ -825,7 +824,8 @@ pickMostSpecificEntry sx goals (e :: rest) =
 --     `…/s6-2-t4-open-goal-deferred.mdk` (open goal): both reject at their goal.
 --
 --  🚦 ONE INTERFACE.  A filter by METHOD NAME alone would let two impls of two
---     DIFFERENT interfaces that happen to share a method name arrive together.  Their head vectors are ⊑-incomparable for a reason that has
+--     DIFFERENT interfaces that happen to share a method name arrive together.  Their
+--     head vectors are ⊑-incomparable for a reason that has
 --     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
 --     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
@@ -969,7 +969,7 @@ entryCovers (KeyEntry _ _ _ _ _ candTys _ _) (KeyEntry _ _ _ _ _ otherTys _ _) =
 -- the way out (`keyEntryOfRow` is lossy: it keeps `instRefSeq`, not `InstRef`).
 --
 -- A goal with no head tycon keys no bucket and selects nothing — the `None => None` arm
--- below, which is what `matchingEntries`' `None => []` arm did before B-2.1-d.
+-- below.
 export
 ieSelectRowByIface : SiteCtx ->
   ImplEnv ->
@@ -983,9 +983,8 @@ ieSelectRowByIface sx env iface goals = match goalHeadCon goals
       (pickMostSpecificEntry sx goals (ieCandidatesForIface env hk iface goals))
   None => None
 
--- ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by leg 3's two
--- element-dict route sites AND (since ARCH B-2.1-g) by the route WORD itself, through
--- `keyForSite`.  It replaced `matchedEntry`, which B-2.1-d deleted.
+-- ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by the two element-dict
+-- route sites AND by the route WORD itself, through `keyForSite`.
 --
 -- ── #1182: the admitted declaration is read HERE, from [name] alone ───────────
 -- DELIBERATELY NOT A new parameter on this function, and the reason is
@@ -1180,7 +1179,7 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 -- lies in an `inst` arm (`entailInst`) or in an element-route helper called from one.
 -- No selector call may be reachable from `entailAssum`, `entailAssumVar` or
 -- `entailAssumRoute` — verified at this pin by enumerating the assum chain
--- (`activeDictVarOfEncl`/`activeDictVarForEncl`/`enclDictVarOf`/`opDictVarOf`/
+-- (`activeDictVarOfEncl`/`activeDictVarOf`/`enclDictVarOf`/`opDictVarOf`/
 -- `activeDictPredOf`/`ifaceOfMethodName`): every one is a module-record registry lookup and
 -- none reaches a selector.
 --
@@ -1218,15 +1217,13 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 -- check, not a routing decision — and is out of scope here.  An audit that greps the
 -- selector names without excluding it reports a false violation.
 -- THE `inst` arm projects through `headTyconMono`, THE DISPATCH-KEY PROJECTION,
--- Not through the `headTyconNameMono` residual it read until #1617.  This is the
--- SAME repoint A-2.2b made at `goalHeadCon` and the three `implExistsForHead`
--- receiver sites, arriving one site late: `entail` is a ROUTING decision (its
--- result is stamped straight into a site's route ref by `resolveArgStamp`), so it
--- owes the goal-side dispatch key, and the name-only residual can no longer
--- express that argument now that the two answer differently at `TFun`.
+-- not through the name-only `headTyconNameMono`, as `goalHeadCon` does: `entail` is
+-- a ROUTING decision (its result is stamped straight into a site's route ref by
+-- `resolveArgStamp`), so it owes the goal-side dispatch key, and the name-only
+-- projection cannot express that because the two answer differently at `TFun`.
 --
--- MEASURED, this line alone is what kept #1617 open after both head projections
--- and both definition-side tags already agreed on `__fun__`: an arg-position
+-- MEASURED (#1617): this line alone decides it, with both head projections
+-- and both definition-side tags agreeing on `__fun__`: an arg-position
 -- occurrence (`sz : a -> Int` dispatches on its ARGUMENT, so it is stamped here
 -- and not by `resolveSites`) took the `None => entailFallback` arm, left the site
 -- `RNone`, and the emitter arg-tag-dispatched over a closure.  The typed Core-IR
@@ -1411,7 +1408,7 @@ goalRequestOfKind mctx _ (EKNestedTop _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
--- nested/top kind uses the plain encl-aware lookup (activeDictVarForEncl); the op kind
+-- nested/top kind uses the plain lookup (activeDictVarOf); the op kind
 -- routes through opDictVarOf (isBinop/inImpl-keyed, needs the method [name]).  [name] is
 -- ignored by the non-op kinds.
 entailAssumVar : ModuleCtx ->
@@ -1426,7 +1423,7 @@ entailAssumVar : ModuleCtx ->
 -- [name]'s interface plus the vector `ifaceParamMonos` recovers from the kind's own
 -- full occurrence mono, the SAME vector `entailInst` selects the impl row on — so the
 -- slot the body reads and the impl the site dispatches to answer one question.  The
--- nested/top kind keeps `activeDictVarForEncl` (no predicate: [name] there is a
+-- nested/top kind keeps `activeDictVarOf` (no predicate: [name] there is a
 -- constrained FUNCTION, not a method occurrence).
 entailAssumVar mctx request m encl _ useScope (EKReturn _ _) =
   activeDictVarOfEncl mctx request m encl useScope
@@ -1588,9 +1585,8 @@ entailInst sx name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
 --
 -- The top-level `=>`-constrained-call leg also threads its own goal vector through
 -- this arm, carrying the vector recorded at SIGNATURE REGISTRATION
--- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
--- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
--- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
+-- (the `psArgs` of the function's `funPredicateSlotsRef` slots).  A dict slot per
+-- predicate would move the emitted dict arity; that is #607 punch-list item 3, open.
 entailInst sx _ m encl useScope _ (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
@@ -1609,15 +1605,16 @@ entailInst sx _ m encl useScope _ (EKNestedTop iface _ walk rest) =
 -- selected impl's own `requires`-context routes.  That is not a tidiness point — §6
 -- C2 requires the impl dispatched to and the impl whose context is discharged to be
 -- the SAME impl; computing the vector here but handing the scalar `m` to
--- argImplDictRoutesForEncl would let the two arms select differently at n≥2.  Sharing one binding makes them agree by construction.
+-- argImplDictRoutesForEncl would let the two arms select differently at n≥2.  Sharing
+-- one binding makes them agree by construction.
 entailInst sx name m encl useScope tag (EKArg fullMono omitted) =
   let goals =
     optionOr [m] (occurrenceParamMonos sx.sxModule name fullMono omitted)
   let (siteKey, selected) = keyForSite sx name goals
-  -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
+  -- Graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
   -- whose name IS this arm's `tag` (`entail` derives `tag` from the same `m` via
-  -- `headTyconNameMono`), NOT `goalHeadCon goals` — this guard has always asked about
+  -- `headKeyTag`), NOT `goalHeadCon goals` — this guard asks about
   -- the DISCRIMINATING mono's head, and re-aiming it at the vector's head would be a
   -- second, unrelated semantic change at n>=2.
   let dictName =
@@ -1923,15 +1920,14 @@ requiresRouteWalkCut gctx _ =
 -- mis-selecting.
 -- encl-aware variant: thread the ENCLOSING method [encl] so the recursively-routed
 -- element dicts forward [encl]'s own `$dict_<encl>_<slot>` params (not whichever
--- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  An
+-- method registered the shared impl tyvar id LAST — see activeDictVarOf).  An
 -- empty [encl] has no lexical dict owner and therefore cannot forward one.
--- #203 (H): the arg/op-position element routes.  Was a FIRST-MATCH scan of the
--- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForRow);
--- now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
--- via the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
--- replaced `matchedEntry`) and discharges THAT impl's OWN requires.  A
--- non-overlapping site (one match) selects the same impl the first-match scan did ⇒
--- byte-identical routes.
+-- #203: the arg/op-position element routes select the MOST-SPECIFIC matching impl over
+-- the graph-global impl universe (`IE`) via the shared method-keyed selector
+-- (`ieSelectRowByMethod`) and discharge THAT impl's OWN requires; a first-match scan
+-- would be blind to no-requires siblings (see implDictRoutesForRow).  A
+-- non-overlapping site (one match) selects the impl a first-match scan would ⇒
+-- identical routes.
 -- #609 (arg position): selects on the goal VECTOR [goals] and binds the subst from
 -- the winner's FULL head types, as the return-position selected-row matcher does.
 -- This is the SAME defect as #609 proper, one leg over:
@@ -1959,9 +1955,9 @@ argImplDictRoutesForEncl : SiteCtx ->
   Mono ->
   List Mono ->
   List Route
--- ARCH B-2.1-b2 (LEG 3b): the arg-position twin of leg 3a, repointed for the same
--- reason and in the same bite — the two legs select the SAME way at the same goal
--- and a split between them is the §6 C2 break the header describes.
+-- The two element-dict route sites select the SAME way at the same goal; a split
+-- between them is the §6 C2 break (the route word and the prerequisite routes must
+-- name one row).
 argImplDictRoutesForEncl sx encl useScope name _tag mono goals =
   match (ieRowHeadTriple
     (ieSelectRowByMethod
@@ -2234,37 +2230,26 @@ bucketArgsMatch mctx ((tys, _) :: rest) args =
 --
 -- #326: the within-bucket winner is chosen by the SHARED min⊑ selector — the SAME
 -- registry, and the SAME selector, the dispatch ROUTER stamps with (PR #319 fixed the
--- router, this makes the CHECKER agree).  ARCH B-2.1-b2 moved BOTH sides at once:
--- that registry is now `ieSelectRowByIface` over the graph-global `IE`
--- (`bodyImplEnvRef`), not `selectImplEntryByIface` over the topological-prefix
--- `shadowKeyTableRef`.  The checker-agrees-with-router property is what forced the two
--- to move in one bite — see the `B-2.1-b2` block's three-leg header.  It returns the most-specific impl's
+-- router, this makes the CHECKER agree).  That registry is `ieSelectRowByIface` over the
+-- graph-global `IE` (`bodyImplEnvRef`); checker and router select through the one
+-- function, so they cannot disagree.  It returns the most-specific impl's
 -- OWN requires — [] for a no-requires specific `impl Foo (List Int)` sibling declared
 -- ALONGSIDE a `impl Foo (List a) requires Show a`, both in the same `List` head bucket —
--- never the general sibling's.  The prior concrete-then-headless first-match ranked
--- concrete-vs-headless correctly but took DECLARATION-ORDER first-match WITHIN a shared
+-- never the general sibling's.  A concrete-then-headless first-match would rank
+-- concrete-vs-headless correctly but take DECLARATION-ORDER first-match WITHIN a shared
 -- head bucket, so `Foo (List Int)` could inherit `List a`'s `Show a` requirement (a false
 -- reject/accept).  A non-overlapping receiver head has exactly one match, which
--- pickMostSpecificEntry returns unchanged ⇒ byte-identical to the old first-match.
--- #1128 (F-3b) CORRECTION.  This said "Headless impls carry no head tycon and so
--- are absent from KeyBuckets — the headless bucket fallback (still over the
--- ImplUniverse) covers them."  They are no longer absent: `keyEntryOf` registers a
--- bare-TyVar head under `noneHeadTag` and the candidate scan unions it into every
--- goal-head lookup (`candidateBucket` then; `ieCandidatesForIface`/`…ForMethod` since
--- B-2.1-b2, the former deleted by B-2.1-d), so a HEADLESS winner can be returned
--- directly.  That does not change which impl's requires get discharged — the union
--- goes through the same min⊑ selector, and concrete ⊑ headless strictly at every
--- single-param head, so a concrete match still outranks the catch-all exactly as the
--- "concrete bucket before headless bucket" ordering below did.  What it changes is
--- WHERE the headless answer comes from: the `firstReqMatch (univHeadless …)` fallback
--- is now reached only when the KeyBuckets union has no match at all (e.g. an empty
--- arg list, the arm above).  The fallback is retained rather than deleted because
--- `ImplUniverse` and `KeyBuckets` are populated from different decl sets and this
--- stage is a bug fix, not a registry merge.  `keyEntryOf` and `KeyBuckets` (this whole
--- paragraph's subject) were later deleted outright by `S-keytable-payoff` (`75f4148f`);
--- `findMatchingImplReqsU` below reads `ImplUniverse` only.  This paragraph is kept as the
--- historical record of the #1128 fix it documents, not as a description of the current
--- table.  Regression:
+-- pickMostSpecificEntry returns unchanged.
+-- Headless impls are in the candidate scan: `keyEntryOf` registers a bare-TyVar head
+-- under `noneHeadTag` and the scan (`ieCandidatesForIface`/`…ForMethod`) unions it into
+-- every goal-head lookup, so a HEADLESS winner can be returned directly.  That does not
+-- change which impl's requires get discharged — the union goes through the same min⊑
+-- selector, and concrete ⊑ headless strictly at every single-param head, so a concrete
+-- match outranks the catch-all.  The `firstReqMatch (univHeadless …)` fallback is
+-- therefore reached only when the candidate union has no match at all (e.g. an empty
+-- arg list, the arm above).  It is retained because `ImplUniverse` and the impl
+-- environment are populated from different decl sets; `findMatchingImplReqsU` below
+-- reads `ImplUniverse` only.  Regression:
 -- test/typecheck_error_fixtures/overlap_specific_req_wins.mdk (concrete-vs-headless) and
 -- overlap_same_head_req_wins{,_swapped}.mdk (#326 within-bucket min⊑).
 export
@@ -2330,8 +2315,8 @@ concreteReqMatchByIface : SiteCtx ->
   Option (List (String, Mono), List Require)
 -- Use `bodyImplEnvRef`, not `shadowKeyTableRef`: the latter is a topological PREFIX,
 -- so an impl in a later module contributes no `requires` and the goal reads as
--- unroutable. This is LEG 1 of ARCH B-2.1-b2's coordinated three-leg change; moving
--- only this function alone produces an S0.
+-- unroutable. The checker and the two element-dict route sites read this one registry;
+-- repointing this function alone produces an S0.
 concreteReqMatchByIface sx iface args =
   match (ieSelectRowByIface
     sx
@@ -2352,14 +2337,12 @@ firstReqMatch mctx ((tys, reqs) :: rest) args =
     None => firstReqMatch mctx rest args
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
--- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
--- identity — this is the row the concrete bucket's `"<iface>|<tag>"` key is
--- built from, on both sides (`insertUnivImpl` is the impl side).  The tag is
--- still that key's bare NAME, so every bucket lookup answers exactly as before.
--- A-2.2b (#1111): the `"\{iface}|\{tag}"` string splice is gone — this is a
--- structured two-component key (`RegKey`), so a `|` inside either half can no
--- longer forge the other, and each half carries its namespace.  Both halves are
--- still keyed by SPELLING; `dispHeadTab` derives why.
+-- The GOAL-side head arrives as a `HeadKey` that can carry identity; the concrete
+-- bucket's key is built from it on both sides (`insertUnivImpl` is the impl side),
+-- and the tag is that key's bare NAME.  The key is a structured two-component
+-- `RegKey`, so a `|` inside either half cannot forge the other, and each half
+-- carries its namespace.  Both halves are keyed by SPELLING; `dispHeadTab` derives
+-- why.
 export
 univConcreteBucket : ImplUniverse ->
   IfaceRef ->
@@ -2407,9 +2390,8 @@ bucketArgsMatchReqs mctx ((tys, reqs) :: rest) args =
   isNonEmptyL reqs && implHeadMatchesArgs mctx tys args
     || bucketArgsMatchReqs mctx rest args
 
--- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
--- by the keyed implMatchesU / bucketRecvMatch above.  implHeadMatchesArgs (used by
--- both the keyed matcher and matchTyMono callers) stays: each head-arg type pattern is
+-- The keyed matchers (`bucketArgsMatch`, `bucketArgsMatchReqs`) test a bucket entry with
+-- implHeadMatchesArgs: each head-arg type pattern is
 -- matched against the corresponding mono via matchTyMono (a TyVar in the head is a
 -- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`), and a
 -- variable the head repeats must be bound consistently across positions

@@ -2,18 +2,21 @@
 -- a goal already on the path is a cycle, a smaller goal is free, a goal that does not shrink
 -- spends the walk's fuel until it is exhausted), the head matching an instance is selected
 -- by (`positionBindings`, `repeatedBindings`, `paramMonoOf`, `goalHeadCon`,
--- `goalIsProjection`), the identity word of an instance row (`rowRouteKey`); then the
--- judgment `P |- pi ~> e` through one whole check: an instance, a given and a superclass
--- each entail a goal, an absent instance or a prerequisite is rejected by code, the most
--- specific of overlapping instances is the one a route names, and two incomparable ones are
--- an ambiguous instance.  One property: the route of a goal does not depend on the order the
--- instances are declared in.
+-- `goalIsProjection`), and the identity word of an instance row (`rowRouteKey`).  The
+-- judgment `P |- pi ~> e` through one whole check, and the property that a goal's route
+-- does not depend on the order its instances are declared in, are in `typecheck_test`.
 
 import types.tc_mono.{tconFrom, tconBuiltin}
-import list.{drop, head, reverse}
+import list.{head, reverse}
 import test.{
-  expectAll, expectEach, expectFalse, expectEqual, expectNotEqual,
-  expectSatisfies, expectTrue, pass
+  expectAll,
+  expectFalse,
+  expectEqual,
+  expectNotEqual,
+  expectSatisfies,
+  expectTrue,
+  fail,
+  pass,
 }
 import frontend.ast.{Ty, TyConOrigin(..)}
 import frontend.parser.{parse}
@@ -23,25 +26,13 @@ import types.tc_solve_entail.{
   enteredGoalKey, goalHeadCon, goalIsProjection, paramMonoOf, positionBindings,
   reqWalkEnter, reqWalkSeed, reqWalkStart, repeatedBindings, rowRouteKey
 }
-import types.tc_solve_test_support.{
-  checkCodes, expectChecks, expectRejectedWith, routeWordsOf
-}
-import types.tc_test_support.{sigsOf}
+import types.tc_test_support.{ifaceOf, intM, sigsOf, varM}
 import types.tc_types.{ImplRow(..), InstRef(..), ReqStep(..), ReqWalk}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
-ifaceOf : String -> IfaceRef
-ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
-
-intM : Mono
-intM = tconBuiltin "Int"
-
 boxOf : Mono -> Mono
 boxOf m = TApp (tconFrom (OriginModule "probe") "Box") m
-
-varM : Int -> Mono
-varM id = TVar (Ref (Unbound id 0))
 
 -- The memo bucket key of the goal a step entered: interface, size and fuel left.
 stepKey : ReqStep -> Option String
@@ -49,10 +40,10 @@ stepKey (ReqOn walk) = Some (enteredGoalKey walk)
 stepKey _ = None
 
 -- The fuel left in a bucket key, the last field.
-fuelOf : String -> String
+fuelOf : String -> Option String
 fuelOf key = match reverse (splitOnChar '#' key)
-  fuel :: _ => fuel
-  [] => ""
+  fuel :: _ => Some fuel
+  [] => None
 
 -- The walk a step continues with, when it continues.
 onward : ReqStep -> Option ReqWalk
@@ -104,7 +95,7 @@ test "a goal already on the path is a cycle that names the goal it closes on" =
       expectEqual
         ("A", ["Int"], "A", ["Int"])
         (parent.irName, map ppMono parentArgs, goal.irName, map ppMono goalArgs)
-    _ => expectEqual "a cycle" "another step"
+    _ => fail "expected a cycle, got another step"
 
 test "the same arguments under another interface are a different goal, not a cycle" =
   let seed = reqWalkSeed (ifaceOf "A") [intM]
@@ -113,21 +104,14 @@ test "the same arguments under another interface are a different goal, not a cyc
 test "a goal smaller than the one before it is entered without spending fuel" =
   let seed = reqWalkSeed (ifaceOf "A") [boxOf intM]
   expectEqual
-    (Some (fuelOf (enteredGoalKey seed)))
-    (map fuelOf (stepKey (reqWalkEnter seed (ifaceOf "A") [intM])))
+    (fuelOf (enteredGoalKey seed))
+    (stepKey (reqWalkEnter seed (ifaceOf "A") [intM]) |> flatMap fuelOf)
 
 test "a goal that does not shrink spends one unit of fuel" =
   let seed = reqWalkSeed (ifaceOf "A") [intM]
   expectEqual
     (map (n => n - 1) (parseFuel (enteredGoalKey seed)))
-    (stepKey (reqWalkEnter seed (ifaceOf "B") [intM]) |> bindOpt parseFuelOf)
-
-parseFuelOf : String -> Option Int
-parseFuelOf key = parseFuel key
-
-bindOpt : (a -> Option b) -> Option a -> Option b
-bindOpt f (Some x) = f x
-bindOpt _ None = None
+    (stepKey (reqWalkEnter seed (ifaceOf "B") [intM]) |> flatMap parseFuel)
 
 -- The goals `G0 .. G(n-1)` over one argument vector: none is smaller than the one before
 -- it, and no two are the same goal.
@@ -165,14 +149,14 @@ test "the steps taken before the cut-off are the fuel the walk starts with" =
     (Some steps)
 
 parseFuel : String -> Option Int
-parseFuel key = stringToInt (fuelOf key)
+parseFuel key = fuelOf key |> flatMap stringToInt
 
 test "a goal that closes on the path is a cycle even when fuel is gone" =
   match enterAll (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 20)
     Some walk => match reqWalkEnter walk (ifaceOf "G3") [intM]
       ReqCycle _ _ _ _ => pass
-      _ => expectEqual "a cycle" "another step"
-    None => expectEqual "a walk" "no walk"
+      _ => fail "expected a cycle, got another step"
+    None => fail "expected a walk, got none"
 
 -- ── head matching ─────────────────────────────────────────────────────────
 
@@ -197,7 +181,7 @@ test "a head and a goal of different lengths do not match" =
   expectEqual
     None
     (map
-      (bs => map (b => fst b) bs)
+      (bs => map fst bs)
       (positionBindings (headsOf "x : a") [intM, intM] []))
 
 test "a variable the head repeats pairs each later binding with its first" =
@@ -254,193 +238,3 @@ test "an instance row's word is its interface and head, whichever rows surround 
       (rowRouteKey first)
       (rowRouteKey (rowOf 0 "Other" "x : Box Int")),
   ]
-
--- ── what an instance, a given and a superclass entail ─────────────────────
-
-sizeable : String
-sizeable =
-  """
-interface Sz a where
-  sz : a -> Int
-impl Sz Int where
-  sz _ = 1
-data Box a = Box a
-data Pair a b = Pair a b
-"""
-
-test "a goal an instance answers is entailed" =
-  expectChecks (joinNl [sizeable, "f : Int", "f = sz 1"])
-
-test "a goal no instance answers is rejected as having no impl" =
-  expectRejectedWith ["T-NO-IMPL"] (joinNl [sizeable, "f : Int", "f = sz True"])
-
-test "an instance's prerequisite is owed at the use, and is met by the instance of its argument" = expectEach
-  [
-    (
-      "prerequisite met",
-      expectChecks
-        """
-\{sizeable}
-impl Sz (Box a) requires Sz a where
-  sz (Box x) = sz x
-f : Int
-f = sz (Box 1)
-""",
-    ),
-    (
-      "prerequisite absent",
-      expectRejectedWith
-        ["T-NO-IMPL"]
-        """
-\{sizeable}
-impl Sz (Box a) requires Sz a where
-  sz (Box x) = sz x
-f : Int
-f = sz (Box True)
-""",
-    ),
-  ]
-
-test "a given discharges the prerequisite of the instance a goal selects" =
-  expectChecks
-    """
-\{sizeable}
-impl Sz (Box a) requires Sz a where
-  sz (Box x) = sz x
-h : Sz a => Box a -> Int
-h b = sz b
-"""
-
-test "an instance of a sub-interface without the instance of its super is rejected" =
-  expectRejectedWith
-    ["T-MISSING-SUPER-IMPL"]
-    """
-\{sizeable}
-interface Sz2 a requires Sz a where
-  sz2 : a -> Int
-impl Sz2 Bool where
-  sz2 _ = 1
-"""
-
-test "an instance of a sub-interface beside its super's instance is entailed" =
-  expectChecks
-    """
-\{sizeable}
-interface Sz2 a requires Sz a where
-  sz2 : a -> Int
-impl Sz2 Int where
-  sz2 _ = 1
-f : Int
-f = sz2 1 + sz 2
-"""
-
-overlapping : String
-overlapping =
-  """
-\{sizeable}
-impl Sz (Box a) where
-  sz _ = 2
-impl Sz (Box Int) where
-  sz _ = 3
-"""
-
-test "of two instances that both match, the strictly more specific one is the route" =
-  let specificOnly =
-    routeWordsOf
-      (joinNl [
-        sizeable, "impl Sz (Box Int) where", "  sz _ = 3", "f : Int",
-        "f = sz (Box 1)"
-      ])
-  expectAll [
-    expectChecks (joinNl [overlapping, "f : Int", "f = sz (Box 1)"]),
-    expectEqual
-      specificOnly
-      (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box 1)"])),
-  ]
-
-test "the general instance is the route for a goal only it matches" =
-  let generalOnly =
-    routeWordsOf
-      (joinNl [
-        sizeable, "impl Sz (Box a) where", "  sz _ = 2", "f : Int",
-        "f = sz (Box True)"
-      ])
-  expectEqual
-    generalOnly
-    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box True)"]))
-
-test "the specific and the general instance name different routes" =
-  expectNotEqual
-    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box 1)"]))
-    (routeWordsOf (joinNl [overlapping, "f : Int", "f = sz (Box True)"]))
-
-incomparable : String
-incomparable =
-  """
-\{sizeable}
-impl Sz (Pair a Int) where
-  sz _ = 2
-impl Sz (Pair Int b) where
-  sz _ = 3
-"""
-
-test "two matching instances neither of which is more specific are an ambiguous instance" =
-  expectRejectedWith
-    ["T-AMBIGUOUS-INSTANCE"]
-    (joinNl [incomparable, "f : Int", "f = sz (Pair 1 2)"])
-
-test "a goal only one of two incomparable instances matches is not ambiguous" =
-  expectChecks (joinNl [incomparable, "f : Int", "f = sz (Pair True 2)"])
-
--- ── the law ───────────────────────────────────────────────────────────────
-
--- The instance heads and goals of the property, as source text.  Each head overlaps some of
--- the goals; `Pair a Int` and `Pair Int b` are incomparable where both match.
-headPool : List String
-headPool = ["Box a", "Box Int", "Pair a Int", "Pair Int b", "Box Bool"]
-
-goalPool : List String
-goalPool = ["Box 1", "Box True", "Pair 1 2", "Pair True 2", "Pair 1 True"]
-
-data RouteCase = RouteCase (List Int) Int
-
-impl Arbitrary RouteCase where
-  arbitrary () = RouteCase (pickHeads (randomInt 1 5) []) (randomInt 0 4)
-  shrink (RouteCase heads goal) = match heads
-    _ :: rest@(_ :: _) => [RouteCase rest goal]
-    _ => []
-
--- Up to [n] distinct pool indices, in draw order.
-pickHeads : Int -> List Int -> <Rand> List Int
-pickHeads n acc
-  | n <= 0 = acc
-  | otherwise =
-    let i = randomInt 0 4
-    if elem i acc then pickHeads (n - 1) acc else pickHeads (n - 1) (i :: acc)
-
-programOf : List Int -> Int -> String
-programOf heads goal =
-  joinNl
-    ([sizeable]
-      ++ map implText heads
-      ++ ["f : Int", "f = sz (\{nth goalPool goal})"])
-
-implText : Int -> String
-implText i =
-  "impl Sz (\{nth headPool i}) where\n  sz _ = \{intToString (i + 2)}\n"
-
-nth : List String -> Int -> String
-nth xs i = match drop i xs
-  x :: _ => x
-  [] => ""
-
--- Law: the route a goal is stamped with, and whether it is accepted, do not depend on the
--- order the instances are declared in.  Precondition: the goal is accepted, so that a
--- route exists to compare; ambiguous draws check the verdict alone.
-prop "a goal's route and verdict do not depend on the order its instances are declared in" (c : RouteCase) =
-  let (RouteCase heads goal) = c
-  let forward = programOf heads goal
-  let backward = programOf (reverse heads) goal
-  checkCodes forward == checkCodes backward
-    && (checkCodes forward /= []
-      || routeWordsOf forward == routeWordsOf backward)
