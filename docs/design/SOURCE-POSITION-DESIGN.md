@@ -19,6 +19,20 @@ the claims below still holds; **their symbol names, file paths and line numbers 
 not**, and are left as written rather than retro-edited. Re-derive with
 `grep -rn 'firstTyLoc\|orElseLoc' compiler/frontend/ast.mdk`.
 
+## Editor coordinate contract
+
+The internal `SourceIndex` indexes codepoint offsets and uses one-based lines
+and zero-based codepoint columns for `Loc` conversion. LSP and MCP positions
+use zero-based lines and UTF-16 code-unit columns. Astral characters occupy two
+units; combining characters and tabs are not display-width expanded. LF,
+CRLF, and lone CR end lines. Conversion accepts valid boundaries through EOF,
+rejects positions inside a surrogate pair and outside a line, and treats the
+interior of CRLF as invalid. Output ranges use valid source boundaries.
+
+The immutable index holds line starts, line ends and UTF-16 prefix widths.
+Construction scans the source once; endpoint lookup uses binary search. It is
+owned by the request and does not retain a parser context or session state.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;

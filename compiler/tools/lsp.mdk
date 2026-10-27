@@ -49,6 +49,7 @@ import driver.diagnostics.{
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
 import support.ordmap.{OrdMap, omEmpty}
+import support.path.{dirOf}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
   offsetToUtf16Position
@@ -911,7 +912,7 @@ projectEntryEnv : String ->
   <IO> Option HoverEnv
 projectEntryEnv runtimeSrc coreSrc uri src docs =
   let rootFile = pathOfUri uri
-  let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+  let projectDir = findProjectRootOrSelf (dirOf rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   map
@@ -1223,11 +1224,10 @@ hasExplicitSig (d :: rest) name = match innerDecl d
 -- Column right after the name on the decl's start line (0-based `line`).  Scan
 -- from char 0 over identifier chars; None if the line has no leading identifier.
 -- Intentionally kept (not retired) as `inlayNamePos`'s `None` fallback — full F5 retirement stays deferred.
-columnAfterName : String -> Int -> Option Int
-columnAfterName src line =
-  let arr = stringToChars src
+columnAfterName : SourceIndex -> Array Char -> Int -> Option Int
+columnAfterName index arr line =
   let len = arrayLength arr
-  match sourcePositionToOffset (indexSource src) (line + 1) 0
+  match sourcePositionToOffset index (line + 1) 0
     None => None
     Some lineStart =>
       let endCol = identRunLen arr len lineStart 0
@@ -1252,44 +1252,51 @@ inlayHints runtimeSrc coreSrc uri src docs =
     Some env => match parseWithPositionsOpt src
       None => []
       Some (decls, positions) =>
-        inlayZip src decls decls (positionsDecls positions) env.heSchemes
+        inlayZip
+          (indexSource src)
+          (stringToChars src)
+          decls
+          decls
+          (positionsDecls positions)
+          env.heSchemes
 
 -- The (0-based line, col) right after a decl's name: the real name `Loc`'s end
 -- position (#331) when there is one, else the old `columnAfterName` heuristic
 -- over the decl's start line.
-inlayNamePos : String -> DeclPos -> Option (Int, Int)
-inlayNamePos src p = match declPosNameLoc p
-  Some (Loc _ _ _ el ec) => match sourcePositionToOffset (indexSource src) el ec
-    Some off => offsetToUtf16Position (indexSource src) off
+inlayNamePos : SourceIndex -> Array Char -> DeclPos -> Option (Int, Int)
+inlayNamePos index arr p = match declPosNameLoc p
+  Some (Loc _ _ _ el ec) => match sourcePositionToOffset index el ec
+    Some off => offsetToUtf16Position index off
     None => None
   None =>
     map
       (col => (declPosLine p - 1, col))
-      (columnAfterName src (declPosLine p - 1))
+      (columnAfterName index arr (declPosLine p - 1))
 
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
 -- `name` always comes from `declBindingName d`, i.e. the BUFFER's own top-level
 -- binder, and the env lists the buffer's own schemes first, so the hit renders
 -- the context the buffer's binding was published with.
-inlayZip : String ->
+inlayZip : SourceIndex ->
+  Array Char ->
   List Decl ->
   List Decl ->
   List DeclPos ->
   List (String, PubScheme) ->
   List Json
-inlayZip src allDecls (d :: ds) (p :: ps) env = match declBindingName d
-  None => inlayZip src allDecls ds ps env
+inlayZip index arr allDecls (d :: ds) (p :: ps) env = match declBindingName d
+  None => inlayZip index arr allDecls ds ps env
   Some name =>
     if hasExplicitSig allDecls name then
-      inlayZip src allDecls ds ps env
+      inlayZip index arr allDecls ds ps env
     else match lookupSchemeL name env
-      None => inlayZip src allDecls ds ps env
-      Some sch => match inlayNamePos src p
-        None => inlayZip src allDecls ds ps env
+      None => inlayZip index arr allDecls ds ps env
+      Some sch => match inlayNamePos index arr p
+        None => inlayZip index arr allDecls ds ps env
         Some (line, col) =>
           jInlayHint line col (stringConcat [": ", ppPubScheme sch])
-            :: inlayZip src allDecls ds ps env
-inlayZip _ _ _ _ _ = []
+            :: inlayZip index arr allDecls ds ps env
+inlayZip _ _ _ _ _ _ = []
 
 -- One InlayHint { position, label, paddingLeft } (mirror the OCaml create).
 jInlayHint : Int -> Int -> String -> Json
@@ -1775,20 +1782,6 @@ uriOfPath path =
   else
     stringConcat ["file://", path]
 
--- directory of a path (everything before the last '/'; "." if none).
-dirOfPath : String -> String
-dirOfPath path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo path 0 = "."
--- Intentional cross-file duplicate of the same helper in path.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
-
 -- True when the buffer has a non-core `import` (→ project / multi-file path).
 bufferHasImports : String -> Bool
 bufferHasImports src = match parseResult src
@@ -1832,7 +1825,7 @@ publishProjectDiagnostics : String ->
   <IO> Option Kept
 publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let rootFile = pathOfUri uri
-  let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+  let projectDir = findProjectRootOrSelf (dirOf rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   -- #1362: the single-doc path (`publishDiagnosticsFrom`) runs `fileFront` UNGUARDED
@@ -2038,7 +2031,7 @@ projectDefinition runtimeSrc coreSrc uri src params docs =
       None => JNull
       Some _ =>
         let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+        let projectDir = findProjectRootOrSelf (dirOf rootFile)
         let read = path => docsGet (uriOfPath path) docs
         let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
         match binderAt idx rootFile (line + 1) col
@@ -2119,7 +2112,7 @@ referencesResult runtimeSrc coreSrc uri src params docs =
       None => jArray []
       Some _ =>
         let rootFile = pathOfUri uri
-        let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
+        let projectDir = findProjectRootOrSelf (dirOf rootFile)
         let read = path => docsGet (uriOfPath path) docs
         let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
         -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
