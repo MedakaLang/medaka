@@ -305,7 +305,8 @@ coordinateRun dir =
   match (
     writeOk path """value = 1
 main = ("😀", value + value)""",
-    writeOk one "main = (\n",
+    writeOk one """main = (
+""",
     writeOk two """value = 1
 bad = )
 """,
@@ -456,14 +457,32 @@ testGateCoordinates dir =
           (jObject [("file", JString path), ("engine", JString "eval")]))
       paths
   match (
-    writeOk ascii "-- > 1\n-- 1\nmain = (1 + \"x\")\n",
-    writeOk one "-- > 1\n-- 1\nmain = (\"😀\", 1 + \"x\")\n",
-    writeOk two "-- > 1\n-- 1\nmain = (\"😀😀\", 1 + \"x\")\n",
-    writeOk dep "export bad = (\"😀😀\", 1 + \"x\")\n",
-    writeOk main "import dep.{bad}\nmain = bad\n",
-    writeOk bad "import dep.{bad}\nmain = (\n",
-    writeOk missing "import absent.{x}\nmain = x\n",
-    writeOk cycle "import cycle.{x}\nx = 1\n",
+    writeOk ascii """-- > 1
+-- 1
+main = (1 + "x")
+""",
+    writeOk one """-- > 1
+-- 1
+main = ("😀", 1 + "x")
+""",
+    writeOk two """-- > 1
+-- 1
+main = ("😀😀", 1 + "x")
+""",
+    writeOk dep """export bad = ("😀😀", 1 + "x")
+""",
+    writeOk main """import dep.{bad}
+main = bad
+""",
+    writeOk bad """import dep.{bad}
+main = (
+""",
+    writeOk missing """import absent.{x}
+main = x
+""",
+    writeOk cycle """import cycle.{x}
+x = 1
+""",
     writeOk request (stringConcat [join "\n" calls, "\n"]),
   )
     (Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _) =>
@@ -475,7 +494,9 @@ testGateCoordinates dir =
               ("exit", expectEqual 0 code),
               (
                 "error envelope",
-                expectEqual 7 (length (split "\"isError\":true" out) - 1),
+                expectEqual
+                  (length paths)
+                  (length (split "\"isError\":true" out) - 1),
               ),
               (
                 "ASCII",
@@ -546,10 +567,17 @@ testGateControls dir =
   match (
     writeOk entry "main = (\n",
     writeOk broken "export bad = (\n",
-    writeOk importing "import broken.{bad}\nmain = bad\n",
+    writeOk importing """import broken.{bad}
+main = bad
+""",
     writeOk good "main = 1\n",
     writeOk exempt "test \"panic\" = panic \"must not run\"\n",
-    writeOk multi "-- > 1\n-- 1\nx = 1 + \"x\"\ny = True + 1\nmain = x\n",
+    writeOk multi """-- > 1
+-- 1
+x = 1 + "x"
+y = True + 1
+main = x
+""",
     writeOk request (stringConcat [join "\n" calls, "\n"]),
   )
     (Ok _, Ok _, Ok _, Ok _, Ok _, Ok _, Ok _) => match mcpRun 60 request "" []
@@ -587,3 +615,76 @@ testGateControls dir =
 
 test "mcp test parse, validation, and skipped phase controls" =
   withScratchDir testGateControls
+
+mixedGateDiagnostics : String -> <Exec, IO, FileRead> Expectation
+mixedGateDiagnostics dir =
+  let single = "\{dir}/single.mdk"
+  let dep = "\{dir}/dep.mdk"
+  let main = "\{dir}/main.mdk"
+  let warning = "\{dir}/warning.mdk"
+  let request = "\{dir}/mixed.jsonl"
+  let calls =
+    map
+      (path =>
+        coordinateCall
+          1
+          "medaka_test"
+          (jObject [("file", JString path), ("engine", JString "eval")]))
+      [single, main, warning]
+  match (
+    writeOk single """data Color = Red | Blue
+f Red = 1
+main = 1 + "x"
+""",
+    writeOk dep """data Color = Red | Blue
+f Red = 1
+export bad = 1 + "x"
+""",
+    writeOk main """import dep.{bad}
+main = bad
+""",
+    writeOk warning """data Color = Red | Blue
+f Red = 1
+main = 1
+""",
+    writeOk request (stringConcat [join "\n" calls, "\n"]),
+  )
+    (Ok _, Ok _, Ok _, Ok _, Ok _) => match mcpRun 60 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+        (Some a) :: (Some b) :: (Some c) :: _ => expectEach [
+          ("exit", expectEqual 0 code),
+          (
+            "error envelopes",
+            expectEqual 2 (length (split "\"isError\":true" out) - 1),
+          ),
+          (
+            "single diagnostics",
+            expectTextContainsAll
+              [
+                "W-NONEXHAUSTIVE-CLAUSES", "T-NO-IMPL", "\"severity\":2",
+                "\"severity\":1", "\"character\":8", "\"character\":9",
+                "\"character\":7", "\"character\":14",
+                "\"typeError\":\"no impl of Num for String\"", "\"total\":0",
+                "\"properties\":[]"
+              ]
+              a,
+          ),
+          (
+            "import diagnostics",
+            expectTextContainsAll
+              [
+                dep, "W-NONEXHAUSTIVE-CLAUSES", "T-NO-IMPL", "\"severity\":2",
+                "\"severity\":1", "\"character\":8", "\"character\":9",
+                "\"character\":13", "\"character\":20",
+                "\"typeError\":\"no impl of Num for String\""
+              ]
+              b,
+          ),
+          ("warning only", expectTextContainsAll ["\"ok\":true"] c),
+        ]
+        _ => fail "mixed gate responses missing"
+    _ => fail "mixed gate fixture write failed"
+
+test "mcp test gate retains warnings alongside errors" =
+  withScratchDir mixedGateDiagnostics

@@ -1698,7 +1698,7 @@ primaryEngineName : List Engine -> String
 primaryEngineName [] = "unknown"
 primaryEngineName (e :: _) = engineName e
 
--- #1443: present iff `runTestReport`'s typecheck gate rejected the module —
+-- Setup, parse, and typecheck failures expose `typeError`; on rejection,
 -- `doctests`/`properties`/`summary` are then the untouched empty defaults
 -- (mirrors the CLI's `runTest`, which never reaches `driveAll` on a gate
 -- failure either). Diagnostic messages and structured ranges are separate;
@@ -1717,7 +1717,7 @@ typeErrorField (Some (TestDiagnosticError triples)) = [
 
 testDiagnosticMessages : (String, String, List Diag) -> List String
 testDiagnosticMessages (_, _, diags) =
-  map ((Diag _ _ message _ _ _) => message) diags
+  map ((Diag _ _ message _ _ _) => message) (filter diagIsError diags)
 
 testDiagnosticFile : (String, String, List Diag) -> Json
 testDiagnosticFile (path, src, diags) = match cjFileEntry path src diags
@@ -2268,7 +2268,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "typeErrorField" ((PCon "Some" (PCon "TestSetupError" (PVar "errText")))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
 (DFunDef false "typeErrorField" ((PCon "Some" (PCon "TestDiagnosticError" (PVar "triples")))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "flatMap") (EVar "testDiagnosticMessages")) (EVar "triples"))))) (ETuple (ELit (LString "typeDiagnostics")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "testDiagnosticFile")) (EVar "triples"))))))
 (DTypeSig false "testDiagnosticMessages" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EVar "diags")))
+(DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "testDiagnosticFile" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
 (DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EMatch (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")) (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EVar "mcpDiagnosticField") (EApp (EVar "Some") (EApp (EVar "indexSource") (EVar "src"))))) (EApp (EVar "toList") (EVar "fields"))))) (arm (PVar "value") () (EVar "value"))))
 (DTypeSig false "typecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
@@ -2545,7 +2545,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "typeErrorField" ((PCon "Some" (PCon "TestSetupError" (PVar "errText")))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
 (DFunDef false "typeErrorField" ((PCon "Some" (PCon "TestDiagnosticError" (PVar "triples")))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EDictApp "flatMap") (EVar "testDiagnosticMessages")) (EVar "triples"))))) (ETuple (ELit (LString "typeDiagnostics")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "testDiagnosticFile")) (EVar "triples"))))))
 (DTypeSig false "testDiagnosticMessages" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EMethodRef "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EVar "diags")))
+(DFunDef false "testDiagnosticMessages" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EMethodRef "map") (ELam ((PCon "Diag" PWild PWild (PVar "message") PWild PWild PWild)) (EVar "message"))) (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "testDiagnosticFile" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
 (DFunDef false "testDiagnosticFile" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EMatch (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")) (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EVar "mcpDiagnosticField") (EApp (EVar "Some") (EApp (EVar "indexSource") (EVar "src"))))) (EApp (EMethodRef "toList") (EVar "fields"))))) (arm (PVar "value") () (EVar "value"))))
 (DTypeSig false "typecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=5023
+source_lines=5025
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -630,15 +630,7 @@ exemptNotice False _ _ = ()
 exemptNotice True target userDecls =
   ePutStrLn (typecheckSkipNotice target userDecls)
 
--- Type-check the module the way `medaka check` does.  Prelude-only (no
--- non-core imports) modules go through `analyzeLocated`, the single-file
--- analyzer `medaka check` uses: it correctly handles the target==prelude case
--- (`medaka test stdlib/core.mdk`, the neq-hang canary) via the shared
--- shadow-scoping, and is UNGUARDED for internal-only externs so a stdlib
--- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
--- Import-bearing modules are gated by `gatedDrive` below instead, off the
--- ONE elaboration the phases already need.
--- Returns Some <located error text> iff the module does NOT typecheck, else None.
+-- Setup failures have no location; diagnostic failures retain per-file source.
 -- lint-disable-next-line rule-clone-type
 public export data TestReportError =
   | TestSetupError String
@@ -649,16 +641,26 @@ renderTestReportError (TestSetupError text) = text
 renderTestReportError (TestDiagnosticError triples) =
   joinNl (flatMap renderFileErrors triples)
 
+-- Type-check the module the way `medaka check` does.  Prelude-only (no
+-- non-core imports) modules go through `analyzeLocated`, the single-file
+-- analyzer `medaka check` uses: it correctly handles the target==prelude case
+-- (`medaka test stdlib/core.mdk`, the neq-hang canary) via the shared
+-- shadow-scoping, and is UNGUARDED for internal-only externs so a stdlib
+-- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
+-- Import-bearing modules are gated by `gatedDrive` below instead, off the
+-- ONE elaboration the phases already need.
+-- Returns structured diagnostics iff the module has an error.
 singleFileTypeErrorsParts : String ->
   String ->
   String ->
   String ->
   Option TestReportError
 singleFileTypeErrorsParts target tsrc rsrc csrc =
-  let errs = filter diagIsError (analyzeLocated noStdlibExports rsrc csrc tsrc)
-  match errs
-    [] => None
-    _ => Some (TestDiagnosticError [(target, tsrc, errs)])
+  let diags = analyzeLocated noStdlibExports rsrc csrc tsrc
+  if isNonEmptyL (filter diagIsError diags) then
+    Some (TestDiagnosticError [(target, tsrc, diags)])
+  else
+    None
 
 singleFileTypeErrors : String -> String -> String -> String -> Option String
 singleFileTypeErrors target tsrc rsrc csrc =
@@ -732,10 +734,10 @@ diagnosticGate sources results =
       ((path, ds) => (
         path,
         option "" identity (omLookup path sources),
-        filter diagIsError ds,
+        ds,
       ))
       results
-  if isNonEmptyL (flatMap ((_, _, ds) => ds) triples) then
+  if isNonEmptyL (filter diagIsError (flatMap ((_, _, ds) => ds) triples)) then
     Some (TestDiagnosticError triples)
   else
     None
@@ -5105,7 +5107,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "renderTestReportError" ((PCon "TestSetupError" (PVar "text"))) (EVar "text"))
 (DFunDef false "renderTestReportError" ((PCon "TestDiagnosticError" (PVar "triples"))) (EApp (EVar "joinNl") (EApp (EApp (EVar "flatMap") (EVar "renderFileErrors")) (EVar "triples"))))
 (DTypeSig false "singleFileTypeErrorsParts" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestReportError")))))))
-(DFunDef false "singleFileTypeErrorsParts" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "errs"))))))))))
+(DFunDef false "singleFileTypeErrorsParts" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (EVar "None")))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "singleFileTypeErrors" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EVar "map") (EVar "renderTestReportError")) (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrorsParts") (EVar "target")) (EVar "tsrc")) (EVar "rsrc")) (EVar "csrc"))))
 (DTypeSig false "gatedDrive" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs"))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "TestReportError")) (TyApp (TyCon "Option") (TyCon "ElabResult")))))))))))
@@ -5118,7 +5120,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))) (arm (PCon "None") () (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadMsg" (PVar "e"))) (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))
 (DTypeSig false "diagnosticGate" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "Option") (TyCon "TestReportError")))))
-(DFunDef false "diagnosticGate" ((PVar "sources") (PVar "results")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "ds"))) (ETuple (EVar "path") (EApp (EApp (EApp (EVar "option") (ELit (LString ""))) (EVar "identity")) (EApp (EApp (EVar "omLookup") (EVar "path")) (EVar "sources"))) (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "ds"))))) (EVar "results"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "flatMap") (ELam ((PTuple PWild PWild (PVar "ds"))) (EVar "ds"))) (EVar "triples"))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EVar "triples"))) (EVar "None")))))
+(DFunDef false "diagnosticGate" ((PVar "sources") (PVar "results")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "ds"))) (ETuple (EVar "path") (EApp (EApp (EApp (EVar "option") (ELit (LString ""))) (EVar "identity")) (EApp (EApp (EVar "omLookup") (EVar "path")) (EVar "sources"))) (EVar "ds")))) (EVar "results"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple PWild PWild (PVar "ds"))) (EVar "ds"))) (EVar "triples")))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EVar "triples"))) (EVar "None")))))
 (DTypeSig false "renderFileErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderFileErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "typecheckGateFail" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -5793,7 +5795,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "renderTestReportError" ((PCon "TestSetupError" (PVar "text"))) (EVar "text"))
 (DFunDef false "renderTestReportError" ((PCon "TestDiagnosticError" (PVar "triples"))) (EApp (EVar "joinNl") (EApp (EApp (EDictApp "flatMap") (EVar "renderFileErrors")) (EVar "triples"))))
 (DTypeSig false "singleFileTypeErrorsParts" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestReportError")))))))
-(DFunDef false "singleFileTypeErrorsParts" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "errs"))))))))))
+(DFunDef false "singleFileTypeErrorsParts" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (EVar "None")))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "singleFileTypeErrors" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EMethodRef "map") (EVar "renderTestReportError")) (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrorsParts") (EVar "target")) (EVar "tsrc")) (EVar "rsrc")) (EVar "csrc"))))
 (DTypeSig false "gatedDrive" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs"))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "TestReportError")) (TyApp (TyCon "Option") (TyCon "ElabResult")))))))))))
@@ -5806,7 +5808,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))) (arm (PCon "None") () (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadMsg" (PVar "e"))) (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))
 (DTypeSig false "diagnosticGate" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "Option") (TyCon "TestReportError")))))
-(DFunDef false "diagnosticGate" ((PVar "sources") (PVar "results")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "ds"))) (ETuple (EVar "path") (EApp (EApp (EApp (EVar "option") (ELit (LString ""))) (EVar "identity")) (EApp (EApp (EVar "omLookup") (EVar "path")) (EVar "sources"))) (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "ds"))))) (EVar "results"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple PWild PWild (PVar "ds"))) (EVar "ds"))) (EVar "triples"))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EVar "triples"))) (EVar "None")))))
+(DFunDef false "diagnosticGate" ((PVar "sources") (PVar "results")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "ds"))) (ETuple (EVar "path") (EApp (EApp (EApp (EVar "option") (ELit (LString ""))) (EVar "identity")) (EApp (EApp (EVar "omLookup") (EVar "path")) (EVar "sources"))) (EVar "ds")))) (EVar "results"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple PWild PWild (PVar "ds"))) (EVar "ds"))) (EVar "triples")))) (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EVar "triples"))) (EVar "None")))))
 (DTypeSig false "renderFileErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderFileErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))))
 (DTypeSig false "typecheckGateFail" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
