@@ -1,5 +1,5 @@
 # META
-source_lines=2869
+source_lines=2867
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -48,7 +48,9 @@ import support.char.{
   isHexDigit,
 }
 import support.util.{joinWith, compareDecMag, listLen, anyList}
-export import frontend.lex_token.{Token(..), tokenToString, describeToken}
+export import frontend.lex_token.{
+  Token(..), tokenToString, describeToken, isCommaTok
+}
 import frontend.lex_token.{RawTok(..)}
 export import support.source_index.{lineStartsOf, offsetToLineColFast}
 
@@ -70,10 +72,6 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 -- Constructor matches, not derived `==` on Token (layout pass hot path).
-export
-isCommaTok : Token -> Bool
-isCommaTok TComma = True
-isCommaTok _ = False
 
 export
 isThenTok : Token -> Bool
@@ -2876,7 +2874,7 @@ collectComments s =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isSp" false) (mem "isTab" false) (mem "isNL" false) (mem "isCR" false) (mem "isQuote" false) (mem "isApos" false) (mem "isBackslash" false) (mem "isBacktick" false) (mem "isSpace" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isAlnum" false) (mem "isHexDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "compareDecMag" false) (mem "listLen" false) (mem "anyList" false))))
-(DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false))))
+(DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false) (mem "isCommaTok" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse true (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
@@ -2885,9 +2883,6 @@ collectComments s =
 (DFunDef false "is2" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))))
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
-(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
-(DFunDef false "isCommaTok" (PWild) (EVar "False"))
 (DTypeSig true "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
 (DFunDef false "isThenTok" (PWild) (EVar "False"))
@@ -3604,7 +3599,7 @@ collectComments s =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isSp" false) (mem "isTab" false) (mem "isNL" false) (mem "isCR" false) (mem "isQuote" false) (mem "isApos" false) (mem "isBackslash" false) (mem "isBacktick" false) (mem "isSpace" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isAlnum" false) (mem "isHexDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "compareDecMag" false) (mem "listLen" false) (mem "anyList" false))))
-(DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false))))
+(DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false) (mem "isCommaTok" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse true (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
@@ -3613,9 +3608,6 @@ collectComments s =
 (DFunDef false "is2" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))))
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
-(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
-(DFunDef false "isCommaTok" (PWild) (EVar "False"))
 (DTypeSig true "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
 (DFunDef false "isThenTok" (PWild) (EVar "False"))

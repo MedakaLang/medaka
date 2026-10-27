@@ -29,6 +29,7 @@ import test.{
   Expectation
 }
 import frontend.parser as P
+import frontend.parse_result as R
 import support.util.{joinWith}
 
 -- The rendered message of a recoverable failure, or the marker text for any
@@ -459,3 +460,31 @@ test "parseResult spans do not depend on the located parse before it" =
   expectEqual
     (afterLocatedResult "longname = 1\nb = 2\n")
     (afterLocatedResult "q = 0\n")
+
+locTuple : Option Loc -> Option (Int, Int, Int, Int)
+locTuple None = None
+locTuple (Some (Loc _ l c el ec)) = Some (l, c, el, ec)
+
+test "position and immutable result projections preserve CRLF and Unicode" =
+  let (decls, positions) =
+    P.parseWithPositions "-- λ\r\ndata Foo = Bar | Baz\r\nx = 1\r\n"
+  let metadata = R.makeParseMetadata [(2, 3)] [(3, 0, 1)]
+  let result = R.makeParsedSource decls positions metadata
+  expectAll [
+    expectEqual 2 (length (R.parsedDecls result)),
+    expectEqual
+      [(2, 2), (3, 3)]
+      (map
+        (d => (P.declPosLine d, P.declPosEndLine d))
+        (P.positionsDecls (R.parsedPositions result))),
+    expectEqual
+      [Some (2, 5, 2, 8), Some (3, 0, 3, 1)]
+      (map (d => locTuple (P.declPosNameLoc d)) (P.positionsDecls positions)),
+    expectEqual
+      [[Some (2, 11, 2, 14), Some (2, 17, 2, 20)], []]
+      (map
+        (d => map locTuple (P.declPosChildLocs d))
+        (P.positionsDecls positions)),
+    expectEqual [(2, 3)] (R.metadataTrailingCommas (R.parsedMetadata result)),
+    expectEqual [(3, 0, 1)] (R.metadataUnitStarts (R.parsedMetadata result)),
+  ]

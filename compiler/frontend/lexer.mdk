@@ -44,7 +44,9 @@ import support.char.{
   isHexDigit,
 }
 import support.util.{joinWith, compareDecMag, listLen, anyList}
-export import frontend.lex_token.{Token(..), tokenToString, describeToken}
+export import frontend.lex_token.{
+  Token(..), tokenToString, describeToken, isCommaTok
+}
 import frontend.lex_token.{RawTok(..)}
 export import support.source_index.{lineStartsOf, offsetToLineColFast}
 
@@ -66,10 +68,6 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 -- Constructor matches, not derived `==` on Token (layout pass hot path).
-export
-isCommaTok : Token -> Bool
-isCommaTok TComma = True
-isCommaTok _ = False
 
 export
 isThenTok : Token -> Bool

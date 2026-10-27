@@ -1,0 +1,555 @@
+import array
+import frontend.ast.{
+  noBinderId,
+  unminted,
+  negateLiteral,
+  DeriveRef(..),
+  Lit(..),
+  Ty(..),
+  EffAtomTy(..),
+  EffParamTy(..),
+  effAtomAt,
+  effectDeclUnstamped,
+  KindAnn(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  Loc(..),
+  noDeclLoc,
+  UseMember(..),
+  UsePath(..),
+  useMemberOrigin,
+  useMemberAlias,
+  qualifiedLocal,
+  tyConUnresolved,
+  tyConBuiltin,
+  dDataUnresolved,
+  externDataUnresolved,
+  kindAnnSource,
+  kindAuthorityUnstamped,
+  dTypeAliasUnresolved,
+  dNewtypeUnresolved,
+  dInterfaceUnresolved,
+  setDeclNameLoc,
+  dImplUnresolved,
+  constraintUnresolved,
+  superUnresolved,
+  requireUnresolved,
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+  ExternDecl(..),
+  ExternBind(..),
+  Attr(..),
+  Route(..),
+}
+import frontend.lex_token.{
+  Token(..), isCommaTok, isNoiseTok, isColonTok, isConsTok, isDedentTok,
+  isDeferTok, isEofTok, isEqualTok, isExportTok, isImplTok, isInTok,
+  isIndentTok, isLBraceTok, isLetTok, isNewlineTok, isOfTok, isPipeTok,
+  isPublicTok, isRBraceTok, isRequiresTok, isStarTok, isWhereTok, isLayoutTok,
+  isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
+}
+import support.source_index.{lineStartIndex, offsetToLineColFast}
+import support.util.{reverseL, joinWith}
+import list.{last}
+import support.char.{isUpper}
+
+public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))
+public export data Positions =
+  Positions (List DeclPos) (List Int) Int (List (List Int))
+
+export
+positionsDecls : Positions -> List DeclPos
+positionsDecls (Positions ds _ _ _) = ds
+
+export
+positionsVariantLines : Positions -> List Int
+positionsVariantLines (Positions _ vs _ _) = vs
+
+export
+positionsLastContentLine : Positions -> Int
+positionsLastContentLine (Positions _ _ l _) = l
+
+export
+positionsChainLines : Positions -> List (List Int)
+positionsChainLines (Positions _ _ _ cl) = cl
+
+export
+declPosLine : DeclPos -> Int
+declPosLine (DeclPos l _ _ _) = l
+
+export
+declPosEndLine : DeclPos -> Int
+declPosEndLine (DeclPos _ e _ _) = e
+export
+declPosNameLoc : DeclPos -> Option Loc
+declPosNameLoc (DeclPos _ _ nl _) = nl
+export
+declPosChildLocs : DeclPos -> List (Option Loc)
+declPosChildLocs (DeclPos _ _ _ cs) = cs
+
+lastContentIdx : Array Token -> Int -> Int -> Int
+lastContentIdx toks s i
+  | i < s = s
+  | isNoiseTok (arrayGetUnsafe i toks) = lastContentIdx toks s (i - 1)
+  | otherwise = i
+lineAt : Array Int -> Int -> Int
+lineAt lines i
+  | i < arrayLength lines = arrayGetUnsafe i lines
+  | otherwise = 0
+export
+locOfSpanWith : Array (Int, Int) -> Array Int -> Int -> Int -> Loc
+locOfSpanWith offs lineStarts startIdx endIdx =
+  let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
+  let startOff = tokOffsetAtArr offs startIdx
+  let endOff = tokEndOffsetAtArr offs lastIdx
+  let si = lineStartIndex lineStarts startOff
+  let ei = lineStartIndex lineStarts endOff
+  Loc
+    ""
+    (si + 1)
+    (startOff - arrayGetUnsafe si lineStarts)
+    (ei + 1)
+    (endOff - arrayGetUnsafe ei lineStarts)
+tokOffsetAtArr : Array (Int, Int) -> Int -> Int
+tokOffsetAtArr offs i =
+  if i >= 0 && i < arrayLength offs then fst (arrayGetUnsafe i offs) else 0
+
+tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
+tokEndOffsetAtArr offs i =
+  if i >= 0 && i < arrayLength offs then snd (arrayGetUnsafe i offs) else 0
+isLeadingModifierTok : Token -> Bool
+isLeadingModifierTok TPublic = True
+isLeadingModifierTok TExport = True
+isLeadingModifierTok TDefault = True
+isLeadingModifierTok t = isNoiseTok t
+skipLeadingModifiers : Array Token -> Int -> Int
+skipLeadingModifiers toks i
+  | i < arrayLength toks && isLeadingModifierTok (arrayGetUnsafe i toks) =
+    skipLeadingModifiers toks (i + 1)
+  | otherwise = i
+
+tokIdxOrNone : Array Token -> Int -> Option Int
+tokIdxOrNone toks i = if i >= 0 && i < arrayLength toks then Some i else None
+implHeadTokIdx : Array Token -> Int -> Option Int
+implHeadTokIdx toks i = implHeadTokGo toks i 0
+
+implHeadTokGo : Array Token -> Int -> Int -> Option Int
+implHeadTokGo toks i depth
+  | i >= arrayLength toks = None
+  | otherwise = implHeadTokStep toks i depth (arrayGetUnsafe i toks)
+
+implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
+implHeadTokStep toks i depth t
+  | isOpenDelim t = implHeadTokGo toks (i + 1) (depth + 1)
+  | isCloseDelim t = implHeadTokGo toks (i + 1) (depth - 1)
+  | isTUpperTok t = Some i
+  | depth == 0 && (isWhereTok t || isRequiresTok t || isNoiseTok t) = None
+  | otherwise = implHeadTokGo toks (i + 1) depth
+declNameTokIdxAt : Array Token -> Decl -> Int -> Option Int
+declNameTokIdxAt toks (DAttrib _ inner) i =
+  let i1 = i + 1  -- '@'
+  let i2 = i1 + 1  -- attribute name ident
+  let i3 =
+    if i2 < arrayLength toks && isTStringTok (arrayGetUnsafe i2 toks) then
+      i2 + 1
+    else
+      i2
+  declNameTokIdx toks inner i3
+declNameTokIdxAt toks (DTypeSig _ _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DFunDef _ _ _ _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DExtern _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DEffect _ _ _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DProp _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DTest _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DInterface { ... }) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DTypeAlias { tyAliasOrigin = _ }) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DNewtype { newtypeOrigin = _ }) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DLetGroup _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 2))  -- `let` `rec`
+declNameTokIdxAt toks (DImpl { ... }) i = match implHeadTokIdx toks (i + 2)
+  Some headIdx => Some headIdx
+  None => Some i  -- fully-parametric head: fall back to the `impl` keyword
+declNameTokIdxAt toks (DUse _ _ _) i = None
+declNameTokIdx : Array Token -> Decl -> Int -> Option Int
+declNameTokIdx toks d i = declNameTokIdxAt toks d (skipLeadingModifiers toks i)
+declNameSpanOf : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  (Decl, Int, Int) ->
+  Option Loc
+declNameSpanOf toks offs lineStarts (d, s, _e) =
+  map
+    (nameIdx => locOfSpanWith offs lineStarts nameIdx (nameIdx + 1))
+    (declNameTokIdx toks d s)
+innerDeclOf : Decl -> Decl
+innerDeclOf (DAttrib _ d) = innerDeclOf d
+innerDeclOf d = d
+declChildNameIdxs : Array Token -> (Decl, Int, Int) -> List (Option Int)
+declChildNameIdxs toks (d, s, e) = match innerDeclOf d
+  DData { dataCtors = variants } => dataChildIdxs toks s e variants
+  DInterface { ... } => methodNameIdxs toks s e
+  DImpl { ... } => methodNameIdxs toks s e
+  DLetGroup _ _ => [declNameTokIdx toks d s]
+  _ => []
+variantBoundaryIdxs : Array Token -> Int -> Int -> List Int
+variantBoundaryIdxs toks s e = variantBoundaryGo toks s e 0 False
+
+variantBoundaryGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
+variantBoundaryGo toks i e depth seenEq
+  | i >= e = []
+  | otherwise = variantBoundaryAt toks i e depth seenEq (arrayGetUnsafe i toks)
+
+variantBoundaryAt : Array Token ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Token ->
+  List Int
+variantBoundaryAt toks i e depth seenEq t
+  | isOpenDelim t = variantBoundaryGo toks (i + 1) e (depth + 1) seenEq
+  | isCloseDelim t = variantBoundaryGo toks (i + 1) e (depth - 1) seenEq
+  | depth == 0 && not seenEq && isEqualTok t && nextSigIsPipe toks e (i + 1) =
+    variantBoundaryGo toks (i + 1) e depth True
+  | depth == 0 && not seenEq && isEqualTok t =
+    firstContentAt toks (i + 1) e :: variantBoundaryGo toks (i + 1) e depth True
+  | depth == 0 && seenEq && isPipeTok t =
+    firstContentAt toks (i + 1) e
+      :: variantBoundaryGo toks (i + 1) e depth seenEq
+  | otherwise = variantBoundaryGo toks (i + 1) e depth seenEq
+dataChildIdxs : Array Token -> Int -> Int -> List Variant -> List (Option Int)
+dataChildIdxs toks s e variants =
+  zipVariantIdxs toks e variants (variantBoundaryIdxs toks s e)
+
+zipVariantIdxs : Array Token ->
+  Int ->
+  List Variant ->
+  List Int ->
+  List (Option Int)
+zipVariantIdxs _ _ [] _ = []
+zipVariantIdxs toks e ((Variant _ (ConNamed fs True)) :: vs) (b :: bs) =
+  zipFieldIdxs fs (fieldNameIdxsIn toks (b + 1) e)
+    ++ zipVariantIdxs toks e vs bs
+zipVariantIdxs toks e ((Variant _ _) :: vs) (b :: bs) =
+  Some b :: zipVariantIdxs toks e vs bs
+zipVariantIdxs toks e (v :: vs) [] =
+  variantNoneIdxs v ++ zipVariantIdxs toks e vs []
+variantNoneIdxs : Variant -> List (Option Int)
+variantNoneIdxs (Variant _ (ConNamed fs True)) = map (_ => None) fs
+variantNoneIdxs (Variant _ _) = [None]
+fieldNameIdxsIn : Array Token -> Int -> Int -> List Int
+fieldNameIdxsIn toks i e = fieldNameGo toks i e 1 True
+
+fieldNameGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
+fieldNameGo toks i e depth atStart
+  | i >= e = []
+  | depth <= 0 = []
+  | otherwise = fieldNameStep toks i e depth atStart (arrayGetUnsafe i toks)
+
+fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
+fieldNameStep toks i e depth atStart t
+  | isOpenDelim t = fieldNameGo toks (i + 1) e (depth + 1) False
+  | isCloseDelim t = fieldNameGo toks (i + 1) e (depth - 1) False
+  | depth == 1 && isCommaTok t = fieldNameGo toks (i + 1) e depth True
+  | isNoiseTok t = fieldNameGo toks (i + 1) e depth atStart
+  | atStart && depth == 1 = i :: fieldNameGo toks (i + 1) e depth False
+  | otherwise = fieldNameGo toks (i + 1) e depth False
+zipFieldIdxs : List Field -> List Int -> List (Option Int)
+zipFieldIdxs [] _ = []
+zipFieldIdxs (_ :: fs) (i :: is) = Some i :: zipFieldIdxs fs is
+zipFieldIdxs (_ :: fs) [] = None :: zipFieldIdxs fs []
+methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
+methodNameIdxs toks s e = match findWhereIdx toks s e
+  None => []
+  Some w =>
+    let after = skipNewlineToks toks (w + 1) e
+    if after < e && isIndentTok (arrayGetUnsafe after toks) then
+      methodNameGo toks (after + 1) e 1 True
+    else
+      []
+
+findWhereIdx : Array Token -> Int -> Int -> Option Int
+findWhereIdx toks i e
+  | i >= e = None
+  | isWhereTok (arrayGetUnsafe i toks) = Some i
+  | otherwise = findWhereIdx toks (i + 1) e
+skipNewlineToks : Array Token -> Int -> Int -> Int
+skipNewlineToks toks i e
+  | i < e && isNewlineTok (arrayGetUnsafe i toks) =
+    skipNewlineToks toks (i + 1) e
+  | otherwise = i
+
+methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
+methodNameGo toks i e depth atStart
+  | i >= e = []
+  | depth <= 0 = []
+  | otherwise = methodNameStep toks i e depth atStart (arrayGetUnsafe i toks)
+
+methodNameStep : Array Token ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Token ->
+  List (Option Int)
+methodNameStep toks i e depth _ TIndent =
+  methodNameGo toks (i + 1) e (depth + 1) False
+methodNameStep toks i e depth _ TDedent =
+  methodNameGo toks (i + 1) e (depth - 1) False
+methodNameStep toks i e depth _ TNewline =
+  methodNameGo toks (i + 1) e depth (depth == 1)
+methodNameStep toks i e depth atStart _
+  | atStart && depth == 1 = Some i :: methodNameGo toks (i + 1) e depth False
+  | otherwise = methodNameGo toks (i + 1) e depth False
+declChildSpansOf : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  (Decl, Int, Int) ->
+  List (Option Loc)
+declChildSpansOf toks offs lineStarts span =
+  map
+    (idxOpt => map (idx => locOfSpanWith offs lineStarts idx (idx + 1)) idxOpt)
+    (declChildNameIdxs toks span)
+declPosOf : Array Token ->
+  Array Int ->
+  Array (Int, Int) ->
+  Array Int ->
+  (Decl, Int, Int) ->
+  DeclPos
+declPosOf toks lines offs lineStarts (d, s, e) =
+  DeclPos
+    (lineAt lines s)
+    (lineAt lines (lastContentIdx toks s (e - 1)))
+    (declNameSpanOf toks offs lineStarts (d, s, e))
+    (declChildSpansOf toks offs lineStarts (d, s, e))
+variantStartsIn : Array Token -> Array Int -> Int -> Int -> List Int
+variantStartsIn toks lines i e = variantStartsGo toks lines i e 0 False
+variantStartsGo : Array Token ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  List Int
+variantStartsGo toks lines i e depth seenEq
+  | i >= e = []
+  | otherwise =
+    variantStartsAt toks lines i e depth seenEq (arrayGetUnsafe i toks)
+
+variantStartsAt : Array Token ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Token ->
+  List Int
+variantStartsAt toks lines i e depth seenEq t
+  | isOpenDelim t = variantStartsGo toks lines (i + 1) e (depth + 1) seenEq
+  | isCloseDelim t = variantStartsGo toks lines (i + 1) e (depth - 1) seenEq
+  | depth == 0 && not seenEq && isEqualTok t && nextSigIsPipe toks e (i + 1) =
+    variantStartsGo toks lines (i + 1) e depth True
+  | depth == 0 && not seenEq && isEqualTok t =
+    lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth True
+  | depth == 0 && seenEq && isPipeTok t =
+    lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth seenEq
+  | otherwise = variantStartsGo toks lines (i + 1) e depth seenEq
+nextSigIsPipe : Array Token -> Int -> Int -> Bool
+nextSigIsPipe toks e j
+  | j >= e = False
+  | isLayoutTok (arrayGetUnsafe j toks) = nextSigIsPipe toks e (j + 1)
+  | otherwise = isPipeTok (arrayGetUnsafe j toks)
+isDataDecl : Decl -> Bool
+isDataDecl (DData { dataOrigin = _ }) = True
+isDataDecl _ = False
+allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
+allVariantLines toks lines [] = []
+allVariantLines toks lines ((d, s, e) :: rest)
+  | isDataDecl d =
+    variantStartsIn toks lines s e ++ allVariantLines toks lines rest
+  | otherwise = allVariantLines toks lines rest
+isContinuationOpStr : String -> Bool
+isContinuationOpStr op =
+  op == "|>"
+    || op == ">>"
+    || op == "<<"
+    || op == "&&"
+    || op == "||"
+    || op == "++"
+chainOpTokEq : String -> Token -> Bool
+chainOpTokEq "&&" TAnd = True
+chainOpTokEq "||" TOr = True
+chainOpTokEq "|>" TPipeRight = True
+chainOpTokEq ">>" TRCompose = True
+chainOpTokEq "<<" TLCompose = True
+chainOpTokEq "++" TPlusPlus = True
+chainOpTokEq _ _ = False
+declChainTopOp : Decl -> Option String
+declChainTopOp (DAttrib _ inner) = declChainTopOp inner
+declChainTopOp (DFunDef _ _ _ body _ _) = bodyChainTopOp body
+declChainTopOp _ = None
+
+bodyChainTopOp : Expr -> Option String
+bodyChainTopOp (ELoc _ e) = bodyChainTopOp e
+bodyChainTopOp (EBinOp op _ _ _) =
+  if isContinuationOpStr op then Some op else None
+bodyChainTopOp _ = None
+firstContentAt : Array Token -> Int -> Int -> Int
+firstContentAt toks i e
+  | i >= e = e
+  | isNoiseTok (arrayGetUnsafe i toks) = firstContentAt toks (i + 1) e
+  | otherwise = i
+rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
+rhsStartIdx toks i e depth
+  | i >= e = e
+  | isOpenDelim (arrayGetUnsafe i toks) = rhsStartIdx toks (i + 1) e (depth + 1)
+  | isCloseDelim (arrayGetUnsafe i toks) =
+    rhsStartIdx toks (i + 1) e (depth - 1)
+  | depth == 0 && isEqualTok (arrayGetUnsafe i toks) = i + 1
+  | otherwise = rhsStartIdx toks (i + 1) e depth
+chainOperandLines : Array Token -> Array Int -> String -> Int -> Int -> List Int
+chainOperandLines toks lines op rs e =
+  let h = firstContentAt toks rs e
+  if h >= e then [] else lineAt lines h :: chainOpLinesGo toks lines op rs e 0
+
+chainOpLinesGo : Array Token ->
+  Array Int ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  List Int
+chainOpLinesGo toks lines op i e depth
+  | i >= e = []
+  | otherwise = chainOpLinesAt toks lines op i e depth (arrayGetUnsafe i toks)
+
+chainOpLinesAt : Array Token ->
+  Array Int ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  Token ->
+  List Int
+chainOpLinesAt toks lines op i e depth t
+  | isOpenDelim t = chainOpLinesGo toks lines op (i + 1) e (depth + 1)
+  | isCloseDelim t = chainOpLinesGo toks lines op (i + 1) e (depth - 1)
+  | depth == 0 && chainOpTokEq op t =
+    lineAt lines (firstContentAt toks (i + 1) e)
+      :: chainOpLinesGo toks lines op (i + 1) e depth
+  | otherwise = chainOpLinesGo toks lines op (i + 1) e depth
+
+declBlockRhs : Decl -> Bool
+declBlockRhs (DAttrib _ inner) = declBlockRhs inner
+declBlockRhs (DFunDef _ _ _ body _ _) = bodyIsBlock body
+declBlockRhs _ = False
+
+bodyIsBlock : Expr -> Bool
+bodyIsBlock (ELoc _ e) = bodyIsBlock e
+bodyIsBlock (EBlock _) = True
+bodyIsBlock (EDo _ _) = True
+bodyIsBlock _ = False
+firstIndentIdx : Array Token -> Int -> Int -> Int
+firstIndentIdx toks i e
+  | i >= e = e
+  | isIndentTok (arrayGetUnsafe i toks) = i + 1
+  | otherwise = firstIndentIdx toks (i + 1) e
+
+blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
+blockStmtLines toks lines rs e =
+  let bi = firstIndentIdx toks rs e
+  if bi >= e then [] else blockStmtGo toks lines bi e 1 True
+blockStmtGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
+blockStmtGo toks lines i e ind atStart
+  | i >= e = []
+  | ind <= 0 = []
+  | otherwise = blockStmtAt toks lines i e ind atStart (arrayGetUnsafe i toks)
+
+blockStmtAt : Array Token ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Token ->
+  List Int
+blockStmtAt toks lines i e ind atStart t
+  | isIndentTok t = blockStmtGo toks lines (i + 1) e (ind + 1) False
+  | isDedentTok t = blockStmtGo toks lines (i + 1) e (ind - 1) False
+  | isNewlineTok t = blockStmtGo toks lines (i + 1) e ind (ind == 1)
+  | atStart && ind == 1 =
+    lineAt lines i :: blockStmtGo toks lines (i + 1) e ind False
+  | otherwise = blockStmtGo toks lines (i + 1) e ind False
+declChainLines : Array Token -> Array Int -> Decl -> Int -> Int -> List Int
+declChainLines toks lines d s e = match declChainTopOp d
+  Some op => chainOperandLines toks lines op (rhsStartIdx toks s e 0) e
+  None =>
+    if declBlockRhs d then
+      blockStmtLines toks lines (rhsStartIdx toks s e 0) e
+    else
+      []
+allChainLines : Array Token ->
+  Array Int ->
+  List (Decl, Int, Int) ->
+  List (List Int)
+allChainLines toks lines [] = []
+allChainLines toks lines ((d, s, e) :: rest) =
+  declChainLines toks lines d s e :: allChainLines toks lines rest
+lastContentLineOf : Array Token -> Array Int -> List (Decl, Int, Int) -> Int
+lastContentLineOf toks lines spans = lastContentLineGo toks lines spans 0
+
+lastContentLineGo : Array Token ->
+  Array Int ->
+  List (Decl, Int, Int) ->
+  Int ->
+  Int
+lastContentLineGo toks lines [] acc = acc
+lastContentLineGo toks lines ((_, s, e) :: rest) acc =
+  lastContentLineGo
+    toks
+    lines
+    rest
+    (lineAt lines (lastContentIdx toks s (e - 1)))
+
+export
+positionsFromSpans : Array Int ->
+  Array Token ->
+  Array (Int, Int) ->
+  List (Decl, Int, Int) ->
+  Positions
+positionsFromSpans lineStarts toks offs spans =
+  let lines = map (off => fst (offsetToLineColFast lineStarts (fst off))) offs
+  Positions
+    (map (declPosOf toks lines offs lineStarts) spans)
+    (allVariantLines toks lines spans)
+    (lastContentLineOf toks lines spans)
+    (allChainLines toks lines spans)

@@ -345,3 +345,149 @@ public export data RawTok =
   | RComment Int Int
   | RClauseNl Int Int
   | RClauseOpen Int Int Int
+
+export
+isNoiseTok : Token -> Bool
+isNoiseTok TNewline = True
+isNoiseTok TIndent = True
+isNoiseTok TDedent = True
+isNoiseTok _ = False
+
+export
+isColonTok : Token -> Bool
+isColonTok TColon = True
+isColonTok _ = False
+
+export
+isConsTok : Token -> Bool
+isConsTok TCons = True
+isConsTok _ = False
+
+export
+isDedentTok : Token -> Bool
+isDedentTok TDedent = True
+isDedentTok _ = False
+
+export
+isDeferTok : Token -> Bool
+isDeferTok TDefer = True
+isDeferTok _ = False
+
+export
+isEofTok : Token -> Bool
+isEofTok TEof = True
+isEofTok _ = False
+
+export
+isEqualTok : Token -> Bool
+isEqualTok TEqual = True
+isEqualTok _ = False
+
+export
+isExportTok : Token -> Bool
+isExportTok TExport = True
+isExportTok _ = False
+
+export
+isImplTok : Token -> Bool
+isImplTok TImpl = True
+isImplTok _ = False
+
+export
+isInTok : Token -> Bool
+isInTok TIn = True
+isInTok _ = False
+
+export
+isIndentTok : Token -> Bool
+isIndentTok TIndent = True
+isIndentTok _ = False
+
+export
+isLBraceTok : Token -> Bool
+isLBraceTok TLBrace = True
+isLBraceTok _ = False
+
+export
+isLetTok : Token -> Bool
+isLetTok TLet = True
+isLetTok _ = False
+
+export
+isNewlineTok : Token -> Bool
+isNewlineTok TNewline = True
+isNewlineTok _ = False
+
+export
+isOfTok : Token -> Bool
+isOfTok TOf = True
+isOfTok _ = False
+
+export
+isPipeTok : Token -> Bool
+isPipeTok TPipe = True
+isPipeTok _ = False
+
+export
+isPublicTok : Token -> Bool
+isPublicTok TPublic = True
+isPublicTok _ = False
+
+export
+isRBraceTok : Token -> Bool
+isRBraceTok TRBrace = True
+isRBraceTok _ = False
+
+export
+isRequiresTok : Token -> Bool
+isRequiresTok TRequires = True
+isRequiresTok _ = False
+
+export
+isStarTok : Token -> Bool
+isStarTok TStar = True
+isStarTok _ = False
+
+export
+isWhereTok : Token -> Bool
+isWhereTok TWhere = True
+isWhereTok _ = False
+
+export
+isLayoutTok : Token -> Bool
+isLayoutTok TNewline = True
+isLayoutTok TIndent = True
+isLayoutTok TDedent = True
+isLayoutTok _ = False
+
+export
+isOpenDelim : Token -> Bool
+isOpenDelim TLParen = True
+isOpenDelim TLBracket = True
+isOpenDelim TLBracketTight = True
+isOpenDelim TLBrace = True
+isOpenDelim TLArray = True
+isOpenDelim _ = False
+
+export
+isCloseDelim : Token -> Bool
+isCloseDelim TRParen = True
+isCloseDelim TRBracket = True
+isCloseDelim TRBrace = True
+isCloseDelim TRArray = True
+isCloseDelim _ = False
+
+export
+isTStringTok : Token -> Bool
+isTStringTok (TString _) = True
+isTStringTok _ = False
+
+export
+isTUpperTok : Token -> Bool
+isTUpperTok (TUpper _) = True
+isTUpperTok _ = False
+
+export
+isCommaTok : Token -> Bool
+isCommaTok TComma = True
+isCommaTok _ = False

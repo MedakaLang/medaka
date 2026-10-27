@@ -96,7 +96,6 @@ invalidStrEscMsg : Char -> ParseDiagnosticKind
 is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
 is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
-isCommaTok : Token -> Bool
 isElseTok : Token -> Bool
 isExpMarker : Char -> Bool
 isExprEnd : Char -> Bool

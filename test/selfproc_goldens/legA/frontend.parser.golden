@@ -8,9 +8,7 @@ afterPublic : ParserE <> Decl
 afterPublicFor : Int -> Token -> ParserE <> Decl
 aliasName : ParserE <> String
 aliasNameFor : Token -> ParserE <> String
-allChainLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List (List Int)
 allNames : List EffParamTy -> List String -> Option (List String)
-allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
 annotOpt : Expr -> ParserE <> Expr
 annotTail : Expr -> ParserE <> Expr
 anyField : List KvItem -> Bool
@@ -63,12 +61,7 @@ bindStmts : Expr -> Expr -> List DoStmt
 binderDomainP : Token -> Token -> ParserE <> (Option EffAtomTy)
 blockCommentMsg : ParseDiagnosticKind
 blockOrExpr : List DoStmt -> Expr
-blockStmtAt : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Token -> List Int
-blockStmtGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
-blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
 blockWord : Token -> String
-bodyChainTopOp : Expr -> Option String
-bodyIsBlock : Expr -> Bool
 braceAfterEq : Array Token -> Int -> Int
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockMsg : ParseDiagnosticKind
@@ -79,10 +72,6 @@ bracketIndexRest : Expr -> Expr -> Token -> ParserE <> Expr
 bracketIndexTail : Expr -> ParserE <> Expr
 branchBlock : ParserE <> Expr
 caseHasOfBeforeBoundary : Array Token -> Int -> Int -> Bool
-chainOpLinesAt : Array Token -> Array Int -> String -> Int -> Int -> Int -> Token -> List Int
-chainOpLinesGo : Array Token -> Array Int -> String -> Int -> Int -> Int -> List Int
-chainOpTokEq : String -> Token -> Bool
-chainOperandLines : Array Token -> Array Int -> String -> Int -> Int -> List Int
 charBound : ParserE <> Lit
 charBoundFor : Token -> ParserE <> Lit
 charPatRest : Lit -> ParserE <> Pat
@@ -107,23 +96,9 @@ curryLam : List Pat -> Expr -> Expr
 dataAfterEq : String -> Token -> ParserE <> (List (Variant, List (String, KindAnn)), List DeriveRef)
 dataBody : String -> ParserE <> (List (Variant, List (String, KindAnn)), List DeriveRef)
 dataBodyFor : String -> Token -> ParserE <> (List (Variant, List (String, KindAnn)), List DeriveRef)
-dataChildIdxs : Array Token -> Int -> Int -> List Variant -> List (Option Int)
 dataVariants : ParserE <> (List (Variant, List (String, KindAnn)))
 dataVariantsN : String -> ParserE <> (List (Variant, List (String, KindAnn)))
 dataVariantsNFor : String -> Token -> ParserE <> (List (Variant, List (String, KindAnn)))
-declBlockRhs : Decl -> Bool
-declChainLines : Array Token -> Array Int -> Decl -> Int -> Int -> List Int
-declChainTopOp : Decl -> Option String
-declChildNameIdxs : Array Token -> (Decl, Int, Int) -> List (Option Int)
-declChildSpansOf : Array Token -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> List (Option Loc)
-declNameSpanOf : Array Token -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> Option Loc
-declNameTokIdx : Array Token -> Decl -> Int -> Option Int
-declNameTokIdxAt : Array Token -> Decl -> Int -> Option Int
-declPosChildLocs : DeclPos -> List (Option Loc)
-declPosEndLine : DeclPos -> Int
-declPosLine : DeclPos -> Int
-declPosNameLoc : DeclPos -> Option Loc
-declPosOf : Array Token -> Array Int -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> DeclPos
 declThenNoise : ParserE <> Decl
 declWithSpan : ParserE <> (Decl, Int, Int)
 deepenLeftover : String -> (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> Int -> Int -> ParseError
@@ -185,16 +160,10 @@ fatalAtP : String -> Int -> ParserE <> a
 fatalP : ParseDiagnosticKind -> ParserE <> a
 fatalProblemAtP : ParseDiagnosticKind -> Int -> ParserE <> a
 fieldAssignRemovedMsg : String -> List String -> String
-fieldNameGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
-fieldNameIdxsIn : Array Token -> Int -> Int -> List Int
-fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 fieldPathExtend : Option (String, List String) -> String -> Option (String, List String)
-findWhereIdx : Array Token -> Int -> Int -> Option Int
 finishBracketIndex : Expr -> Expr -> ParserE <> Expr
 finishSingletonArray : Expr -> ParserE <> Expr
 finishSingletonList : Expr -> ParserE <> Expr
-firstContentAt : Array Token -> Int -> Int -> Int
-firstIndentIdx : Array Token -> Int -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, ParseDiagnosticKind)
 flattenFieldPath : Expr -> Option (String, List String)
 forLoopHeadTail : Array Token -> Int -> Bool -> Bool
@@ -232,9 +201,6 @@ ifaceWhereBody : Token -> ParserE <> (List IfaceMethod)
 implBody : Int -> ParserE <> (List ImplMethod)
 implBodyFor : Int -> Token -> ParserE <> (List ImplMethod)
 implHead : Bool -> Int -> Token -> ParserE <> Decl
-implHeadTokGo : Array Token -> Int -> Int -> Option Int
-implHeadTokIdx : Array Token -> Int -> Option Int
-implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
 implMethod : ParserE <> ImplMethod
 implMethodRest : String -> List Pat -> Token -> ParserE <> ImplMethod
 implMethods : ParserE <> (List ImplMethod)
@@ -259,7 +225,6 @@ indexOrSlice : Expr -> ParserE <> Expr
 indexOrSliceRest : Expr -> Expr -> Token -> ParserE <> Expr
 inlineLetMissingInMsg : String
 inlineTrailingDerives : Token -> ParserE <> (List DeriveRef)
-innerDeclOf : Decl -> Decl
 intBound : ParserE <> Lit
 intBoundFor : Token -> ParserE <> Lit
 intLitTooBigMsg : ParseDiagnosticKind
@@ -274,42 +239,13 @@ interpolatedNameMsg : String -> String
 isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
-isCloseDelim : Token -> Bool
-isColonTok : Token -> Bool
-isConsTok : Token -> Bool
 isContextualKw : Token -> Bool
-isContinuationOpStr : String -> Bool
 isCtorChars : Array Char -> Bool
 isCtorName : String -> Bool
-isDataDecl : Decl -> Bool
-isDedentTok : Token -> Bool
-isDeferTok : Token -> Bool
-isEofTok : Token -> Bool
-isEqualTok : Token -> Bool
-isExportTok : Token -> Bool
 isForPatTok : Token -> Bool
 isForeignKwTok : Token -> Bool
-isImplTok : Token -> Bool
-isInTok : Token -> Bool
-isIndentTok : Token -> Bool
 isIntMinLit : Int -> Bool
-isLBraceTok : Token -> Bool
-isLayoutTok : Token -> Bool
-isLeadingModifierTok : Token -> Bool
-isLetTok : Token -> Bool
 isLineEndTok : Token -> Bool
-isNewlineTok : Token -> Bool
-isNoiseTok : Token -> Bool
-isOfTok : Token -> Bool
-isOpenDelim : Token -> Bool
-isPipeTok : Token -> Bool
-isPublicTok : Token -> Bool
-isRBraceTok : Token -> Bool
-isRequiresTok : Token -> Bool
-isStarTok : Token -> Bool
-isTStringTok : Token -> Bool
-isTUpperTok : Token -> Bool
-isWhereTok : Token -> Bool
 kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
 kindAtomEmit : KindAnn -> ParserE <> KindAnn
 kindAtomFor : Token -> ParserE <> KindAnn
@@ -325,9 +261,6 @@ kvToField : KvItem -> FieldAssign
 lamOpt : Expr -> ParserE <> Expr
 lamTail : Expr -> ParserE <> Expr
 lamTailRaw : Expr -> ParserE <> Expr
-lastContentIdx : Array Token -> Int -> Int -> Int
-lastContentLineGo : Array Token -> Array Int -> List (Decl, Int, Int) -> Int -> Int
-lastContentLineOf : Array Token -> Array Int -> List (Decl, Int, Int) -> Int
 leadingIndentAllBlank : Array Char -> Int -> Int -> Bool
 leadingIndentAt : String -> Int -> Option Int
 leadingIndentLineStart : Array Char -> Int -> Int
@@ -353,19 +286,16 @@ letRecStmt : ParserE <> DoStmt
 letRecWithRemovedMsg : String
 letStmtAt : Loc -> DoStmt -> DoStmt
 letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
-lineAt : Array Int -> Int -> Int
 lineHasFatArrow : Array Token -> Int -> Bool
 lineIndentCol : Array Token -> Int -> Int
 lineIndentGo : Array Token -> Int -> Int -> Int -> Int
 lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
-lineStartIdx : Array Int -> Int -> Int -> Int -> Int
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> ParserE <> Expr
 listFor : Token -> ParserE <> Expr
 listRest : Expr -> Token -> ParserE <> Expr
 locLineStartsRef : Ref (Array Int)
 locOfSpan : Int -> Int -> Loc
-locOfSpanWith : Array (Int, Int) -> Array Int -> Int -> Int -> Loc
 locOffsRef : Ref (Array (Int, Int))
 locSrcRef : Ref String
 locateOffset : Array Token -> Array Int -> Int -> Int -> Int
@@ -387,9 +317,6 @@ memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
 memberAliasName : ParserE <> String
 memberAliasNameFor : Token -> ParserE <> String
 memberAliasOrNot : Int -> String -> Bool -> ParserE <> UseMember
-methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
-methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
-methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Option Int)
 missingWhereIfaceMsg : ParseDiagnosticKind
 missingWhereImplMsg : ParseDiagnosticKind
 mkAttr : Int -> String -> Option String -> ParserE <> Attr
@@ -412,7 +339,6 @@ negUnaryFor : Token -> ParserE <> Expr
 nestDepthRef : Ref Int
 nestTooDeepMsg : String
 newtypeDerives : Token -> ParserE <> (List DeriveRef)
-nextSigIsPipe : Array Token -> Int -> Int -> Bool
 noExportedAlias : Bool -> UsePath -> ParserE <> Unit
 noMemberAlias : String -> ParserE <> Unit
 noMemberAliasFor : String -> Token -> ParserE <> Unit
@@ -462,10 +388,6 @@ parseDo : ParserE <> Expr
 parseDoBlock : Token -> Bool -> ParserE <> Expr
 parseEffect : Bool -> ParserE <> Decl
 parseEffectTy : ParserE <> Ty
-parseErrorCol : ParseError -> Int
-parseErrorDiagnostic : ParseError -> ParseDiagnostic
-parseErrorLine : ParseError -> Int
-parseErrorMessage : ParseError -> String
 parseExpr : ParserE <> Expr
 parseExprStmt : ParserE <> (List DoStmt)
 parseExtern : Bool -> ParserE <> Decl
@@ -568,10 +490,6 @@ peekTok : Array Token -> Int -> Token
 pipeLevel : Int
 pipeTail : ParserE <> (List String)
 pipeTailFor : Token -> ParserE <> (List String)
-positionsChainLines : Positions -> List (List Int)
-positionsDecls : Positions -> List DeclPos
-positionsLastContentLine : Positions -> Int
-positionsVariantLines : Positions -> List Int
 postfixChain : Expr -> ParserE <> Expr
 postfixTail : Expr -> ParserE <> Expr
 postfixTailR : Expr -> Array Token -> Int -> PR Expr
@@ -616,7 +534,6 @@ reservedOrPatFail : Token -> ParserE <> Pat
 resetLocState : Unit -> Unit
 resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDeclsResult : String -> (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> Int -> PR (List Decl) -> Result ParseError (List Decl)
-rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
 rngPatRest : Lit -> ParserE <> Lit -> Token -> ParserE <> Pat
 runP : ParserE a b -> Array Token -> Int -> <a> PR b
 sameLineWhereIfaceMsg : ParseDiagnosticKind
@@ -629,8 +546,6 @@ sepBy1 : ParserE <> a -> ParserE <> b -> ParserE <> (List a)
 sepThen : ParserE <> a -> ParserE <> b -> ParserE <> b
 setLocState : String -> Array (Int, Int) -> Unit
 setLocStateWith : String -> Array Int -> Array (Int, Int) -> Unit
-skipLeadingModifiers : Array Token -> Int -> Int
-skipNewlineToks : Array Token -> Int -> Int -> Int
 skipNewlines : ParserE <> Unit
 skipNlFor : Token -> ParserE <> Unit
 skipNoise : ParserE <> Unit
@@ -651,12 +566,9 @@ stripLoc : Expr -> Expr
 stripLoc1 : Expr -> Expr
 tokCol : Int -> Int
 tokEndOffsetAt : Int -> Int
-tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
-tokIdxOrNone : Array Token -> Int -> Option Int
 tokLine : Int -> Int
 tokLineCol : Int -> (Int, Int)
 tokOffsetAt : Int -> Int
-tokOffsetAtArr : Array (Int, Int) -> Int -> Int
 trailingArrowLeftoverMsg : Token -> String -> String
 trailingCommaLocs : Unit -> List (Int, Int)
 trailingCommaLocsRef : Ref (List (Int, Int))
@@ -696,13 +608,6 @@ upperPatRest : String -> Token -> ParserE <> Pat
 upperQualFor : String -> Token -> Token -> ParserE <> String
 upperQualTail : String -> ParserE <> String
 upperTail : String -> Token -> ParserE <> Expr
-variantBoundaryAt : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
-variantBoundaryGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
-variantBoundaryIdxs : Array Token -> Int -> Int -> List Int
-variantNoneIdxs : Variant -> List (Option Int)
-variantStartsAt : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Token -> List Int
-variantStartsGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
-variantStartsIn : Array Token -> Array Int -> Int -> Int -> List Int
 variantUpdateTail : String -> ParserE <> Expr
 variantsRest : ParserE <> (List (Variant, List (String, KindAnn)))
 variantsRestFor : Token -> ParserE <> (List (Variant, List (String, KindAnn)))
@@ -715,5 +620,3 @@ widePatMsg : String -> ParseDiagnosticKind
 withAllFor : Int -> String -> Token -> ParserE <> UseMember
 withAllOrNot : Int -> String -> ParserE <> UseMember
 withBindSite : Loc -> (String, List Pat, Expr) -> (String, List Pat, Expr, Loc)
-zipFieldIdxs : List Field -> List Int -> List (Option Int)
-zipVariantIdxs : Array Token -> Int -> List Variant -> List Int -> List (Option Int)

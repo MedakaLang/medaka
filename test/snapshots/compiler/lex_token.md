@@ -1,5 +1,5 @@
 # META
-source_lines=347
+source_lines=493
 stages=SOURCE,DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
@@ -349,6 +349,152 @@ public export data RawTok =
   | RComment Int Int
   | RClauseNl Int Int
   | RClauseOpen Int Int Int
+
+export
+isNoiseTok : Token -> Bool
+isNoiseTok TNewline = True
+isNoiseTok TIndent = True
+isNoiseTok TDedent = True
+isNoiseTok _ = False
+
+export
+isColonTok : Token -> Bool
+isColonTok TColon = True
+isColonTok _ = False
+
+export
+isConsTok : Token -> Bool
+isConsTok TCons = True
+isConsTok _ = False
+
+export
+isDedentTok : Token -> Bool
+isDedentTok TDedent = True
+isDedentTok _ = False
+
+export
+isDeferTok : Token -> Bool
+isDeferTok TDefer = True
+isDeferTok _ = False
+
+export
+isEofTok : Token -> Bool
+isEofTok TEof = True
+isEofTok _ = False
+
+export
+isEqualTok : Token -> Bool
+isEqualTok TEqual = True
+isEqualTok _ = False
+
+export
+isExportTok : Token -> Bool
+isExportTok TExport = True
+isExportTok _ = False
+
+export
+isImplTok : Token -> Bool
+isImplTok TImpl = True
+isImplTok _ = False
+
+export
+isInTok : Token -> Bool
+isInTok TIn = True
+isInTok _ = False
+
+export
+isIndentTok : Token -> Bool
+isIndentTok TIndent = True
+isIndentTok _ = False
+
+export
+isLBraceTok : Token -> Bool
+isLBraceTok TLBrace = True
+isLBraceTok _ = False
+
+export
+isLetTok : Token -> Bool
+isLetTok TLet = True
+isLetTok _ = False
+
+export
+isNewlineTok : Token -> Bool
+isNewlineTok TNewline = True
+isNewlineTok _ = False
+
+export
+isOfTok : Token -> Bool
+isOfTok TOf = True
+isOfTok _ = False
+
+export
+isPipeTok : Token -> Bool
+isPipeTok TPipe = True
+isPipeTok _ = False
+
+export
+isPublicTok : Token -> Bool
+isPublicTok TPublic = True
+isPublicTok _ = False
+
+export
+isRBraceTok : Token -> Bool
+isRBraceTok TRBrace = True
+isRBraceTok _ = False
+
+export
+isRequiresTok : Token -> Bool
+isRequiresTok TRequires = True
+isRequiresTok _ = False
+
+export
+isStarTok : Token -> Bool
+isStarTok TStar = True
+isStarTok _ = False
+
+export
+isWhereTok : Token -> Bool
+isWhereTok TWhere = True
+isWhereTok _ = False
+
+export
+isLayoutTok : Token -> Bool
+isLayoutTok TNewline = True
+isLayoutTok TIndent = True
+isLayoutTok TDedent = True
+isLayoutTok _ = False
+
+export
+isOpenDelim : Token -> Bool
+isOpenDelim TLParen = True
+isOpenDelim TLBracket = True
+isOpenDelim TLBracketTight = True
+isOpenDelim TLBrace = True
+isOpenDelim TLArray = True
+isOpenDelim _ = False
+
+export
+isCloseDelim : Token -> Bool
+isCloseDelim TRParen = True
+isCloseDelim TRBracket = True
+isCloseDelim TRBrace = True
+isCloseDelim TRArray = True
+isCloseDelim _ = False
+
+export
+isTStringTok : Token -> Bool
+isTStringTok (TString _) = True
+isTStringTok _ = False
+
+export
+isTUpperTok : Token -> Bool
+isTUpperTok (TUpper _) = True
+isTUpperTok _ = False
+
+export
+isCommaTok : Token -> Bool
+isCommaTok TComma = True
+isCommaTok _ = False
 # DESUGAR
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false))))
@@ -549,6 +695,98 @@ public export data RawTok =
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EApp (EVar "renderParseProblem") (EVar "s")))
 (DData Public "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RTripleInterpOpen" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseOpen" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig true "isNoiseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isNoiseTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isNoiseTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isNoiseTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isNoiseTok" (PWild) (EVar "False"))
+(DTypeSig true "isColonTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isColonTok" ((PCon "TColon")) (EVar "True"))
+(DFunDef false "isColonTok" (PWild) (EVar "False"))
+(DTypeSig true "isConsTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isConsTok" ((PCon "TCons")) (EVar "True"))
+(DFunDef false "isConsTok" (PWild) (EVar "False"))
+(DTypeSig true "isDedentTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isDedentTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isDedentTok" (PWild) (EVar "False"))
+(DTypeSig true "isDeferTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isDeferTok" ((PCon "TDefer")) (EVar "True"))
+(DFunDef false "isDeferTok" (PWild) (EVar "False"))
+(DTypeSig true "isEofTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isEofTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isEofTok" (PWild) (EVar "False"))
+(DTypeSig true "isEqualTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isEqualTok" ((PCon "TEqual")) (EVar "True"))
+(DFunDef false "isEqualTok" (PWild) (EVar "False"))
+(DTypeSig true "isExportTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isExportTok" ((PCon "TExport")) (EVar "True"))
+(DFunDef false "isExportTok" (PWild) (EVar "False"))
+(DTypeSig true "isImplTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isImplTok" ((PCon "TImpl")) (EVar "True"))
+(DFunDef false "isImplTok" (PWild) (EVar "False"))
+(DTypeSig true "isInTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isInTok" ((PCon "TIn")) (EVar "True"))
+(DFunDef false "isInTok" (PWild) (EVar "False"))
+(DTypeSig true "isIndentTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isIndentTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isIndentTok" (PWild) (EVar "False"))
+(DTypeSig true "isLBraceTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLBraceTok" ((PCon "TLBrace")) (EVar "True"))
+(DFunDef false "isLBraceTok" (PWild) (EVar "False"))
+(DTypeSig true "isLetTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLetTok" ((PCon "TLet")) (EVar "True"))
+(DFunDef false "isLetTok" (PWild) (EVar "False"))
+(DTypeSig true "isNewlineTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isNewlineTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isNewlineTok" (PWild) (EVar "False"))
+(DTypeSig true "isOfTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isOfTok" ((PCon "TOf")) (EVar "True"))
+(DFunDef false "isOfTok" (PWild) (EVar "False"))
+(DTypeSig true "isPipeTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isPipeTok" ((PCon "TPipe")) (EVar "True"))
+(DFunDef false "isPipeTok" (PWild) (EVar "False"))
+(DTypeSig true "isPublicTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isPublicTok" ((PCon "TPublic")) (EVar "True"))
+(DFunDef false "isPublicTok" (PWild) (EVar "False"))
+(DTypeSig true "isRBraceTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isRBraceTok" ((PCon "TRBrace")) (EVar "True"))
+(DFunDef false "isRBraceTok" (PWild) (EVar "False"))
+(DTypeSig true "isRequiresTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isRequiresTok" ((PCon "TRequires")) (EVar "True"))
+(DFunDef false "isRequiresTok" (PWild) (EVar "False"))
+(DTypeSig true "isStarTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isStarTok" ((PCon "TStar")) (EVar "True"))
+(DFunDef false "isStarTok" (PWild) (EVar "False"))
+(DTypeSig true "isWhereTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
+(DFunDef false "isWhereTok" (PWild) (EVar "False"))
+(DTypeSig true "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DTypeSig true "isOpenDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isOpenDelim" ((PCon "TLParen")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBracket")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBracketTight")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBrace")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLArray")) (EVar "True"))
+(DFunDef false "isOpenDelim" (PWild) (EVar "False"))
+(DTypeSig true "isCloseDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isCloseDelim" ((PCon "TRParen")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRBracket")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRBrace")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRArray")) (EVar "True"))
+(DFunDef false "isCloseDelim" (PWild) (EVar "False"))
+(DTypeSig true "isTStringTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isTStringTok" ((PCon "TString" PWild)) (EVar "True"))
+(DFunDef false "isTStringTok" (PWild) (EVar "False"))
+(DTypeSig true "isTUpperTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isTUpperTok" ((PCon "TUpper" PWild)) (EVar "True"))
+(DFunDef false "isTUpperTok" (PWild) (EVar "False"))
+(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
+(DFunDef false "isCommaTok" (PWild) (EVar "False"))
 # MARK
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false))))
@@ -749,3 +987,95 @@ public export data RawTok =
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EApp (EVar "renderParseProblem") (EVar "s")))
 (DData Public "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RTripleInterpOpen" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseOpen" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig true "isNoiseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isNoiseTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isNoiseTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isNoiseTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isNoiseTok" (PWild) (EVar "False"))
+(DTypeSig true "isColonTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isColonTok" ((PCon "TColon")) (EVar "True"))
+(DFunDef false "isColonTok" (PWild) (EVar "False"))
+(DTypeSig true "isConsTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isConsTok" ((PCon "TCons")) (EVar "True"))
+(DFunDef false "isConsTok" (PWild) (EVar "False"))
+(DTypeSig true "isDedentTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isDedentTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isDedentTok" (PWild) (EVar "False"))
+(DTypeSig true "isDeferTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isDeferTok" ((PCon "TDefer")) (EVar "True"))
+(DFunDef false "isDeferTok" (PWild) (EVar "False"))
+(DTypeSig true "isEofTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isEofTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isEofTok" (PWild) (EVar "False"))
+(DTypeSig true "isEqualTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isEqualTok" ((PCon "TEqual")) (EVar "True"))
+(DFunDef false "isEqualTok" (PWild) (EVar "False"))
+(DTypeSig true "isExportTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isExportTok" ((PCon "TExport")) (EVar "True"))
+(DFunDef false "isExportTok" (PWild) (EVar "False"))
+(DTypeSig true "isImplTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isImplTok" ((PCon "TImpl")) (EVar "True"))
+(DFunDef false "isImplTok" (PWild) (EVar "False"))
+(DTypeSig true "isInTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isInTok" ((PCon "TIn")) (EVar "True"))
+(DFunDef false "isInTok" (PWild) (EVar "False"))
+(DTypeSig true "isIndentTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isIndentTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isIndentTok" (PWild) (EVar "False"))
+(DTypeSig true "isLBraceTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLBraceTok" ((PCon "TLBrace")) (EVar "True"))
+(DFunDef false "isLBraceTok" (PWild) (EVar "False"))
+(DTypeSig true "isLetTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLetTok" ((PCon "TLet")) (EVar "True"))
+(DFunDef false "isLetTok" (PWild) (EVar "False"))
+(DTypeSig true "isNewlineTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isNewlineTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isNewlineTok" (PWild) (EVar "False"))
+(DTypeSig true "isOfTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isOfTok" ((PCon "TOf")) (EVar "True"))
+(DFunDef false "isOfTok" (PWild) (EVar "False"))
+(DTypeSig true "isPipeTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isPipeTok" ((PCon "TPipe")) (EVar "True"))
+(DFunDef false "isPipeTok" (PWild) (EVar "False"))
+(DTypeSig true "isPublicTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isPublicTok" ((PCon "TPublic")) (EVar "True"))
+(DFunDef false "isPublicTok" (PWild) (EVar "False"))
+(DTypeSig true "isRBraceTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isRBraceTok" ((PCon "TRBrace")) (EVar "True"))
+(DFunDef false "isRBraceTok" (PWild) (EVar "False"))
+(DTypeSig true "isRequiresTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isRequiresTok" ((PCon "TRequires")) (EVar "True"))
+(DFunDef false "isRequiresTok" (PWild) (EVar "False"))
+(DTypeSig true "isStarTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isStarTok" ((PCon "TStar")) (EVar "True"))
+(DFunDef false "isStarTok" (PWild) (EVar "False"))
+(DTypeSig true "isWhereTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
+(DFunDef false "isWhereTok" (PWild) (EVar "False"))
+(DTypeSig true "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DTypeSig true "isOpenDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isOpenDelim" ((PCon "TLParen")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBracket")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBracketTight")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLBrace")) (EVar "True"))
+(DFunDef false "isOpenDelim" ((PCon "TLArray")) (EVar "True"))
+(DFunDef false "isOpenDelim" (PWild) (EVar "False"))
+(DTypeSig true "isCloseDelim" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isCloseDelim" ((PCon "TRParen")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRBracket")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRBrace")) (EVar "True"))
+(DFunDef false "isCloseDelim" ((PCon "TRArray")) (EVar "True"))
+(DFunDef false "isCloseDelim" (PWild) (EVar "False"))
+(DTypeSig true "isTStringTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isTStringTok" ((PCon "TString" PWild)) (EVar "True"))
+(DFunDef false "isTStringTok" (PWild) (EVar "False"))
+(DTypeSig true "isTUpperTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isTUpperTok" ((PCon "TUpper" PWild)) (EVar "True"))
+(DFunDef false "isTUpperTok" (PWild) (EVar "False"))
+(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
+(DFunDef false "isCommaTok" (PWild) (EVar "False"))
