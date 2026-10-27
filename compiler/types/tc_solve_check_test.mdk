@@ -1,0 +1,446 @@
+-- Tests of `types.tc_solve_check`'s own API: the projections of a predicate slot and the
+-- dedup of dictionary slots that decides how many a constrained function has, the slots
+-- and ids a signature's predicates declare, the call-predicate filter, the survivor
+-- and dispatch projections, the ids a checked binder's quantified variables give a
+-- predicate, and quiescence defaulting of live numeric roots (`defaultLiveNumRoots`);
+-- then the obligation checks of one whole check: an absent instance, an omitted
+-- constraint, an inferred constraint met and unmet, overlapping instances, an impl that
+-- omits a required prerequisite, and a numeric literal's defaulting.  One property:
+-- defaulting twice is defaulting once.
+
+import types.tc_mono.{tconFrom, tconBuiltin}
+import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{Loc(..), TyConOrigin(..)}
+import frontend.parser.{parse}
+import support.util.{joinNl}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..), ppMono}
+import types.effect_rows.{pureRow}
+import types.tc_solve_check.{
+  abstractSlotIds, callPredOf, declaredOblArgOk, declaredPredicateSlots,
+  dedupSlotVecs, defaultLiveNumRoots, dispatchMonosOf, numConstrainedIds,
+  predicateSlotTableWithoutArgs, predicateSlotView, survivorNameOfId
+}
+import types.tc_solve_test_support.{
+  checkDiagsOver, expectChecks, expectRejectedWith, numericPreludeSource
+}
+import types.tc_test_support.{fresh, sigsOf}
+import types.tc_types.{
+  CSlot(..), ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
+}
+import types.tc_unify.{freshVar, unify}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+ifaceOf : String -> IfaceRef
+ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
+
+intM : Mono
+intM = tconBuiltin "Int"
+
+boolM : Mono
+boolM = tconBuiltin "Bool"
+
+varM : Int -> Mono
+varM id = TVar (Ref (Unbound id 0))
+
+slotOf : String -> PredicateSlotArgs -> List Int -> PredicateSlot
+slotOf name args ids =
+  PredicateSlot { psIface = ifaceOf name, psArgs = args, psBoundIds = ids }
+
+cslotOf : String -> Int -> CSlot
+cslotOf name id = CSlot { csIface = ifaceOf name, csId = id }
+
+-- A slot's interface name, lead id and argument vector, as text.
+viewText : (CSlot, List Mono) -> (String, Int, List String)
+viewText (s, args) = (s.csIface.irName, s.csId, map ppMono args)
+
+-- ── slots ─────────────────────────────────────────────────────────────────
+
+test "a slot's view leads with its first bound id, or zero when it binds none" = expectAll
+  [
+    expectEqual
+      ("A", 4, ["Int"])
+      (viewText (predicateSlotView (slotOf "A" (PSArgsKnown [intM]) [4, 5]))),
+    expectEqual
+      ("A", 0, ["Int"])
+      (viewText (predicateSlotView (slotOf "A" (PSArgsKnown [intM]) []))),
+  ]
+
+test "a slot with an unknown vector views with no arguments" =
+  expectEqual
+    ("A", 4, [])
+    (viewText (predicateSlotView (slotOf "A" PSArgsUnknown [4])))
+
+test "erasing the vectors of a slot table keeps every key and interface and bound id" =
+  let table = [
+    (
+      "f",
+      [
+        slotOf "A" (PSArgsKnown [intM]) [1],
+        slotOf "B" (PSArgsKnown [boolM]) [2, 3],
+      ],
+    ),
+    ("g", [slotOf "A" PSArgsUnknown []]),
+  ]
+  let erased = predicateSlotTableWithoutArgs table
+  expectAll [
+    expectEqual ["f", "g"] (map fst erased),
+    expectEqual
+      [[("A", [1]), ("B", [2, 3])], [("A", [])]]
+      (map (e => map (s => (s.psIface.irName, s.psBoundIds)) (snd e)) erased),
+    expectEqual
+      [[True, True], [True]]
+      (map (e => map (s => argsUnknown s.psArgs) (snd e)) erased),
+  ]
+
+argsUnknown : PredicateSlotArgs -> Bool
+argsUnknown PSArgsUnknown = True
+argsUnknown (PSArgsKnown _) = False
+
+-- ── dictionary slot dedup ─────────────────────────────────────────────────
+
+test "the same predicate written twice is one dictionary slot, the first occurrence kept" =
+  expectEqual
+    [("A", 1, ["Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [(cslotOf "A" 1, [intM]), (cslotOf "A" 1, [intM])]))
+
+test "two predicates of one interface and one lead variable with different vectors are two slots" =
+  expectEqual
+    [("Ix", 1, ["Int", "Bool"]), ("Ix", 1, ["Bool", "Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [
+        (cslotOf "Ix" 1, [intM, boolM]),
+        (cslotOf "Ix" 1, [boolM, intM]),
+        (cslotOf "Ix" 1, [intM, boolM]),
+      ]))
+
+test "predicates of different interfaces or lead variables are separate slots, in order" =
+  expectEqual
+    [("A", 1, ["Int"]), ("B", 1, ["Int"]), ("A", 2, ["Int"])]
+    (map
+      viewText
+      (dedupSlotVecs [
+        (cslotOf "A" 1, [intM]),
+        (cslotOf "B" 1, [intM]),
+        (cslotOf "A" 2, [intM]),
+        (cslotOf "A" 1, [intM]),
+      ]))
+
+test "same-named interfaces of different modules are different slots" =
+  let foreign = CSlot {
+    csIface = IfaceRef { irName = "A", irOrigin = OriginModule "elsewhere" },
+    csId = 1,
+  }
+  expectEqual
+    2
+    (length (dedupSlotVecs [(cslotOf "A" 1, [intM]), (foreign, [intM])]))
+
+-- ── what a signature declares ─────────────────────────────────────────────
+
+test "abstractSlotIds lists the variables of a vector in order and skips solved positions" =
+  expectEqual
+    [3, 9]
+    (abstractSlotIds [
+      varM 3,
+      intM,
+      varM 9,
+      TApp (tconFrom (OriginModule "probe") "Box") (varM 4),
+    ])
+
+test "a variable bound to a type is no longer abstract" =
+  let m = fresh ()
+  let a = freshVar m ()
+  let b = freshVar m ()
+  unify m a intM
+  expectEqual 1 (length (abstractSlotIds [a, b]))
+
+test "a declared predicate with an abstract variable is a slot over its first ids and its vector" =
+  let slots =
+    declaredPredicateSlots [(ifaceOf "A", [varM 3, varM 4])] [[varM 3, varM 4]]
+  expectEqual
+    [("A", [3, 4], 2)]
+    (map
+      (s => (s.psIface.irName, s.psBoundIds, length (knownOf s.psArgs)))
+      slots)
+
+knownOf : PredicateSlotArgs -> List Mono
+knownOf PSArgsUnknown = []
+knownOf (PSArgsKnown args) = args
+
+test "a declared predicate with no abstract variable is no slot, and the vectors stay in step" =
+  let slots =
+    declaredPredicateSlots
+      [(ifaceOf "A", [intM]), (ifaceOf "B", [varM 7])]
+      [[intM], [varM 7]]
+  expectEqual [("B", [7])] (map (s => (s.psIface.irName, s.psBoundIds)) slots)
+
+test "a declared predicate with no vector supplied is a slot whose vector is unknown" =
+  let slots = declaredPredicateSlots [(ifaceOf "A", [varM 3])] []
+  expectEqual
+    [("A", [3], 0)]
+    (map
+      (s => (s.psIface.irName, s.psBoundIds, length (knownOf s.psArgs)))
+      slots)
+
+test "a declared obligation argument is admitted when its variables are all bound" = expectEach
+  [
+    ("a bound variable", expectTrue (declaredOblArgOk (i => i == 3) (varM 3))),
+    (
+      "an unbound variable",
+      expectFalse (declaredOblArgOk (i => i == 3) (varM 4)),
+    ),
+    (
+      "an application over bound variables",
+      expectTrue
+        (declaredOblArgOk
+          (i => i == 3)
+          (TApp (tconFrom (OriginModule "probe") "Box") (varM 3))),
+    ),
+    (
+      "an application over an unbound variable",
+      expectFalse
+        (declaredOblArgOk
+          (i => i == 3)
+          (TApp (tconFrom (OriginModule "probe") "Box") (varM 4))),
+    ),
+    ("a ground type", expectTrue (declaredOblArgOk (_ => False) intM)),
+  ]
+
+-- ── call predicates, survivors and dispatch ───────────────────────────────
+
+test "a call predicate whose interface has no name is dropped, any other is kept as it was" =
+  let loc = Some (Loc "probe.mdk" 3 1 3 5)
+  expectAll [
+    expectEqual 0 (length (callPredOf (ifaceOf "", [intM], loc))),
+    expectEqual
+      [("A", ["Int"])]
+      (map predText (callPredOf (ifaceOf "A", [intM], loc))),
+  ]
+
+predText : (IfaceRef, List Mono, Option Loc) -> (String, List String)
+predText (iface, args, _) = (iface.irName, map ppMono args)
+
+test "a survivor is named by the signature variable its id belongs to" = expectAll
+  [
+    expectEqual (Some "b") (survivorNameOfId 4 [("a", varM 3), ("b", varM 4)]),
+    expectEqual None (survivorNameOfId 5 [("a", varM 3), ("b", varM 4)]),
+    expectEqual None (survivorNameOfId 3 [("a", intM)]),
+    expectEqual None (survivorNameOfId 3 []),
+  ]
+
+test "the dispatch monos of an occurrence are the types at the interface parameter's positions" =
+  let sig = sigsOf (parse "x : a -> Int")
+  let occ = TFun boolM pureRow intM
+  expectEqual
+    [["Bool"]]
+    (map (t => map ppMono (dispatchMonosOf ["a"] t occ)) sig)
+
+test "an occurrence with no interface parameter position has no dispatch monos" =
+  let sig = sigsOf (parse "x : Int -> Int")
+  expectEqual
+    [0]
+    (map (t => length (dispatchMonosOf ["a"] t (TFun boolM pureRow intM))) sig)
+
+test "no obligation constrains no numeric variable" =
+  expectEqual [] (numConstrainedIds [])
+
+-- ── quiescence defaulting ─────────────────────────────────────────────────
+
+test "a live numeric root nothing grounded defaults to Int and the work list is drained" =
+  let m = fresh ()
+  let a = freshVar m ()
+  m.mcGraph.graphRun.liveNumRoots := [a]
+  defaultLiveNumRoots m
+  expectAll [
+    expectEqual "Int" (ppMono a),
+    expectEqual 0 (length m.mcGraph.graphRun.liveNumRoots.value),
+    expectEqual 0 (length m.mcGraph.graphRun.liveRoots.value),
+  ]
+
+test "a live numeric root a module grounded keeps its type" =
+  let m = fresh ()
+  let a = freshVar m ()
+  unify m a (tconBuiltin "Float")
+  m.mcGraph.graphRun.liveNumRoots := [a]
+  defaultLiveNumRoots m
+  expectEqual "Float" (ppMono a)
+
+-- The numeric roots of the property: how each was left when quiescence began.
+data RootCase = RootCase (List Int)
+
+impl Arbitrary RootCase where
+  arbitrary () = RootCase (draws (randomInt 0 4))
+  shrink (RootCase ks) = match ks
+    _ :: rest => [RootCase rest]
+    [] => []
+
+draws : Int -> <Rand> List Int
+draws n
+  | n <= 0 = []
+  | otherwise = randomInt 0 2 :: draws (n - 1)
+
+-- The variable for a root left open (0), grounded to Int (1) or to Float (2).
+rootFor : ModuleCtx -> Int -> Mono
+rootFor m k =
+  let v = freshVar m ()
+  if k == 1 then
+    unify m v intM
+  else if k == 2 then
+    unify m v (tconBuiltin "Float")
+  v
+
+-- Law: defaulting the live numeric roots twice leaves the same types as defaulting once, an
+-- open root becomes Int, a grounded root is untouched, and the work list is empty after.
+-- Precondition: none; a case with no open root checks that grounded roots stay put.
+prop "defaulting the live numeric roots twice is defaulting them once" (c : RootCase) =
+  let (RootCase kinds) = c
+  let m = fresh ()
+  let roots = map (rootFor m) kinds
+  m.mcGraph.graphRun.liveNumRoots := roots
+  defaultLiveNumRoots m
+  let once = map ppMono roots
+  defaultLiveNumRoots m
+  let twice = map ppMono roots
+  let expected = map (k => if k == 2 then "Float" else "Int") kinds
+  once == twice
+    && once == expected
+    && length m.mcGraph.graphRun.liveNumRoots.value == 0
+
+-- ── what the obligation checks accept and reject through one check ────────
+
+base : String
+base = joinNl [
+  "interface Sz a where",
+  "  sz : a -> Int",
+  "interface Make a where",
+  "  make : Unit -> a",
+  "impl Make Int where",
+  "  make _ = 1",
+  "impl Sz Int where",
+  "  sz _ = 1",
+  "data Box a = Box a",
+]
+
+test "a call at a type with no instance is rejected as having no impl" =
+  expectRejectedWith ["T-NO-IMPL"] (joinNl [base, "h : Int", "h = sz True"])
+
+test "a goal on an undetermined type no instance can fix is rejected as having no impl" =
+  expectRejectedWith
+    ["T-NO-IMPL"]
+    (joinNl [
+      "interface Sz a where",
+      "  sz : a -> Int",
+      "interface Make a where",
+      "  make : Unit -> a",
+      "impl Make Int where",
+      "  make _ = 1",
+      "f : Int",
+      "f = sz (make ())",
+    ])
+
+test "a body that uses an interface its signature omits is rejected as a missing constraint" = expectEach
+  [
+    (
+      "a bare variable",
+      expectRejectedWith
+        ["T-MISSING-CONSTRAINT"]
+        (joinNl [base, "k : a -> Int", "k v = sz v"]),
+    ),
+    (
+      "a variable under a constructor",
+      expectRejectedWith
+        ["T-MISSING-CONSTRAINT"]
+        (joinNl [base, "k : Box a -> Int", "k v = sz v"]),
+    ),
+  ]
+
+test "a signature that declares the constraint is accepted" =
+  expectChecks (joinNl [base, "k : Sz a => a -> Int", "k v = sz v"])
+
+test "an inferred constraint is promoted to the binder and met at a use with an instance" =
+  expectChecks (joinNl [base, "g x = sz x", "h : Int", "h = g 1"])
+
+test "an inferred constraint is owed at every use, and unmet at a type with no instance" =
+  expectRejectedWith
+    ["T-NO-IMPL"]
+    (joinNl [base, "g x = sz x", "h : Int", "h = g True"])
+
+test "two instances that can match the same type are a conflicting impl" = expectEach
+  [
+    (
+      "the same head",
+      expectRejectedWith
+        ["T-CONFLICTING-IMPL"]
+        (joinNl [base, "impl Sz Int where", "  sz _ = 2"]),
+    ),
+    (
+      "the same head over a variable",
+      expectRejectedWith
+        ["T-CONFLICTING-IMPL"]
+        (joinNl [
+          base, "impl Sz (Box a) where", "  sz _ = 1", "impl Sz (Box b) where",
+          "  sz _ = 2"
+        ]),
+    ),
+  ]
+
+test "instances whose heads are disjoint do not conflict" =
+  expectChecks (joinNl [base, "impl Sz Bool where", "  sz _ = 2"])
+
+test "an impl whose head variable needs an interface it does not require is rejected" =
+  expectRejectedWith
+    ["T-IMPL-MISSING-REQUIRES"]
+    (joinNl [base, "impl Sz (Box a) where", "  sz (Box x) = sz x"])
+
+test "an impl that declares the requirement is accepted" =
+  expectChecks
+    (joinNl [
+      base, "impl Sz (Box a) requires Sz a where", "  sz (Box x) = sz x"
+    ])
+
+test "two instances that fit one goal and neither is more specific are an ambiguous instance" =
+  expectRejectedWith
+    ["T-AMBIGUOUS-INSTANCE"]
+    (joinNl [
+      base,
+      "data Pair a b = Pair a b",
+      "impl Sz (Pair a Int) where",
+      "  sz _ = 2",
+      "impl Sz (Pair Int b) where",
+      "  sz _ = 3",
+      "f : Int",
+      "f = sz (Pair 1 2)",
+    ])
+
+test "an unconstrained literal defaults and is accepted" =
+  expectEqual
+    []
+    (map
+      fst
+      (checkDiagsOver numericPreludeSource (joinNl ["y = 1", "z = (1, 2)"])))
+
+test "a body that needs Num its signature omits is rejected as a missing constraint" =
+  expectEqual
+    ["T-MISSING-CONSTRAINT"]
+    (map
+      fst
+      (checkDiagsOver numericPreludeSource (joinNl ["f : a -> a", "f x = 1"])))
+
+test "a body whose signature declares Num is accepted" =
+  expectEqual
+    []
+    (map
+      fst
+      (checkDiagsOver
+        numericPreludeSource
+        (joinNl ["f : Num a => a -> a", "f x = 1"])))
+
+test "a local literal is defaulted at its own boundary and checks" =
+  expectEqual
+    []
+    (map
+      fst
+      (checkDiagsOver numericPreludeSource (joinNl ["main = let z = 2 in z"])))

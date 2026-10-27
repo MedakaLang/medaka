@@ -1,0 +1,537 @@
+-- Tests of `types.tc_solve_givens`'s own API: the pure projections of predicate slots, the
+-- request-against-slot match that routes a goal to a given, the given store (`pushGiven`,
+-- `givensForScope`, `goalMatchesGiven`, `projectedGivenOf`) with its scope visibility, the
+-- route a binder stamps, the slot position of an enclosing function's tyvar, and `oblArgKey`;
+-- then the rejections and acceptances a signature's givens produce through one whole check.
+-- One property: adding a given never removes a goal a given already answered.  Each test
+-- mints its own graph record.
+
+import types.tc_mono.{tconFrom, tconBuiltin}
+import list.{lookup, reverse, zip}
+import support.util.{joinNl}
+import test.{
+  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+}
+import frontend.ast.{Route(..), TyConOrigin(..)}
+import support.ordmap.{omEmpty, omInsert}
+import types.effect_rows.{pureRow}
+import types.evidence.{EvidenceBinderId, ScopeId, SolverEvidence(..)}
+import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
+import types.scopes.{ScopeOwner(..), binderAt, freshScope}
+import types.tc_mono_test.{MTy(..), genClosed}
+import types.tc_solve_givens.{
+  anyGivenMatches, enclSlot, givenAnswers, givenInScope, givenRoute,
+  givensForScope, goalMatchesGiven, indexOfId, oblArgKey,
+  predicateRequestMatchesSlot, predicateSlotIds, predicateSlotIdsAt,
+  projectedGivenOf, pushGiven, assumAnswerEvidence
+}
+import types.tc_solve_test_support.{expectChecks, expectRejectedWith}
+import types.tc_state.{currentScopeStore, dictParamName, probeGraphCtx}
+import types.tc_test_support.{fresh}
+import types.tc_types.{
+  AssumAnswer(..), GivenEntry(..), GivenMatch(..), GivenProvenance(..),
+  GivenScope(..), GraphCtx, PredicateRequest(..), PredicateSlot(..),
+  PredicateSlotArgs(..)
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+ifaceOf : String -> IfaceRef
+ifaceOf name = IfaceRef { irName = name, irOrigin = OriginModule "probe" }
+
+intM : Mono
+intM = tconBuiltin "Int"
+
+boolM : Mono
+boolM = tconBuiltin "Bool"
+
+varM : Int -> Mono
+varM id = TVar (Ref (Unbound id 0))
+
+slotOf : String -> List Mono -> List Int -> PredicateSlot
+slotOf name args ids = PredicateSlot {
+  psIface = ifaceOf name,
+  psArgs = PSArgsKnown args,
+  psBoundIds = ids,
+}
+
+requestOf : String -> List Mono -> PredicateRequest
+requestOf name args =
+  PredicateRequest { prIface = ifaceOf name, prArgs = PSArgsKnown args }
+
+-- A function's scope, a local scope inside it, and an unrelated sibling function's scope,
+-- all in one module.
+data Scopes3 = Scopes3 ScopeId ScopeId ScopeId
+
+threeScopes : GraphCtx -> Scopes3
+threeScopes gctx =
+  let store = currentScopeStore gctx ()
+  let outer = freshScope store None 0 "probe" (BindingOwner "f")
+  let inner = freshScope store (Some outer) 1 "probe" (LocalBindingOwner "g")
+  let other = freshScope store None 0 "probe" (BindingOwner "h")
+  Scopes3 outer inner other
+
+-- Records [slot] as a given of [match] in [scope], at dictionary position [ordinal].
+givenIn : GraphCtx -> ScopeId -> Int -> GivenMatch -> PredicateSlot -> Unit
+givenIn gctx scope ordinal gm slot =
+  pushGiven gctx gm DirectGiven slot (binderAt scope ordinal)
+
+-- The dictionary variable name a route reads, and whether it is the forwarding form.
+dictRead : Route -> Option (Bool, String)
+dictRead (RDict name) = Some (False, name)
+dictRead (RDictFwd name) = Some (True, name)
+dictRead _ = None
+
+-- ── predicate slots ───────────────────────────────────────────────────────
+
+test "predicateSlotIds keeps the first bound id of each slot and skips a slot that binds none" =
+  expectEqual
+    [4, 9]
+    (predicateSlotIds [
+      slotOf "A" [varM 4] [4, 5],
+      slotOf "A" [intM] [],
+      slotOf "B" [varM 9] [9],
+    ])
+
+test "predicateSlotIdsAt reads the named function's slots and nothing for an unknown name" =
+  let idx =
+    omInsert "f" [slotOf "A" [varM 3] [3], slotOf "B" [varM 7] [7]] omEmpty
+  expectAll [
+    expectEqual [3, 7] (predicateSlotIdsAt "f" idx),
+    expectEqual [] (predicateSlotIdsAt "g" idx),
+  ]
+
+test "indexOfId gives the first position of an id and nothing when it is absent" = expectAll
+  [
+    expectEqual (Some 0) (indexOfId 5 [5, 6, 5]),
+    expectEqual (Some 2) (indexOfId 7 [5, 6, 7]),
+    expectEqual None (indexOfId 8 [5, 6, 7]),
+    expectEqual None (indexOfId 1 []),
+  ]
+
+test "enclSlot is the position of a tyvar among the enclosing function's slot ids" =
+  let m = fresh ()
+  m.mcCells.funPredicateSlotsIdxRef :=
+    omInsert "f" [slotOf "A" [varM 3] [3], slotOf "B" [varM 7] [7]] omEmpty
+  expectAll [
+    expectEqual (Some 1) (enclSlot m "f" (varM 7)),
+    expectEqual None (enclSlot m "f" (varM 8)),
+    expectEqual None (enclSlot m "other" (varM 7)),
+    expectEqual None (enclSlot m "f" intM),
+  ]
+
+-- ── matching a request to a slot ──────────────────────────────────────────
+
+test "a request matches a slot of the same interface and the same known arguments" = expectEach
+  [
+    (
+      "same iface, same args",
+      expectTrue
+        (predicateRequestMatchesSlot
+          (requestOf "A" [intM])
+          (slotOf "A" [intM] [])),
+    ),
+    (
+      "different args",
+      expectFalse
+        (predicateRequestMatchesSlot
+          (requestOf "A" [intM])
+          (slotOf "A" [boolM] [])),
+    ),
+    (
+      "different iface",
+      expectFalse
+        (predicateRequestMatchesSlot
+          (requestOf "A" [intM])
+          (slotOf "B" [intM] [])),
+    ),
+    (
+      "different arity",
+      expectFalse
+        (predicateRequestMatchesSlot
+          (requestOf "A" [intM])
+          (slotOf "A" [intM, intM] [])),
+    ),
+  ]
+
+test "an unknown argument vector on either side matches on the interface alone" =
+  let unknown = PredicateSlot {
+    psIface = ifaceOf "A",
+    psArgs = PSArgsUnknown,
+    psBoundIds = [],
+  }
+  expectAll [
+    expectTrue (predicateRequestMatchesSlot (requestOf "A" [intM]) unknown),
+    expectTrue
+      (predicateRequestMatchesSlot
+        PredicateRequest { prIface = ifaceOf "A", prArgs = PSArgsUnknown }
+        (slotOf "A" [boolM] [])),
+    expectFalse
+      (predicateRequestMatchesSlot
+        PredicateRequest { prIface = ifaceOf "B", prArgs = PSArgsUnknown }
+        unknown),
+  ]
+
+test "a request or slot whose interface has no name matches nothing" = expectAll
+  [
+    expectFalse
+      (predicateRequestMatchesSlot (requestOf "" [intM]) (slotOf "" [intM] [])),
+    expectFalse
+      (predicateRequestMatchesSlot (requestOf "A" [intM]) (slotOf "" [intM] [])),
+  ]
+
+test "a request does not match a slot of a same-named interface from another module" =
+  let foreign = IfaceRef { irName = "A", irOrigin = OriginModule "elsewhere" }
+  expectFalse
+    (predicateRequestMatchesSlot (requestOf "A" [intM]) PredicateSlot {
+      psIface = foreign,
+      psArgs = PSArgsKnown [intM],
+      psBoundIds = [],
+    })
+
+test "givenAnswers needs the same interface and a known, equal argument vector" = expectEach
+  [
+    (
+      "equal known",
+      expectTrue
+        (givenAnswers (ifaceOf "A") [intM, boolM] (slotOf "A" [intM, boolM] [])),
+    ),
+    (
+      "unequal known",
+      expectFalse (givenAnswers (ifaceOf "A") [intM] (slotOf "A" [boolM] [])),
+    ),
+    (
+      "other iface",
+      expectFalse (givenAnswers (ifaceOf "B") [intM] (slotOf "A" [intM] [])),
+    ),
+    (
+      "unknown slot vector",
+      expectFalse
+        (givenAnswers
+          (ifaceOf "A")
+          [intM]
+          PredicateSlot {
+            psIface = ifaceOf "A",
+            psArgs = PSArgsUnknown,
+            psBoundIds = [],
+          }),
+    ),
+  ]
+
+-- ── the given store ───────────────────────────────────────────────────────
+
+test "givensForScope lists the givens of the scope's module newest first" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  givenIn gctx outer 0 GMPredicate (slotOf "A" [intM] [])
+  givenIn gctx outer 1 GMPredicate (slotOf "B" [intM] [])
+  expectEqual
+    ["B", "A"]
+    (map (g => g.geSlot.psIface.irName) (givensForScope gctx outer))
+
+test "a given answers a goal in its own scope and in a scope nested inside it, not in a sibling" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer inner other) = threeScopes gctx
+  givenIn gctx outer 0 GMPredicate (slotOf "A" [intM] [])
+  expectEach [
+    (
+      "own scope",
+      expectTrue (goalMatchesGiven gctx outer (ifaceOf "A") [intM]),
+    ),
+    (
+      "nested scope",
+      expectTrue (goalMatchesGiven gctx inner (ifaceOf "A") [intM]),
+    ),
+    (
+      "sibling scope",
+      expectFalse (goalMatchesGiven gctx other (ifaceOf "A") [intM]),
+    ),
+  ]
+
+test "a given in a nested scope does not answer a goal in the scope around it" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer inner _) = threeScopes gctx
+  givenIn gctx inner 0 GMPredicate (slotOf "A" [intM] [])
+  expectAll [
+    expectTrue (goalMatchesGiven gctx inner (ifaceOf "A") [intM]),
+    expectFalse (goalMatchesGiven gctx outer (ifaceOf "A") [intM]),
+  ]
+
+test "goalMatchesGiven answers on interface and exact arguments, and never an empty vector" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  givenIn gctx outer 0 GMPredicate (slotOf "A" [intM] [])
+  expectEach [
+    (
+      "other args",
+      expectFalse (goalMatchesGiven gctx outer (ifaceOf "A") [boolM]),
+    ),
+    (
+      "other iface",
+      expectFalse (goalMatchesGiven gctx outer (ifaceOf "B") [intM]),
+    ),
+    ("empty vector", expectFalse (goalMatchesGiven gctx outer (ifaceOf "A") [])),
+  ]
+
+test "a given witnessed only by tyvar id does not answer a goal by predicate alone" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  givenIn gctx outer 0 GMIdWitnessed (slotOf "A" [varM 5] [5])
+  expectFalse (goalMatchesGiven gctx outer (ifaceOf "A") [varM 5])
+
+test "anyGivenMatches reads only the givens it is handed" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  givenIn gctx outer 0 GMPredicate (slotOf "A" [intM] [])
+  let stored = givensForScope gctx outer
+  expectAll [
+    expectTrue (anyGivenMatches gctx (requestOf "A" [intM]) outer stored),
+    expectFalse (anyGivenMatches gctx (requestOf "A" [intM]) outer []),
+  ]
+
+test "givenInScope separates predicate-keyed givens from id-witnessed ones" =
+  let entry gm = GivenEntry {
+    geSlot = slotOf "A" [intM] [],
+    geBinder = EvidenceBinderId (ScopeId 0) 0,
+    geMatch = gm,
+    geProvenance = DirectGiven,
+  }
+  expectEach [
+    (
+      "predicate-only rung, predicate given",
+      expectTrue (givenInScope GSPredicateOnly (entry GMPredicate)),
+    ),
+    (
+      "predicate-only rung, witnessed given",
+      expectFalse (givenInScope GSPredicateOnly (entry GMIdWitnessed)),
+    ),
+    (
+      "impl-requires rung, witnessed given",
+      expectTrue (givenInScope GSImplRequires (entry GMIdWitnessed)),
+    ),
+    (
+      "impl-requires rung, predicate given",
+      expectFalse (givenInScope GSImplRequires (entry GMPredicate)),
+    ),
+  ]
+
+test "projectedGivenOf finds the projection recorded under a binder and path, not another path" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  let parent = binderAt outer 0
+  pushGiven gctx GMPredicate DirectGiven (slotOf "Sub" [intM] []) parent
+  pushGiven
+    gctx
+    GMPredicate
+    (ProjectedGiven parent [0])
+    (slotOf "Base" [intM] [])
+    (binderAt outer 1)
+  expectAll [
+    expectEqual
+      (Some "Base")
+      (map (g => g.geSlot.psIface.irName) (projectedGivenOf gctx parent [0])),
+    expectEqual
+      None
+      (map (g => g.geSlot.psIface.irName) (projectedGivenOf gctx parent [1])),
+  ]
+
+-- ── what an assumption answer denotes, and the route a binder stamps ──────
+
+test "an assumption answer denotes the evidence it carries, or the binder it routes through" =
+  let binder = EvidenceBinderId (ScopeId 2) 1
+  let evidenceOf answer = match assumAnswerEvidence answer
+    GivenEvidence b => Some (b, [])
+    SuperclassEvidence b path => Some (b, path)
+    _ => None
+  expectEach [
+    (
+      "scalar",
+      expectEqual (Some (binder, [])) (evidenceOf (LegacyScalar binder)),
+    ),
+    (
+      "predicate",
+      expectEqual (Some (binder, [])) (evidenceOf (LegacyPredicate binder)),
+    ),
+    (
+      "projected",
+      expectEqual
+        (Some (binder, [0, 1]))
+        (evidenceOf (LegacyProjected binder [0, 1])),
+    ),
+    (
+      "semantic",
+      expectEqual
+        (Some (binder, []))
+        (evidenceOf (SemanticGiven (GivenEvidence binder))),
+    ),
+  ]
+
+test "givenRoute reads the binder's dictionary parameter, forwarding in return position" =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  let binder = binderAt outer 2
+  expectAll [
+    expectEqual
+      (Some (False, dictParamName "f" 2))
+      (dictRead (givenRoute gctx False binder)),
+    expectEqual
+      (Some (True, dictParamName "f" 2))
+      (dictRead (givenRoute gctx True binder)),
+  ]
+
+-- ── oblArgKey ─────────────────────────────────────────────────────────────
+
+test "oblArgKey tells heads, applications and arrows apart" =
+  let pair = TApp (TApp (tconFrom (OriginModule "probe") "Pair") intM) boolM
+  expectAll [
+    expectNotEqual (oblArgKey intM) (oblArgKey boolM),
+    expectNotEqual
+      (oblArgKey pair)
+      (oblArgKey
+        (TApp (TApp (tconFrom (OriginModule "probe") "Pair") boolM) intM)),
+    expectNotEqual
+      (oblArgKey (TApp intM boolM))
+      (oblArgKey (TFun intM pureRow boolM)),
+    expectEqual (oblArgKey pair) (oblArgKey pair),
+  ]
+
+test "oblArgKey keys a variable by its id and reads a rigid like a constructor of that name" = expectAll
+  [
+    expectEqual (oblArgKey (varM 3)) (oblArgKey (varM 3)),
+    expectNotEqual (oblArgKey (varM 3)) (oblArgKey (varM 4)),
+    expectEqual (oblArgKey (TRigid "Int")) (oblArgKey intM),
+    expectNotEqual
+      (oblArgKey
+        (TApp
+          (tconFrom (OriginModule "probe") "ab")
+          (tconFrom (OriginModule "probe") "c")))
+      (oblArgKey
+        (TApp
+          (tconFrom (OriginModule "probe") "a")
+          (tconFrom (OriginModule "probe") "bc"))),
+  ]
+
+-- ── what a signature's givens accept and reject through one check ─────────
+
+sizeable : String
+sizeable =
+  """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz _ = 1
+"""
+
+test "a signature's constraint is a given for its body" =
+  expectChecks (joinNl [sizeable, "g : Sz a => a -> Int", "g x = sz x"])
+
+test "a body that needs a constraint its signature omits is rejected as a missing constraint" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    (joinNl [sizeable, "g : a -> Int", "g x = sz x"])
+
+test "a given's superclass closure answers a goal on the super" =
+  expectChecks
+    """
+\{sizeable}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+h : Sz2 a => a -> Int
+h x = sz x
+"""
+
+test "a given of the super does not answer a goal on the sub" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    """
+\{sizeable}
+interface Sz2 a requires Sz a where
+  sz2 : a -> Int
+h : Sz a => a -> Int
+h x = sz2 x
+"""
+
+test "an impl's requires slot is a given for the impl's methods" =
+  expectChecks
+    """
+\{sizeable}
+data Box a = Box a
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+"""
+
+test "a requires the impl does not declare is rejected at the use" =
+  expectRejectedWith
+    ["T-MISSING-CONSTRAINT"]
+    """
+\{sizeable}
+data Box a = Box a
+impl Sz (Box a) requires Sz a where
+  sz (Box x) = sz x
+k : a -> Int
+k v = sz (Box v)
+"""
+
+-- ── the law ───────────────────────────────────────────────────────────────
+
+-- A given, as the model sees it: an interface index and a closed argument type.
+data GivenCase = GivenCase (List (Int, MTy)) (Int, MTy) (Int, MTy)
+
+-- Gives up shrinking: the three components are drawn together, so a smaller case would
+-- not keep the goal drawn from the givens.
+impl Arbitrary GivenCase where
+  arbitrary () = genGivenCase ()
+  shrink _ = []
+
+genGivenCase : Unit -> <Rand> GivenCase
+genGivenCase () =
+  let gs = genGivens (randomInt 0 4)
+  let extra = genGiven ()
+  let fromGivens = match gs
+    g :: _ => g
+    [] => genGiven ()
+  let goal = if randomInt 0 1 == 0 then fromGivens else genGiven ()
+  GivenCase gs extra goal
+
+genGiven : Unit -> <Rand> (Int, MTy)
+genGiven () = (randomInt 0 2, genClosed 1)
+
+genGivens : Int -> <Rand> List (Int, MTy)
+genGivens n
+  | n <= 0 = []
+  | otherwise = genGiven () :: genGivens (n - 1)
+
+closedMono : MTy -> Mono
+closedMono (MCon n) = tconFrom (OriginModule "probe") n
+closedMono (MApp a b) = TApp (closedMono a) (closedMono b)
+closedMono (MFun a b) = TFun (closedMono a) pureRow (closedMono b)
+closedMono (MVar _) = tconFrom (OriginModule "probe") "Open"
+
+answers : List (Int, MTy) -> (Int, MTy) -> Bool
+answers gs (i, t) =
+  let gctx = probeGraphCtx ()
+  let (Scopes3 outer _ _) = threeScopes gctx
+  pushAll gctx outer 0 (reverse gs)
+  goalMatchesGiven gctx outer (ifaceOf (ifaceName i)) [closedMono t]
+
+-- Pushes [gs] in order, so the head of the list is the oldest given.
+pushAll : GraphCtx -> ScopeId -> Int -> List (Int, MTy) -> Unit
+pushAll _ _ _ [] = ()
+pushAll gctx scope ordinal ((i, t) :: rest) =
+  givenIn
+    gctx
+    scope
+    ordinal
+    GMPredicate
+    (slotOf (ifaceName i) [closedMono t] [])
+  pushAll gctx scope (ordinal + 1) rest
+
+ifaceName : Int -> String
+ifaceName i = optionOr "I" (lookup i (zip [0, 1, 2] ["I0", "I1", "I2"]))
+
+-- Law: a goal a set of givens answers is still answered after one more given is added.
+-- Precondition: the goal is answered by the first set, which the generator makes likely
+-- by drawing the goal from the givens half the time.
+prop "adding a given never removes a goal the givens answered" (c : GivenCase) =
+  let (GivenCase gs extra goal) = c
+  not (answers gs goal) || answers (extra :: gs) goal
