@@ -1155,6 +1155,7 @@ import types.tc_occurrence.{
   mintMethodCellRaw,
   mkMethodOccObl,
   pushSiteGoal,
+  rebuildGroupDecls,
   recordBinopGoals,
   recordIfaceObligation,
   recordMethodObligationGuarded,
@@ -1194,7 +1195,6 @@ import types.tc_groups.{
   letGroupComponents,
   memberForce,
   quantifiableAuthorities,
-  rebuildGroupDecls,
   registerSchemeObligations,
   requireGoalsBelow,
   residualsOf,
@@ -1208,9 +1208,7 @@ import types.tc_pat.{
   closeExistentialScope,
   inferPat,
   inferPats,
-  isConPat,
   openExistentialScope,
-  patIsVar,
   patOpensExistentials,
   recordBinderType,
   recordLetBindType,
@@ -6144,6 +6142,10 @@ inferLetSimple outer pat e1 e2 =
     dictN0
     lscope
 
+patIsVar : Pat -> Bool
+patIsVar (PVar _ _ _) = True
+patIsVar _ = False
+
 -- [env] is located at the binding, [bodyLoc] is the span the body is inferred at.
 inferLetBody : TcEnv ->
   Option Loc ->
@@ -6490,6 +6492,10 @@ armUnreachable mctx col0 prec _ _ dp =
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
 noteHeadCtor _ heads = heads
+
+isConPat : Pat -> Bool
+isConPat (PCon _ _) = True
+isConPat _ = False
 
 -- Only UNGUARDED arms contribute to the covered set (a guarded arm may not fire).
 armIsUnguarded : List Guard -> Bool

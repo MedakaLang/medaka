@@ -1,11 +1,13 @@
 # META
-source_lines=3754
+source_lines=3820
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method, operator and literal occurrence inference and dispatch-site recording
 -- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
--- groups, the constrained-signature set, and the test-only evidence-cell probes
--- (`cellGoalInnerAliasing`, `innerAliases`, `aliasMarker`).
+-- groups and the write-back of its marked clauses over the declarations
+-- (`rebuildGroupDecls`), the constrained-signature set, and the test-only evidence-cell and
+-- method-return probes (the `cellGoalInnerAliasing` family, `cellStoreMisses`, the
+-- `methodRow*Probe` and `methodReturn*Probe` rows).
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --
@@ -1349,18 +1351,16 @@ unmarkGrantOnly gctx ev =
 -- + funConstraintIfacesRef path (today's behavior; same slots when no collision, since
 -- the qual entry is the same module's same ids the bare first-match returns sans collision).
 -- S-xmod-vector-supply (#1868/#1867): a PROJECTION of `qualConstraintDecl`, which is the
--- ONE qual-entry resolution.  It was the whole body until this slice; a third reader
--- (`declaredCrossModuleObls`) needed the same entry's ARGUMENT VECTORS as well as its
--- slots, and two readers re-deriving which entry a name resolves to is the drift
--- `qualConstraintKey` was factored out to remove.
+-- ONE qual-entry resolution, which `declaredCrossModuleObls` also reads for the entry's
+-- ARGUMENT VECTORS: two readers re-deriving which entry a name resolves to is the drift
+-- `qualConstraintKey` exists to prevent.
 qualConstraintFor : ModuleCtx -> String -> Option (List CSlot)
 qualConstraintFor mctx name =
   map (d => d.cdSlots) (qualConstraintDecl mctx name)
 
--- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
--- pre-U1b `declaredConstraintFor` returned as its first component.
+-- the callee's registered dict-slot ids, unpaired and untruncated.
 --
--- Why this exists, and why it is not the parallel-LIST HAZARD `CSlot` REMOVED.
+-- Why this exists, and why it is not the parallel-list hazard `CSlot` removed.
 -- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
 -- result decides dict SLOTS — that is exactly what the zips it replaced did.  But two
 -- guards in `inferDictAtFound` and one in `shadowStandaloneDictSlotsAt` do not ask about
@@ -1805,12 +1805,11 @@ recordIfaceObligation mctx c lt
 -- present — `builtinClassPresent BNum` since #1539, was `ifaceRegistered "Num"` — AND
 -- `fromInt` bound): with no prelude (bare-HM oracle) fall back to a plain fresh
 -- Num-obligated var, leaving [dref] RNone (⇒ a static Int literal at rewrite time).
--- #1539 converted the GATE; #259 converts the ANCHOR, which was the larger half of
--- the same I7 divergence (§11's "I7 (literals)" row).  Both halves now ask the PRELUDE
--- and nothing else: the gate is `builtinClassPresent BNum`, the method is the scheme
+-- The gate (#1539) and the anchor (#259) both ask the PRELUDE and nothing else (§11's
+-- "I7 (literals)" row): the gate is `builtinClassPresent BNum`, the method is the scheme
 -- `seedNumLitFromIntAnchor` selected out of the prelude `Num` DECLARATION by identity.
--- A binding spelled `fromInt` in the user's term scope is no longer consulted, so it can
--- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
+-- A binding spelled `fromInt` in the user's term scope is not consulted, so it cannot
+-- re-anchor the literals around it (#259: `fromInt : Int -> Float` made
 -- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
 export
 inferNumLit : TcEnv -> Int -> EvId -> Mono
@@ -2088,7 +2087,7 @@ recordImplObligation mctx x mono omitted
       -- shape, discriminating METHOD-OCCURRENCE goals the same way the other three
       -- goal-producer call sites always did.
       --
-      -- #1288 IS A separate fact, and points the other way — do not weld the two.
+      -- #1288 is a separate fact, and points the other way: do not weld the two.
       -- It is what carrying identity COSTS: when a re-export merge (`mid.mdk` doing
       -- `export import p.*` + `export import g.*` over two unrelated `Same` interfaces)
       -- gives an importer's `impl Same P` an `implOrigin` of `g` while the method it
@@ -2099,8 +2098,8 @@ recordImplObligation mctx x mono omitted
       -- silent accept into a reject (good).  #1288: identity turns a valid program into
       -- a rejection (bad, and open).  Both are live; both belong here.
       --
-      -- A DO-NOT-RESTORE ban stood at this exact site from #1480 until U1c retired it.
-      -- Do NOT reinstate it on a bare assertion that the two layers are "different" — and
+      -- Do NOT reinstate a ban on foreign-interface method occurrences here on a bare
+      -- assertion that the two layers are "different" — and
       -- do NOT cite "resolve already rejects the ambiguous case" as cover either: MEASURED,
       -- resolve catches a DIRECT double import of a colliding method name but does NOT
       -- diagnose a RE-EXPORT MERGE of the same collision, which reaches this line as
@@ -2111,13 +2110,12 @@ recordImplObligation mctx x mono omitted
       -- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`) build
       -- their goal from `builtinIfaceRef`; the STANDING CONDITION that keeps them safe
       -- lives at that function's own definition, where it is about them.  And "the third
-      -- and last of the `ifaceRefBare` producers" (U1b retired the other two,
-      -- `schemeObligationsRef` and `funConstraintIfacesRef`) is a claim about
+      -- and last of the `ifaceRefBare` producers" is a claim about
       -- `ifaceRefBare` MINTS ONLY — the `ImplUniverse` channel has at least six goal
       -- producers in total.  Re-derive with `grep -n ifaceRefBare` rather than trust a
       -- count, and do not read the narrow claim as the broad one.
       --
-      -- The retired ban's premise and why it was wrong, the re-export-merge measurement,
+      -- The reason such a ban is wrong, the re-export-merge measurement,
       -- the `builtinIfaceRef` census, and #1288's verbatim repro:
       -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.  Positive pair:
       -- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
@@ -3176,11 +3174,79 @@ placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
   None =>
     panic "markRecursiveOccurrences: \{callee} is not a member of the group"
 
+-- Write each group's marked clauses back over the declarations that produced them.
+-- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
+-- order and `clausesOf` returns a name's clauses in that order, so consuming them
+-- head-first as the declarations are walked restores every clause to its own slot.
+-- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
+-- `funDefs` collects clauses from but this walk passes through would drop those
+-- clauses' marks from the returned tree without a panic (the reverse direction
+-- panics in `popMarkedClause`).
+export
+rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
+rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
+
+rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List Decl ->
+  (List Decl, OrdMap (List (List Pat, Expr)))
+rebuildGroupDeclsGo _ pending [] = ([], pending)
+rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _ site bid) :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DFunDef pub n ps e site bid :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
+  let (binds2, pending2) = rebuildLetBinds grouped pending binds
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DLetGroup pub binds2 :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DAttrib attrs d) :: rest) =
+  let (inner, pending2) = rebuildGroupDeclsGo grouped pending [d]
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (map (d2 => DAttrib attrs d2) inner ++ ds, pending3)
+rebuildGroupDeclsGo grouped pending (d :: rest) =
+  let (ds, pending2) = rebuildGroupDeclsGo grouped pending rest
+  (d :: ds, pending2)
+
+rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List LetBind ->
+  (List LetBind, OrdMap (List (List Pat, Expr)))
+rebuildLetBinds _ pending [] = ([], pending)
+rebuildLetBinds grouped pending ((LetBind n clauses site bid) :: rest) =
+  let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
+  let (binds, pending3) = rebuildLetBinds grouped pending2 rest
+  (LetBind n clauses2 site bid :: binds, pending3)
+
+rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  List FunClause ->
+  (List FunClause, OrdMap (List (List Pat, Expr)))
+rebuildFunClauses _ pending _ [] = ([], pending)
+rebuildFunClauses grouped pending n (_ :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
+  (FunClause ps e :: cs, pending3)
+
+-- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
+-- written back, in source order, minted from `clausesOf` on first use.
+popMarkedClause : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  ((List Pat, Expr), OrdMap (List (List Pat, Expr)))
+popMarkedClause grouped pending n =
+  let remaining = match omLookup n pending
+    Some cs => cs
+    None => clausesOf n grouped
+  match remaining
+    c :: cs => (c, omInsert n cs pending)
+    [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
+
 -- test-only observation: declarations whose only callers are tests and probes.
 
--- Test visibility (`typecheck_test.mdk`): each goal of [gctx]'s graph that writes a
--- method cell's route or dictionaries, by kind, with whether its `oInner` is that
--- cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
+-- Test visibility (`typecheck_test.mdk` and `tc_occurrence_test.mdk`): each goal of
+-- [gctx]'s graph that writes a method cell's route or dictionaries, by kind, with
+-- whether its `oInner` is that cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
 -- by writing a marker through the goal's refs and looking for it in the cells, then
 -- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
 export
@@ -3242,7 +3308,7 @@ innerAliases o c =
   c.ecInner := savedCell
   hit
 
--- Test visibility (`typecheck_test.mdk`): why [gctx]'s site and method cell stores
+-- Test visibility (`tc_occurrence_test.mdk`): why [gctx]'s site and method cell stores
 -- hold no cell for [ev], each "" where one does.
 export
 cellStoreMisses : GraphCtx -> EvId -> (String, String)
@@ -4232,6 +4298,22 @@ methodReturnSlotOwnershipProbe _ =
 (DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
 (DTypeSig false "placeholderMonoOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "placeholderMonoOf" ((PVar "callee") (PVar "placeholders")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "callee")) (EVar "placeholders")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "markRecursiveOccurrences: ")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString " is not a member of the group")))))))
+(DTypeSig true "rebuildGroupDecls" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "rebuildGroupDecls" ((PVar "grouped") (PVar "prog")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "omEmpty")) (EVar "prog"))))
+(DTypeSig false "rebuildGroupDeclsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "rebuildGroupDeclsGo" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e")) (EVar "site")) (EVar "bid")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "binds2") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending")) (EVar "binds"))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "binds2")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DAttrib" (PVar "attrs") (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "inner") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending")) (EListLit (EVar "d")))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "d2")) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EVar "d2")))) (EVar "inner")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "ds") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "d") (EVar "ds")) (EVar "pending2")))))
+(DTypeSig false "rebuildLetBinds" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyTuple (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "rebuildLetBinds" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildLetBinds" ((PVar "grouped") (PVar "pending") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "clauses2") (PVar "pending2")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending")) (EVar "n")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "binds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses2")) (EVar "site")) (EVar "bid")) (EVar "binds")) (EVar "pending3")))))
+(DTypeSig false "rebuildFunClauses" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
+(DFunDef false "rebuildFunClauses" (PWild (PVar "pending") PWild (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
+(DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))))
 (DTypeSig true "cellGoalInnerAliasing" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "cellGoalInnerAliasing" ((PVar "gctx")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "cells") (EApp (EApp (EApp (EVar "cellsFrom") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EVar "filterMap") (ELam ((PVar "o")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (ETuple (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind")) (EApp (EApp (EVar "innerAliases") (EVar "o")) (EVar "c"))))) (EApp (EApp (EVar "cellOfGoal") (EVar "cells")) (EVar "o"))))) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value")))))
 (DTypeSig false "cellsFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "List") (TyCon "EvCell"))))))
@@ -4756,6 +4838,22 @@ methodReturnSlotOwnershipProbe _ =
 (DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
 (DTypeSig false "placeholderMonoOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "placeholderMonoOf" ((PVar "callee") (PVar "placeholders")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "callee")) (EVar "placeholders")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "markRecursiveOccurrences: ")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString " is not a member of the group")))))))
+(DTypeSig true "rebuildGroupDecls" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "rebuildGroupDecls" ((PVar "grouped") (PVar "prog")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "omEmpty")) (EVar "prog"))))
+(DTypeSig false "rebuildGroupDeclsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "rebuildGroupDeclsGo" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e")) (EVar "site")) (EVar "bid")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "binds2") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending")) (EVar "binds"))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "binds2")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PCon "DAttrib" (PVar "attrs") (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "inner") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending")) (EListLit (EVar "d")))) (DoLet false false (PTuple (PVar "ds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "d2")) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EVar "d2")))) (EVar "inner")) (EVar "ds")) (EVar "pending3")))))
+(DFunDef false "rebuildGroupDeclsGo" ((PVar "grouped") (PVar "pending") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "ds") (PVar "pending2")) (EApp (EApp (EApp (EVar "rebuildGroupDeclsGo") (EVar "grouped")) (EVar "pending")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "d") (EVar "ds")) (EVar "pending2")))))
+(DTypeSig false "rebuildLetBinds" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyTuple (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "rebuildLetBinds" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildLetBinds" ((PVar "grouped") (PVar "pending") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "clauses2") (PVar "pending2")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending")) (EVar "n")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "binds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses2")) (EVar "site")) (EVar "bid")) (EVar "binds")) (EVar "pending3")))))
+(DTypeSig false "rebuildFunClauses" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
+(DFunDef false "rebuildFunClauses" (PWild (PVar "pending") PWild (PList)) (ETuple (EListLit) (EVar "pending")))
+(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
+(DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
+(DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))))
 (DTypeSig true "cellGoalInnerAliasing" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "cellGoalInnerAliasing" ((PVar "gctx")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "cells") (EApp (EApp (EApp (EVar "cellsFrom") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "o")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (ETuple (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind")) (EApp (EApp (EVar "innerAliases") (EVar "o")) (EVar "c"))))) (EApp (EApp (EVar "cellOfGoal") (EVar "cells")) (EVar "o"))))) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value")))))
 (DTypeSig false "cellsFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "List") (TyCon "EvCell"))))))

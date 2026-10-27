@@ -5,7 +5,7 @@
 -- binding boundary (`checkLetRecDecls`, `checkRecBindNonFunction`, `checkAnnotTooGeneral`),
 -- the signature-constraint readings (`sigConstraints`, `sigConstraintArgTys`,
 -- `constraintVarIfaceMonos`, `sccProtectedSignatureIds`), the authority residual filter
--- (`residualsOf`) and the write-back of marked clauses (`rebuildGroupDecls`).  Two
+-- (`residualsOf`).  Two
 -- properties run over generated groups: the dependency edges of a group do not depend on
 -- what its parameter is called, and the components of a block come dependencies first.  Each
 -- test builds the module record or environment it reads; none reaches the inference
@@ -47,7 +47,6 @@ import types.tc_groups.{
   isLetrecGroup,
   isNonexpansive,
   letGroupComponents,
-  rebuildGroupDecls,
   residualsOf,
   sccProtectedSignatureIds,
   sigConstraintArgTys,
@@ -66,8 +65,8 @@ import types.tc_test_support.{
   withFirstSig,
 }
 import support.ordmap.{omEmpty, omKeys, omLookup}
-import support.util.{contains, joinNl, listLen}
-import list.{range, sort, zip}
+import support.util.{contains, listLen}
+import list.{findIndex, range, sort, zip}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -83,7 +82,7 @@ clauseOf _ = []
 bodyOf : String -> Expr
 bodyOf src = match defsOf src
   (_, (_, body)) :: _ => body
-  [] => EVar "<no function in source>"
+  [] => panic "bodyOf: no function in source"
 
 -- The names a group's dependency graph relates, as (name, dependencies) in name order.
 edgesOf : List String ->
@@ -156,12 +155,11 @@ test "a binding depends on the other group names its bodies mention, never on it
     [("f", Some ["g"]), ("g", Some ["f"]), ("h", Some [])]
     (edgesOf
       ["f", "g", "h"]
-      (defsOf
-        (joinNl [
-          "f n = f (g n)",
-          "g n = f n",
-          "h n = outside n",
-        ])))
+      (defsOf """
+f n = f (g n)
+g n = f n
+h n = outside n
+"""))
 
 test "a name outside the group is no edge" =
   expectEqual [("f", Some [])] (edgesOf ["f"] (defsOf "f n = print n"))
@@ -169,34 +167,58 @@ test "a name outside the group is no edge" =
 test "a parameter spelled like a group name is no reference to it" =
   expectEqual
     [("f", Some []), ("g", Some ["f"])]
-    (edgesOf ["f", "g"] (defsOf (joinNl ["f g = g", "g n = f n"])))
+    (edgesOf ["f", "g"] (defsOf """
+f g = g
+g n = f n
+"""))
 
 test "a let binder spelled like a group name hides it inside its body only" =
   expectEqual
     [("f", Some ["g"]), ("g", Some [])]
-    (edgesOf
-      ["f", "g"]
-      (defsOf
-        (joinNl [
-          "f n = (g => g) n + g n",
-          "g n = n",
-        ])))
+    (edgesOf ["f", "g"] (defsOf """
+f n = (g => g) n + g n
+g n = n
+"""))
+
+test "a match-arm pattern spelled like a group name hides it inside its arm only" = expectAll
+  [
+    expectEqual
+      [("f", Some []), ("g", Some [])]
+      (edgesOf ["f", "g"] (defsOf """
+f n = match n
+  g => g
+g n = n
+""")),
+    expectEqual
+      [("f", Some ["g"]), ("g", Some [])]
+      (edgesOf
+        ["f", "g"]
+        (defsOf """
+f n = match n
+  g => g
+  _ => g
+g n = n
+""")),
+  ]
 
 test "every clause of a function contributes its references to one edge list" =
   expectEqual
     [("f", Some ["g", "h"]), ("g", Some []), ("h", Some [])]
     (edgesOf
       ["f", "g", "h"]
-      (defsOf
-        (joinNl [
-          "f 0 = g 0",
-          "f n = h n",
-          "g n = n",
-          "h n = n",
-        ])))
+      (defsOf """
+f 0 = g 0
+f n = h n
+g n = n
+h n = n
+"""))
 
 test "the clauses of a name are grouped in source order and each name is listed once" =
-  let defs = defsOf (joinNl ["f 0 = a", "g n = b", "f n = c"])
+  let defs = defsOf """
+f 0 = a
+g n = b
+f n = c
+"""
   expectAll [
     expectEqual ["f", "g"] (groupNames defs omEmpty),
     expectEqual ["f", "g"] (sort (omKeys (groupClauses defs))),
@@ -357,7 +379,7 @@ test "the argument types of each slot follow the slots in order" = withFirstSig
 tyName : Ty -> String
 tyName (TyVar v) = v
 tyName (TyCon { tyConName = n }) = n
-tyName _ = "<other>"
+tyName _ = panic "tyName: neither a variable nor a constructor"
 
 test "a slot survives when one of its variables is instantiated, with the monos that are" =
   let eq = ifaceOf "Eq"
@@ -393,30 +415,6 @@ test "the residuals of one member are those its index owns, in order" =
         (2, residual True),
         (1, residual False),
       ]))
-
--- ── the write-back of marked clauses ──────────────────────────────────────
-
-test "rebuilding writes each marked clause over its own declaration and leaves the rest" =
-  let prog =
-    parse
-      (joinNl [
-        "f : Int -> Int",
-        "f 0 = a",
-        "g n = b",
-        "f n = c",
-        "data T = X",
-      ])
-  let marked =
-    map
-      ((name, (pats, body)) => (
-        name,
-        (pats, EVar ("marked_" ++ name ++ "_" ++ joinNl (allEVars body))),
-      ))
-      (defsOf (joinNl ["f 0 = a", "g n = b", "f n = c"]))
-  let rebuilt = rebuildGroupDecls (groupClauses marked) prog
-  expectEqual
-    [[], ["marked_f_a"], ["marked_g_b"], ["marked_f_c"], []]
-    (map declRefNames rebuilt)
 
 -- ── the law preconditions ─────────────────────────────────────────────────
 
@@ -578,13 +576,9 @@ blockOf refs =
       bindingOf name (map (j => "b" ++ intToString (j % listLen refs)) rs))
     (zip (blockNames refs) refs)
 
--- The index of the component that holds [name].
-componentIndex : List (List String) -> String -> Int
-componentIndex comps name = indexFrom 0 comps
-  where
-    indexFrom _ [] = 0 - 1
-    indexFrom i (c :: rest) =
-      if contains name c then i else indexFrom (i + 1) rest
+-- The index of the component that holds [name], or `None` when no component does.
+componentIndex : List (List String) -> String -> Option Int
+componentIndex comps name = findIndex (contains name) comps
 
 -- The edges of a block that run from one component to an earlier one.
 crossEdges : List (List Int) -> List (List String) -> List (String, String)

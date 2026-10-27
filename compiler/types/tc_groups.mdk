@@ -1,6 +1,8 @@
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
--- free-variable walk that forms groups, the value restriction, group generalization, goals required
--- below, signature constraints.
+-- free-variable walk that forms groups, the value restriction and the recursive-value restriction
+-- (`checkRecursiveValue`, `checkRecBindNonFunction`, the `eagerRefs` walk), group generalization,
+-- goals required below, signature constraints.  The mark pass over groups and the write-back of
+-- its clauses are `tc_occurrence`.
 --
 -- Spec: HM-CORE section 1 (gen-value), section 4, section 5 (owed, #2555); DICT section 4.1 G2,
 -- section 6.3 at binders.
@@ -55,11 +57,13 @@ import types.tc_mono.{
 }
 import types.tc_diag_text.{
   annotTooGeneralMsg,
+  groundedSigVarMsg,
   letRecNonFunctionMsg,
   missingConstraintMsg,
   missingConstraintVecMsg,
   sigOverExpansiveMsg,
   sigTooGeneralMsg,
+  siblingSharedSigVarMsg,
   varNameForId,
 }
 import types.tc_state.{mctxAtIfSome}
@@ -137,7 +141,6 @@ import types.repr.{
   Scheme(..),
   VecObl(..),
   normalize,
-  ppMono,
 }
 import types.effect_bindings.{BindingSummary(..)}
 import types.effect_rows.{EffRow(..), pureRow}
@@ -179,7 +182,7 @@ idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
 -- `isCtorAppSpine` below: generalizing `Ref x` would be unsound (polymorphic
 -- reference: write at one type, read at another).
 --
--- The head test is an actual constructor lookup, not A SPELLING TEST —
+-- The head test is an actual constructor lookup, not a spelling test —
 -- issue 1150 (S0, memory-safety), fixed 2026-08-26.  `isCtorAppSpine`'s head
 -- arms ask `lookupCtor env name`, so the predicate now answers "is this name a
 -- REAL, DECLARED constructor?" instead of "does this name start with a capital
@@ -247,8 +250,9 @@ isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
 isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
 isNonexpansive env (EListLit es) = allList (isNonexpansive env) es
 -- Constructor application: non-expansive iff the spine head is an EVar naming a
--- REAL, DECLARED constructor (`lookupCtor env`, see the above and issue
--- 1150) — that is NOT `Ref`, and every spine argument is itself non-expansive.
+-- REAL, DECLARED constructor (`lookupCtor env`, see the head-test paragraph on
+-- `isNonexpansive` above and issue 1150) — that is NOT `Ref`, and every spine argument is
+-- itself non-expansive.
 -- Partial ctor applications (e.g. `MkTwo []`) are also non-expansive — they are
 -- closures, not mutable cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers
 -- before testing.
@@ -265,7 +269,7 @@ isNonexpansive env _ = False
 -- on the way, and finally test whether the head IS a constructor that is safe to
 -- generalize: an EVar naming a constructor DECLARED in this `TcEnv`, asked of
 -- the environment via `lookupCtor` rather than guessed from the name's spelling
--- (issue 1150, fixed 2026-08-26 — see the on `isNonexpansive` above for why
+-- (issue 1150, fixed 2026-08-26 — see the head-test paragraph on `isNonexpansive` above for why
 -- the ctor map's two writers make the lookup sound).  `Ref` stays excluded by
 -- name as defense-in-depth: it is an extern FUNCTION, never passed to
 -- `addCtor`, so `lookupCtor` already rejects it on its own.
@@ -1073,21 +1077,15 @@ filterNonSelf name xs = filterList (/= name) xs
 -- callee lives on the pendingCallObligations delta, never in addedObls, so a caller of
 -- this group must re-instantiate it from schemeObligationsRef.
 --
--- This used to detour through a SYNTHETIC addedObls entry (iface, ["a"], TyVar "a",
--- mono, loc) that schemeObligationOne re-read via dispatchMonosOf.  That entry
--- structurally carries ONE Mono, so a joint predicate could not pass through it: it was
--- flat-mapped per ARGUMENT, and because each 1-ary shard lands on a bound tyvar,
--- boundTyvarIds SUCCEEDED and FABRICATED `Ix a` + `Ix i` alongside the real `Ix a i`
--- (one violation reported three times; `(Ix a, Ix a b, Ix b) =>` displayed).
---
--- The detour was pure overhead: dispatchMonosOf ["a"] (TyVar "a") m is an IDENTITY —
--- walkDispatch hits `contains "a" ["a"]` giving [("a", normalize m)], and collectByParam
--- reads it straight back out as [normalize m].  A pendingCallObligations entry ALREADY
--- carries its joint `List Mono`, so map it to bound tyvar ids DIRECTLY and the vector
--- survives at every arity.  Identical at arity 1 (boundTyvarIds normalizes too), and it
--- closes the UNSIGNED forwarding hole, which the declared-context path cannot reach
--- (lookupSigTvMap is None for an unsigned binding).
--- #1549: both scheme-obligation channels now project their entry to a PREDICATE
+-- A pendingCallObligations entry carries its joint `List Mono`, so it is mapped to bound
+-- tyvar ids directly and the vector survives at every arity.  Routing it through a
+-- synthetic single-Mono addedObls entry would flat-map a joint predicate per ARGUMENT, and
+-- because each 1-ary shard lands on a bound tyvar, boundTyvarIds would succeed and
+-- fabricate `Ix a` + `Ix i` alongside the real `Ix a i` (one violation reported three
+-- times; `(Ix a, Ix a b, Ix b) =>` displayed).  Mapping directly also closes the UNSIGNED
+-- forwarding hole, which the declared-context path cannot reach (lookupSigTvMap is None
+-- for an unsigned binding).
+-- #1549: both scheme-obligation channels project their entry to a PREDICATE
 -- (`callPredOf` / `oblPredOf`) and map it through the ONE `vecOblOfPred` — so the
 -- residual reduction §4 `gen` requires cannot be present on one channel and absent
 -- from the other (this file's signature failure mode).
@@ -1151,8 +1149,8 @@ sccProtectedSignatureIds sigTvMaps =
 -- not per bare tyvar ARGUMENT: `Ix a b =>` is ONE dict param, matching the
 -- METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
 -- one slot per constraint) and the impl-`requires` channel (`registerReqSlots`, one
--- slot per ENTRY).  All three channels agree: one dict per predicate.  The names are kept as a LIST, not collapsed to the first one here,
--- because WHICH of them is still an abstract tyvar after body inference is not knowable
+-- slot per ENTRY).  All three channels agree: one dict per predicate.  The names are kept
+-- as a LIST, not collapsed to the first one here, because WHICH of them is still an abstract tyvar after body inference is not knowable
 -- until `registerMemberSlots` normalizes the instantiated monos — and every abstract one
 -- must still reach `activeDictVars`, or a body use dispatching on the predicate's SECOND
 -- variable loses its route.
@@ -1257,7 +1255,7 @@ constraintVarArgMonos mctx ((_, names) :: rest) (args :: argsRest) tvMap =
 --     `maximum = fold step None`.
 -- A non-function expansive binding (`r = Ref []`) is value-restricted and stays
 -- monomorphic whether or not it is signed.  The `isLetrec` argument is retained
--- for the (unchanged) caller signature; it no longer influences the decision.
+-- for the caller signature; it does not influence the decision.
 export
 sccSchemes : TcEnv ->
   List (String, Ty) ->
@@ -1412,7 +1410,7 @@ checkSigTooGeneral mctx name ty tvs =
         mctx
         "T-TYPE-TOO-GENERAL"
         (firstTyLoc ty)
-        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the body requires `\{ppMono actual}`; write that type in the signature or make the body work for every `\{vname}`"
+        (groundedSigVarMsg vname name actual)
     None =>
       if hasDupI tvarIds then
         pushTypeError mctx "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
@@ -1466,7 +1464,7 @@ checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
         mctx
         "T-TYPE-TOO-GENERAL"
         (firstTyLoc ty)
-        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the zero-argument sibling `\{sibling}` shares it and is evaluated once; give `\{sibling}` a parameter or declare its monomorphic type"
+        (siblingSharedSigVarMsg vname name sibling)
     None => ()
   checkSigsFixedBy mctx fixed rest
 
@@ -1607,7 +1605,7 @@ declaredOblOne mctx boundIds tvMap (Constraint { constraintHead = iface, constra
 -- channel: record its WHOLE argument vector in `voArgs`, and the ids of its bare-tyvar
 -- positions in `voIds` (one dict slot per deferred variable, unchanged cardinality).
 --
--- The admission test is deliberately narrow, and every clause of it is load-BEARING —
+-- The admission test is deliberately narrow, and every clause of it is load-bearing —
 -- this is a NARROWING (programs that were accepted now reject), so an argument this
 -- function admits without being able to instantiate CORRECTLY would substitute to a
 -- wrong-but-CONCRETE goal, which is strictly worse than the missing one it replaces:
@@ -1699,13 +1697,8 @@ vecOblKey o =
 containsVecObl : VecObl -> List VecObl -> Bool
 containsVecObl _ [] = False
 containsVecObl o (o2 :: rest) =
-  sameIfaceDecl o.voIface o2.voIface && eqIntList o.voIds o2.voIds
+  sameIfaceDecl o.voIface o2.voIface && o.voIds == o2.voIds
     || containsVecObl o rest
-
-eqIntList : List Int -> List Int -> Bool
-eqIntList [] [] = True
-eqIntList (a :: xs) (b :: ys) = a == b && eqIntList xs ys
-eqIntList _ _ = False
 
 -- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
 -- all quantified ids of this scheme.  Deduped on (iface, ids).
@@ -1725,11 +1718,10 @@ schemeObligationsOf mctx generalizing boundIds obls =
 -- unsatisfiable `Ix a i =>` reached neither the displayed scheme nor any caller's
 -- obligation list, and `check` accepted it at exit 0 while the built binary did raw
 -- pointer arithmetic.
--- #1549: a predicate whose argument vector is NOT all bare bound tyvars is no longer
--- simply discarded — it is first REDUCED by §3 entailment (`residualVecObls`), and the
--- residual that reduction leaves over this scheme's own quantified vars is deferred
--- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
--- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
+-- #1549: a predicate whose argument vector is NOT all bare bound tyvars is first REDUCED
+-- by §3 entailment (`residualVecObls`), and the residual that reduction leaves over this
+-- scheme's own quantified vars is deferred here.  Dropping it outright would sever
+-- `nest x = tagOf (Wrap x)` from its `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
 vecOblOfPred : ModuleCtx ->
   Bool ->
   List Int ->
@@ -1761,7 +1753,7 @@ vecOblOfPred mctx generalizing boundIds (iface, ds, loc) =
 -- before any impl lookup — that keeps the common ground obligation (`Display String`)
 -- off the reduction path entirely.
 --
--- [loc] IS LOAD-bearing and is not decoration — dropping it moves A DIAGNOSTIC.
+-- [loc] is load-bearing and is not decoration: dropping it moves a diagnostic.
 -- `residualPredsOf` reaches `findMatchingImplReqsU`, which asks the min⊑ selector WHICH
 -- impl matched — so this is a SECOND goal-posing site outside the five resolver drains
 -- (the first is `checkNestedReqs`, whose header says the same thing).  When the goal is
@@ -1789,8 +1781,8 @@ residualVecObls mctx generalizing boundIds iface ds loc =
     keepBoundResidual
     (residualBoundPreds (siteFor mctx) generalizing boundIds iface ds loc)
 
--- `voArgs` IS THE ids-only `[]` for an all-bare residual and the whole vector for A
--- MIXED ONE — the same split `declaredOblOne` makes between its own arm and
+-- `voArgs` is the ids-only `[]` for an all-bare residual and the whole vector for a
+-- mixed one: the same split `declaredOblOne` makes between its own arm and
 -- `declaredOblMixed`, so the OBLIGATION channel's readers (`substVecOblArgs`,
 -- `dedupVecObls`, `reportUncoveredVec`) see, for each shape, precisely the shape they
 -- have always seen from the declared channel.  Every residual that reached a `VecObl`
@@ -1803,7 +1795,7 @@ keepBoundResidual (iface, ids, args) =
   VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs ids args }
 
 -- #1937: the test is not `listLen ids == listLen args`.  `declaredOblArgId` contributes
--- one id per bound leaf, so a STRUCTURED argument makes equal lengths no longer mean
+-- one id per bound leaf, so a STRUCTURED argument makes equal lengths not mean
 -- "every position is a bare tyvar": `Conv (Wrap a) b` has two ids for two arguments and
 -- would take the ids-only `[]` arm — instantiating through `substMonos o.voIds` to the goal `Conv a b`,
 -- i.e. silently DROPPING the `Wrap`.  Ask the structural question directly instead:
@@ -1829,12 +1821,12 @@ pairsOfVecObls (o :: rest) =
 -- closed under the interface `requires` (superclass) graph.  An uncovered
 -- inferred constraint ⇒ def-site type_error (the constraint analogue of
 -- checkEffectEscape).  Under #619 DECLARED-ONLY this is the SOLE enforcement of the
--- body's inferred obligations: registerSchemeObligations no longer merges them into
+-- body's inferred obligations: registerSchemeObligations does not merge them into
 -- the scheme, so a body needing more than its signature declares is caught HERE or
 -- silently severed.  The inferred obligations are the UNION of the flat-path
 -- (schemeObligationsOf over addedObls), the FORWARDED path (forwardedVecObls over the
--- constrained-callee call delta — #619: a signed forwarder that under-declares is no
--- longer backstopped by the union, so it must be checked here), and the marked-path
+-- constrained-callee call delta — #619: a signed forwarder that under-declares is not
+-- backstopped by the union, so it must be checked here), and the marked-path
 -- (inferredConstraintIds + ifaceForInferredId) sources — a return-position-method
 -- constraint lands only in the last.
 -- #607: the PAIR test runs in (iface, var-id) currency on both sides — a multi-param
@@ -1933,8 +1925,8 @@ declaredPairsFor : String -> List ConstraintReg -> List (IfaceRef, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
--- accessor (`snd`/`lookupAssoc` no longer apply).  Both spellings — first-match by name,
--- and the whole-list projection — are exactly what the two consumers used before.
+-- accessor (`snd`/`lookupAssoc` do not apply).  Both spellings — first-match by name,
+-- and the whole-list projection — are what the two consumers need.
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosFor _ [] = []
 regIfaceMonosFor m (reg :: rest)
@@ -2083,71 +2075,3 @@ ifaceMethodEVars : IfaceMethod -> List String
 ifaceMethodEVars (IfaceMethod _ _ d _) = match d
   Some (MethodDefault _ body) => allEVars body
   None => []
-
--- Write each group's marked clauses back over the declarations that produced them.
--- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
--- order and `clausesOf` returns a name's clauses in that order, so consuming them
--- head-first as the declarations are walked restores every clause to its own slot.
--- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
--- `funDefs` collects clauses from but this walk passes through would drop those
--- clauses' marks from the returned tree without a panic (the reverse direction
--- panics in `popMarkedClause`).
-export
-rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
-rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
-
-rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  List Decl ->
-  (List Decl, OrdMap (List (List Pat, Expr)))
-rebuildGroupDeclsGo _ pending [] = ([], pending)
-rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _ site bid) :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (DFunDef pub n ps e site bid :: ds, pending3)
-rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
-  let (binds2, pending2) = rebuildLetBinds grouped pending binds
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (DLetGroup pub binds2 :: ds, pending3)
-rebuildGroupDeclsGo grouped pending ((DAttrib attrs d) :: rest) =
-  let (inner, pending2) = rebuildGroupDeclsGo grouped pending [d]
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (map (d2 => DAttrib attrs d2) inner ++ ds, pending3)
-rebuildGroupDeclsGo grouped pending (d :: rest) =
-  let (ds, pending2) = rebuildGroupDeclsGo grouped pending rest
-  (d :: ds, pending2)
-
-rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  List LetBind ->
-  (List LetBind, OrdMap (List (List Pat, Expr)))
-rebuildLetBinds _ pending [] = ([], pending)
-rebuildLetBinds grouped pending ((LetBind n clauses site bid) :: rest) =
-  let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
-  let (binds, pending3) = rebuildLetBinds grouped pending2 rest
-  (LetBind n clauses2 site bid :: binds, pending3)
-
-rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  String ->
-  List FunClause ->
-  (List FunClause, OrdMap (List (List Pat, Expr)))
-rebuildFunClauses _ pending _ [] = ([], pending)
-rebuildFunClauses grouped pending n (_ :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
-  (FunClause ps e :: cs, pending3)
-
--- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
--- written back, in source order, minted from `clausesOf` on first use.
-popMarkedClause : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  String ->
-  ((List Pat, Expr), OrdMap (List (List Pat, Expr)))
-popMarkedClause grouped pending n =
-  let remaining = match omLookup n pending
-    Some cs => cs
-    None => clausesOf n grouped
-  match remaining
-    c :: cs => (c, omInsert n cs pending)
-    [] => panic "rebuildGroupDecls: no marked clause left for \{n}"

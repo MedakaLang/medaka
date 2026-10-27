@@ -1,7 +1,8 @@
 -- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
 -- patterns, binder types.
 --
--- Spec: HM-CORE section 3 (owed, #2555); language-design Data Types; EFFECTS section 4.1.
+-- Spec: HM-CORE has no section on pattern typing yet (owed, #2555); language-design Data Types;
+-- EFFECTS section 4.1.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -28,6 +29,8 @@ import types.tc_mono.{
   tupleMono,
 }
 import types.tc_diag_text.{
+  boxedLitPatHelp,
+  boxedLitPatMsg,
   existentialEscapeMsg,
   existentialScopeMsg,
   unknownCtorMsg,
@@ -63,7 +66,6 @@ import frontend.ast.{
   Pat(..),
   RecPatField(..),
   isBoxed64Head,
-  isI64Head,
   isTaggedFixedHead,
   orElseLoc,
 }
@@ -344,8 +346,8 @@ refuseBoxedLitPat mctx tag lit loc =
       "T-TYPE-MISMATCH"
       1
       (orElseLoc loc mctx.mcLoc)
-      "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
-      (Some "compare in a guard instead: `x if x == \{lit}`")
+      (boxedLitPatMsg tag lit)
+      (Some (boxedLitPatHelp lit))
       None)
 
 inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
@@ -407,16 +409,6 @@ inferPatAs env x xloc bid p =
   let pr = inferPat env p
   recordLocalBind env.teDyn.dcModule x (Some xloc) bid (fst pr)
   (fst pr, (x, monoScheme (fst pr)) :: snd pr)
-
-export
-patIsVar : Pat -> Bool
-patIsVar (PVar _ _ _) = True
-patIsVar _ = False
-
-export
-isConPat : Pat -> Bool
-isConPat (PCon _ _) = True
-isConPat _ = False
 
 -- Does the pattern name a constructor with an existential binder?  Decided
 -- before inference so the arm can enter its level first.

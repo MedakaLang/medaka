@@ -1,16 +1,18 @@
 # META
-source_lines=204
+source_lines=212
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
--- module record (`fresh`, and `scoped` inside a root scope), the codes it has been given, the signatures of a parsed source, the
--- alias table and declared parameter kinds a source's declarations register, and the
--- interface reference and the monos of the probe module (`ifaceOf`, `intM`, `boolM`,
--- `varM`), a hand-built pattern (`at`, `pvar`) and the reader of a module that declares an
--- interface with a live impl (`readerOfLib`).  Test siblings import it and no production module does.  `aliasTableOf` and
--- `recordKindsOf` are the fixture-side twins of `tc_decls`' `graphAliasRow` and
--- `withDeclParamKinds`: a test of a module below `tc_decls` cannot import those, and its
--- fixtures need the same tables.
+-- module record (`fresh`, and `scoped` inside a root scope), the codes it has been given, the
+-- signatures of a parsed source, the alias table and declared parameter kinds a source's
+-- declarations register, the interface reference and the monos of the probe module
+-- (`ifaceOf`, `intM`, `boolM`, `varM`), a hand-built pattern (`at`, `pvar`), the triple
+-- projections (`fst3`, `snd3`) and the reader of a module that declares an interface with a
+-- live impl (`readerOfLib`).  Test siblings import it and no production module does.
+-- `aliasTableOf` and `recordKindsOf` are the fixture-side twins of `tc_decls`'
+-- `graphAliasRow` and `withDeclParamKinds`: a test of a module below `tc_decls` cannot
+-- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
+-- own `kindIsDeclared`, so the registration test it serves cannot disagree with it.
 
 import list.{reverse}
 import test.{Expectation, expectEqual}
@@ -28,6 +30,7 @@ import types.repr.{IfaceRef(..), Mono(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
 import support.ordmap.{omInsert}
 import types.publish.{tcCode}
+import types.tc_decls.{kindIsDeclared}
 import types.tc_env.{
   buildImplEnvGo,
   declEnvModule,
@@ -120,6 +123,15 @@ export
 boolM : Mono
 boolM = tconBuiltin "Bool"
 
+-- The first and second components of a triple.
+export
+fst3 : (a, b, c) -> a
+fst3 (a, _, _) = a
+
+export
+snd3 : (a, b, c) -> b
+snd3 (_, b, _) = b
+
 -- A free type variable with id [id] at level 0.
 export
 varM : Int -> Mono
@@ -159,10 +171,6 @@ recordKinds m o n kinds
     m.mcCells.dataParamNameIndexRef :=
       omInsert n () m.mcCells.dataParamNameIndexRef.value
   | otherwise = ()
-
-kindIsDeclared : Kind -> Bool
-kindIsDeclared KType = False
-kindIsDeclared _ = True
 
 -- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.
 export
@@ -215,6 +223,7 @@ readerOfLib _ =
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false))))
+(DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "buildImplEnvGo" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
@@ -247,6 +256,10 @@ readerOfLib _ =
 (DFunDef false "intM" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
 (DTypeSig true "boolM" (TyCon "Mono"))
 (DFunDef false "boolM" () (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
+(DTypeSig true "fst3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
+(DFunDef false "fst3" ((PTuple (PVar "a") PWild PWild)) (EVar "a"))
+(DTypeSig true "snd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
+(DFunDef false "snd3" ((PTuple PWild (PVar "b") PWild)) (EVar "b"))
 (DTypeSig true "varM" (TyFun (TyCon "Int") (TyCon "Mono")))
 (DFunDef false "varM" ((PVar "id")) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EVar "id")) (ELit (LInt 0))))))
 (DTypeSig true "aliasTableOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))))
@@ -261,9 +274,6 @@ readerOfLib _ =
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))
 (DTypeSig false "recordKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
 (DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EVar "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
-(DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
-(DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
 (DTypeSig true "libSource" (TyCon "String"))
 (DFunDef false "libSource" () (ELit (LString "interface Sizeable a where\n  size : a -> Int\nimpl Sizeable Int where\n  size n = n\n")))
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -283,6 +293,7 @@ readerOfLib _ =
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false))))
+(DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "buildImplEnvGo" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
@@ -315,6 +326,10 @@ readerOfLib _ =
 (DFunDef false "intM" () (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))
 (DTypeSig true "boolM" (TyCon "Mono"))
 (DFunDef false "boolM" () (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
+(DTypeSig true "fst3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "a")))
+(DFunDef false "fst3" ((PTuple (PVar "a") PWild PWild)) (EVar "a"))
+(DTypeSig true "snd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
+(DFunDef false "snd3" ((PTuple PWild (PVar "b") PWild)) (EVar "b"))
 (DTypeSig true "varM" (TyFun (TyCon "Int") (TyCon "Mono")))
 (DFunDef false "varM" ((PVar "id")) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EVar "id")) (ELit (LInt 0))))))
 (DTypeSig true "aliasTableOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))))
@@ -329,9 +344,6 @@ readerOfLib _ =
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))
 (DTypeSig false "recordKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
 (DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EDictApp "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
-(DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
-(DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
 (DTypeSig true "libSource" (TyCon "String"))
 (DFunDef false "libSource" () (ELit (LString "interface Sizeable a where\n  size : a -> Int\nimpl Sizeable Int where\n  size n = n\n")))
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))

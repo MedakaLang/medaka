@@ -111,6 +111,7 @@ omittedParamVars : ModuleCtx -> List String -> Ty -> List (String, Mono)
 onlyCell : List EvCell -> Option EvCell
 pinUnboundIds : ModuleCtx -> List Int -> List (Int, Mono) -> List (Int, Mono)
 placeholderMonoOf : String -> List (String, Mono) -> Mono
+popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
 prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
 prePassFunClauseScoped : ModuleCtx -> ArgRw -> FunClause -> FunClause
 prePassIfaceMethodScoped : ModuleCtx -> ArgRw -> IfaceMethod -> IfaceMethod
@@ -127,6 +128,10 @@ pushRecDictAppGoal : GraphCtx -> RecDictApp -> Unit
 pushSiteGoal : GraphCtx -> GoalKind -> Ref Inner -> PendingEntry -> Unit
 qualConstraintFor : ModuleCtx -> String -> Option (List CSlot)
 qualConstraintIds : ModuleCtx -> String -> Option (List Int)
+rebuildFunClauses : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> List FunClause -> (List FunClause, Map String (List (List Pat, Expr)))
+rebuildGroupDecls : Map String (List (List Pat, Expr)) -> List Decl -> List Decl
+rebuildGroupDeclsGo : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List Decl -> (List Decl, Map String (List (List Pat, Expr)))
+rebuildLetBinds : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List LetBind -> (List LetBind, Map String (List (List Pat, Expr)))
 recMarkMembers : ModuleCtx -> Map String Unit -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 recordArgSiteFn : ModuleCtx -> String -> Int -> Mono -> Unit
 recordArgStamp : ModuleCtx -> Bool -> String -> Ref Route -> Ref (List Route) -> Ref Inner -> Int -> Mono -> List (String, Mono) -> Unit

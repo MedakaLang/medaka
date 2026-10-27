@@ -32,6 +32,7 @@ import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
   Expr(..),
+  isI64Head,
   KindAnn(..),
   kindAnnSource,
   Lit(..),
@@ -1234,6 +1235,25 @@ export
 sigTooGeneralMsg : String -> Ty -> String
 sigTooGeneralMsg name ty =
   "the signature of `\{name}` is more general than its body: `\{ppTy ty}` claims type variables that inference makes the same type"
+
+export
+groundedSigVarMsg : String -> String -> Mono -> String
+groundedSigVarMsg vname name actual =
+  "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the body requires `\{ppMono actual}`; write that type in the signature or make the body work for every `\{vname}`"
+
+export
+siblingSharedSigVarMsg : String -> String -> String -> String
+siblingSharedSigVarMsg vname name sibling =
+  "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the zero-argument sibling `\{sibling}` shares it and is evaluated once; give `\{sibling}` a parameter or declare its monomorphic type"
+
+export
+boxedLitPatMsg : String -> String -> String
+boxedLitPatMsg tag lit =
+  "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
+
+export
+boxedLitPatHelp : String -> String
+boxedLitPatHelp lit = "compare in a guard instead: `x if x == \{lit}`"
 
 export
 annotTooGeneralMsg : Ty -> String

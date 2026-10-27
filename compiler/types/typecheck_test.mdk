@@ -3362,6 +3362,49 @@ ioJoinCheck name sources =
       (desugar (parseLocated ioJoinPrelude))
       (map (s => (fst s, desugar (parseLocated (snd s)))) sources))
 
+-- A constrained function of one module that shares its name with an interface method, used at a
+-- type with no impl by a second module that imports it: the rejection names the missing impl at
+-- the call.
+test "an imported constrained function used at a type with no impl is rejected at the call, naming the impl" =
+  let core =
+    desugar
+      (parseLocated
+        """
+interface Display a where
+  display : a -> String
+impl Display String where
+  display s = s
+interface Addable a where
+  add : a -> a -> a
+""")
+  let lib = """
+export
+add : Display b => a -> b -> a
+add x y = x
+"""
+  let entry =
+    """
+import lib.{add}
+
+data NoDisp = NoDisp
+
+main = add "a" NoDisp
+"""
+  expectEqual
+    [
+      (
+        "entry",
+        5,
+        "T-NO-IMPL",
+        "no impl of Display for NoDisp; add `deriving Display` to `NoDisp` or write `impl Display NoDisp`",
+      ),
+    ]
+    (ioJoinErrors
+      (checkModulesDiagsChain defaultDriveInputs None "" [] [] core [
+        ("lib", desugar (parseLocated lib)),
+        ("entry", desugar (parseLocated entry)),
+      ]))
+
 nodeJoinClause : String
 nodeJoinClause =
   "; `IO` on `wasmgc/node` is <Clock, Env, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout>"

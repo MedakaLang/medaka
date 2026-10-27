@@ -61,7 +61,6 @@ eagerRefsGuardArm : GuardArm -> List String
 eagerRefsInterp : InterpPart -> List String
 eagerRefsLetBind : LetBind -> List String
 eagerRefsPair : (Expr, Expr) -> List String
-eqIntList : List Int -> List Int -> Bool
 exprLoc : Expr -> Option Loc
 fieldAssignEVars : FieldAssign -> List String
 filterNonSelf : String -> List String -> List String
@@ -110,13 +109,8 @@ memberForce : ScopedMember -> EffRow
 memberRole : Bool -> Bool -> BindingRole
 pairIface : ModuleCtx -> String -> Int -> List (IfaceRef, Int)
 pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
-popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifiedVecObls : List Int -> List VecObl -> List VecObl
-rebuildFunClauses : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> List FunClause -> (List FunClause, Map String (List (List Pat, Expr)))
-rebuildGroupDecls : Map String (List (List Pat, Expr)) -> List Decl -> List Decl
-rebuildGroupDeclsGo : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List Decl -> (List Decl, Map String (List (List Pat, Expr)))
-rebuildLetBinds : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List LetBind -> (List LetBind, Map String (List (List Pat, Expr)))
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 registerSchemeObligations : ModuleCtx -> Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 reportUncovered : ModuleCtx -> String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit

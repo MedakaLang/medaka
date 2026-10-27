@@ -20,11 +20,9 @@ inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -
 inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
 instantiateCtorPattern : ModuleCtx -> Scheme -> Mono
 instantiateRecordOpening : ModuleCtx -> RecordInfo -> ((Mono, List (String, Mono)), List (Ref Authvar))
-isConPat : Pat -> Bool
 openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
 openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
 parkOpenedExistentials : ModuleCtx -> Unit -> Unit
-patIsVar : Pat -> Bool
 patOpensExistentials : TcEnv -> Pat -> Bool
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
 recordBinderType : GraphCtx -> BinderId -> String -> Mono -> Option Int -> Bool -> Unit

@@ -480,6 +480,7 @@ instantiateRecordShared : ModuleCtx -> RecordInfo -> (RecordSubst, Mono)
 instantiateRecordUpdate : ModuleCtx -> String -> RecordInfo -> List String -> (RecordSubst, Mono)
 ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
 isBinderArms : List Arm -> Bool
+isConPat : Pat -> Bool
 isDisplayHead : Expr -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
@@ -597,6 +598,7 @@ paramRenaming : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List 
 passIndex : PassEvidence -> EvIndex
 passMethodFacts : EvVal -> PassMethod
 passMethodOf : PassEvidence -> EvId -> PassMethod
+patIsVar : Pat -> Bool
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List (Option Loc, String)
 phantomMethodMsgs : CeRow -> List (Option Loc, String)

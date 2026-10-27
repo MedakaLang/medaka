@@ -2163,6 +2163,7 @@ recordDeclaredKinds mctx d = match declKindEntry mctx.mcGraph d
     recordParamKinds mctx o name kinds
   _ => ()
 
+export
 kindIsDeclared : Kind -> Bool
 kindIsDeclared KType = False
 kindIsDeclared _ = True

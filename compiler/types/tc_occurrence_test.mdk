@@ -1,18 +1,21 @@
 -- Tests of `types.tc_occurrence`'s own API: the evidence ids and cells a module mints
--- (`freshEvId`, `mintMethodCellRaw`, the site readers and `cellStoreMisses`, and the sites the
--- mark pass mints through `markGroupClauses`), the structural registries read off interface declarations
+-- (`freshEvId`, `mintMethodCellRaw`, the site readers and `cellStoreMisses`, and the sites
+-- the mark pass mints through `markGroupClauses`), the structural registries read off
+-- interface declarations
 -- (`argDispatchIndices`, `argDispatchIndicesById`, `methodConstraintNames`,
 -- `constrainedSigNames`), the operator method tables and the goals an operator occurrence
 -- records (`recordBinopGoals`, `recordUnopSite`, `recordIfaceObligation`,
 -- `recordNegatedLitRange`), literal inference (`inferNumLit`), the method-occurrence
 -- obligation (`mkMethodOccObl`), the obligations a standalone shadow's scheme re-records
--- (`recordShadowStandaloneObls`), variable and standalone instantiation
+-- (reached through `standaloneOccurrence`, which calls `recordShadowStandaloneObls`),
+-- variable and standalone instantiation
 -- (`instantiateVarTrackedId`, `standaloneSchemeFor`), the clause map of the mark pass
--- (`mapGroupClauses`, `markDictNames`) and the ordinary-return probes
+-- (`mapGroupClauses`, `markDictNames`), the write-back of marked clauses
+-- (`rebuildGroupDecls`) and the ordinary-return probes
 -- (`methodReturnResolutionMutationProbe`, `methodReturnTemplatePresenceProbe`).  Each test
 -- builds the module record, environment and graph it reads; none reaches the inference
--- recursion.  `typecheck_test` drives `cellGoalInnerAliasing`, which reads the goals of a
--- whole check, and the mark pass over a real program.
+-- recursion.  `typecheck_test` also drives `cellGoalInnerAliasing`, which reads the goals of
+-- a whole check, and the mark pass over a real program.
 
 import test.{
   expectAll,
@@ -26,6 +29,7 @@ import frontend.ast.{
   Expr(..),
   Pat(..),
   Route(..),
+  isUnminted,
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
@@ -67,6 +71,7 @@ import types.tc_occurrence.{
   recordIfaceObligation,
   recordNegatedLitRange,
   standaloneOccurrence,
+  rebuildGroupDecls,
   recordUnopSite,
   siteHeadCell,
   standaloneSchemeFor,
@@ -79,12 +84,14 @@ import types.tc_state.{probeGraphCtx, wAll}
 import types.tc_test_support.{
   at,
   boolM,
+  fst3,
   ifaceOf,
   inRootScope,
   intM,
   intTy,
   readerOfLib,
   scoped,
+  snd3,
   varM,
 }
 import types.tc_unify.{unifyIn}
@@ -97,6 +104,7 @@ import types.tc_types.{
   OblProjection(..),
   PendingEntry(..),
   Provenance(..),
+  SiteCell(..),
   SiteKind(..),
   StandaloneOrigin(..),
   TcEnv(..),
@@ -104,7 +112,7 @@ import types.tc_types.{
 }
 import types.tc_effects.{clausesOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
-import support.util.{isEmptyL, joinNl, listLen}
+import support.util.{isEmptyL, listLen}
 import list.{reverse}
 import types.effect_rows.{pureRow}
 import map as IdMap
@@ -180,10 +188,20 @@ nodesOf _ = []
 
 -- The node [kind] with id [ev], when [ev] was minted; the parser leaves a node unminted.
 minted : String -> EvId -> List (String, EvId)
-minted kind ev = if ordinalOf ev >= 0 then [(kind, ev)] else []
+minted kind ev = if isUnminted ev then [] else [(kind, ev)]
 
 kindsOf : List (String, EvId) -> List String
 kindsOf nodes = map fst nodes
+
+-- The kind of the site cell minted for [ev]: the cell itself, not the node that carries it.
+cellKindOf : ModuleCtx -> EvId -> String
+cellKindOf m (EvId _ n) =
+  let g = m.mcGraph.graphRun
+  match arrayGetUnsafe (n - g.evBase) g.siteCells.value
+    Some (_, OpSite _) => "op"
+    Some (_, LitSite _ _) => "lit"
+    Some (_, HeadSite _) => "head"
+    None => "unminted"
 
 -- A route as a word: the constructor and the name it carries.
 routeWord : Route -> String
@@ -211,8 +229,12 @@ test "a minted operator site's cell is the one its id reads, and starts unrouted
       let before = route.value
       route := RDict "d"
       expectEqual
-        ("none", "dict:d")
-        (routeWord before, routeWord (siteRouteCell m.mcGraph ev).value)
+        ("op", "none", "dict:d")
+        (
+          cellKindOf m ev,
+          routeWord before,
+          routeWord (siteRouteCell m.mcGraph ev).value,
+        )
     [] => expectEqual "an operator site" "none"
 
 test "a minted literal site has an unrouted fromInt route and a field access site the unknown head" =
@@ -221,8 +243,10 @@ test "a minted literal site has an unrouted fromInt route and a field access sit
   match flatMap nodesOf (bodiesOf "f" marked)
     [("head", head), ("lit", lit)] =>
       expectEqual
-        ("", "none")
+        ("head", "lit", "", "none")
         (
+          cellKindOf m head,
+          cellKindOf m lit,
           (siteHeadCell m.mcGraph head).value,
           routeWord (siteRouteCell m.mcGraph lit).value,
         )
@@ -467,17 +491,17 @@ test "an attributed constrained signature is still a constrained signature" =
     (constrainedSigNames
       (desugar
         (parse
-          (joinNl [
-            "@noinline",
-            "g : Num a => a -> a",
-            "g x = x",
-            "@must_use",
-            "@noinline",
-            "h : Num a => a -> a",
-            "h x = x",
-            "k : Int -> Int",
-            "k x = x",
-          ]))))
+          """
+@noinline
+g : Num a => a -> a
+g x = x
+@must_use
+@noinline
+h : Num a => a -> a
+h x = x
+k : Int -> Int
+k x = x
+""")))
 
 test "a name outside the dispatch registry is only a constructor head by its spelling" = expectAll
   [
@@ -539,34 +563,28 @@ test "a negated literal replaces the range entry the literal itself pushed" =
     m
     (varM 2)
     (ELoc at (ENumLit 300 (EvId "" (0 - 1)) "300"))
-  expectEqual [0 - 300] (map (e => snd3 e) m.mcCells.numlitRanges.value)
-
-snd3 : (a, b, c) -> b
-snd3 (_, b, _) = b
+  expectEqual [0 - 300] (map snd3 m.mcCells.numlitRanges.value)
 
 test "an operand that is not a literal leaves the ranges alone" =
   let m = scoped ()
   m.mcCells.numlitRanges := [(varM 1, 7, None)]
   recordNegatedLitRange m (varM 2) (EVar "x")
-  expectEqual [7] (map (e => snd3 e) m.mcCells.numlitRanges.value)
+  expectEqual [7] (map snd3 m.mcCells.numlitRanges.value)
 
 test "a literal without the prelude is a fresh variable recorded for the range check, its route unset" =
   let m = scoped ()
   let marked = markedAs m (marking [] [] [] []) ["f"] "f = 5"
-  let ev = match flatMap nodesOf (bodiesOf "f" marked)
-    [(_, e)] => e
-    _ => EvId "" (0 - 1)
-  let t = inferNumLit (envFor m) 5 ev
-  expectEqual
-    ([5], [True], "none")
-    (
-      map (e => snd3 e) m.mcCells.numlitRanges.value,
-      map (e => ppMono (fst3 e) == ppMono t) m.mcCells.numlitRanges.value,
-      routeWord (siteRouteCell m.mcGraph ev).value,
-    )
-
-fst3 : (a, b, c) -> a
-fst3 (a, _, _) = a
+  match flatMap nodesOf (bodiesOf "f" marked)
+    [(_, ev)] =>
+      let t = inferNumLit (envFor m) 5 ev
+      expectEqual
+        ([5], [True], "none")
+        (
+          map snd3 m.mcCells.numlitRanges.value,
+          map (e => ppMono (fst3 e) == ppMono t) m.mcCells.numlitRanges.value,
+          routeWord (siteRouteCell m.mcGraph ev).value,
+        )
+    nodes => expectEqual 1 (listLen nodes)
 
 -- ── the method-occurrence obligation ──────────────────────────────────────
 
@@ -694,6 +712,18 @@ test "a definer shadow whose scheme has no table entry records nothing" =
   let param = occurrenceParam (withStandalone m sizeScheme)
   expectEqual (isSome param, []) (True, recorded m)
 
+test "an importer shadow whose scheme only the cross-module table holds records those obligations" =
+  let m = shadowReader ()
+  m.mcCells.schemeObligationsRef := []
+  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
+  m.mcGraph.crossRun.coreSchemeObligationsRef :=
+    omInsert
+      "size"
+      [VecObl { voIface = ifaceOf "Sizeable", voIds = [1], voArgs = [] }]
+      omEmpty
+  let param = occurrenceParam (withStandalone m sizeScheme)
+  expectEqual (map (p => [("Sizeable", [p])]) param) (Some (recorded m))
+
 -- ── the clause map of the mark pass ───────────────────────────────────────
 
 -- The clauses of [src], grouped the way a group's map keeps them.
@@ -732,7 +762,7 @@ varName : Expr -> String
 varName (EVar x) = x
 varName (EVarId x _) = x
 varName (ELoc _ e) = varName e
-varName _ = "<not a variable>"
+varName _ = panic "varName: not a variable"
 
 test "a name outside the members is not rewritten" =
   let marked =
@@ -755,6 +785,36 @@ test "the dict-name set keeps the bare names once and adds the local name an ali
   expectEqual
     ["f", "g"]
     (markDictNames gctx ["f", "f"] [] [("m", parse "import lib.{f as g}")])
+
+-- ── the write-back of marked clauses ──────────────────────────────────────
+
+test "rebuilding writes each marked clause over its own declaration and leaves the rest" =
+  let prog = parse """
+f : Int -> Int
+f 0 = a
+g n = b
+f n = c
+data T = X
+"""
+  -- clauses are grouped newest first, as `groupClauses` leaves them
+  let grouped =
+    omInsert
+      "g"
+      [([], EVar "marked_g_b")]
+      (omInsert "f" [([], EVar "marked_f_c"), ([], EVar "marked_f_a")] omEmpty)
+  expectEqual
+    [
+      None,
+      Some ("f", "marked_f_a"),
+      Some ("g", "marked_g_b"),
+      Some ("f", "marked_f_c"),
+      None,
+    ]
+    (map writtenBody (rebuildGroupDecls grouped prog))
+
+writtenBody : Decl -> Option (String, String)
+writtenBody (DFunDef _ n _ (EVar v) _ _) = Some (n, v)
+writtenBody _ = None
 
 -- ── the ordinary-return probes ────────────────────────────────────────────
 

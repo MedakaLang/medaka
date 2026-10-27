@@ -1,5 +1,5 @@
 # META
-source_lines=3199
+source_lines=3200
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -2167,6 +2167,7 @@ recordDeclaredKinds mctx d = match declKindEntry mctx.mcGraph d
     recordParamKinds mctx o name kinds
   _ => ()
 
+export
 kindIsDeclared : Kind -> Bool
 kindIsDeclared KType = False
 kindIsDeclared _ = True
@@ -3561,7 +3562,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "recordDeclaredKinds" ((PVar "mctx") (PVar "d")) (EMatch (EApp (EApp (EVar "declKindEntry") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "d")) (arm (PCon "Some" (PTuple (PVar "o") (PVar "name") (PVar "kinds"))) ((GBool (EApp (EApp (EVar "anyList") (EVar "kindIsDeclared")) (EVar "kinds")))) (EApp (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "mctx")) (EVar "o")) (EVar "name")) (EVar "kinds"))) (arm PWild () (ELit LUnit))))
-(DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
+(DTypeSig true "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
 (DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
 (DTypeSig true "instantiateSigTracked" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "EffRow"))))))
@@ -4097,7 +4098,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "recordDeclaredKinds" ((PVar "mctx") (PVar "d")) (EMatch (EApp (EApp (EVar "declKindEntry") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "d")) (arm (PCon "Some" (PTuple (PVar "o") (PVar "name") (PVar "kinds"))) ((GBool (EApp (EApp (EVar "anyList") (EVar "kindIsDeclared")) (EVar "kinds")))) (EApp (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "mctx")) (EVar "o")) (EVar "name")) (EVar "kinds"))) (arm PWild () (ELit LUnit))))
-(DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
+(DTypeSig true "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
 (DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
 (DTypeSig true "instantiateSigTracked" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "EffRow"))))))
