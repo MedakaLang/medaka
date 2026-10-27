@@ -38,7 +38,8 @@ updated. The `symbol` addressing option avoids counting columns. LF, CRLF, and l
 CR end lines; positions must be valid boundaries through EOF, and a column
 inside an astral character's UTF-16 surrogate pair is invalid.
 Parse-error positions from `medaka_symbols` also use 0-based lines; older
-versions returned the parser's 1-based line for that error response.
+versions returned the parser's 1-based line for that error response. Formatter
+errors use the same coordinate policy, and doctest example lines are zero-based.
 
 | Tool | Args | What it does |
 |------|------|---------------|

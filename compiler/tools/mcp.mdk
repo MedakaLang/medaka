@@ -35,9 +35,10 @@ import json.{
 }
 import string.{stripCR}
 import support.source_index.{
-  SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
+  SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
+  clampSourcePositionToOffset
 }
-import tools.lsp_positions.{locToLspRange}
+import tools.lsp_positions.{clampedLocToLspRange}
 import driver.diagnostics.{
   stdlibExportsReader,
   checkJsonSingle,
@@ -48,9 +49,10 @@ import driver.diagnostics.{
 }
 import tools.lsp.{
   typeAtPoint,
-  typeAtPoints,
+  typeAtPointsWithIndex,
   documentSymbols,
   definitionResult,
+  definitionResultsWithIndex,
   referencesResult,
   emptyDocs,
   docsPut,
@@ -565,7 +567,7 @@ mcpRange (Some index) range = match (get "start" range, get "end" range)
     fieldInt "character" end,
   )
     (Some sl, Some sc, Some el, Some ec) =>
-      match locToLspRange index (Loc "" (sl + 1) sc (el + 1) ec)
+      match clampedLocToLspRange index (Loc "" (sl + 1) sc (el + 1) ec)
         None => JNull
         Some converted => jObject [
           ("end", mcpOrderedPosition (fieldOr "end" converted)),
@@ -607,14 +609,17 @@ fieldSymbol args = match fieldStr "symbol" args
 
 -- The raw text of a zero-based line, excluding its line terminator.
 lineTextAt : String -> Int -> Option String
-lineTextAt src line =
+lineTextAt src line = lineTextAtIndexed (indexSource src) src line
+
+lineTextAtIndexed : SourceIndex -> String -> Int -> Option String
+lineTextAtIndexed index src line =
   map
     (start =>
       stringSlice
         start
         (lineTextEnd (stringToChars src) (stringLength src) start)
         src)
-    (sourcePositionToOffset (indexSource src) (line + 1) 0)
+    (sourcePositionToOffset index (line + 1) 0)
 
 lineTextEnd : Array Char -> Int -> Int -> Int
 lineTextEnd arr len i
@@ -639,8 +644,19 @@ identPair index m = match offsetToUtf16Position index m.start
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").
-symbolColsOnLine : String -> String -> List Int
-symbolColsOnLine text symbol = symbolColsGo (identifiersInLine text) symbol
+symbolColsInSource : SourceIndex -> Int -> String -> String -> List Int
+symbolColsInSource index line text symbol =
+  match sourcePositionToOffset index (line + 1) 0
+    None => []
+    Some start =>
+      symbolColsGo
+        (map (identPairAt index start) (findAll identTokenRe text))
+        symbol
+
+identPairAt : SourceIndex -> Int -> Match -> (String, Int)
+identPairAt index start m = match offsetToUtf16Position index (start + m.start)
+  Some (_, col) => (m.text, col)
+  None => (m.text, m.start)
 
 symbolColsGo : List (String, Int) -> String -> List Int
 symbolColsGo [] _ = []
@@ -716,7 +732,7 @@ medakaTypeAtSchema = jObject [
 ]
 
 -- medaka_type_at handler: read `file` from disk and infer the type at `line`
--- plus either `col` (unchanged) or `symbol` (#849 — resolved to a column by
+-- plus either `col` (UTF-16) or `symbol` (#849 — resolved to a column by
 -- searching the line's own text, so a caller never has to count characters).
 -- `symbol` matching MORE than one identifier on the line reports each match
 -- rather than silently picking one.  Any miss — off-identifier `col`, or a
@@ -743,33 +759,36 @@ runTypeAtTool runtimeSrc coreSrc _stdlibDir args = match (
         toolArgError
           "medaka_type_at: missing argument — provide 'col' (integer) or 'symbol' (string)"
       (Some col, None) => typeAtOneCol runtimeSrc coreSrc path src line col
-      (None, Some symbol) => match lineTextAt src line
-        None =>
-          toolTextResult
-            (stringConcat [
-              "medaka_type_at: line ",
-              intToString line,
-              " does not exist in '",
-              path,
-              "'",
-            ])
-            False
-        Some lineText => match symbolColsOnLine lineText symbol
-          [] =>
+      (None, Some symbol) =>
+        let index = indexSource src
+        match lineTextAtIndexed index src line
+          None =>
             toolTextResult
               (stringConcat [
-                "no identifier named '",
-                symbol,
-                "' on line ",
+                "medaka_type_at: line ",
                 intToString line,
-                " of '",
+                " does not exist in '",
                 path,
-                "' — identifiers on this line: ",
-                describeIdentifiers (identifiersInLine lineText),
+                "'",
               ])
               False
-          [col] => typeAtOneCol runtimeSrc coreSrc path src line col
-          cols => typeAtManyCols runtimeSrc coreSrc path src line symbol cols
+          Some lineText => match symbolColsInSource index line lineText symbol
+            [] =>
+              toolTextResult
+                (stringConcat [
+                  "no identifier named '",
+                  symbol,
+                  "' on line ",
+                  intToString line,
+                  " of '",
+                  path,
+                  "' — identifiers on this line: ",
+                  describeIdentifiers (identifiersInLine lineText),
+                ])
+                False
+            [col] => typeAtOneCol runtimeSrc coreSrc path src line col
+            cols =>
+              typeAtManyCols index runtimeSrc coreSrc path src line symbol cols
   _ =>
     toolArgError
       "medaka_type_at: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
@@ -804,7 +823,8 @@ typeAtMissNote src line col = match lineTextAt src line
 -- `symbol` matched more than one identifier on `line` — report EACH
 -- resolved type rather than silently picking the first (#849's "or all
 -- matches if ambiguous, returning each").
-typeAtManyCols : String ->
+typeAtManyCols : SourceIndex ->
+  String ->
   String ->
   String ->
   String ->
@@ -812,7 +832,7 @@ typeAtManyCols : String ->
   String ->
   List Int ->
   <IO> Json
-typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
+typeAtManyCols index runtimeSrc coreSrc path src line symbol cols =
   let header = stringConcat
     [
       "'",
@@ -824,7 +844,8 @@ typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
       " matches:",
     ]
   -- Every match is answered from one analysis of the file.
-  let answers = typeAtPoints runtimeSrc coreSrc path src line cols
+  let answers =
+    typeAtPointsWithIndex index runtimeSrc coreSrc path src line cols
   let bodies = zipWith typeAtColLine cols answers
   toolTextResult (joinWith "\n" (header :: bodies)) False
 
@@ -868,9 +889,9 @@ symbolsResult src = match parseResult src
   Err e =>
     let index = indexSource src
     let position =
-      match sourcePositionToOffset index (parseErrorLine e) (parseErrorCol e)
-        Some off => offsetToUtf16Position index off
-        None => None
+      offsetToUtf16Position
+        index
+        (clampSourcePositionToOffset index (parseErrorLine e) (parseErrorCol e))
     toolTextResult
       (stringify
         (jObject [
@@ -973,21 +994,34 @@ identPairJson pair =
 -- `symbol` matched more than one identifier on `line` — resolve EACH
 -- (#849's "or all matches if ambiguous, returning each") rather than
 -- silently picking the first.
-definitionManyCols : String -> String -> Int -> String -> List Int -> Json
-definitionManyCols path src line symbol cols = jObject [
+definitionManyCols : SourceIndex ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  List Int ->
+  Json
+definitionManyCols index path src line symbol cols = jObject [
   ("ambiguous", JBool True),
   ("symbol", JString symbol),
-  ("matches", jArray (map (definitionOneMatch path src line) cols)),
+  (
+    "matches",
+    jArray
+      (zipWith
+        definitionOneMatch
+        cols
+        (definitionResultsWithIndex index path src line cols)),
+  ),
 ]
 
-definitionOneMatch : String -> String -> Int -> Int -> Json
-definitionOneMatch path src line col = jObject [
+definitionOneMatch : Int -> Json -> Json
+definitionOneMatch col result = jObject [
   ("col", JInt col),
-  ("result", definitionResult path src (positionParams line col)),
+  ("result", result),
 ]
 
 -- medaka_definition handler: read `file` from disk and resolve the
--- identifier at `line` plus either `col` (unchanged) or `symbol` (#849 —
+-- identifier at `line` plus either `col` (UTF-16) or `symbol` (#849 —
 -- resolved to a column by searching the line's own text).  `uri` is passed
 -- as the caller's own `file` string, UNCHANGED (no `uriOfPath`/`file://`
 -- wrapping) — a relative request path stays relative in the echoed result,
@@ -1013,27 +1047,10 @@ runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
           "medaka_definition: missing argument — provide 'col' (integer) or 'symbol' (string)"
       (Some col, None) =>
         toolTextResult (stringify (definitionAtCol path src line col)) False
-      (None, Some symbol) => match lineTextAt src line
-        None =>
-          toolTextResult
-            (stringify
-              (jObject [
-                ("matches", jArray []),
-                (
-                  "note",
-                  JString
-                    (stringConcat [
-                      "line ",
-                      intToString line,
-                      " does not exist in '",
-                      path,
-                      "'",
-                    ]),
-                ),
-              ]))
-            False
-        Some lineText => match symbolColsOnLine lineText symbol
-          [] =>
+      (None, Some symbol) =>
+        let index = indexSource src
+        match lineTextAtIndexed index src line
+          None =>
             toolTextResult
               (stringify
                 (jObject [
@@ -1042,27 +1059,48 @@ runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
                     "note",
                     JString
                       (stringConcat [
-                        "no identifier named '",
-                        symbol,
-                        "' on line ",
+                        "line ",
                         intToString line,
-                        " of '",
+                        " does not exist in '",
                         path,
                         "'",
                       ]),
                   ),
-                  (
-                    "identifiersOnLine",
-                    jArray (map identPairJson (identifiersInLine lineText)),
-                  ),
                 ]))
               False
-          [col] =>
-            toolTextResult (stringify (definitionAtCol path src line col)) False
-          cols =>
-            toolTextResult
-              (stringify (definitionManyCols path src line symbol cols))
-              False
+          Some lineText => match symbolColsInSource index line lineText symbol
+            [] =>
+              toolTextResult
+                (stringify
+                  (jObject [
+                    ("matches", jArray []),
+                    (
+                      "note",
+                      JString
+                        (stringConcat [
+                          "no identifier named '",
+                          symbol,
+                          "' on line ",
+                          intToString line,
+                          " of '",
+                          path,
+                          "'",
+                        ]),
+                    ),
+                    (
+                      "identifiersOnLine",
+                      jArray (map identPairJson (identifiersInLine lineText)),
+                    ),
+                  ]))
+                False
+            [col] =>
+              toolTextResult
+                (stringify (definitionAtCol path src line col))
+                False
+            cols =>
+              toolTextResult
+                (stringify (definitionManyCols index path src line symbol cols))
+                False
   _ =>
     toolArgError
       "medaka_definition: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
@@ -1230,12 +1268,13 @@ fmtResult : Bool -> String -> Json
 fmtResult check src = match tokenizeWithOffsetPairs src
   (toks, pairs) => match formatSourceChecked src toks pairs
     Err e =>
-      let loc = stringConcat [
-        "line ",
-        intToString (parseErrorLine e),
-        ", col ",
-        intToString (parseErrorCol e),
-      ]
+      let index = indexSource src
+      let offset =
+        clampSourcePositionToOffset index (parseErrorLine e) (parseErrorCol e)
+      let loc = match offsetToUtf16Position index offset
+        Some (line, col) =>
+          stringConcat ["line ", intToString line, ", col ", intToString col]
+        None => "unknown position"
       toolArgError
         (stringConcat [
           "medaka_fmt: source does not parse (",
@@ -1557,7 +1596,7 @@ exampleJson : (Example, ExResult) -> Json
 -- lint-disable-next-line rule-duplicate-body
 exampleJson (ex, res) =
   jObject
-    ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
+    ([("line", JInt (exampleLine ex - 1)), ("input", JString (exampleInput ex))]
       ++ exResultJsonFields res)
 
 doctestsJson : RunResult -> Json

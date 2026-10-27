@@ -3130,7 +3130,7 @@ offsetToLineCol : String -> Int -> (Int, Int)
 offsetToLineCol s off = posLineColFrom (stringToChars s) off 0 1 0
 
 -- Precompute the sorted array of line-start char offsets for a source string:
--- offset 0, plus the offset just after every '\n'.  One O(N) scan.  Fed to
+-- offset 0, plus the offset after each LF, CRLF, or lone CR. One O(N) scan. Fed to
 -- `offsetToLineColFast` so the located-parse pass can resolve each offset in
 -- O(log N) instead of re-walking from 0 (which made `locOfSpan` O(N²)).
 export
@@ -3153,9 +3153,8 @@ lineStartsGo src len i
 
 -- Resolve a 0-based char offset to a (1-based line, 0-based column) pair using a
 -- precomputed line-starts array (`lineStartsOf`), by binary search.  This is
--- byte-identical to `offsetToLineCol` for every offset: line = 1 + (# newlines
--- strictly before `off`); col = off - (start of that line).  The '\n' AT `off`
--- is NOT counted (mirrors `posLineColFrom`'s `p >= target` guard checked first).
+-- The line is one plus the index of the last start at or before `off`;
+-- the column is `off` minus that start.
 export
 offsetToLineColFast : Array Int -> Int -> (Int, Int)
 offsetToLineColFast lineStarts off =
