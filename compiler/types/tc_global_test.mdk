@@ -358,11 +358,21 @@ interface Ghost a where
   imagined x = 0
 """
 
+-- A method whose declared type never mentions the interface parameter.
+unmentioned : String
+unmentioned = """
+interface G a where
+  m : Int -> Int
+"""
+
 phantomCheck : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
 phantomCheck m _ ce _ = checkPhantomMethods m ce moduleOrdinal
 
 test "an interface that gives a default to a method it never declares has a phantom method" =
   expectEqual ["T-PHANTOM-METHOD"] (codesOver phantomCheck phantom)
+
+test "an interface whose method type never mentions its parameter has a phantom method" =
+  expectEqual ["T-PHANTOM-METHOD"] (codesOver phantomCheck unmentioned)
 
 test "an interface whose defaults are all of declared methods has none" =
   expectEqual [] (codesOver phantomCheck withDefault)
