@@ -508,7 +508,7 @@ runGuards : EvalEnv (Value a) -> List Guard -> <a> Option (EvalEnv (Value a))
 runJsonMode : Ref Bool
 runMainForEffect : List (String, Value a) -> <a> Value a
 runtimeCellsOf : List (String, Value a) -> <a> List (String, Ref (Value a))
-runtimePanic : String -> String -> a
+runtimePanic : DiagCode -> String -> a
 runtimeTypeTag : Value a -> Option String
 scopedFileBound : Bool -> Value a
 selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)

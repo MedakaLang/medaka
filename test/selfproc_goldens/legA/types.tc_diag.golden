@@ -10,12 +10,12 @@ noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
 pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
 pushBoundaryAmbiguity : ModuleCtx -> Map String Unit -> List Mono -> Option Loc -> String -> Unit
 pushNoImplError : ModuleCtx -> String -> Option Loc -> List Mono -> Unit
-pushTypeError : ModuleCtx -> String -> String -> Unit
-pushTypeErrorAt : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorHelpFixAt : ModuleCtx -> String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
-pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
-pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeError : ModuleCtx -> DiagCode -> String -> Unit
+pushTypeErrorAt : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
+pushTypeErrorHelpFixAt : ModuleCtx -> DiagCode -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
+pushTypeErrorOnce : ModuleCtx -> DiagCode -> String -> Unit
+pushTypeErrorOnceAt : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
 recordTypeError : ModuleCtx -> TcDiag -> Unit
 recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
 replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
