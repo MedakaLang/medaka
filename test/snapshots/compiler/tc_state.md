@@ -1,11 +1,13 @@
 # META
-source_lines=1154
+source_lines=1199
 stages=DESUGAR,MARK
 # SOURCE
--- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
--- span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process
--- interners cell, the `Windowed` channel ops, and the test-only trace-sink probes that only build
--- or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
+-- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
+-- check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries
+-- `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and
+-- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the
+-- `Windowed` channel ops, and the test-only trace-sink probes that only build or read a
+-- `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
 -- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
 -- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
 --
@@ -29,9 +31,9 @@ import types.tc_types.{
   DynCtx(..), EvidenceObservationEntry(..), GrantState(..), GraphCtx(..),
   GraphRun(..), ImplEnv(..), ImplUniverse(..), Interners(..),
   InvocationView(..), Lineage(..), LocalAbsState(..), MethodEnv(..),
-  ModuleCells(..), ModuleCtx(..), NumericPredicateTraceEntry(..),
-  ShadowDicts(..), SigVars(..), TcConfig(..), TcEnv(..), TraceSink(..),
-  Windowed(..), StampCtx, UObligation
+  ModuleCells(..), ModuleCtx(..), ModuleSeed(..),
+  NumericPredicateTraceEntry(..), ShadowDicts(..), SigVars(..), TcConfig(..),
+  TcEnv(..), TraceSink(..), Windowed(..), StampCtx, UObligation
 }
 import map.{Map(..)}
 import list.{take}
@@ -65,6 +67,20 @@ checkRunResidue : ModuleCtx -> CheckRunSeed
 checkRunResidue m = CheckRunSeed {
   crsOracle = m.mcCells.matchOracle.value,
   crsWarnings = m.mcCells.matchWarnings.value,
+}
+
+-- #415 item 1: the seeding PREAMBLE every runtime-seeded entry point runs before its
+-- typecheck pass — the head half of the sandwich whose tail is `runFinalChecks`.
+-- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
+-- legitimately differ on (the flat paths pass `prog`; checkModuleFullDiags passes
+-- `prog ++ accData` own-module-FIRST — see the P0-9 note there, that order is load-bearing).
+-- The module's mint (`checkBodyImpl`) installs the seed: this oracle and an empty
+-- warnings list.
+export
+seedCheckRun : List Decl -> CheckRunSeed
+seedCheckRun oracleDecls = CheckRunSeed {
+  crsOracle = buildOracle oracleDecls,
+  crsWarnings = [],
 }
 
 -- Builds [ctx]'s record, with the two module tables the drain reads taken from
@@ -249,6 +265,15 @@ emptyDeclEnvSeedAcc = DeclEnvSeedAcc {
   dsNames = omInsert "" omEmpty omEmpty,
 }
 
+export
+plainModuleSeed : List (String, Scheme) -> ModuleSeed
+plainModuleSeed schemes = ModuleSeed {
+  msSchemes = schemes,
+  msImportedValues = omEmpty,
+  msImportedNames = omEmpty,
+  msImportedExterns = omEmpty,
+}
+
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- This index is deliberately syntactic: an identity-keyed table over the raw
 -- `Variant`/`Field`/`Ty` declaration nodes, carrying no elaborated
@@ -393,6 +418,26 @@ noteInterners c =
       lnEffvarHigh = high.lnEffvarHigh,
     },
   }
+
+-- A serving drive's type and effect variables start above every id a serving drive
+-- before it ended at, so no variable it mints shares an id with one a served
+-- interface holds: the existential and pattern-authority tables are keyed by those
+-- ids.
+export
+raiseToHighWater : GraphCtx -> Unit
+raiseToHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  r.tyvarCounter := max r.tyvarCounter.value lineage.lnTyvarHigh.value
+  r.effvarCounter := max r.effvarCounter.value lineage.lnEffvarHigh.value
+
+export
+noteHighWater : GraphCtx -> Unit
+noteHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  lineage.lnTyvarHigh := max lineage.lnTyvarHigh.value r.tyvarCounter.value
+  lineage.lnEffvarHigh := max lineage.lnEffvarHigh.value r.effvarCounter.value
 
 -- A test probe's graph record: every field fresh, as a process's first record.
 export
@@ -1161,7 +1206,7 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
@@ -1178,12 +1223,16 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "moduleWindow" ((PVar "now") (PVar "mark") (PVar "xs")) (EApp (EApp (EVar "take") (EBinOp "-" (EVar "now") (EVar "mark"))) (EVar "xs")))
 (DTypeSig true "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
 (DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchWarnings") "value")))))
+(DTypeSig true "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckRunSeed")))
+(DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EApp (EVar "buildOracle") (EVar "oracleDecls"))) (fa "crsWarnings" (EListLit)))))
 (DTypeSig true "enterStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyCon "ModuleCtx"))))
 (DFunDef false "enterStampCtx" ((PVar "saved") (PVar "ctx")) (EBlock (DoLet false false (PVar "s") (EFieldAccess (EVar "ctx") "scModuleCtx")) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "s")) (EVar "s")) (EVar "saved")) (EVar "s")))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig true "emptyDeclEnvSeedAcc" (TyCon "DeclEnvSeedAcc"))
 (DFunDef false "emptyDeclEnvSeedAcc" () (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EListLit)) (fa "dsOAcc" (EVar "omEmpty")) (fa "dsNAcc" (EVar "omEmpty")) (fa "dsKinds" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (fa "dsOwners" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "dsNames" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))))))
+(DTypeSig true "plainModuleSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleSeed")))
+(DFunDef false "plainModuleSeed" ((PVar "schemes")) (ERecordCreate "ModuleSeed" ((fa "msSchemes" (EVar "schemes")) (fa "msImportedValues" (EVar "omEmpty")) (fa "msImportedNames" (EVar "omEmpty")) (fa "msImportedExterns" (EVar "omEmpty")))))
 (DTypeSig true "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)) (fa "deCtorExports" (EVar "omEmpty")))))
 (DTypeSig true "emptyImplEnv" (TyCon "ImplEnv"))
@@ -1202,6 +1251,10 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "internersOf" ((PVar "c")) (ERecordCreate "Interners" ((fa "lineage" (ERecordCreate "Lineage" ((fa "lnEvCounter" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "evCounter")) (fa "lnLocalAbs" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "localAbs")) (fa "lnGrants" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "grants")) (fa "lnTyvarHigh" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "lnEffvarHigh" (EApp (EVar "Ref") (ELit (LInt 0))))))) (fa "externCatalog" (EFieldAccess (EVar "c") "builtinExternNamesRef")))))
 (DTypeSig true "noteInterners" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
 (DFunDef false "noteInterners" ((PVar "c")) (EBlock (DoLet false false (PVar "high") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "next") (EApp (EVar "internersOf") (EVar "c"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "interners")) (EVariantUpdate "Interners" (EVar "next") ((fa "lineage" (EVariantUpdate "Lineage" (EFieldAccess (EVar "next") "lineage") ((fa "lnTyvarHigh" (EFieldAccess (EVar "high") "lnTyvarHigh")) (fa "lnEffvarHigh" (EFieldAccess (EVar "high") "lnEffvarHigh")))))))))))
+(DTypeSig true "raiseToHighWater" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
+(DFunDef false "raiseToHighWater" ((PVar "gctx")) (EBlock (DoLet false false (PVar "lineage") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "r") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "tyvarCounter")) (EApp (EApp (EVar "max") (EFieldAccess (EFieldAccess (EVar "r") "tyvarCounter") "value")) (EFieldAccess (EFieldAccess (EVar "lineage") "lnTyvarHigh") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "effvarCounter")) (EApp (EApp (EVar "max") (EFieldAccess (EFieldAccess (EVar "r") "effvarCounter") "value")) (EFieldAccess (EFieldAccess (EVar "lineage") "lnEffvarHigh") "value"))))))
+(DTypeSig true "noteHighWater" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
+(DFunDef false "noteHighWater" ((PVar "gctx")) (EBlock (DoLet false false (PVar "lineage") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "r") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "lineage") "lnTyvarHigh")) (EApp (EApp (EVar "max") (EFieldAccess (EFieldAccess (EVar "lineage") "lnTyvarHigh") "value")) (EFieldAccess (EFieldAccess (EVar "r") "tyvarCounter") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "lineage") "lnEffvarHigh")) (EApp (EApp (EVar "max") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEffvarHigh") "value")) (EFieldAccess (EFieldAccess (EVar "r") "effvarCounter") "value"))))))
 (DTypeSig true "probeGraphCtx" (TyFun (TyCon "Unit") (TyCon "GraphCtx")))
 (DFunDef false "probeGraphCtx" (PWild) (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EVar "freshGraphRun") (ELit LUnit))))
 (DTypeSig true "freshSubRecordsOf" (TyFun (TyCon "GraphCtx") (TyCon "GraphCtx")))
@@ -1320,7 +1373,7 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true) (mem "NumericPredicateTraceEntry" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "Windowed" true) (mem "StampCtx" false) (mem "UObligation" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
@@ -1337,12 +1390,16 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "moduleWindow" ((PVar "now") (PVar "mark") (PVar "xs")) (EApp (EApp (EVar "take") (EBinOp "-" (EVar "now") (EVar "mark"))) (EVar "xs")))
 (DTypeSig true "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
 (DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "matchWarnings") "value")))))
+(DTypeSig true "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckRunSeed")))
+(DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EApp (EVar "buildOracle") (EVar "oracleDecls"))) (fa "crsWarnings" (EListLit)))))
 (DTypeSig true "enterStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyCon "ModuleCtx"))))
 (DFunDef false "enterStampCtx" ((PVar "saved") (PVar "ctx")) (EBlock (DoLet false false (PVar "s") (EFieldAccess (EVar "ctx") "scModuleCtx")) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "s")) (EVar "s")) (EVar "saved")) (EVar "s")))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig true "emptyDeclEnvSeedAcc" (TyCon "DeclEnvSeedAcc"))
 (DFunDef false "emptyDeclEnvSeedAcc" () (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EListLit)) (fa "dsOAcc" (EVar "omEmpty")) (fa "dsNAcc" (EVar "omEmpty")) (fa "dsKinds" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (fa "dsOwners" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "dsNames" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))))))
+(DTypeSig true "plainModuleSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleSeed")))
+(DFunDef false "plainModuleSeed" ((PVar "schemes")) (ERecordCreate "ModuleSeed" ((fa "msSchemes" (EVar "schemes")) (fa "msImportedValues" (EVar "omEmpty")) (fa "msImportedNames" (EVar "omEmpty")) (fa "msImportedExterns" (EVar "omEmpty")))))
 (DTypeSig true "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)) (fa "deCtorExports" (EVar "omEmpty")))))
 (DTypeSig true "emptyImplEnv" (TyCon "ImplEnv"))
@@ -1361,6 +1418,10 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "internersOf" ((PVar "c")) (ERecordCreate "Interners" ((fa "lineage" (ERecordCreate "Lineage" ((fa "lnEvCounter" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "evCounter")) (fa "lnLocalAbs" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "localAbs")) (fa "lnGrants" (EFieldAccess (EFieldAccess (EVar "c") "graphRun") "grants")) (fa "lnTyvarHigh" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "lnEffvarHigh" (EApp (EVar "Ref") (ELit (LInt 0))))))) (fa "externCatalog" (EFieldAccess (EVar "c") "builtinExternNamesRef")))))
 (DTypeSig true "noteInterners" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
 (DFunDef false "noteInterners" ((PVar "c")) (EBlock (DoLet false false (PVar "high") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "next") (EApp (EVar "internersOf") (EVar "c"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "interners")) (EVariantUpdate "Interners" (EVar "next") ((fa "lineage" (EVariantUpdate "Lineage" (EFieldAccess (EVar "next") "lineage") ((fa "lnTyvarHigh" (EFieldAccess (EVar "high") "lnTyvarHigh")) (fa "lnEffvarHigh" (EFieldAccess (EVar "high") "lnEffvarHigh")))))))))))
+(DTypeSig true "raiseToHighWater" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
+(DFunDef false "raiseToHighWater" ((PVar "gctx")) (EBlock (DoLet false false (PVar "lineage") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "r") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "tyvarCounter")) (EApp (EApp (EMethodRef "max") (EFieldAccess (EFieldAccess (EVar "r") "tyvarCounter") "value")) (EFieldAccess (EFieldAccess (EVar "lineage") "lnTyvarHigh") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "r") "effvarCounter")) (EApp (EApp (EMethodRef "max") (EFieldAccess (EFieldAccess (EVar "r") "effvarCounter") "value")) (EFieldAccess (EFieldAccess (EVar "lineage") "lnEffvarHigh") "value"))))))
+(DTypeSig true "noteHighWater" (TyFun (TyCon "GraphCtx") (TyCon "Unit")))
+(DFunDef false "noteHighWater" ((PVar "gctx")) (EBlock (DoLet false false (PVar "lineage") (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage")) (DoLet false false (PVar "r") (EFieldAccess (EVar "gctx") "graphRun")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "lineage") "lnTyvarHigh")) (EApp (EApp (EMethodRef "max") (EFieldAccess (EFieldAccess (EVar "lineage") "lnTyvarHigh") "value")) (EFieldAccess (EFieldAccess (EVar "r") "tyvarCounter") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "lineage") "lnEffvarHigh")) (EApp (EApp (EMethodRef "max") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEffvarHigh") "value")) (EFieldAccess (EFieldAccess (EVar "r") "effvarCounter") "value"))))))
 (DTypeSig true "probeGraphCtx" (TyFun (TyCon "Unit") (TyCon "GraphCtx")))
 (DFunDef false "probeGraphCtx" (PWild) (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EVar "freshGraphRun") (ELit LUnit))))
 (DTypeSig true "freshSubRecordsOf" (TyFun (TyCon "GraphCtx") (TyCon "GraphCtx")))

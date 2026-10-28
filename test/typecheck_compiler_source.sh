@@ -270,21 +270,21 @@ compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk
 compiler/tools/prop_runner_test.mdk"
 # ⚠️ THIS LIST IS FILENAMES, so it cannot tell CONSTRUCTION from a PATTERN, and a
-# ⚠️ types/typecheck.mdk IS on this list as of #1110 unit D, and it is the one entry
-# that mints the sentinel at a layer this ratchet's prose was not written for. Its
-# mentions are the `Mono` layer, NOT `Ty`: `tconUnresolved n = TCon n
-# OriginUnresolved` and its two callers. `Mono` has no stamping pass and therefore no
+# ⚠️ types/tc_mono.mdk IS on this list (as of #1110 unit D, in typecheck.mdk before the
+# Phase 4 split), and it is the one entry that mints the sentinel at a layer this
+# ratchet's prose was not written for. Its mentions are the `Mono` layer, NOT `Ty`:
+# `tconUnresolved n = TCon n OriginUnresolved` and its two callers. `Mono` has no stamping pass and therefore no
 # immunity rule to make a wrong first write permanent, so the hazard the paragraph
 # above describes does not transfer -- what transfers is the weaker requirement that
 # a site claiming "no identity available" be deliberate and few.
 #
-# 🚨 BUT A FILENAME ENTRY EXEMPTS THE WHOLE 20k-LINE FILE, INCLUDING ANY FUTURE
+# 🚨 BUT A FILENAME ENTRY EXEMPTS THE WHOLE FILE, INCLUDING ANY FUTURE
 # `Ty`-LAYER `TyCon { …, tyConOrigin = OriginUnresolved }` LITERAL IN IT -- which is
 # precisely the bypass this ratchet's FAIL message exists to catch. Nothing is masked
 # today, and rather than accept the forward-looking softening the exemption is made
 # LINE-GRAINED by the companion check just below: the `OriginUnresolved`-bearing lines
-# of typecheck.mdk are pinned by text, so a `Ty`-layer literal added there fails even
-# though the filename is allow-listed.
+# of typecheck.mdk and the tc_*.mdk modules are pinned by text, so a `Ty`-layer literal
+# added there fails even though the filename is allow-listed.
 # ⚠️ `compiler/types/route_key.mdk`: same entry, same reason, same "red since
 # `B-2.2-a`" caveat as `occun_allowed` above. Its three hits are the DOCTEST FIXTURES
 # `rkTyInt`/`rkTyBool`/`rkTyList` — `TyCon { …, tyConOrigin = OriginUnresolved }`,
@@ -300,7 +300,7 @@ compiler/tools/prop_runner_test.mdk"
 # `implRouteKeyWord`/`routeWordFor` into `typecheck.mdk`'s live route path, in the
 # same sprint. A filename entry granted on "nothing calls this file" cannot survive
 # the file acquiring callers, so the exemption is pinned to its four actual lines
-# the way `typecheck.mdk`'s is.
+# the way the typecheck family's is.
 # The scope and typecheck sibling tests observe unresolved default-owner origins
 # in total matches. Their sole eliminator lines are pinned below; this grants no
 # new constructor mint.
@@ -325,11 +325,11 @@ compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
+compiler/types/tc_module.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_solve.mdk
 compiler/types/tc_solve_givens.mdk
-compiler/types/tc_state.mdk
-compiler/types/typecheck.mdk"
+compiler/types/tc_state.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
@@ -505,11 +505,11 @@ check_origin_observers compiler/tools/check_policy.mdk \
 check_origin_observers compiler/types/capability_manifest.mdk \
   'OriginUnresolved => "unresolved:"' || exit 1
 
-# The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
+# The LINE-GRAINED half of the tc_mono.mdk entry above (see its comment). The
 # filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one
 # 20k-line file; this pins the exact lines, so a `Ty`-layer
-# `TyCon { …, tyConOrigin = OriginUnresolved }` literal added to typecheck.mdk fails
-# here even though the file is allow-listed.
+# `TyCon { …, tyConOrigin = OriginUnresolved }` literal added to typecheck.mdk or a
+# tc_*.mdk fails here even though the file is allow-listed.
 # ⚠️ ONE OF THE TWO LINES IS AN ELIMINATOR ARM, NOT A CONSTRUCTION.
 # `originPhrase OriginUnresolved = …` (#1111 A-2.10) renders an origin into the
 # user-facing text of the same-spelling type-mismatch hint. It CONSTRUCTS nothing —
@@ -629,18 +629,19 @@ tc_originun_actual=$(grep -hw 'OriginUnresolved' "$ROOT/compiler/types/typecheck
   | grep -vE '^--' \
   | LC_ALL=C sort)
 if [ "$tc_originun_actual" != "$tc_originun_allowed" ]; then
-  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck.mdk changed."
-  echo "  allowed (the Mono-layer mint, and nothing else):"
+  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck.mdk and tc_*.mdk changed."
+  echo "  allowed (the Mono-layer mint, the eliminator arms, and nothing else):"
   printf '%s\n' "$tc_originun_allowed" | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$tc_originun_actual" | sed 's/^/    /'
-  echo "  typecheck.mdk is on \`originun_allowed\` for its \`Mono\`-layer mint ONLY."
+  echo "  The typecheck family's \`originun_allowed\` entries cover the lines above and no"
+  echo "  others."
   echo "  A \`Ty\`-layer literal here bypasses \`tyConUnresolved\` and its ratchet; a"
   echo "  NEW Mono-layer sentinel site needs the same justification the two existing"
   echo "  callers carry at the call. Route it, or add the line here and say why."
   exit 1
 fi
-echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer literal"
+echo "  ok: the OriginUnresolved lines of typecheck.mdk and tc_*.mdk are the pinned set, no Ty-layer literal"
 
 # ── The LINE-GRAINED half of the two `compiler/types/route_key.mdk` entries ──
 # 🚨 WHY THIS EXISTS, stated plainly because the justification it replaces EXPIRED
@@ -959,7 +960,7 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk $ROOT/compiler/types/tc_elab.mdk $ROOT/compiler/types/tc_global.mdk"
+predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk $ROOT/compiler/types/tc_elab.mdk $ROOT/compiler/types/tc_global.mdk $ROOT/compiler/types/tc_module.mdk"
 cat $predicate_slot_row_files > "$predicate_slot_rows_src"
 tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
 tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"

@@ -628,6 +628,9 @@ test "arch_boundaries: types.tc_elab closure matches its golden" =
 test "arch_boundaries: types.tc_global closure matches its golden" =
   closurePin "types.tc_global"
 
+test "arch_boundaries: types.tc_module closure matches its golden" =
+  closurePin "types.tc_module"
+
 test "arch_boundaries: types.publish closure matches its golden" =
   closurePin "types.publish"
 
@@ -1152,6 +1155,7 @@ typecheckFamily = [
   "types.tc_infer",
   "types.tc_elab",
   "types.tc_global",
+  "types.tc_module",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

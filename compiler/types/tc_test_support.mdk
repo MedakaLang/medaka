@@ -8,7 +8,8 @@
 -- a live impl (`readerOfLib`), the environment of an importer shadow over it (`shadowEnvOf`),
 -- a method occurrence of it (`methodOccurrence`), and the environment over the data and
 -- record types a source declares (`scopedWith`, `envWithData`, `declareData`,
--- `recordShapes`).  Test siblings import it and no production module does.
+-- `recordShapes`), and a source with an interface and its impl at `Int` (`sizeable`).  Test
+-- siblings import it and no production module does.
 -- It imports no module above `tc_decls`, so a sibling of a lower module cannot reach a higher
 -- one through it; the fixtures that run a source through the mark pass and `infer`
 -- (`mainOf`, `withMain`) live in `tc_infer_test`.
@@ -84,6 +85,15 @@ import types.tc_types.{
   UObligation(..),
   ValueScheme(..),
 }
+
+-- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
+export
+routeTag : Route -> String
+routeTag (RScalar tag) = "scalar:\{tag}"
+routeTag RNone = "none"
+routeTag (RDict d) = "dict:\{d}"
+routeTag (RKey word _ _) = "key:\{word}"
+routeTag _ = "other"
 
 -- A source position and a variable pattern at it, for tests that build syntax by hand.
 export
@@ -392,6 +402,17 @@ moduleDecls src = declsOf "m" src
 export
 declsOf : String -> String -> List Decl
 declsOf origin src = declaredIn origin (desugar (parse src))
+
+-- A source that declares the interface `Sz` with one method and its impl at `Int`.
+export
+sizeable : String
+sizeable =
+  """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz x = x
+"""
 
 -- The ordinal of the first user module in the tables `envsOf` builds.  Ordinal 0 is the
 -- prelude's, which the coherence sweep never checks against itself.

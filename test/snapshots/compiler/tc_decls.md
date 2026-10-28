@@ -1,15 +1,17 @@
 # META
-source_lines=3216
+source_lines=3241
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
 -- from declarations (`buildDeclEnvs`, `dataEnvAddDecl`, the owner tables), variant and record
 -- registration (`registerVariants`, `registerRecordInfoKeyed`, the existential cells), type aliases
 -- (`addAliasDecl`, cycle rejection by `rejectCyclicAliases`, the expansion normal form
--- `tyAliasNormalForm`), the recording of declared kinds (`recordDeclKinds`, `recordDeclaredKinds`),
--- the method scheme rows, and the signature layer over the conversion (`sigToScheme`, `sigVarsFor`,
--- `instantiateSigTracked`, `astTypeFreshTbl`, `headAnnotTy`). The conversion itself and the kind,
--- authority, effect-domain and effect-parameter checks are `tc_decls_types`.
+-- `tyAliasNormalForm`), the graph pre-pass over declarations (`stampGraphDecls`: type-constructor
+-- identity, then impl heads in alias normal form), the recording of declared kinds
+-- (`recordDeclKinds`, `recordDeclaredKinds`), the method scheme rows, and the signature layer over
+-- the conversion (`sigToScheme`, `sigVarsFor`, `instantiateSigTracked`, `astTypeFreshTbl`,
+-- `headAnnotTy`). The conversion itself and the kind, authority, effect-domain and effect-parameter
+-- checks are `tc_decls_types`.
 --
 -- Spec: DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.1 (kinds), section 6.2
 -- (kind annotations bind parameters at declaration heads), section 6.4 (kind consistency and indices
@@ -215,6 +217,7 @@ import support.util.{
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
 import frontend.visibility.{useModId}
+import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
 -- Fold rows into the accumulator, one row at a time, through each table's OWN
@@ -2345,13 +2348,35 @@ graphAliasRow (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rh
   [(tyTabKey o n, (ps, rhs))]
 graphAliasRow _ = []
 
-export
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 implHeadNormalDecl aliases (DAttrib a d) =
   DAttrib a (implHeadNormalDecl aliases d)
 implHeadNormalDecl aliases (d@(DImpl { tys = tys })) =
   DImpl { d | tys = map (tyAliasNormalForm aliases []) tys }
 implHeadNormalDecl _ d = d
+
+-- The graph every Module-mode driver typechecks: type-constructor identity
+-- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
+-- alias normal form (`tyAliasNormalForm`).  An impl head enters the instance
+-- environment here, once, as the type it denotes, so instance selection,
+-- coherence, the super-context checks and both engines read the same head, and
+-- none of them expands an alias on it.  The alias table is the whole graph's,
+-- keyed by declaration identity, so a head expands with the aliases of the
+-- module that wrote it.
+export
+stampGraphDecls : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+stampGraphDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let aliases = flatMap graphAliasRow (coreDecls ++ flatMap snd modules)
+  if isEmptyL aliases then
+    (coreDecls, modules)
+  else
+    (
+      map (implHeadNormalDecl aliases) coreDecls,
+      map (m => (fst m, map (implHeadNormalDecl aliases) (snd m))) modules,
+    )
 
 export
 declEnvModulesFrom : GraphCtx ->
@@ -3238,6 +3263,7 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
 (DFunDef false "declEnvAccOf" ((PVar "gctx") (PList) (PVar "a")) (EVar "a"))
@@ -3617,10 +3643,12 @@ distinctIdentsIn2 _ = False
 (DFunDef false "graphAliasRow" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "graphAliasRow") (EVar "d")))
 (DFunDef false "graphAliasRow" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs")))))
 (DFunDef false "graphAliasRow" (PWild) (EListLit))
-(DTypeSig true "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampGraphDecls" ((PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
 (DFunDef false "declEnvModulesFrom" ((PVar "gctx") PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvModulesFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
@@ -3776,6 +3804,7 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
 (DFunDef false "declEnvAccOf" ((PVar "gctx") (PList) (PVar "a")) (EVar "a"))
@@ -4155,10 +4184,12 @@ distinctIdentsIn2 _ = False
 (DFunDef false "graphAliasRow" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "graphAliasRow") (EVar "d")))
 (DFunDef false "graphAliasRow" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs")))))
 (DFunDef false "graphAliasRow" (PWild) (EListLit))
-(DTypeSig true "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampGraphDecls" ((PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EDictApp "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
 (DFunDef false "declEnvModulesFrom" ((PVar "gctx") PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvModulesFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))

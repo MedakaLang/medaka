@@ -81,6 +81,7 @@ resolveAdmittedSite : SiteCtx -> String -> Ref String -> Ref Route -> Ref (List 
 resolveArgStamp : SiteCtx -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
 resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
+resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
 resolveExactReturnSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 resolveNumLitSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit

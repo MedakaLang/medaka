@@ -2,10 +2,12 @@
 -- from declarations (`buildDeclEnvs`, `dataEnvAddDecl`, the owner tables), variant and record
 -- registration (`registerVariants`, `registerRecordInfoKeyed`, the existential cells), type aliases
 -- (`addAliasDecl`, cycle rejection by `rejectCyclicAliases`, the expansion normal form
--- `tyAliasNormalForm`), the recording of declared kinds (`recordDeclKinds`, `recordDeclaredKinds`),
--- the method scheme rows, and the signature layer over the conversion (`sigToScheme`, `sigVarsFor`,
--- `instantiateSigTracked`, `astTypeFreshTbl`, `headAnnotTy`). The conversion itself and the kind,
--- authority, effect-domain and effect-parameter checks are `tc_decls_types`.
+-- `tyAliasNormalForm`), the graph pre-pass over declarations (`stampGraphDecls`: type-constructor
+-- identity, then impl heads in alias normal form), the recording of declared kinds
+-- (`recordDeclKinds`, `recordDeclaredKinds`), the method scheme rows, and the signature layer over
+-- the conversion (`sigToScheme`, `sigVarsFor`, `instantiateSigTracked`, `astTypeFreshTbl`,
+-- `headAnnotTy`). The conversion itself and the kind, authority, effect-domain and effect-parameter
+-- checks are `tc_decls_types`.
 --
 -- Spec: DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.1 (kinds), section 6.2
 -- (kind annotations bind parameters at declaration heads), section 6.4 (kind consistency and indices
@@ -211,6 +213,7 @@ import support.util.{
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
 import frontend.visibility.{useModId}
+import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
 -- Fold rows into the accumulator, one row at a time, through each table's OWN
@@ -2341,13 +2344,35 @@ graphAliasRow (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rh
   [(tyTabKey o n, (ps, rhs))]
 graphAliasRow _ = []
 
-export
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 implHeadNormalDecl aliases (DAttrib a d) =
   DAttrib a (implHeadNormalDecl aliases d)
 implHeadNormalDecl aliases (d@(DImpl { tys = tys })) =
   DImpl { d | tys = map (tyAliasNormalForm aliases []) tys }
 implHeadNormalDecl _ d = d
+
+-- The graph every Module-mode driver typechecks: type-constructor identity
+-- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
+-- alias normal form (`tyAliasNormalForm`).  An impl head enters the instance
+-- environment here, once, as the type it denotes, so instance selection,
+-- coherence, the super-context checks and both engines read the same head, and
+-- none of them expands an alias on it.  The alias table is the whole graph's,
+-- keyed by declaration identity, so a head expands with the aliases of the
+-- module that wrote it.
+export
+stampGraphDecls : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+stampGraphDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let aliases = flatMap graphAliasRow (coreDecls ++ flatMap snd modules)
+  if isEmptyL aliases then
+    (coreDecls, modules)
+  else
+    (
+      map (implHeadNormalDecl aliases) coreDecls,
+      map (m => (fst m, map (implHeadNormalDecl aliases) (snd m))) modules,
+    )
 
 export
 declEnvModulesFrom : GraphCtx ->

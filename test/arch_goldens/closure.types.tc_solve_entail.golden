@@ -1,5 +1,6 @@
 frontend.ast
 frontend.exhaust
+frontend.resolve
 frontend.visibility
 support.opcount
 support.ordmap

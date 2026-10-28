@@ -6,7 +6,7 @@
 -- `drivenEvidence`, and the resolvers that
 -- realize a solved route into a site's cells (`resolveArithSite`, `resolveSite`,
 -- `resolveOpSite`, `resolvePredicateOpSite`, `resolveNumLitSite`, `resolveArgStamps`,
--- `resolveAdmittedSite`, `resolveMethodDicts`, `realizeRecDictApps`).  Not driven here: the
+-- `resolveAdmittedSite`, `resolveMethodDicts`, `resolveDictApps`, `realizeRecDictApps`).  Not driven here: the
 -- grant rewrite of a method occurrence and of a recorded use (it needs the grant tables a drive
 -- fills), `resolveExactReturnSite` (it needs a method-return request a drive builds), and the
 -- committed arm of `resolveAdmittedSite` (it needs two admitted declarations of one spelling).
@@ -35,12 +35,13 @@ import frontend.ast.{
   tyConBuiltin,
 }
 import ir.sexp.{exprSexp, programToSexp}
-import types.repr.{Mono(..)}
+import types.repr.{IfaceRef(..), Mono(..)}
 import types.solver_contract.{ClassPredicate(..)}
 import types.tc_mono.{tconBuiltin}
 import types.tc_types.{
   LocalAbs(..),
   ModuleCtx,
+  PendingDictApp(..),
   PendingEntry(..),
   PendingMethodDict(..),
   PredicateSlot(..),
@@ -74,6 +75,7 @@ import types.tc_elab.{
   grantWholeDomain,
   realizeRecDictApps,
   resolveArgStamps,
+  resolveDictApps,
   resolveAdmittedSite,
   resolveArithSite,
   resolveNumLitSite,
@@ -91,17 +93,10 @@ import types.tc_test_support.{
   intM,
   pvar,
   readerOfLib,
+  routeTag,
 }
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
-
--- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
-routeTag : Route -> String
-routeTag (RScalar tag) = "scalar:\{tag}"
-routeTag RNone = "none"
-routeTag (RDict d) = "dict:\{d}"
-routeTag (RKey word _ _) = "key:\{word}"
-routeTag _ = "other"
 
 -- A top-level definition of [name] over [pats] with [body].
 defOf : String -> List Pat -> Expr -> Decl
@@ -738,6 +733,61 @@ test "a deferred recursive call whose callee has no recorded constraints records
     RecDictApp routes "callee" "enc" intM (scopeIn m) (EvId "probe" 0),
   ]
   expectEqual [] (map routeTag routes.value)
+
+-- ── resolveDictApps ──────────────────────────────────────────────────────
+
+-- The interface the module of `readerOfLib` declares.
+libSizeable : IfaceRef
+libSizeable = IfaceRef { irName = "Sizeable", irOrigin = OriginModule "lib" }
+
+-- A constrained call recorded in the module [m]: one route per constraint, over the monos
+-- [monos] of the interfaces [ifaces], its routes held in [routes].
+dictAppOf : ModuleCtx ->
+  Ref (List Route) ->
+  List Mono ->
+  List IfaceRef ->
+  PendingDictApp
+dictAppOf m routes monos ifaces = PendingDictApp {
+  pdaRoutesRef = routes,
+  pdaEv = EvId "probe" 0,
+  pdaMonos = monos,
+  pdaIfaces = ifaces,
+  pdaArgVecs = map (t => [t]) monos,
+  pdaEncl = "enc",
+  pdaLoc = None,
+  pdaScope = scopeIn m,
+  pdaCallee = "f",
+}
+
+test "a constrained call at a type a live impl answers is routed to that impl" =
+  let m = readerOfLib ()
+  let routes = Ref []
+  resolveDictApps (siteFor m) [dictAppOf m routes [intM] [libSizeable]]
+  expectEqual ["key:lib::Sizeable|Int|"] (map routeTag routes.value)
+
+test "a constrained call at a type no impl answers is routed nowhere" =
+  let m = readerOfLib ()
+  let routes = Ref []
+  resolveDictApps (siteFor m) [dictAppOf m routes [boolM] [libSizeable]]
+  expectEqual ["none"] (map routeTag routes.value)
+
+test "a constrained call with no constraint records no route, replacing one it had" =
+  let m = readerOfLib ()
+  let routes = Ref [RDict "stale"]
+  resolveDictApps (siteFor m) [dictAppOf m routes [] []]
+  expectEqual [] (map routeTag routes.value)
+
+test "each constrained call of the list is resolved into its own routes" =
+  let m = readerOfLib ()
+  let first = Ref []
+  let second = Ref []
+  resolveDictApps (siteFor m) [
+    dictAppOf m first [intM] [libSizeable],
+    dictAppOf m second [boolM] [libSizeable],
+  ]
+  expectEqual
+    (["key:lib::Sizeable|Int|"], ["none"])
+    (map routeTag first.value, map routeTag second.value)
 
 -- ── dictPassModulesIfEnabled: impls, interface defaults, wide and negated literals ──
 

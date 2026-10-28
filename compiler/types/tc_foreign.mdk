@@ -1,6 +1,7 @@
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
 -- unlabelled, builtin-shadowing, catalog-narrow and nullary externs, with the signature-position
--- helpers they use.
+-- helpers they use and the extern projections of a declaration list (`externDecls`,
+-- `directExternSigs`, `declExternNames`).
 --
 -- Spec: FFI-ABI section 1 (the crossable set) and its preamble rules (T-FFI-UNLABELLED,
 -- -BUILTIN-SHADOW, -CATALOG-NARROW, -NULLARY); EFFECTS section 2.3 (the `FFI` parameter grammar at
@@ -904,3 +905,14 @@ externDecls : List Decl -> List Decl
 externDecls [] = []
 externDecls ((d@(DExtern _)) :: rest) = d :: externDecls rest
 externDecls (_ :: rest) = externDecls rest
+
+export
+directExternSigs : List Decl -> List (String, Ty)
+directExternSigs [] = []
+directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
+  (n, ty) :: directExternSigs rest
+directExternSigs (_ :: rest) = directExternSigs rest
+
+export
+declExternNames : List Decl -> List String
+declExternNames decls = map fst (directExternSigs decls)

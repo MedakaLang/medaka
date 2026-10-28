@@ -1,10 +1,11 @@
 # META
-source_lines=906
+source_lines=918
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
 -- unlabelled, builtin-shadowing, catalog-narrow and nullary externs, with the signature-position
--- helpers they use.
+-- helpers they use and the extern projections of a declaration list (`externDecls`,
+-- `directExternSigs`, `declExternNames`).
 --
 -- Spec: FFI-ABI section 1 (the crossable set) and its preamble rules (T-FFI-UNLABELLED,
 -- -BUILTIN-SHADOW, -CATALOG-NARROW, -NULLARY); EFFECTS section 2.3 (the `FFI` parameter grammar at
@@ -908,6 +909,17 @@ externDecls : List Decl -> List Decl
 externDecls [] = []
 externDecls ((d@(DExtern _)) :: rest) = d :: externDecls rest
 externDecls (_ :: rest) = externDecls rest
+
+export
+directExternSigs : List Decl -> List (String, Ty)
+directExternSigs [] = []
+directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
+  (n, ty) :: directExternSigs rest
+directExternSigs (_ :: rest) = directExternSigs rest
+
+export
+declExternNames : List Decl -> List String
+declExternNames decls = map fst (directExternSigs decls)
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_types") ((mem "SigVars" true) (mem "GraphCtx" false) (mem "ModuleCtx" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ffiArrowNote" false))))
@@ -1069,6 +1081,12 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "externDecls" ((PList)) (EListLit))
 (DFunDef false "externDecls" ((PCons (PAs "d" (PCon "DExtern" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
+(DTypeSig true "directExternSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
+(DFunDef false "directExternSigs" ((PList)) (EListLit))
+(DFunDef false "directExternSigs" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "directExternSigs") (EVar "rest"))))
+(DFunDef false "directExternSigs" ((PCons PWild (PVar "rest"))) (EApp (EVar "directExternSigs") (EVar "rest")))
+(DTypeSig true "declExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declExternNames" ((PVar "decls")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EVar "decls"))))
 # MARK
 (DUse false (UseGroup ("types" "tc_types") ((mem "SigVars" true) (mem "GraphCtx" false) (mem "ModuleCtx" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ffiArrowNote" false))))
@@ -1230,3 +1248,9 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "externDecls" ((PList)) (EListLit))
 (DFunDef false "externDecls" ((PCons (PAs "d" (PCon "DExtern" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
+(DTypeSig true "directExternSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
+(DFunDef false "directExternSigs" ((PList)) (EListLit))
+(DFunDef false "directExternSigs" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "directExternSigs") (EVar "rest"))))
+(DFunDef false "directExternSigs" ((PCons PWild (PVar "rest"))) (EApp (EVar "directExternSigs") (EVar "rest")))
+(DTypeSig true "declExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declExternNames" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EVar "decls"))))

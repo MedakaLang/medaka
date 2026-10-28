@@ -3,7 +3,8 @@
 -- unlabelled and nullary rules of `ffiCheckExternsLabelled`, the exemption of an extern
 -- named like a runtime-catalog entry, the builtin-shadow and catalog-narrow rules against
 -- such an entry, the reading of an alias-headed extern through its alias, the extern
--- signature table `externSigsToMap` and the helper `externDecls`.  Each test parses its own
+-- signature table `externSigsToMap`, the helper `externDecls`, and the extern signatures and
+-- names a module declares (`directExternSigs`, `declExternNames`).  Each test parses its own
 -- declarations and mints its own module record in a fresh graph record.
 
 import test.{
@@ -24,6 +25,8 @@ import types.tc_state.{wAll}
 import types.tc_types.{ModuleCtx(..), GraphCtx(..)}
 import types.tc_test_support.{aliasTableOf, codesOf, fresh}
 import types.tc_foreign.{
+  declExternNames,
+  directExternSigs,
   externDecls,
   externSigsToMap,
   ffiCheckExternsCatalogRow,
@@ -277,4 +280,30 @@ test "externSigsToMap keys each extern by its name" =
     expectTrue (omHasKey "a" table),
     expectTrue (omHasKey "b" table),
     expectFalse (omHasKey "f" table),
+  ]
+
+-- ── the externs a module declares ─────────────────────────────────────────
+
+externs : String
+externs =
+  """
+extern first : Int -> Int
+plain : Int
+plain = 1
+extern second : Bool
+"""
+
+test "the extern signatures of a module are its extern declarations in source order, others skipped" =
+  expectEqual ["first", "second"] (map fst (directExternSigs (parse externs)))
+
+test "the extern names of a module are those of its extern declarations in source order" = expectEach
+  [
+    (
+      "two externs",
+      expectEqual ["first", "second"] (declExternNames (parse externs)),
+    ),
+    (
+      "none",
+      expectEqual [] (declExternNames (parse "f : Int -> Int")),
+    ),
   ]

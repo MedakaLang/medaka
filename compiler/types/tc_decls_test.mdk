@@ -3,7 +3,8 @@
 -- field-owner tables, the kind projection a later module reads), the data-env fold, the
 -- registration helpers that put constructors, records and aliases into a module record,
 -- alias head expansion, signature-to-scheme conversion with its kind and alias diagnostics,
--- cyclic-alias rejection and the small predicates over declarations and constraints.  The
+-- cyclic-alias rejection, the graph pre-pass that writes impl heads in alias normal form
+-- (`stampGraphDecls`) and the small predicates over declarations and constraints.  The
 -- declarations are parsed from source so each row states the declaration it relies on.  The
 -- variance tables are `tc_decls_variance`'s and are not read here.  Each test mints its own
 -- graph and module records.
@@ -42,7 +43,9 @@ import types.tc_env.{
   lookupRecordByName,
 }
 import types.tc_state.{probeGraphCtx}
-import types.tc_test_support.{codesOf, firstSig, fresh, withFirstSig}
+import types.tc_test_support.{
+  codesOf, declsOf, firstSig, fresh, sizeable, withFirstSig
+}
 import types.tc_decls_types.{
   sigConstraintsOf,
 }
@@ -61,6 +64,7 @@ import types.tc_decls.{
   registerAllData,
   rejectCyclicAliases,
   sigToScheme,
+  stampGraphDecls,
   tyConNamesInTy,
   withDeclParamKinds,
 }
@@ -435,3 +439,38 @@ test "constraintNameMonos keeps the monos of the names that have one, in the nam
       (constraintNameMonos
         ["a", "z", "b"]
         [("b", tconBuiltin "Bool"), ("a", tconBuiltin "Int")]))
+
+-- ── the graph pre-pass ────────────────────────────────────────────────────
+
+-- The type constructor each impl head among the declarations names; a head that is not a bare
+-- constructor reads as `None`.
+implHeads : List Decl -> List (Option String)
+implHeads [] = []
+implHeads ((DImpl { tys = ts, ... }) :: rest) =
+  map headName ts ++ implHeads rest
+implHeads (_ :: rest) = implHeads rest
+
+headName : Ty -> Option String
+headName (TyCon { tyConName = c, ... }) = Some c
+headName _ = None
+
+test "an impl head that names an alias is rewritten to the type the alias stands for" =
+  let (_, mods) = stampGraphDecls [] [
+    (
+      "m",
+      declsOf
+        "m"
+        """
+type A = Int
+interface Sz a where
+  sz : a -> Int
+impl Sz A where
+  sz x = x
+""",
+    ),
+  ]
+  expectEqual [Some "Int"] (implHeads (flatMap snd mods))
+
+test "a graph with no alias keeps the heads it came with" =
+  let (core, mods) = stampGraphDecls [] [("m", declsOf "m" sizeable)]
+  expectEqual ([], [Some "Int"]) (implHeads core, implHeads (flatMap snd mods))

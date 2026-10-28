@@ -1,11 +1,12 @@
 # META
-source_lines=2495
+source_lines=2509
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
 -- and method-return solver (`solveExactReturn*`, the method-return predicate and its templates);
--- improvement and determination by the unique instance; instance selection for the judgments above
--- entailment (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
+-- improvement and determination by the unique instance, with the module-end refiling of the
+-- determined rows (`refileDeterminedRows`); instance selection for the judgments above entailment
+-- (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
 -- `residualSelectionStable`); the goal store, its dict-application reads (`dictAppsSince`) and the
 -- solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); and the
 -- evidence routes a solved goal answers with (the call-slot route family `routeOf`,
@@ -261,6 +262,7 @@ import support.util.{
   listLen,
   lookupAssoc,
   orElseOpt,
+  reverseL,
   splitOnChar,
 }
 import list.{drop, get, head, indexed, reverse, take, zip}
@@ -1636,7 +1638,6 @@ determineHeldGoal mctx rigidIds window o args
 
 -- Files a commit's instance under the variable heading the committed goal, the
 -- one `determinedGoalInstance` reads when selection by head finds nothing.
-export
 fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
 fileDeterminedRow mctx _ [] = ()
 fileDeterminedRow mctx row (first :: rest) = match normalize first
@@ -1647,6 +1648,19 @@ fileDeterminedRow mctx row (first :: rest) = match normalize first
     mctx.mcCells.determinedRowsRef :=
       IdMap.set (tyvarId cell) (entry :: filed) table
   _ => ()
+
+-- Files every commit again under the variable now heading its goal.  A later group
+-- or module that unified the committed variable moved its representative, and a
+-- lookup reads the representative.  Called where the lookups run: the module's end
+-- and each module's stamping in the drain.
+export
+refileDeterminedRows : ModuleCtx -> Unit -> Unit
+refileDeterminedRows mctx _ =
+  let table = mctx.mcCells.determinedRowsRef.value
+  if not (IdMap.isEmpty table) then
+    let entries = reverseL (flatMap identity (IdMap.values table))
+    mctx.mcCells.determinedRowsRef := Tip
+    fold (_ entry => fileDeterminedRow mctx (fst entry) (snd entry)) () entries
 
 -- Every variable of the goal is one the boundary holds rigid, so a commit could
 -- bind none of them.
@@ -2516,7 +2530,7 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
@@ -2790,9 +2804,11 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "withDeclaredVars" ((PVar "mctx") (PVar "rigidIds") (PVar "args")) (EBlock (DoLet false false (PVar "declared") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "declaredSigVarIds") "value")) (DoExpr (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "declared")))) (EApp (EApp (EVar "map") (EVar "intToString")) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))) (EVar "rigidIds")))))
 (DTypeSig false "determineHeldGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
 (DFunDef false "determineHeldGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "o") (PVar "args")) (EIf (EBinOp "||" (EApp (EVar "monoVectorClosed") (EVar "args")) (EApp (EApp (EVar "goalVarsAllHeld") (EVar "rigidIds")) (EVar "args"))) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "goalRows") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EVar "args"))) (DoLet false false (PVar "unifying") (EIf (EApp (EApp (EVar "goalIsProjection") (EVar "args")) (EVar "rows")) (EListLit) (EApp (EApp (EApp (EApp (EVar "goalCandidates") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "rows")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "determinationCandidates") (EVar "mctx")) (EVar "window")) (EVar "args")) (EVar "unifying")) (arm (PList (PTuple (PVar "row") PWild)) () (EBlock (DoLet false false (PVar "oldIds") (EApp (EVar "dedupI") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoLet false false (PVar "sizeBefore") (EApp (EVar "monoSizes") (EVar "args"))) (DoExpr (EApp (EApp (EVar "enterLevel") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "heads") (EApp (EApp (EVar "freshRowHeads") (EVar "mctx")) (EVar "row"))) (DoExpr (EApp (EApp (EVar "exitLevel") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "commitImprovement") (EApp (EVar "dynFor") (EVar "mctx"))) (EVar "rigidIds")) (EApp (EApp (EVar "zip") (EVar "args")) (EVar "heads")))) (DoExpr (EApp (EApp (EApp (EVar "fileDeterminedRow") (EVar "mctx")) (EVar "row")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EVar "refileGoals") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "window")) (EVar "oldIds"))) (DoExpr (EBinOp "||" (EBinOp "/=" (EApp (EVar "monoSizes") (EVar "args")) (EVar "sizeBefore")) (EBinOp "/=" (EApp (EVar "listLen") (EApp (EVar "dedupI") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EVar "listLen") (EVar "oldIds"))))))) (arm PWild () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "fileDeterminedRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
+(DTypeSig false "fileDeterminedRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
 (DFunDef false "fileDeterminedRow" ((PVar "mctx") PWild (PList)) (ELit LUnit))
 (DFunDef false "fileDeterminedRow" ((PVar "mctx") (PVar "row") (PCons (PVar "first") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "first")) (arm (PCon "TVar" (PVar "cell")) () (EBlock (DoLet false false (PVar "table") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef") "value")) (DoLet false false (PVar "filed") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "table")))) (DoLet false false (PVar "entry") (ETuple (EVar "row") (EApp (EApp (EVar "map") (EVar "normalize")) (EBinOp "::" (EVar "first") (EVar "rest"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "tyvarId") (EVar "cell"))) (EBinOp "::" (EVar "entry") (EVar "filed"))) (EVar "table")))))) (arm PWild () (ELit LUnit))))
+(DTypeSig true "refileDeterminedRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
+(DFunDef false "refileDeterminedRows" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "table") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef") "value")) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "IdMap.isEmpty") (EVar "table"))) (EBlock (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "IdMap.values") (EVar "table"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "entry")) (EApp (EApp (EApp (EVar "fileDeterminedRow") (EVar "mctx")) (EApp (EVar "fst") (EVar "entry"))) (EApp (EVar "snd") (EVar "entry"))))) (ELit LUnit)) (EVar "entries")))) (ELit LUnit)))))
 (DTypeSig true "goalVarsAllHeld" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "goalVarsAllHeld" ((PVar "rigidIds") (PVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "c")))) (EVar "rigidIds")))) (EApp (EApp (EVar "flatMap") (EVar "monoVarCells")) (EVar "args"))))
 (DTypeSig true "determinationCandidates" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GoalWindow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))))))
@@ -2981,7 +2997,7 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
@@ -3255,9 +3271,11 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "withDeclaredVars" ((PVar "mctx") (PVar "rigidIds") (PVar "args")) (EBlock (DoLet false false (PVar "declared") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "declaredSigVarIds") "value")) (DoExpr (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "declared")))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))) (EVar "rigidIds")))))
 (DTypeSig false "determineHeldGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
 (DFunDef false "determineHeldGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "o") (PVar "args")) (EIf (EBinOp "||" (EApp (EVar "monoVectorClosed") (EVar "args")) (EApp (EApp (EVar "goalVarsAllHeld") (EVar "rigidIds")) (EVar "args"))) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "goalRows") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EVar "args"))) (DoLet false false (PVar "unifying") (EIf (EApp (EApp (EVar "goalIsProjection") (EVar "args")) (EVar "rows")) (EListLit) (EApp (EApp (EApp (EApp (EVar "goalCandidates") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "rows")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "determinationCandidates") (EVar "mctx")) (EVar "window")) (EVar "args")) (EVar "unifying")) (arm (PList (PTuple (PVar "row") PWild)) () (EBlock (DoLet false false (PVar "oldIds") (EApp (EVar "dedupI") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoLet false false (PVar "sizeBefore") (EApp (EVar "monoSizes") (EVar "args"))) (DoExpr (EApp (EApp (EVar "enterLevel") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "heads") (EApp (EApp (EVar "freshRowHeads") (EVar "mctx")) (EVar "row"))) (DoExpr (EApp (EApp (EVar "exitLevel") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "commitImprovement") (EApp (EVar "dynFor") (EVar "mctx"))) (EVar "rigidIds")) (EApp (EApp (EVar "zip") (EVar "args")) (EVar "heads")))) (DoExpr (EApp (EApp (EApp (EVar "fileDeterminedRow") (EVar "mctx")) (EVar "row")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EVar "refileGoals") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "window")) (EVar "oldIds"))) (DoExpr (EBinOp "||" (EBinOp "/=" (EApp (EVar "monoSizes") (EVar "args")) (EVar "sizeBefore")) (EBinOp "/=" (EApp (EVar "listLen") (EApp (EVar "dedupI") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EVar "listLen") (EVar "oldIds"))))))) (arm PWild () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "fileDeterminedRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
+(DTypeSig false "fileDeterminedRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
 (DFunDef false "fileDeterminedRow" ((PVar "mctx") PWild (PList)) (ELit LUnit))
 (DFunDef false "fileDeterminedRow" ((PVar "mctx") (PVar "row") (PCons (PVar "first") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "first")) (arm (PCon "TVar" (PVar "cell")) () (EBlock (DoLet false false (PVar "table") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef") "value")) (DoLet false false (PVar "filed") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "table")))) (DoLet false false (PVar "entry") (ETuple (EVar "row") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EBinOp "::" (EVar "first") (EVar "rest"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "tyvarId") (EVar "cell"))) (EBinOp "::" (EVar "entry") (EVar "filed"))) (EVar "table")))))) (arm PWild () (ELit LUnit))))
+(DTypeSig true "refileDeterminedRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
+(DFunDef false "refileDeterminedRows" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "table") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef") "value")) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "IdMap.isEmpty") (EVar "table"))) (EBlock (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "IdMap.values") (EVar "table"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "determinedRowsRef")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "entry")) (EApp (EApp (EApp (EVar "fileDeterminedRow") (EVar "mctx")) (EApp (EVar "fst") (EVar "entry"))) (EApp (EVar "snd") (EVar "entry"))))) (ELit LUnit)) (EVar "entries")))) (ELit LUnit)))))
 (DTypeSig true "goalVarsAllHeld" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "goalVarsAllHeld" ((PVar "rigidIds") (PVar "args")) (EApp (EApp (EVar "allList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "c")))) (EVar "rigidIds")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoVarCells")) (EVar "args"))))
 (DTypeSig true "determinationCandidates" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GoalWindow") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))) (TyApp (TyCon "List") (TyTuple (TyCon "ImplRow") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))))))

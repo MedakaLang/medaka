@@ -31,6 +31,7 @@ recordLetBindType : GraphCtx -> (LetBind, (String, BindingSummary)) -> Unit
 recordLocalBind : ModuleCtx -> String -> Option Loc -> BinderId -> Mono -> Unit
 refuseBoxedLitPat : ModuleCtx -> String -> String -> Option Loc -> Unit
 refuseOpenedExistentials : ModuleCtx -> Unit -> Unit
+settleDeferredPatLits : ModuleCtx -> Unit -> Unit
 settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
 settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
 settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit

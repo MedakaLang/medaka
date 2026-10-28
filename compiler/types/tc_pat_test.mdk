@@ -2,7 +2,8 @@
 -- variable, wildcard, tuple, cons, list, as, range and constructor pattern, the rejections of
 -- a pattern by code (an unknown constructor or record, a literal pattern that cannot match, a
 -- range of two kinds), the integer literals parked at a pattern site and settled against the
--- scrutinee (`takePatLits`, `settlePatLits`), the existential binders a constructor pattern
+-- scrutinee (`takePatLits`, `settlePatLits`) and the ones whose scrutinee is still unknown at the
+-- module's end (`settleDeferredPatLits`), the existential binders a constructor pattern
 -- opens (`patOpensExistentials`, `takeOpenedExistentials`, `openExistentialScope`) and the
 -- binder records a pattern leaves (`recordLocalBind`, `recordBinderType`).  Each test builds
 -- the module record and constructor table it reads; none reaches the inference recursion.
@@ -28,6 +29,7 @@ import types.tc_pat.{
   patOpensExistentials,
   recordBinderType,
   recordLocalBind,
+  settleDeferredPatLits,
   settlePatLits,
   takeOpenedExistentials,
   takePatLits,
@@ -249,6 +251,42 @@ test "a site restores the literals of the site enclosing it" =
   let _ = inferPat env (PLit (LInt 2))
   settlePatLits env.teDyn outer
   expectEqual [1] (map snd3 m.mcCells.patLitPending.value)
+
+test "a literal pattern whose scrutinee stayed unknown to the module's end is an Int" =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let (t, _) = inferPat env (PLit (LInt 3))
+  settlePatLits env.teDyn saved
+  let parked = listLen m.mcCells.patLitDeferred.value
+  settleDeferredPatLits m ()
+  expectEqual
+    (1, "Int", [], 0)
+    (parked, ppMono t, codesOf m, listLen m.mcCells.patLitDeferred.value)
+
+test "a literal pattern deferred to the module's end takes the type its scrutinee finally got" =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let (t, _) = inferPat env (PLit (LInt 3))
+  settlePatLits env.teDyn saved
+  unifyIn env.teDyn (tconBuiltin "String") t
+  settleDeferredPatLits m ()
+  expectEqual
+    (["T-TYPE-MISMATCH"], 0)
+    (codesOf m, listLen m.mcCells.patLitDeferred.value)
+
+test "a literal pattern whose scrutinee turns out U64 is refused when the module is settled" =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let (t, _) = inferPat env (PLit (LInt 3))
+  settlePatLits env.teDyn saved
+  unifyIn env.teDyn (tconBuiltin "U64") t
+  settleDeferredPatLits m ()
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "settling a module with no deferred literal changes nothing" =
+  let (m, _) = setup ()
+  settleDeferredPatLits m ()
+  expectEqual ([], 0) (codesOf m, listLen m.mcCells.patLitDeferred.value)
 
 -- ── existential binders ───────────────────────────────────────────────────
 

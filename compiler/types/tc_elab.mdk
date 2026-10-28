@@ -1,8 +1,8 @@
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
--- operator-to-method rewriting: tree-to-tree passes
--- over evidence; and the realization of solved evidence into the tree's route cells, one recorded
--- site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `realizeRecDictApps`):
--- the cells `dictPass` reads.
+-- operator-to-method rewriting: tree-to-tree passes over evidence; and the realization of solved
+-- evidence into the tree's route cells, one recorded site at a time (`resolve*Site`,
+-- `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`, `realizeRecDictApps`): the cells
+-- `dictPass` reads.
 --
 -- Spec: DICT section 4 (translation), section 7; EFFECTS section 8.
 --
@@ -17,6 +17,7 @@ import types.tc_types.{
   GrantBinder(..),
   MethodGrantUse(..),
   MethodReturnTraceStage(..),
+  PendingDictApp(..),
   PredicateSlot(..),
   PredicateSlotArgs(..),
   SiteCtx(..),
@@ -68,6 +69,7 @@ import types.tc_solve.{
   numericReturnRoute,
   recRoutes,
   returnPosMethodNames,
+  routesOfMonosTopV,
   solveExactReturnOnce,
 }
 import types.tc_solve_check.{setFunPredicateSlots}
@@ -630,6 +632,25 @@ resolveMethodDicts sx (pending :: rest) =
   pending.pmdRoutesRef :=
     methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
   resolveMethodDicts sx rest
+
+-- fill each constrained-fn call site's routes: one route per constraint mono.  A
+-- mono pinned to a concrete head → RKey; still a constraint variable (a nested
+-- constrained call) → RDict; otherwise RNone.
+export
+resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
+resolveDictApps sx [] = ()
+resolveDictApps sx (app :: rest) =
+  let sx = { sx | sxSite = app.pdaLoc }
+  let routes =
+    routesOfMonosTopV
+      sx
+      app.pdaEncl
+      app.pdaScope
+      app.pdaMonos
+      app.pdaIfaces
+      app.pdaArgVecs
+  app.pdaRoutesRef := routes
+  resolveDictApps sx rest
 
 -- A deferred recursive call records one route per the CALLEE's constraint slot
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
