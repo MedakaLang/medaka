@@ -1409,7 +1409,7 @@ if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallOblig
   exit 1
 fi
 
-ordinary_return_stamp_body="$(slice_rows resolveExactReturnSite resolveNumLitSite)"
+ordinary_return_stamp_body="$(slice_rows resolveExactReturnSite resolveNumLitSite; slice_rows exactReturnRoutes numericReturnRoute)"
 ordinary_return_stamp_required='      let resolution = solveExactReturnOnce sx request
         exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
 exactReturnRoutes sx name encl scope isReturnPosition resolution = match (

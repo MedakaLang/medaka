@@ -24,7 +24,6 @@ import frontend.ast.{
   TyConOrigin(..),
   noDeclLoc,
   noBinderId,
-  unminted,
   Expr(..),
   EvTable,
   EvVal(..),
@@ -130,6 +129,7 @@ import types.typecheck.{
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
+  spanKeys,
 }
 import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
@@ -146,7 +146,6 @@ import types.publish.{TcReport(..)}
 import types.tc_solve.{
   finishMethodReturnTrace,
   methodReturnMemoCurrentViews,
-  spanKeys,
 }
 import types.tc_occurrence.{cellGoalInnerAliasing}
 

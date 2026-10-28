@@ -39,11 +39,9 @@ import types.tc_solve.{
   occurrenceDispatchMonos,
   outerRigidIds,
   predicateSlotKnownArgs,
-  resolveArithSite,
   returnPosMethodNames,
   routeLocalSym,
   sitesFor,
-  spanKeys,
   walkDispatch,
   walkGoalDischarged,
   walkGoalSameProbe,
@@ -52,6 +50,7 @@ import types.tc_solve_entail.{reqWalkSeed}
 import list.{nub, sort}
 import types.tc_mono.{tconBuiltin}
 import types.tc_test_support.{boolM, ifaceOf, intM, sigsOf, varM}
+import types.typecheck.{resolveArithSite, spanKeys}
 
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
 -- solving walks' memo must not, in either order.

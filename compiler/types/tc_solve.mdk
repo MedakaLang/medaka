@@ -3,10 +3,12 @@
 -- improvement and determination by the unique instance; instance selection for the judgments above
 -- entailment (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
 -- `residualSelectionStable`); the goal store, its dict-application reads (`dictAppsSince`) and the
--- solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); the stamp
--- queue (`enqueueStampCtx`, `stampCtxOf`); and the singular `resolve*Site` computations (one site
--- each). Entailment and the route walk are `tc_solve_entail`; predicate-slot, dict-arity and
--- constraint registration and the residual walk at binders are `tc_solve_check`.
+-- solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); and the
+-- evidence routes a solved goal answers with (the call-slot route family `routeOf`,
+-- `routesOfMonosTop`, `routesOfMonosTopV`, `topRouteV`; the method-predicate, recursive-dictionary,
+-- exact-return and numeric-return routes). Entailment and the route walk are `tc_solve_entail`;
+-- predicate-slot, dict-arity and constraint registration and the residual walk at binders are
+-- `tc_solve_check`.
 --
 -- Spec: DICT section 3, section 4.2, section 5; TYPECHECK-CONTRACTS section 3.
 --
@@ -24,7 +26,6 @@ import types.tc_types.{
   GivenScope(..),
   GivenProvenance(..),
   GivenMatch(..),
-  EntailKind(..),
   AdmittedAnswer(..),
   AssumAnswer(..),
   BuiltinClass(..),
@@ -45,7 +46,6 @@ import types.tc_types.{
   SiteCtx(..),
   SiteKind(..),
   SolvedGoalEntry(..),
-  StampCtx(..),
   Undetermined(..),
   UObligation(..),
   DynCtx,
@@ -67,7 +67,6 @@ import types.tc_types.{
   PendingMethodDict,
   RecDictApp,
   ReqWalk,
-  siteFor,
   TraceSink,
 }
 import types.tc_mono.{
@@ -107,13 +106,10 @@ import types.tc_mono.{
   walkMonosSame,
   unrigidSig,
 }
-import types.tc_diag_text.{locKey}
 import types.tc_state.{
-  blankModuleCtx,
   callUOblsWindow,
   currentScopeStore,
   initialModuleCtx,
-  moduleCtxFrom,
   moduleWindow,
   probeGraphCtx,
 }
@@ -162,7 +158,6 @@ import types.tc_solve_givens.{
   givenRoute,
   givensForScope,
   goalMatchesGiven,
-  lookupPredicateSlots,
   noteAssumption,
   predicateRequestMatchesSlot,
   projectedGivenOf,
@@ -171,7 +166,6 @@ import types.tc_solve_givens.{
 import types.tc_solve_entail.{
   determinedGoalInstance,
   directSuperGoals,
-  entail,
   enteredGoalKey,
   freshRowHeads,
   goalCandidates,
@@ -179,7 +173,6 @@ import types.tc_solve_entail.{
   goalIsProjection,
   goalRows,
   ieSelectRowByIface,
-  implDictRoutesForRow,
   paramMonoOf,
   positionBindings,
   repeatedBindings,
@@ -239,7 +232,12 @@ import types.registry.{
   headKeyTag,
 }
 import types.repr.{
-  IfaceRef(..), Mono(..), Tyvar(..), lookupAssocI, normalize, ppMono, tupleSpine
+  IfaceRef(..),
+  Mono(..),
+  lookupAssocI,
+  normalize,
+  ppMono,
+  tupleSpine,
 }
 import map.{Map(..)}
 import support.ordmap.{
@@ -261,11 +259,9 @@ import support.util.{
   orElseOpt,
   splitOnChar,
 }
-import types.runtime_ops.{arithmeticTag}
 import list.{drop, get, head, indexed, reverse, take, zip}
 import string.{join}
-import types.route_key.{ifaceWordOf}
-import types.evidence_complete.{innerNone, innerOr}
+import types.evidence_complete.{innerNone}
 import types.scopes as Scopes
 import map as IdMap
 import types.scopes.{ScopeOwner(..)}
@@ -304,6 +300,7 @@ pushDictApp gctx app = pushGoal gctx Obligation {
 
 -- the goals recorded since `mark` (a length of the channel: a module's start mark
 -- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
+export
 goalsSince : GraphCtx -> Int -> List Obligation
 goalsSince gctx mark =
   moduleWindow gctx.graphRun.goalsN.value mark gctx.graphRun.goals.value
@@ -536,64 +533,6 @@ export
 sitesFor : String -> OrdMap (List a) -> List a
 sitesFor fn idx = optionOr [] (omLookup fn idx)
 
--- D3a/D3b-1: stamp each queued arg-position route from its now-resolved
--- discriminating arg mono.  D3b-1 first: a mono pinned to an impl's `requires`
--- element tyvar (registered in activeDictVars by registerImplRequires) → the
--- element dict param RDict $dict_<method>_<slot> — the ARGUMENT-position analogue
--- of resolveSite's return-position RDict.  Else (D3a): a concrete head
--- (Int/String/Float/… or any ADT tycon) → a static `RKey tag …`, and when that
--- head names a parametric impl WITH a requires, fill the impl-dicts ref so the
--- call threads the element dict (concrete element → RKey Int; a recursive element
--- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
--- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
-export
-resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
-resolveArgStamps sx [] = ()
-resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
-  let sx = { sx | sxSite = loc }
-  match kind
-    SKArg implRef fullMono omitted =>
-      resolveArgStamp sx name tagRef implRef am fullMono omitted encl loc scope
-    _ => ()
-  resolveArgStamps sx rest
-
--- #156 S3c: a thin adapter over `entail` (EKArg kind).  `entail` returns
--- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
--- pre-S3c arm-by-arm body: assum → `(RDict dname, [])`, inst → `(RKey key [],
--- argImplDictRoutesForEncl …)`, fallback → `(RNone, [])`.
--- TYPECHECK-AUDIT C7 (arg-position): when ≥2 impls of this method share head tycon [tag]
--- but differ in type ARGS (e.g. `MyPair Int Bool` vs `MyPair Bool Int`), bare-head `RKey
--- tag` narrows to the FIRST impl (eval's hasTag matches the head `t`).  `keyForSite`
--- (inside entailInst) upgrades to the canonical full-type impl key so eval's hasTag
--- matches the right impl's `k`.  No collision → bare head, unchanged.
--- tagRef is NOT always RNone-seeded: rewriteArgScoped (~7438) seeds a standalone-shadow
--- arg site to `RLocal <sym> []`.  At an `EKArg` site, `resolveRLocalSites` leaves that
--- importer seed untouched only for an ungrounded receiver or a grounded receiver with a
--- visible impl; a no-impl grounded receiver is restamped `RLocal`.  So the pre-S3c None
--- arm's `()` was load-bearing: it PRESERVED the seed until that receiver decision.  For
--- EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
--- inst→RKey), so guarding the stamp on RNone reproduces that do-nothing None arm exactly
--- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
--- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
--- ever writes an arg-site's implRef), so []-over-[] needs no guard (matches resolveSite).
-resolveArgStamp : SiteCtx ->
-  String ->
-  Ref Route ->
-  Ref (List Route) ->
-  Mono ->
-  Mono ->
-  List (String, Mono) ->
-  String ->
-  Option Loc ->
-  ScopeId ->
-  Unit
-resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
-  let (route, routes) = entail sx name am encl scope (EKArg fullMono omitted)
-  match route
-    RNone => ()
-    _ => tagRef := route
-  implRef := routes
-
 sameTraceEvId : EvId -> EvId -> Bool
 sameTraceEvId (EvId moduleA ordinalA) (EvId moduleB ordinalB) =
   moduleA == moduleB && ordinalA == ordinalB
@@ -659,11 +598,6 @@ currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 currentModuleMarks gctx _ = match gctx.graphRun.moduleRanges.value
   (_, m) :: _ => m
   [] => GraphMarks { mGoals = 0, mNumlit = 0 }
-
--- the numeric-literal channel's window, the counterpart of `goalsSince`
-numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
-numlitSince gctx mark =
-  moduleWindow gctx.graphRun.numlitN.value mark gctx.graphRun.numlitRefs.value
 
 -- Has the obligation walk [walk] already checked goal [iface] [args], entered with
 -- the fuel [walk] has left, without an error?
@@ -963,139 +897,7 @@ returnPosMethod typarams (IfaceMethod mname mty _ _)
   | not (anyArgMentions (dispatchTyparams typarams) (methodArgs mty)) = [mname]
   | otherwise = []
 
--- a method occurrence's route: if its discriminating type is a constrained
--- function's constraint variable, read that function's dict param (RDict);
--- otherwise the selected impl's key (RKey); an unresolved polymorphic type
--- stays RNone.  When the route resolves to a concrete head
--- that names a parametric impl WITH a `requires`, also fill the impl-dicts ref so
--- eval threads the element dict(s) into the impl body (Phase 83/84 single-level).
--- Phase 83/84 #5: stamp the route for one pending method site.  At a concrete
--- result type (ground RKey case) the element dict routes are computed recursively
--- by implDictRoutesFor.  At a polymorphic result type (RDict case) the route is
--- RDictFwd for return-position methods — eval will extract and forward the
--- enclosing VDict's nested requires at runtime.  Arg-position methods (display/==)
--- stay RDict; their VMulti dispatch is by arg-tag, not by the forwarded reqs.
--- TYPECHECK-AUDIT C7: the ground RKey case prefers the canonical impl KEY (via
--- keyForSite) over the bare head tycon, so two non-overlapping impls sharing a
--- head tycon (Pair Int Bool vs Pair Bool Int) route to distinct keys; eval's
--- narrowMethod then matches the right VTypedImpl by its key field.  No selected
--- row → no route (`RNone`).
--- C5 NOTE: standalone-shadow RLocal routing is NOT done here — a return-position
--- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
--- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
--- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
 export
-resolveSite : SiteCtx ->
-  OrdMap Unit ->
-  String ->
-  Ref Route ->
-  Ref (List Route) ->
-  Mono ->
-  Mono ->
-  String ->
-  Option Loc ->
-  ScopeId ->
-  Unit
--- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
--- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
--- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
--- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
--- tagRef is NOT always RNone-seeded: a P0-18 standalone-shadow site seeds it to
--- `RLocal <sym> []` at rewriteArgScoped (~7438).  A return-position standalone value
--- shadow is then force-stamped `RLocal` by `resolveRLocalSites`; an argument-position
--- importer shadow is the separate receiver-sensitive case described at `resolveArgStamp`.
--- The pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
--- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
--- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
--- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite sx rpNames name tagRef implRef resultMono fullMono encl origin scope =
-  let (route, routes) =
-    entail
-      sx
-      name
-      resultMono
-      encl
-      scope
-      (EKReturn fullMono (omHasKey name rpNames))
-  match route
-    RNone => ()
-    _ => tagRef := route
-  implRef := routes
-
--- An admitted-set occurrence's route, committed by `admittedSelection`, the function
--- that decides its verdict in the same drain (`runStampCtx`): the selected instance's
--- canonical key and prerequisites, and the selecting declaration's interface word on
--- the occurrence, which carried none while its spelling named two or more.  Any
--- other answer is rejected there, and the site keeps no route.
-export
-resolveAdmittedSite : SiteCtx ->
-  String ->
-  Ref String ->
-  Ref Route ->
-  Ref (List Route) ->
-  Mono ->
-  String ->
-  ScopeId ->
-  Unit
-resolveAdmittedSite sx name ifaceRef tagRef implRef fullMono encl scope =
-  match (admittedSelection
-    sx
-    sx.sxModule.mcCells.bodyImplEnvRef.value
-    name
-    fullMono)
-    Selects iface row goals =>
-      ifaceRef := ifaceWordOf iface.irOrigin iface.irName
-      tagRef :=
-        RKey
-          (rowRouteKey row)
-          []
-          (selectedCallSupers sx name (Some row) encl scope goals)
-      implRef := implDictRoutesForRow sx encl scope goals row
-    _ => ()
-
-export
-resolveExactReturnSite : SiteCtx ->
-  OrdMap Unit ->
-  String ->
-  Ref Route ->
-  Ref (List Route) ->
-  Mono ->
-  MethodReturnRequest ->
-  String ->
-  Option Loc ->
-  ScopeId ->
-  Unit
-resolveExactReturnSite sx rpNames name tagRef implRef resultMono request encl origin scope =
-  if methodReturnAmbiguousWithoutGiven sx.sxModule request then
-    noteMethodReturnTrace sx.sxModule MRTStamped request None []
-  else match methodReturnArgs sx.sxModule.mcGraph request
-    None =>
-      noteMethodReturnTrace sx.sxModule MRTStamped request None []
-      resolveSite
-        sx
-        rpNames
-        name
-        tagRef
-        implRef
-        resultMono
-        request.mrrOccurrence
-        encl
-        origin
-        scope
-    Some _ =>
-      let resolution = solveExactReturnOnce sx request
-      if methodReturnResolutionValid sx.sxModule request resolution then
-        ()
-      else
-        panic "ordinary return route received invalid solver evidence"
-      let (route, routes) =
-        exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
-      noteMethodReturnTrace sx.sxModule MRTStamped request (Some route) routes
-      match route
-        RNone => ()
-        _ => tagRef := route
-      implRef := routes
-
 exactReturnRoutes : SiteCtx ->
   String ->
   String ->
@@ -1156,31 +958,6 @@ methodReturnEvidenceRoute sx encl scope prerequisite =
     [] => RNone
 
 export
-resolveNumLitSite : SiteCtx ->
-  OrdMap Unit ->
-  String ->
-  Ref Route ->
-  Mono ->
-  Mono ->
-  ClassPredicate ->
-  String ->
-  Option Loc ->
-  ScopeId ->
-  Unit
-resolveNumLitSite sx rpNames name tagRef resultMono fullMono predicate encl origin scope =
-  let (route, routes) =
-    entail
-      sx
-      name
-      resultMono
-      encl
-      scope
-      (EKNumReturn predicate fullMono (omHasKey name rpNames) origin)
-  match route
-    RNone => ()
-    _ => tagRef := numericReturnRoute route routes
-  ()
-
 numericReturnRoute : Route -> List Route -> Route
 numericReturnRoute (RKey key _ sups) routes = RKey key routes sups
 numericReturnRoute route _ = route
@@ -1246,58 +1023,6 @@ methodPredicateTemplateArgumentsMatch ((Some expected) :: rest) (actual :: argum
 methodPredicateTemplateArgumentsMatch (None :: rest) (_ :: arguments) =
   methodPredicateTemplateArgumentsMatch rest arguments
 methodPredicateTemplateArgumentsMatch _ _ = False
-
-export
-resolveArithSite : Ref Route -> Mono -> Unit
-resolveArithSite dref m = match !dref
-  RNone => match arithmeticTag m
-    Some tag => dref := RScalar tag
-    None => ()
-  _ => ()
-
--- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
--- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
--- RNone; else RKey with the element reqs PACKED in, so `snd` is empty and no separate
--- implRef exists); fallback = RNone.  Op-site route cells are minted `RNone`-seeded
--- (`mintOpSite`), and the mark pass mints each site once, so the two do-nothing arms
--- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed.
-export
-resolveOpSite : SiteCtx ->
-  Bool ->
-  String ->
-  Ref Route ->
-  Mono ->
-  Bool ->
-  String ->
-  ScopeId ->
-  Unit
-resolveOpSite sx isBinop method tagRef operandMono inImpl encl scope =
-  match fst (entail sx method operandMono encl scope (EKOp isBinop inImpl))
-    RNone => ()
-    route => tagRef := route
-
-export
-resolvePredicateOpSite : SiteCtx ->
-  Bool ->
-  String ->
-  Ref Route ->
-  Mono ->
-  Bool ->
-  ClassPredicate ->
-  String ->
-  ScopeId ->
-  Unit
-resolvePredicateOpSite sx isBinop method tagRef operandMono inImpl predicate encl scope =
-  match (fst
-    (entail
-      sx
-      method
-      operandMono
-      encl
-      scope
-      (EKPredicateOp isBinop inImpl predicate)))
-    RNone => ()
-    route => tagRef := route
 
 -- The context of the instance [iface] [args] selects with the head variables
 -- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
@@ -1435,19 +1160,7 @@ routesOfMonosTop sx encl useScope (m :: rest) (iface :: ifacesRest) =
   routeOf sx iface encl useScope (CountImpls iface) m
     :: routesOfMonosTop sx encl useScope rest ifacesRest
 
--- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
--- method-level constraint, from the instantiated constraint mono.  A concrete head
--- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
--- constraint variable still (the caller is itself constrained) → RDict forwarding
--- the caller's dict.  Mirrors resolveDictApps; runs after inference.
 export
-resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
-resolveMethodDicts sx [] = ()
-resolveMethodDicts sx (pending :: rest) =
-  pending.pmdRoutesRef :=
-    methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
-  resolveMethodDicts sx rest
-
 methodPredicateRoutes : SiteCtx ->
   String ->
   ScopeId ->
@@ -1463,24 +1176,7 @@ methodPredicateRoute sx encl scope slot = match slot.psArgs
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
--- A deferred recursive call records one route per the CALLEE's constraint slot
--- (matching the dict params dict_pass prepends to its def), each forwarding the
--- ENCLOSING fn's own dict param.  Run after inference, when `funPredicateSlotsRef` is
--- fully populated.
 export
-realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
-realizeRecDictApps sx [] = ()
-realizeRecDictApps sx ((RecDictApp routesRef callee encl mono scope _) :: rest) =
-  let slots =
-    optionOr
-      []
-      (lookupPredicateSlots
-        callee
-        sx.sxModule.mcCells.funPredicateSlotsIdxRef.value)
-  let routes = recRoutes sx encl scope mono slots
-  routesRef := routes
-  realizeRecDictApps sx rest
-
 recRoutes : SiteCtx ->
   String ->
   ScopeId ->
@@ -2391,53 +2087,8 @@ anyClaimRow ids ((_, slots) :: rest) =
       (predicateSlotArgs slots)
     || anyClaimRow ids rest
 
--- The stamp context of the module [mid] whose record is [mctx]: the module's run
--- fields, and its tables dropped (`moduleCtxFrom`).
-stampCtxOf : ModuleCtx ->
-  String ->
-  List Decl ->
-  List Obligation ->
-  List (Mono, Ref (Option Float), Int, Ref Route) ->
-  StampCtx
-stampCtxOf mctx mid implDecls goals numlits =
-  let dropped = blankModuleCtx mctx.mcGraph mid
-  dropped.mcCells.superDeclsRef := filterList isInterfaceDecl implDecls
-  StampCtx {
-    scModule = mid,
-    scModuleCtx = moduleCtxFrom False mctx dropped dropped dropped,
-    scRpNames = returnPosMethodNames implDecls,
-    scGoals = goals,
-    scNumlits = numlits,
-    scLiveLocs = liveLocsOf mctx goals,
-  }
-
--- The spans of [goals] and of the module's admitted-set occurrences whose types
--- mention a variable of a live root (`GraphRun.liveRoots`): their evidence and
--- verdicts rest on what quiescence leaves that variable.
-liveLocsOf : ModuleCtx -> List Obligation -> List String
-liveLocsOf mctx goals =
-  let ids = flatMap monoUnboundIds mctx.mcGraph.graphRun.liveRoots.value
-  if isEmptyL ids then
-    []
-  else
-    let live = fold (acc i => IdMap.set i () acc) Tip ids
-    let mentions =
-      ms => anyList (m => anyList (i => IdMap.has i live) (monoUnboundIds m)) ms
-    spanKeys
-      (map (o => o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
-        ++ filterMap
-          ((_, m, loc) => if mentions [m] then Some loc else None)
-          mctx.mcCells.admittedOccObls.value)
-
--- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
--- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
-export
-spanKeys : List (Option Loc) -> List String
-spanKeys [] = []
-spanKeys (None :: rest) = spanKeys rest
-spanKeys (loc :: rest) = locKey loc :: spanKeys rest
-
 -- The types a goal is posed at.
+export
 goalMonos : Obligation -> List Mono
 goalMonos o = match o.oPayload
   GPSite _ m site => m :: siteKindMonos site
@@ -2455,34 +2106,6 @@ siteKindMonos (SKArg _ m omitted) = m :: map snd omitted
 siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
-
-isInterfaceDecl : Decl -> Bool
-isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
-isInterfaceDecl (DInterface {  }) = True
-isInterfaceDecl _ = False
-
--- This module's windows, cut now — see `goalsOfKindIn`.  [mctx] is the record the
--- module was checked in.
-export
-enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
-enqueueStampCtx mctx mid implDecls =
-  let mk = currentModuleMarks mctx.mcGraph ()
-  let ctx =
-    stampCtxOf
-      mctx
-      mid
-      implDecls
-      (goalsSince mctx.mcGraph mk.mGoals)
-      (numlitSince mctx.mcGraph mk.mNumlit)
-  mctx.mcGraph.graphRun.stampCtxs :=
-    ctx :: mctx.mcGraph.graphRun.stampCtxs.value
-
-export
-stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
-stampNoting stamp resolve o =
-  let acc = Ref innerNone
-  resolve { siteFor stamp | sxInner = Some acc } o
-  o.oInner := innerOr o.oInner.value acc.value
 
 -- test-only observation: declarations whose only callers are tests and probes.
 
