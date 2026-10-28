@@ -1763,10 +1763,8 @@ dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
   -- core imports nothing, so its definitions take their dict parameters from core's
   -- own signatures: a user fn sharing a bare name with a core private is another fn.
   setFunPredicateSlots mctx (scopePredicateSlots [] omEmpty core2)
-  -- B-2.2-b1: the sidecar is cleared, not left alone.  `f` shipped arguing that
-  -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
-  -- REQUIRES WRITING `[]`.  No module record is minted
-  -- between the last `checkBodyImpl` and this call, so not writing leaves the PREVIOUS
+  -- The sidecar is cleared, not left alone.  No module record is minted
+  -- between the last `checkBodyImpl` and this call, so writing nothing leaves the previous
   -- module's entries live: a reader in this phase would get a PRESENT, WRONG `CDPLen`,
   -- resolved by bare-name first-match against a differently-populated table, with no
   -- `CDPUnknown` to trip on.  Empty ⇒ `clampPrefix`'s `None` arm ⇒ `CDPUnknown` ⇒
@@ -1840,7 +1838,7 @@ dictPassModulesScoped mctx idx dictNames promotedQ importerReach core2 allModule
       promotedQ
       (aliasConstraintEntries mctx.mcGraph prog promotedQ
         ++ scopePredicateSlots promotedQ scopeMods scope))
-  -- B-2.2-b1: cleared for the same reason as in `dictPassModulesIfEnabled` — a stale
+  -- Cleared for the same reason as in `dictPassModulesIfEnabled`: a stale
   -- prefix table is worse than an empty one, because only the empty one answers
   -- `CDPUnknown`.
   mctx.mcCells.funConstraintDeclaredRef := []

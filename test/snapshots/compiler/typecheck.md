@@ -1,5 +1,5 @@
 # META
-source_lines=9651
+source_lines=9650
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{
@@ -4841,8 +4841,7 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
 -- [implDecls] for interface method types + cross-module impl dispatch.  The sites
 -- it records stay in pendingArgStamps/pendingSites for elabModuleStamp to resolve.
 
--- C8(b): also infer THIS module's interface DEFAULT bodies (gated identically to
--- the single-file path's inferDefaultBodies) so a default body's type
+-- C8(b): also infer THIS module's interface DEFAULT bodies, so a default body's type
 -- error is caught on every path.
 
 -- Phase 4.55: infer this

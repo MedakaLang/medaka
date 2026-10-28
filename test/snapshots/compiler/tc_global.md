@@ -1,12 +1,12 @@
 # META
-source_lines=2858
+source_lines=2811
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
 -- impl head, super-context and completeness checks, impl and default method bodies, survivor call
 -- obligations.
 --
--- Spec: DICT section 6 C1-C4, section 5.1 M1-M3, section 3 (super context); #3995/#4010.
+-- Spec: DICT section 5.1 M1, M3; section 6 C1, C2, C4.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -307,21 +307,14 @@ import map as IdMap
 -- Only interfaces that actually HAVE a graded slot are JUDGED — the `anyKRow want`
 -- guard below is what does that, not the table: every slot of every interface is
 -- recorded (it always was, and `ceRowParamKinds` keeps doing so), and an all-`KType`
--- row falls into the same `_ => ()` arm an outright miss does.  This paragraph
--- read *"only interfaces that actually HAVE a graded slot are inspected
--- (ifaceParamKindsRef records nothing else)"* until #1557 A-3.5c, and the
--- parenthetical was false of the retired table too.  Runs on BOTH whole-program
+-- row falls into the same `_ => ()` arm an outright miss does.  Runs on BOTH whole-program
 -- paths: its one call site is in checkBodyImpl, shared by Flat and Module,
 -- immediately after `dataEnv` has populated the head-constructor kind table.
 --
--- #1557 A-3.5c: it still iterates `prog`, and that is the unit's defining
--- CONDITION, not an implementation detail.  The owner ruling that split A-3.5c
--- out of the A-3b lane (issue #1557, 2026-08-12) is CONDITIONAL: this check
--- qualifies as CE-only *"only if the graded impl-head kind check keeps
--- iterating `prog` rather than `IE.ieRows`"*.  The impl HEADS come from the
--- decl list; only the interface's declared slot kinds come from stage K's `CE`.
--- Whoever re-points this walk at `IE.ieRows` has re-classified the unit as A-3b
--- by construction — that is a routing decision, not a refactor.
+-- It iterates `prog`, not `IE.ieRows`: the impl heads come from the decl list, and
+-- only the interface's declared slot kinds come from stage K's `CE`.  Re-pointing this
+-- walk at `IE.ieRows` changes what the check reads, which is a routing decision, not a
+-- refactor.
 export
 checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
 checkGradedImplHeads mctx _ _ [] = ()
@@ -329,10 +322,9 @@ checkGradedImplHeads mctx ce cur (d :: rest) =
   checkGradedImplHeadDecl mctx ce cur d
   checkGradedImplHeads mctx ce cur rest
 
--- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` is the identity the
--- interface NAME in `impl <iface> …` acquired at resolve — read off the same record
--- pattern as the name itself so the two cannot drift apart, exactly as A-2.3 reads
--- `tyConOrigin` beside `tyConName`.
+-- `implOrigin` is the identity the interface name in `impl <iface> …` acquired at
+-- resolve, read off the same record pattern as the name itself so the two cannot drift
+-- apart (as `tyConOrigin` is read beside `tyConName`).
 checkGradedImplHeadDecl : ModuleCtx -> ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadDecl mctx ce cur (DAttrib _ d) =
   checkGradedImplHeadDecl mctx ce cur d
@@ -341,13 +333,10 @@ checkGradedImplHeadDecl mctx ce cur (DImpl { iface, tys, implOrigin = o, ... }) 
 checkGradedImplHeadDecl mctx _ _ _ = ()
 
 -- The `CE` lookup via `ceSlotKindsAt` uses ordinal filtering — the key is a RegKey
--- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, preserving
--- the identity mint from A-2.4. Ordinals are assigned in dependency-first order,
--- matching the order the accumulator is grown in, so ordinal filtering and the
--- previous marshalled population agree. See
--- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "5. Decisions reopened, and decisions
--- deliberately kept" (A-3.5c) for the prior bare-name table this replaced and the
--- #1257 defect class it drains.
+-- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, carrying the
+-- identity `implOrigin` names. Ordinals are assigned in dependency-first order,
+-- matching the order the accumulator is grown in, so ordinal filtering selects the
+-- row the population holds.
 checkGradedImplTys : ModuleCtx ->
   ClassEnv ->
   Int ->
@@ -377,8 +366,7 @@ checkGradedImplTys mctx ce cur o iface i (t :: rest) =
 --     cross-module, and the abstention was load-bearing for it: judging it reported a
 --     correct program rejected and told the author to add a `Row` parameter the type
 --     ALREADY HAD.  #804/#1028 fixed that at the source — an opaque type's kinds are
---     published cross-module (`kindPublicDataDecl`'s `VisAbstract` arm; it was
---     `registerOpaqueParamKinds` until A-3.2b retired the kind universe) — so an
+--     published cross-module (`kindPublicDataDecl`'s `VisAbstract` arm) — so an
 --     abstract head is now judged on its REAL kinds like any other, and this arm no
 --     longer covers for it.
 -- A head that is not a TyCon spine at all is judged where it can be: a saturated
@@ -421,12 +409,12 @@ checkGradedImplHeadCon mctx iface o n loc nApplied want =
 -- more — `kindPublicDataDecl`'s `VisAbstract` arm gives it a real `dataParamKindsRef`
 -- entry (via `declEnvSeedChain`), so it returns `Some` and is judged exactly like
 -- a `public export` one.
--- `key` is minted ONCE and shared by both guard arms via the `where` (#1111
--- A-2.3 follow-up): the first guard ALWAYS evaluates it (Medaka is strict, and
+-- `key` is minted once and shared by both guard arms via the `where`: the first
+-- guard always evaluates it (Medaka is strict, and
 -- a `where` scoping over guard arms lowers to `ELetGroup (..key..) (EGuards
 -- arms)`, so the binding runs once before either arm is tested), so hoisting
--- adds nothing on the alias arm and removes the previously-redundant second
--- mint on the common `otherwise` arm.  A redundant-allocation removal, not a
+-- adds nothing on the alias arm and spares the common `otherwise` arm a second
+-- mint.  A redundant-allocation saving, not a
 -- measured perf win (`test/bench.sh` doesn't run on this box, #1187; the
 -- perf-scaling gate grades a growth ratio, blind to a constant factor).
 headRemainingKinds : ModuleCtx ->
@@ -501,43 +489,7 @@ numChannelRootSet obls channels =
       (map intToString (dedupI (numConstrainedIds obls))))
     omEmpty
 
--- 🪦 RETIRED 2026-08-12 (#1559 A-3.7 bite 3.7-9): `cohImplsOf` / `cohImplsOfMid` —
--- the decl-walking adapters that built `CohImpl`s straight off `DImpl` nodes, and
--- `cohCollectImpls` / `cohCollectModuleImpls`, their two list drivers.  Coherence's
--- input is now a projection of `IE`'s rows (`cohImplOfRow`), so both sweeps read the
--- registry the rest of stage K reads instead of re-walking decls.  Zero tree-wide
--- callers at deletion time (`grep -rn 'cohCollectImpls\|cohCollectModuleImpls\|
--- cohImplsOf' --include=*.mdk .` → definitions and comments only).  The `#414` span
--- derivation they carried is preserved below, because `cohImplOfRow` still calls
--- `firstTyLocList` on the row's head and inherits every word of it.
---
--- #414: the span to blame for an impl comes from its head types, via
--- `firstTyLocList` (`frontend/ast.mdk`), which folds `firstTyLoc` — that inner
--- walk is the one shared with resolve (`dupSigOf`); resolve does not call
--- `firstTyLocList` itself (issue 480).
--- A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
--- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
--- (`parser.mdk`'s parseTyAtom: `tyConUnresolved c (Some (locOfSpan s q))`), so the head's
--- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
--- `Pair` — the head — not the argument.  An alias head's expansion is located at
--- the alias occurrence (`locateTyAt`), so `impl C LB` still blames `LB`.
---
--- RESIDUAL (#414): only `TyCon` leaves carry spans, so a head with NO tycon —
--- the fully-parametric `impl Foo a` — still yields `None` and falls back to the
--- file-start caret.  That is the degenerate overlap case (`test/
--- typecheck_error_fixtures/overlapping_impls.mdk`).  Closing it needs a span on
--- `TyVar` (an ast.mdk change rippling through every `Ty` consumer) or the parser's
--- `DeclPos` side-table threaded into typecheck; both are out of proportion to an
--- S3 diagnostic-quality fix.  Every head naming a CONCRETE type is covered.
---
--- #1559 A-3.7 OCCURRENCE MINT, and the retirement above is the reason it worked:
--- the deleted adapter destructured `implOrigin` in the SAME record pattern as `iface`
--- and built the `IfaceRef` from that pair on the spot, using the identical expression
--- `implDeclFact` uses to build `ImplRow`'s interface half.  Because the two
--- constructions could not drift, replacing the adapter with a projection of `IE`'s
--- rows yields the same interface half by construction rather than by assertion.
---
--- the impl's head args → monos under ONE shared fresh-var map (so a var reused
+-- The impl's head args → monos under ONE shared fresh-var map (so a var reused
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
 -- tbl across the whole impl head; distinct impls get distinct ids).
 cohFreshTys : ModuleCtx -> List Ty -> List Mono
@@ -586,25 +538,40 @@ checkImplHeadIndices mctx (TyApp a b) = match tyAppSpine (TyApp a b)
   _ => ()
 checkImplHeadIndices mctx _ = ()
 
--- #1559 A-3.7: THE `IE`→`CohImpl` ADAPTER — coherence's input, relocated off the decl
--- walk.  Every one of the four things coherence judges on comes out of the row:
---   * the interface half is `ieRowTriple`'s `IfaceRef` — the SAME value
---     `cohImplsOfMid` built by hand from `iface`+`implOrigin`, because `implDeclFact`
---     builds it with the identical expression.  That is why this relocation is not an
---     acceptance change: `cohSameIface` (3.7-4) sees the same pair of `IfaceRef`s.
---   * the head is `cohFreshTys` of the row's `List Ty`, the same call the decl
---     adapter made.  Effectful (fresh tyvars), exactly as the decl adapter was.
+-- The `IE` row to `CohImpl` adapter: coherence's input.  Every one of the four
+-- things coherence judges on comes out of the row:
+--   * the interface half is `ieRowTriple`'s `IfaceRef`, which `implDeclFact` builds
+--     from `iface`+`implOrigin`; `cohSameIface` compares that pair.
+--   * the head is `cohFreshTys` of the row's `List Ty`.  Effectful (fresh tyvars).
 --     The head is already in alias normal form (`stampGraphDecls`), so
 --     coherence compares the head selection reads, and `fromAstTypeE` finds no
 --     alias left on it to expand with the checked module's alias table (the
 --     wrong table for another module's head).
---   * the owner module id is `instRefMid` of the row's `InstRef` — this is where
---     `InstRef` acquires its FIRST judgment reader in this tree.
+--   * the owner module id is `instRefMid` of the row's `InstRef`.
 --   * the blame span is `firstTyLocList` of that same head.
 -- `ieLoc` is not owed for this.  `ImplRow`'s "no location field" note argues from
 -- `Decl` carrying no `Loc`, which is true and beside the point: the row carries the
 -- head's `List Ty`, and the parser stamps every `TyCon` leaf with its span, so the span
 -- coherence uses today is recoverable with no new field and no `DImpl` change.
+--
+-- #414: the span to blame for an impl comes from its head types, via
+-- `firstTyLocList` (`frontend/ast.mdk`), which folds `firstTyLoc` — that inner
+-- walk is the one shared with resolve (`dupSigOf`); resolve does not call
+-- `firstTyLocList` itself (issue 480).
+-- A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
+-- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
+-- (`parser.mdk`'s parseTyAtom: `tyConUnresolved c (Some (locOfSpan s q))`), so the head's
+-- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
+-- `Pair` — the head — not the argument.  An alias head's expansion is located at
+-- the alias occurrence (`locateTyAt`), so `impl C LB` still blames `LB`.
+--
+-- RESIDUAL (#414): only `TyCon` leaves carry spans, so a head with NO tycon —
+-- the fully-parametric `impl Foo a` — still yields `None` and falls back to the
+-- file-start caret.  That is the degenerate overlap case (`test/
+-- typecheck_error_fixtures/overlapping_impls.mdk`).  Closing it needs a span on
+-- `TyVar` (an ast.mdk change rippling through every `Ty` consumer) or the parser's
+-- `DeclPos` side-table threaded into typecheck; both are out of proportion to an
+-- S3 diagnostic-quality fix.  Every head naming a CONCRETE type is covered.
 cohImplOfRow : ModuleCtx -> ImplRow -> CohImpl
 cohImplOfRow mctx r = match ieRowTriple r
   (ir, tys, _) =>
@@ -656,7 +623,7 @@ cohStep g0 s0 =
   let s = peelQual (normalize s0)
   match g
     TVar c => MVar (tyvarId c)
-    -- #1111 A-2.10 on the `TCon`/`TCon` pairing only (`sameTyConHead`); the
+    -- The `TCon`/`TCon` pairing alone uses `sameTyConHead`; the
     -- cross-population arms stay name-only for the reason `cohGoR` gives.
     -- The cross-population ones are not separately probed — armed
     -- because the pre-split arm answered them, and because a rigid and a real
@@ -708,11 +675,9 @@ cohScanDone : CohScan -> Bool
 cohScanDone (CohScan (Some _) (Some _)) = True
 cohScanDone _ = False
 
--- #1559 A-3.7: do two impl occurrences name the same interface?
+-- Do two impl occurrences name the same interface?
 --
--- `sameTyConHead`, never `ifaceIdMatches`, and the two are exact inverses.  This
--- is the whole substance of the bite, so the derivation is here rather than in a
--- ledger:
+-- `sameTyConHead`, never `ifaceIdMatches`, and the two are exact inverses:
 --   * `sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)`
 --     (`frontend/ast.mdk`) — name equality, and an ABSENT origin makes NO CLAIM, so
 --     it matches anything.
@@ -725,14 +690,13 @@ cohScanDone _ = False
 --
 -- Coherence is an ACCEPTANCE question — it decides whether to reject a program — so
 -- `sameTyConHead` is correct, and it is also the FAIL-LOUD direction here: an impl
--- whose `implOrigin` is still `OriginUnresolved` compares by name exactly as it did
--- before this unit, so no live rejection can silently vanish.  `ifaceIdMatches` in
+-- whose `implOrigin` is still `OriginUnresolved` compares by name,
+-- so no live rejection can silently vanish.  `ifaceIdMatches` in
 -- this position would turn every unstamped-origin conflict into a SILENT ACCEPT,
 -- which is a severity INCREASE and one no fixture in the tree would catch.
 --
--- NOT a re-keying of the HEAD half.  Coherence's head comparison already routes
--- through `sameTyConHead` (`cohGoR`'s `TCon` arm, A-2.10) and is untouched, so the
--- #1317 T1 rule and closed S0 #1277 are not in scope for this unit.
+-- The head half is not keyed by `ifaceIdMatches` either: coherence's head comparison
+-- routes through `sameTyConHead` (`cohGoR`'s `TCon` arm).
 cohSameIface : IfaceRef -> IfaceRef -> Bool
 cohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin
 
@@ -935,9 +899,9 @@ cohWhereSuffix mid1 mid2
 cohImplIface : CohImpl -> IfaceRef
 cohImplIface (CohImpl i _ _ _) = i
 
--- #1559 A-3.7: the SPELLING, for the message renderers alone.  Every `coh*Msg`
+-- The SPELLING, for the message renderers alone.  Every `coh*Msg`
 -- below keeps its `String` parameter deliberately — the rendered wording is pinned
--- byte-for-byte by error goldens, and this unit moves no diagnostic text.  Reading
+-- byte-for-byte by error goldens.  Reading
 -- `.irName` through a named projection rather than at each call site keeps the
 -- "identity decides, spelling only prints" split visible.
 cohImplIfaceName : CohImpl -> String
@@ -970,7 +934,7 @@ pushCoherenceWarning mctx loc msg =
 -- declaration order to mirror the oracle, whose env.impls is built by prepending each
 -- entry (`entry :: !(env.impls)`) — so the conflict message names the later-declared
 -- impl as the first head, byte-identical.
--- #1559 A-3.7: the input is `IE`'s rows for THIS module, not a decl list.
+-- The input is `IE`'s rows for THIS module, not a decl list.
 -- [cur] is the reading module's ordinal.  Its own rows are paired with each other and
 -- with the prelude's rows (`cohPreludeRows`), never prelude with prelude.
 --
@@ -1272,11 +1236,6 @@ firstImplMethodLoc [] = None
 firstImplMethodLoc ((ImplMethod _ _ body) :: _) =
   orElseLoc (exprLoc body) (appArgLoc body)
 
--- The `Map` suffix is cited from compiler/frontend/resolve.mdk,
--- compiler/TYPECHECK-TARGET-ARCHITECTURE.md (§ "9.6 The subsumption enumeration —
--- derived by SHAPE, not by prefix", the `implCompletenessMsgsOf` row) and other
--- comments in this file; this is the one impl-completeness checker.
---
 -- Required-ness is prePass-INVARIANT: `requiredMethodNames` reads only the presence
 -- of `IfaceMethod`'s third position, and the prePass rewrite touches only a
 -- `Some (…, e)` arm's body, so building `CE` from raw `demDecls` cannot change the
@@ -1288,7 +1247,7 @@ checkImplCompletenessMap mctx ce cur iterDecls =
     (pushIncompleteImpl mctx)
     (flatMap (implCompletenessMsgsOfMap ce cur) iterDecls)
 
--- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` beside `iface` in the same
+-- `implOrigin` is read beside `iface` in the same
 -- record pattern, so the identity and the name it qualifies cannot drift apart.
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
 implCompletenessMsgsOfMap ce cur (DAttrib _ d) =
@@ -1305,10 +1264,8 @@ implCompletenessMsgsOfMap ce cur (DImpl { iface, tys, methods, implOrigin = o, i
         (filter (m => not (contains m defined)) required)
 implCompletenessMsgsOfMap _ _ _ = []
 
--- #1557 A-3.5c: relocated onto stage K's `CE`.  The row set is
--- `ceRowsOwnedBy` — the READING module's OWN interfaces, which is exactly the
--- decl list this check was handed before (`prog` on the Module arm, the
--- driver-staged USER decls on Flat), NOT the visible prefix: an imported
+-- The row set is `ceRowsOwnedBy` of stage K's `CE`: the reading module's own
+-- interfaces, not the visible prefix: an imported
 -- interface's phantom method is reported once, at the module that declares it,
 -- not once per importer.  See `ceRowsVisibleAt`/`ceRowsOwnedBy` for why the two
 -- populations are kept apart.
@@ -1434,18 +1391,14 @@ superHeadStep pat t = tyStep pat (stripTyWrap t)
 -- names BOTH owning modules, which is the locating information that actually helps
 -- here.  Attaching a real span needs the renderers to honour `Loc`'s own filename
 -- (a driver/diagnostics.mdk change, well beyond an S3 caret fix).
--- #1559 A-3.7: the input is the whole-graph `IE`, prelude carved out, not the driver's
--- per-module decl pairs.
+-- The input is the whole-graph `IE`, prelude carved out.
 --
--- Order is the thing this bite could move, because `cohScanInner` keeps the FIRST pair
--- per class over a `reverse`-ed list and the wording names `e1` first.  The two orders
--- agree, term by term: the old list was `flatMap (cohImplsOfMid mid) prog` over the
--- driver's `modules` in dependency-first order; `ieRows` is built by `buildImplEnvGo`
--- over the same modules in ORDINAL order (which is that same order, offset by the
+-- Order matters, because `cohScanInner` keeps the first pair per class over a
+-- `reverse`-ed list and the wording names `e1` first.  `ieRows` is built by
+-- `buildImplEnvGo` over the modules in ordinal order (dependency-first, offset by the
 -- prelude at 0) and within a module by `implDeclFacts = flatMap implDeclFact prog`, in
--- decl order.  The one difference is the prelude, which `cohRowsOf` removes
--- BEFORE the `reverse` below — so the filtered list's head is the first user module,
--- which is exactly what the old list's head was.
+-- decl order.  `cohRowsOf` removes the prelude before the `reverse` below, so the
+-- filtered list's head is the first user module.
 export
 globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
 globalCoherenceConflict mctx env =
