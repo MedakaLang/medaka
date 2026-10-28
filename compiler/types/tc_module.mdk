@@ -652,7 +652,7 @@ seedBuiltinClasses gctx mid prog =
 recordTopBinderTypes : GraphCtx -> OrdMap Scheme -> List Decl -> Unit
 recordTopBinderTypes gctx schemes decls =
   let signed = signedTopNames decls omEmpty
-  fold (_ d => recordTopDeclBinderTypes gctx schemes signed d) () decls
+  each (recordTopDeclBinderTypes gctx schemes signed) decls
 
 -- The names a top-level type signature declares, an annotated one included.
 signedTopNames : List Decl -> OrdMap Unit -> OrdMap Unit
@@ -891,8 +891,8 @@ resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc
 -- LOUD→SILENT.  An edge whose target is not in `CE` at this ordinal yields `None` and
 -- the walk stops — the same disposition `ifaceSupersOf`'s `None` arm already had
 -- ("unknown interface, reported elsewhere"), and resolve rejects an interface naming
--- an unknown superinterface before typecheck runs.  What is NEW is that a super whose
--- identity failed to resolve would now MISS where a bare name used to hit.  That is
+-- an unknown superinterface before typecheck runs.  A super whose identity fails to
+-- resolve MISSES where a bare name would hit.  That is
 -- why the abstention arm needs a POSITIVE control -- a shape whose edge MUST still be
 -- followed -- rather than only a negative one.
 --
@@ -921,13 +921,10 @@ resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc
 -- `AccumulateBoth`, so the prefix is the full set.  `CE` at this ordinal is that set in
 -- ordinal order.
 --
--- An earlier cut of this comment claimed a deliberate widening here — *"`accAll`/
--- `accData` carry only `publicDataDecls`, so a PRIVATE interface of an earlier module
--- was never a root"* — and it was simply WRONG about `accAll`, so the widening it
--- conceded does not exist.  Measured on two binaries rather than argued: a module
--- declaring a PRIVATE cyclic interface pair has that cycle reported in a sibling
--- module with NO import path to it, on the pre-relocation arm too, byte-identical.
--- Do not reinstate the hedge; the relocation is root-set-preserving.
+-- `accAll` is not public-filtered, so a PRIVATE interface of an earlier module is a
+-- root: a module declaring a PRIVATE cyclic interface pair has that cycle reported in
+-- a sibling module with NO import path to it.  The root set is the full prefix, with
+-- no widening or narrowing by visibility.
 checkInterfaceCycles : ModuleCtx -> List Decl -> ClassEnv -> Int -> Unit
 checkInterfaceCycles mctx prog ce cur =
   -- #973: `done` is an OrdMap-backed SET (omHasKey/omInsert), NOT a growing `List` scanned
@@ -952,7 +949,7 @@ checkInterfaceCycles mctx prog ce cur =
 -- list.  [ownCe]/[cycCe] are the class environments the caller is entitled to read
 -- and [cur] is the READING module's ordinal — Module passes the whole-graph
 -- `deIfaces` twice with its own ordinal; Flat passes two single-module envs built
--- from the very lists it used to hand `checkPhantomMethods`/`checkInterfaceCycles`,
+-- from the very lists it hands `checkPhantomMethods`/`checkInterfaceCycles`,
 -- at ordinal 0 in the standalone-list compatibility helper; reading a graph envelope there
 -- would switch both checks silently OFF.
 --
@@ -1062,7 +1059,7 @@ cycleReportLoc reach prog cur row
     _ => None
 
 -- DFS from [current]; [path] is the stack of ROWS visited so far (including
--- [current] as its last element, used to reconstruct the cycle message).
+-- [current] as its last element, from which the cycle message is reconstructed).
 -- Marks [current] as done after all its supers are explored.
 ifaceDfsCycle : ClassEnv ->
   Int ->
@@ -1246,8 +1243,8 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- exist"* (`docs/spec/DICT-SEMANTICS.md` §8 I5).  It WIDENS #1438's same-spelled-
   -- interface reach (#1482 measured that topological prefix scoping was accidentally
   -- load-bearing for it); expected and licensed, but an acceptance delta.  The pin that
-  -- used to grade that delta, `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-
-  -- order`, is gone from the tree (derive: `ls test/must_fail_fixtures | grep 1072`) — see
+  -- grades that delta no longer exists: `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-
+  -- order` is gone from the tree (derive: `ls test/must_fail_fixtures | grep 1072`) — see
   -- §9.5a; do not read its absence as "already drained".
   --
   -- `declEnvsOrdOf mid` is still passed and is now inert on this path.  It is
@@ -1366,44 +1363,40 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- such as `Tweak a Int` and `Tweak a Bool` to the ambiguous goal `Tweak a`.
   -- The graph-wide bare-name snapshot below remains vector-free because it lacks
   -- this source identity.
-  let _ =
-    setRef
-      mctx.mcCells.funPredicateSlotsRef
-      (aliasConstraintEntries
-          gctx
-          prog
-          gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
-        ++ mctx.mcCells.funPredicateSlotsRef.value)
-  let _ =
-    setRef
-      mctx.mcCells.funConstraintDeclaredRef
-      (aliasConstraintEntries
-          gctx
-          prog
-          gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
-        ++ mctx.mcCells.funConstraintDeclaredRef.value)
+  setRef
+    mctx.mcCells.funPredicateSlotsRef
+    (aliasConstraintEntries
+        gctx
+        prog
+        gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
+      ++ mctx.mcCells.funPredicateSlotsRef.value)
+  setRef
+    mctx.mcCells.funConstraintDeclaredRef
+    (aliasConstraintEntries
+        gctx
+        prog
+        gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
+      ++ mctx.mcCells.funConstraintDeclaredRef.value)
   -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
   -- BARE-NAME accumulators, so every name this module declares is currently answered by
   -- whichever module's same-named binding the topological order happened to put first.
   -- Re-key those names — and only those — onto this module's own `(mid, name)` rows.
   -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
   -- IDS table, and this is a whole-table replacement of all three.
-  let _ =
-    setFunPredicateSlots
-      mctx
-      (selfDeclArities
-        mid
-        prog
-        gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
-        mctx.mcCells.funPredicateSlotsRef.value)
-  let _ =
-    setRef
-      mctx.mcCells.funConstraintDeclaredRef
-      (selfDeclArities
-        mid
-        prog
-        gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
-        mctx.mcCells.funConstraintDeclaredRef.value)
+  setFunPredicateSlots
+    mctx
+    (selfDeclArities
+      mid
+      prog
+      gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
+      mctx.mcCells.funPredicateSlotsRef.value)
+  setRef
+    mctx.mcCells.funConstraintDeclaredRef
+    (selfDeclArities
+      mid
+      prog
+      gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
+      mctx.mcCells.funConstraintDeclaredRef.value)
   -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
   -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
   -- must not be derived by two independent walks that could admit different rows.
@@ -1416,16 +1409,14 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
   -- the first-match policy of the sibling tables set just above
   -- (`omFromPairs` is last-write-wins; see its own note in support/ordmap.mdk).
-  let _ =
-    setRef
-      mctx.mcCells.importedSchemeOblsRef
-      (omFromPairs
-        (reverseL
-          (importedSchemeOblEntries
-            prog
-            gctx.crossRun.crossModuleSchemeOblsQualRef.value))
-        omEmpty)
-  ()
+  setRef
+    mctx.mcCells.importedSchemeOblsRef
+    (omFromPairs
+      (reverseL
+        (importedSchemeOblEntries
+          prog
+          gctx.crossRun.crossModuleSchemeOblsQualRef.value))
+      omEmpty)
   -- #2563: install THIS module's method scope — its decls and ordinal, the inputs
   -- `methodScopeHere` answers from on first read of each spelling (stage K's
   -- `deMethods` is the whole graph; nothing is copied per module).
@@ -1480,8 +1471,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- a local decl, prelude-free).
     --
     -- cause was exactly two of them disagreeing, and a FUTURE edit re-creates that by
-    -- moving ONE.  This note used to name a PAIR ("both structures agree"), and the
-    -- pair it named was the one that cannot disagree — while omitting the one that can.
+    -- moving ONE.
     --
     -- Registration order here is  universe < overlay < prog0.  Under it:
     --   * the `TcEnv` ctor scheme map (`addCtor` → `omInsert`, BARE ctor name) —
@@ -1527,10 +1517,9 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
     -- emit — `DUse` decls are never mangled.  This key does not go through that
     -- channel.)
-    -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed
-    -- `loadDataUniverse` used to copy out of two `GraphCtx.crossRun` accumulators.  Same
-    -- position in the ladder (it is the UNIVERSE layer, under the overlay and under
-    -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
+    -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed, read
+    -- from one ordinal-aware source.  Position in the ladder: the UNIVERSE layer, under
+    -- the overlay and under `prog0`.  See `declEnvSeedChain` for
     -- why the reader's OWN row is excluded here and registered by the two
     -- `registerAllData` calls below instead.
     declEnvSeedDataUniverse mctx mid envs
@@ -1695,49 +1684,41 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
 
-  let _ = dedupPredicateSlotsTable mctx ()
+  dedupPredicateSlotsTable mctx ()
   -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
   -- must not propagate as a graph-wide deletion into the next module's seed.
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleFunPredicateSlotsRef
-      (predicateSlotTableWithoutArgs
-        (mctx.mcCells.funPredicateSlotsRef.value
-          ++ selfNameRows
-            prog
-            gctx.crossRun.crossModuleFunPredicateSlotsRef.value))
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleFunPredicateSlotsQualRef
-      (attributeModuleEntries mid prog mctx.mcCells.funPredicateSlotsRef.value
-        ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value)
-  -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleFunConstraintDeclaredRef
-      (mctx.mcCells.funConstraintDeclaredRef.value
+  setRef
+    gctx.crossRun.crossModuleFunPredicateSlotsRef
+    (predicateSlotTableWithoutArgs
+      (mctx.mcCells.funPredicateSlotsRef.value
         ++ selfNameRows
           prog
-          gctx.crossRun.crossModuleFunConstraintDeclaredRef.value)
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleFunConstraintDeclaredQualRef
-      (attributeModuleEntries
-          mid
-          prog
-          mctx.mcCells.funConstraintDeclaredRef.value
-        ++ gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value)
+          gctx.crossRun.crossModuleFunPredicateSlotsRef.value))
+  setRef
+    gctx.crossRun.crossModuleFunPredicateSlotsQualRef
+    (attributeModuleEntries mid prog mctx.mcCells.funPredicateSlotsRef.value
+      ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+  -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
+  setRef
+    gctx.crossRun.crossModuleFunConstraintDeclaredRef
+    (mctx.mcCells.funConstraintDeclaredRef.value
+      ++ selfNameRows
+        prog
+        gctx.crossRun.crossModuleFunConstraintDeclaredRef.value)
+  setRef
+    gctx.crossRun.crossModuleFunConstraintDeclaredQualRef
+    (attributeModuleEntries mid prog mctx.mcCells.funConstraintDeclaredRef.value
+      ++ gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value)
   gctx.crossRun.crossModuleMethodPredicateSlotsRef :=
     mctx.mcCells.methodPredicateSlotsRef.value
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleMethodPredicateSlotsQualRef
-      (emptyMethodModulePredicateSlots mid prog
-        ++ attributeMethodModulePredicateSlots
-          mid
-          prog
-          mctx.mcCells.methodPredicateSlotsRef.value
-        ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value)
+  setRef
+    gctx.crossRun.crossModuleMethodPredicateSlotsQualRef
+    (emptyMethodModulePredicateSlots mid prog
+      ++ attributeMethodModulePredicateSlots
+        mid
+        prog
+        mctx.mcCells.methodPredicateSlotsRef.value
+      ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value)
   -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
   -- alongside the three arity tables above.  The arity tables carry only what
   -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
@@ -1747,16 +1728,14 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- always-on store of the same fact and is what the SAME-module use site already
   -- reads; this makes the cross-module use site read it too, under the same
   -- source-exact (mid, name) key.
-  let _ =
-    setRef
-      gctx.crossRun.crossModuleSchemeOblsQualRef
-      (attributeModuleSchemeObls
-          mid
-          prog
-          gctx.crossRun.crossModuleSchemeOblsQualRef.value
-          mctx.mcCells.schemeObligationsRef.value
-        ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value)
-  ()
+  setRef
+    gctx.crossRun.crossModuleSchemeOblsQualRef
+    (attributeModuleSchemeObls
+        mid
+        prog
+        gctx.crossRun.crossModuleSchemeOblsQualRef.value
+        mctx.mcCells.schemeObligationsRef.value
+      ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value)
   -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
   -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
   -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
@@ -1787,18 +1766,15 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
   -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
   -- first step of the graph-end drain every Module-arm driver now runs.
-  let _ = recordLiveRoots mctx ()
-  let _ = judgeQuiescentGoals mctx ()
-  let _ = refileDeterminedRows mctx ()
-  let _ =
-    checkCallObligationsU mctx True obUniv mctx.mcCells.implObls.items.value
-  let _ = checkCallObligationsU mctx False obUniv mctx.mcCells.obls.items.value
-  let _ = settleDeferredPatLits mctx ()
-  let _ =
-    checkDeferredMatches mctx (reverseL mctx.mcCells.matchChecksDeferred.value)
-  let _ = checkFixedWidthLiterals mctx mctx.mcCells.numlitRanges.value
-  let _ = checkWideLiterals mctx mctx.mcCells.wideLitRanges.value
-  ()
+  recordLiveRoots mctx ()
+  judgeQuiescentGoals mctx ()
+  refileDeterminedRows mctx ()
+  checkCallObligationsU mctx True obUniv mctx.mcCells.implObls.items.value
+  checkCallObligationsU mctx False obUniv mctx.mcCells.obls.items.value
+  settleDeferredPatLits mctx ()
+  checkDeferredMatches mctx (reverseL mctx.mcCells.matchChecksDeferred.value)
+  checkFixedWidthLiterals mctx mctx.mcCells.numlitRanges.value
+  checkWideLiterals mctx mctx.mcCells.wideLitRanges.value
   mctx.mcCells.localSchemesOut :=
     mapLocalSchemes mctx mctx.mcCells.localBindRefs.value
   mctx.mcCells.seedSchemesOut := seed
@@ -2014,16 +1990,14 @@ inferUserImplBodies env allProg ce cur decls =
   -- the obligation channel, so windowing keeps the #781 reject while dropping the
   -- abstract-var false positives.
   --
-  -- #1114 (#792): the rollback is ground-preserving, and it did not used to be.
-  -- The two `wRestore`s below used to run bare, which threw away EVERY obligation the
-  -- parametric pass recorded — including the GROUND ones, which are exactly the ones
-  -- the abstract-var argument above does not cover.  `impl Foo (List a)` whose body
-  -- calls `debug Bar` records a fully-ground `Debug Bar`; nothing about it is abstract,
-  -- the gate would have rejected it on the spot, and the blanket rollback deleted it —
-  -- so `check` exited 0 while `build` PANICKED (`no impl of method 'debug' for type
-  -- 'Bar'`).  That is a `run_check_agreement` break, and the sentence this comment
-  -- replaced ("stays deferred to `build` exactly as before — a residual, not a
-  -- regression") named it as a known residual without naming its cost.
+  -- #1114 (#792): the rollback is ground-preserving.  A bare `wRestore` would throw
+  -- away EVERY obligation the parametric pass recorded — including the GROUND ones,
+  -- which are exactly the ones the abstract-var argument above does not cover.
+  -- `impl Foo (List a)` whose body calls `debug Bar` records a fully-ground
+  -- `Debug Bar`; nothing about it is abstract, the gate would reject it on the spot,
+  -- and a blanket rollback would delete it — so `check` would exit 0 while `build`
+  -- PANICKED (`no impl of method 'debug' for type 'Bar'`), a `run_check_agreement`
+  -- break.
   --
   -- The policy is now written down: DICT-SEMANTICS §4.2 **D1** (a predicate the gate can
   -- decide where it is recorded is discharged there — no window may discard it) and
@@ -2192,10 +2166,8 @@ judgeLiveGoal saved byModule (found, judged) lg =
       let stamp = enterStampCtx saved ctx
       let rigidIds = lg.lgRigidIds
       let diags = captureTypeErrors stamp (_ =>
-        fold
-          (_ o =>
-            undeterminedVectorVerdict stamp rigidIds omEmpty lg.lgWindow o)
-          ()
+        each
+          (undeterminedVectorVerdict stamp rigidIds omEmpty lg.lgWindow)
           (lg.lgGoal :: nestedRequireGoals stamp rigidIds omEmpty [lg.lgGoal]))
       match diags
         [] => (found, judged)
@@ -2213,13 +2185,11 @@ judgeQuiescentGoals : ModuleCtx -> Unit -> Unit
 judgeQuiescentGoals mctx _ =
   let goals = reverseL mctx.mcCells.quiescentGoalsRef.value
   mctx.mcCells.quiescentGoalsRef := []
-  fold
-    (_ (rigidIds, window, o) =>
-      fold
-        (_ g => undeterminedVectorVerdict mctx rigidIds omEmpty window g)
-        ()
+  each
+    ((rigidIds, window, o) =>
+      each
+        (undeterminedVectorVerdict mctx rigidIds omEmpty window)
         (o :: nestedRequireGoals mctx rigidIds omEmpty [o]))
-    ()
     goals
 
 -- The variables a later group can still ground (§6.2 T2): those no scheme
@@ -2267,7 +2237,7 @@ derivingTypeLoc _ = None
 -- They must stay byte-identical.
 --
 -- THIS one is the `checkBodyImpl` call, which processes whichever program is under
--- check — normally a USER file, where an `extern f : Int -> <> Int` used to type as
+-- check — normally a USER file, where an `extern f : Int -> <> Int` would type as
 -- a pure `Int -> Int`: a one-line escape hatch through the whole effect system.
 --
 -- This function no longer rewrites a declared row (F1, epic #2070).  Its
@@ -2331,11 +2301,10 @@ registerImportOverlay env prog overlay =
   let ctorPop = env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value
   let recordPop = env.teDyn.dcModule.mcGraph.crossRun.universeRecordPop.value
   let served = map (d => (d, overlayCachedRows ctorPop recordPop d)) overlay
-  fold
-    (_ p => match snd p
+  each
+    (p => match snd p
       None => recordDeclKinds env.teDyn.dcModule (fst p)
       Some _ => ())
-    ()
     served
   let env1 =
     fold
@@ -2393,7 +2362,7 @@ registerCachedRows : TcEnv ->
   (List (String, Scheme), List (String, RecordInfo)) ->
   TcEnv
 registerCachedRows env (ctors, recs) =
-  fold (_ r => registerCachedRecord env.teDyn.dcModule (fst r) (snd r)) () recs
+  each (r => registerCachedRecord env.teDyn.dcModule (fst r) (snd r)) recs
   fold (e c => addCtor e (fst c) (snd c)) env ctors
 
 registerCachedRecord : ModuleCtx -> String -> RecordInfo -> Unit
@@ -2577,10 +2546,7 @@ processSCC outer sigs grouped0 members =
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
   inferMembers groupEnv sigs groupedStamped scopedMembers
-  fold
-    (_ member => checkRecursiveValue env.teDyn member.smOwned)
-    ()
-    scopedMembers
+  each (member => checkRecursiveValue env.teDyn member.smOwned) scopedMembers
   resolvePendingJoins env.teDyn env.teDyn.dcModule.mcCells.currentLevel.value
   let residuals =
     finishEffectSummaryScopeKeeping
@@ -2959,7 +2925,7 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
     checkBodyImpl gctx runSeed seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
-  -- here, at the point its stampers used to run, for the one graph-end drain
+  -- here, in place of per-module stamping, for the one graph-end drain
   -- (`drainStampQueue`, DICT §6.2 T4).  A driver that queues and never drains
   -- leaves the queue for the next driver entry, so every Module-arm driver ends
   -- with a drain (`driveGraphK`'s, or `checkGraphFinish` on a memo path).
@@ -3021,11 +2987,9 @@ appendUniverseAccums gctx mid prog =
         (map fst (funDefs prog))
         gctx.crossRun.universeFunNamesRef.value
   -- #154 PR-B: grow the dispatch-index accumulator by THIS module's interface indices.
-  -- APPEND (universe first) so the accumulated list stays in the same core-first order the
-  -- old `argDispatchIndices (accAll ++ prog)` flatMap produced.  #1351 L5 (CONTRACT) deleted
-  -- the bare-name accumulator that used to be grown alongside this one: its only reader was
-  -- `dispatchIdxScoped`'s fall-back arm, and the reader is now identity-keyed only, so a
-  -- prior-module entry this module never names cannot be queried by spelling at all.
+  -- APPEND (universe first) so the accumulated list stays in core-first order.  #1351 L5
+  -- (CONTRACT): `dispatchIdxScoped` is identity-keyed only, so a prior-module entry this
+  -- module never names cannot be queried by spelling at all.
   gctx.crossRun.universeMethodDispatchIdxByIdRef :=
     gctx.crossRun.universeMethodDispatchIdxByIdRef.value
       ++ argDispatchIndicesById prog
@@ -3108,7 +3072,7 @@ importedMethodBindingNames gctx prog aliases =
 -- an aliased constrained callee gets zero dict routes and under-applies.  Generic over
 -- the payload so the arity table (List Int) and the iface table (List String) share it.
 --
--- [qual] is the (definerMid, name)-keyed table, which is what makes this PRECISE: an
+-- [qual] is the (definerMid, name)-keyed table, which is what makes this exact: an
 -- entry is copied only when its DEFINER is the very module the alias names.
 -- #1114 (#845): THIS module's imported bindings' SCHEME CONTEXTS, keyed by the local
 -- spelling the importer writes.  Structurally the sibling of `aliasConstraintEntries`
@@ -3173,10 +3137,9 @@ importedSchemeOblEntries (_ :: rest) qual = importedSchemeOblEntries rest qual
 -- legal).  It also keeps the verdict from depending on which definer came first: the
 -- moment the name IS written, the import is rejected rather than silently resolved.
 --
--- CORRECTED (sprint-review F2, from #1675's own landed behavior): the first cut
--- rejected at ADMISSION — `import lib.hub.*` / `import lib.hub as H` failed even when
--- the importer never mentioned the colliding name, while the selective form correctly
--- did not.  The precedent cited for that, `T-AMBIGUOUS-ALIAS-METHOD`, is a DIFFERENT
+-- The reject is at USE, not at ADMISSION: `import lib.hub.*` / `import lib.hub as H`
+-- stay legal when the importer never mentions the colliding name, as the selective form
+-- does.  `T-AMBIGUOUS-ALIAS-METHOD`, which rejects at admission, is a DIFFERENT
 -- namespace: methods are dispatched by argument type, where "admitted into scope" and
 -- "used" are hard to pull apart because having the method callable is often the point.
 -- Whether the method side wants the same narrowing is a separate question, deliberately
@@ -3262,21 +3225,16 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- member matches by rule (b) and that SIBLING decl is overlaid.  Measured: `pmod` with
 -- `data Wrap = T Int`, `import pmod.{T, pf}`, and a local `data Loc = T String` —
 -- pinned as `test/llvm_fixtures_modules/ctor_scope_type_only_sibling_decl/`.
--- (An earlier revision of this note claimed such a member "contributes NOTHING"; it was
--- measured false and the paragraph is rewritten rather than re-pointed.)
 --
 -- That contribution is harmless BECAUSE of the layering at the registration site
 -- (`dataEnv`, `Module` arm): the overlay sits BELOW this module's own `prog0`, so a
 -- sibling decl riding along can never clobber a locally-declared constructor.  What it
 -- can still do is out-rank a ctor the unit names from a DIFFERENT module in an EARLIER
--- import clause, decided by source order — the residual this note used to claim was
--- prevented outright.  It is the pre-existing `(..)` hazard (#674's remainder) now also
+-- import clause, decided by source order.  It is the pre-existing `(..)` hazard (#674's remainder) now also
 -- reachable via (b), and it is order-dependent on `main` too.
 --
--- IT IS **#1284**, and that number is the point of this paragraph.  The note used to
--- end "it is tracked, not fixed here" while NOTHING tracked it — #1283 is the RE-EXPORT
--- spelling, #733 item 1a is marked FIXED and item 1c is wildcards only.  A declared-
--- but-unfiled residual is indistinguishable from an unnoticed one.  Pinned self-
+-- IT IS **#1284** (#1283 is the RE-EXPORT spelling; #733 item 1a is marked FIXED and
+-- item 1c is wildcards only).  Pinned self-
 -- drainingly by `test/must_fail_fixtures/1284-a26-overlay-sibling-ctor-beats-named-
 -- import/`, whose CONTROL is the discriminator that dates it: the NON-sibling case is
 -- rejected on `main` and accepted here, so A-2.6 repairs that one and leaves exactly
@@ -3318,18 +3276,15 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 --   * ONE traversal per member, not three (see `findOverlayDecl`/`overlayScan`); and
 --   * ZERO allocation per visited decl (see `overlayNote` — name tests before the
 --     identity mint).
--- Break either and the perf gate's `modules` shape goes superlinear: this comment
--- previously asserted the universe-independence outright, the first cut of A-2.6 broke
--- both parts, and the gate read typecheck TIME r2=3.24 (hard threshold 3.0) with net
--- allocation 306/744/2013 MB against `main`'s 242/491/1010.  A cheaper bound is
+-- Break either and the perf gate's `modules` shape goes superlinear: measured at
+-- typecheck TIME r2=3.24 (hard threshold 3.0) with net allocation 306/744/2013 MB
+-- against 242/491/1010 for the single-walk form.  A cheaper bound is
 -- available if it is ever needed — index `pool` by owning module id, which would make
 -- the owned passes O(log n) — but it does not exist today, so do not cite one.
 --
--- A-3.2b (#1512, absorbing #1319 unit 4): the pool is no longer a materialised
--- accumulator.  It used to be `CrossRun.universeDataDecls` — a bare `List Decl`
--- grown by `appendDataUniverse` one module at a time, with NO record of which module
--- contributed what and no key at all beyond list position.  It is now the whole-graph
--- envelope (`DeclEnvs.deModules`, stage K) read at the READER'S OWN ORDINAL through
+-- A-3.2b (#1512, absorbing #1319 unit 4): the pool is not a materialised accumulator
+-- (which would carry no record of which module contributed what, and no key beyond
+-- list position).  It is the whole-graph envelope (`DeclEnvs.deModules`, stage K) read at the READER'S OWN ORDINAL through
 -- `declEnvRowVisible`, i.e. through `declEnvVisibleTo`'s two conjuncts.  `cur` is
 -- `declEnvsOrdOf mid` for the module being checked — a LOADER-derived identity, not a
 -- spelling re-derived from import syntax, which is what makes it survive the emit path
@@ -3556,9 +3511,9 @@ memberOverlayDecl cur rows mid (UseMember n ctors _ _) =
 -- The three passes share one traversal, and that is a measured perf contract.
 -- `pool` is the WHOLE accumulated universe and this runs once per UseGroup member of
 -- every module, so each independent pass over it is an O(modules x universe) term.
--- The first cut of A-2.6 ran three (type-owned, then ctor-owned, then the bare
--- fallback) where `main` ran ONE, and that alone put the perf gate's `modules` shape
--- at typecheck TIME r2=3.24 — over the hard 3.0 threshold.  `overlayScan` collects all
+-- Three passes (type-owned, then ctor-owned, then the bare fallback) would put the
+-- perf gate's `modules` shape at typecheck TIME r2=3.24 — over the hard 3.0
+-- threshold.  `overlayScan` collects all
 -- three candidates in a SINGLE walk (their predicates are independent, so first-wins
 -- per candidate is unchanged) and stops the instant the DECIDING candidate is found,
 -- which is the early exit the three-pass form had.  See `overlayScan`.
@@ -3706,7 +3661,7 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- here, once, and a form whose rows are missing is not a gap in one arm: it is a
 -- silent fall-through to bare-name first-match for that whole spelling.
 --
--- `import m.*` used to contribute nothing, and that hole is #1425's F1.
+-- `import m.*` must contribute rows (#1425's F1).
 -- `importedBindings` answers `None` for `UseWild` because a wildcard's member list
 -- cannot be read off the `DUse` decl alone — it is every public top-level binding the
 -- DEPENDENCY declares — so this walk simply skipped it and every wildcard-imported
@@ -3731,10 +3686,9 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- this module, or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
 --
--- The supply side does not enumerate (RUN-XMOD-062).  It used to, twice over — one
--- walk for the named forms, one for the wildcard form, each deciding for itself what a
--- dependency "makes available".  Both walks answered that with the names a dependency
--- DECLARES, so a name it RE-EXPORTS (`export import u.{pick}` / `export import u.*`,
+-- The supply side does not enumerate (RUN-XMOD-062).  Separate walks for the named and
+-- the wildcard form, each deciding for itself what a dependency "makes available",
+-- answer with the names a dependency DECLARES, so a name it RE-EXPORTS (`export import u.{pick}` / `export import u.*`,
 -- at any depth) got no row and fell to the source-blind bare table — the same
 -- `E-NOT-A-FUNCTION: applied non-function: <dict:>` on a well-typed program, one hop
 -- further out.  That was the THIRD enumeration in this seam to miss a member.  The rows
@@ -3909,8 +3863,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- dataEnv overlay uses), which equals accData here but keeps the two overlays in
   -- lockstep.
   --
-  -- Two claims that used to stand here are false since A-2.6's rule (b), which is
-  -- why they are written out rather than re-pointed:
+  -- Two tempting claims are false under A-2.6's rule (b):
   --   * NOT "the types this module imports with `(..)`" — EVERY selective
   --     constructor-naming member contributes now (`import m.{T, C}`, and a record's
   --     `import m.{Cfg}`), not only the `(..)` spelling.
@@ -4014,7 +3967,7 @@ cutRanges lo hi ((a, b) :: rest) =
 -- view becomes a graph-wide LOSS: the rows masked while checking module `mid` never reach
 -- the modules processed after it.
 --
--- MEASURED, not hypothetical — this is what the first cut of #1425's fix did.  Masking
+-- MEASURED, not hypothetical.  Masking
 -- `count` while checking `vector` (which declares an unconstrained `count`) deleted the
 -- PRELUDE's constrained `count` row from the accumulator, so every later module lost it and
 -- an ordinary `count (x => x > 1) [1, 2, 3]` in the entry panicked at `run`.  Prelude names
@@ -4342,7 +4295,7 @@ stampEach : ModuleCtx ->
   StampCtx ->
   Unit
 stampEach stamp resolve k ctx =
-  fold (_ o => stampNoting stamp resolve o) () (goalsOfKindIn k ctx.scGoals)
+  each (stampNoting stamp resolve) (goalsOfKindIn k ctx.scGoals)
 
 export
 verdictFinding : String -> Bool -> TcDiag -> DrainFinding
@@ -4555,7 +4508,7 @@ runStampCtx saved ctx =
 recordEvidence : GraphCtx -> List Obligation -> Unit
 recordEvidence gctx gs =
   let g = gctx.graphRun
-  let _ = map (noteEvidenceObservation gctx) gs
+  each (noteEvidenceObservation gctx) gs
   g.evTable := evEntriesOf gs ++ g.evTable.value
 
 evEntriesOf : List Obligation -> EvTable

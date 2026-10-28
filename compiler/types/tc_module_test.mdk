@@ -22,9 +22,7 @@ import test.{
   expectTrue,
 }
 import list.{drop, sort, take}
-import frontend.ast.{
-  Decl(..), EvEntry(..), EvVal(..), Loc(..), Route(..), Ty(..)
-}
+import frontend.ast.{Decl(..), EvEntry(..), EvVal(..), Loc(..), Ty(..)}
 import types.tc_elab.{drivenEvidence}
 import support.ordmap.{omEmpty, omFromNames}
 import types.repr.{Scheme(..), ppScheme}
