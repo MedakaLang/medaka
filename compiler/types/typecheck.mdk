@@ -15,9 +15,9 @@ import types.invocation_basis.{
 --
 -- The HM core is monotypes over Ref-based union-find tyvars, level-based
 -- generalization, unification (occurs-check + level adjust), and instantiation.  This
--- file is the driver over the `tc_*` modules: it carries interfaces, impls,
--- superclasses and coherence; the dict-passing elaboration the backends consume; and
--- the graph drivers below.  The expression recursion, records, operator inference and
+-- file is the driver over the `tc_*` modules: it carries the graph drivers below and
+-- the per-module check; interfaces, impls and coherence are `types/tc_global.mdk`'s
+-- and the dict-passing elaboration the backends consume is `types/tc_elab.mdk`'s.  The expression recursion, records, operator inference and
 -- exhaustiveness live in `types/tc_infer.mdk` and `types/tc_infer_records.mdk`;
 -- `checkMatchExhaustive` (`compiler/frontend/exhaust.mdk`) is called once per
 -- `EMatch` from `tc_infer` ([P-EXHAUST-IN-TYPECHECK]).
