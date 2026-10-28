@@ -9,7 +9,8 @@
 -- properties run over generated groups: the dependency edges of a group do not depend on
 -- what its parameter is called, and the components of a block come dependencies first.  Each
 -- test builds the module record or environment it reads; none reaches the inference
--- recursion, and the mark pass over groups is tested in `tc_occurrence_test`.
+-- recursion, and the mark pass over groups is tested in `tc_occurrence_test`.  Not driven here:
+-- `nestedRequireGoals` (its goals come from occurrences the mark pass mints).
 
 import test.{
   expectAll,

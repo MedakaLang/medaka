@@ -65,6 +65,8 @@ exprLoc : Expr -> Option Loc
 fieldAssignEVars : FieldAssign -> List String
 filterNonSelf : String -> List String -> List String
 fixedSibling : Int -> List (Int, String) -> Option String
+followRequireGoal : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
+followRequireLevel : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation -> List (List (UObligation, ReqWalk)) -> (List UObligation, List (UObligation, ReqWalk))
 forwardedVecObls : ModuleCtx -> Bool -> List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
 freeArmEVars : Map String Unit -> Arm -> List String
 freeEVars : Map String Unit -> Expr -> List String
@@ -107,8 +109,12 @@ lookupSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (Ty,
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberForce : ScopedMember -> EffRow
 memberRole : Bool -> Bool -> BindingRole
+nestedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> List UObligation -> List UObligation
+nestedRequireGoalsGo : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+nestedRequireGoalsOnce : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 pairIface : ModuleCtx -> String -> Int -> List (IfaceRef, Int)
 pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
+prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifiedVecObls : List Int -> List VecObl -> List VecObl
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
@@ -116,6 +122,7 @@ registerSchemeObligations : ModuleCtx -> Map String Int -> List (String, Ty, Lis
 reportUncovered : ModuleCtx -> String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncoveredVec : ModuleCtx -> String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
 requireGoalAt : UObligation -> List Int -> (IfaceRef, List Mono) -> List UObligation
+requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
 requireGoalsBelow : ModuleCtx -> (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 residualOblArgs : List Int -> List Mono -> List Mono
 residualVecObls : ModuleCtx -> Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
@@ -126,11 +133,13 @@ schemeObligationsOf : ModuleCtx -> Bool -> List Int -> List UObligation -> List 
 schemeOblsForMember : ModuleCtx -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
 sectionEVars : Section -> List String
+selectedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 sigConstraintArgTys : Ty -> List (List Ty)
 sigConstraints : Ty -> List (IfaceRef, List String)
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigVarFixedBy : List (Int, String) -> List (String, Mono) -> Option (String, String)
 tyVarArgNames : List Ty -> List String
+uOblGoalArgs : GraphCtx -> UObligation -> List Mono
 unifiedRowReqs : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (String, Mono), List Int, List Require)
 vecOblKey : VecObl -> String
 vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl

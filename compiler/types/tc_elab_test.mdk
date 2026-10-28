@@ -3,7 +3,7 @@
 -- method and an interface default; the rewrite of a routed operator, negation or literal; the
 -- local binders that abstracted a dictionary; the prelude tree left as it came),
 -- `selfDeclArities`, `grantWholeDomain` (a file extern granted the whole domain),
--- `methodMarkCtx` (the mark sets a module may name), `drivenEvidence`, and the resolvers that
+-- `drivenEvidence`, and the resolvers that
 -- realize a solved route into a site's cells (`resolveArithSite`, `resolveSite`,
 -- `resolveOpSite`, `resolvePredicateOpSite`, `resolveNumLitSite`, `resolveArgStamps`,
 -- `resolveAdmittedSite`, `resolveMethodDicts`, `realizeRecDictApps`).  Not driven here: the
@@ -39,10 +39,8 @@ import types.repr.{Mono(..)}
 import types.solver_contract.{ClassPredicate(..)}
 import types.tc_mono.{tconBuiltin}
 import types.tc_types.{
-  GraphCtx(..),
   LocalAbs(..),
   ModuleCtx,
-  MarkSets(..),
   PendingEntry(..),
   PendingMethodDict(..),
   PredicateSlot(..),
@@ -53,17 +51,27 @@ import types.tc_types.{
 }
 import types.tc_occurrence.{mintMethodCellRaw}
 import types.scopes.{ScopeOwner(..), freshScope}
-import types.tc_state.{currentScopeStore, dictParamName, probeGraphCtx}
+import types.tc_state.{
+  currentScopeStore,
+  dictParamName,
+}
 import frontend.parser.{parse}
-import list.{drop, range, replicate, sort, take}
+import list.{
+  drop,
+  range,
+  replicate,
+  take,
+}
 import types.evidence.{ScopeId(..)}
 import types.evidence_complete.{innerNone}
-import support.ordmap.{omEmpty, omInsert, omKeys}
+import support.ordmap.{
+  omEmpty,
+  omInsert,
+}
 import types.tc_elab.{
   dictPassModulesIfEnabled,
   drivenEvidence,
   grantWholeDomain,
-  methodMarkCtx,
   realizeRecDictApps,
   resolveArgStamps,
   resolveAdmittedSite,
@@ -879,82 +887,6 @@ test "a negated literal at I32 is the one constant, so the smallest I32 needs no
   expectEqual
     (Some (exprSexp (litInt (0 - 2147483648))))
     (map exprSexp (bodyOver rows (negated 2147483648)))
-
--- ── methodMarkCtx ─────────────────────────────────────────────────────────
-
--- Mark sets over the method names [shared] (return-position and constrained), [shadows] and
--- [args], and the core shadow map [coreMap].
-marksOf : List String ->
-  List String ->
-  List String ->
-  List (String, String) ->
-  MarkSets
-marksOf rp shared args coreMap = MarkSets {
-  msMarkRpNames = rp,
-  msMarkSharedNames = shared,
-  msGraphShadowNames = [],
-  msArgNames = args,
-  msCoreShadowMap = coreMap,
-  msBareDictNames = [],
-  msUnits = [],
-}
-
--- A graph whose interface index lists the interface `Sizeable` and its method `size` under core.
-withCoreIndex : GraphCtx -> GraphCtx
-withCoreIndex g =
-  let empty = g.declEnvsRef.value
-  g.declEnvsRef := { empty |
-    deMethods = { empty.deMethods |
-      meIfaceExports = omInsert "core" [("Sizeable", ["size"])] omEmpty,
-    },
-  }
-  g
-
-test "a module marked over a graph with no interface index may name every method the sets hold" =
-  let ctx =
-    methodMarkCtx
-      (probeGraphCtx ())
-      (marksOf [] ["size", "zap"] ["size", "zap"] [])
-      "m"
-      []
-  expectEqual
-    (["size", "zap"], ["size", "zap"])
-    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
-
-test "the prelude marked over a graph with no interface index keeps the return-position and argument names whole" =
-  let ctx =
-    methodMarkCtx
-      (probeGraphCtx ())
-      (marksOf ["size"] ["zap"] ["arg"] [("a", "b")])
-      ""
-      []
-  expectEqual
-    (["size"], ["arg"], [("a", "b")])
-    (omKeys ctx.mcRp, omKeys ctx.mcAn, ctx.mcSm)
-
-test "the prelude marked over an interface index names only the methods of an interface core declares" =
-  let ctx =
-    methodMarkCtx
-      (withCoreIndex (probeGraphCtx ()))
-      (marksOf ["size", "zap"] [] ["size", "zap"] [])
-      ""
-      []
-  expectEqual (["size"], ["size"]) (omKeys ctx.mcRp, omKeys ctx.mcAn)
-
-test "a module marked over an interface index names core's methods and its own, and no others" =
-  let own = parse """
-interface Zap a where
-  zap : a -> Int
-"""
-  let ctx =
-    methodMarkCtx
-      (withCoreIndex (probeGraphCtx ()))
-      (marksOf [] ["size", "zap", "other"] ["size", "zap", "other"] [])
-      "m"
-      own
-  expectEqual
-    (["size", "zap"], ["size", "zap"])
-    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
 
 -- ── resolveNumLitSite, resolvePredicateOpSite, resolveAdmittedSite ────────
 

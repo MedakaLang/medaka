@@ -56,8 +56,6 @@ declNameLocs : String -> Decl -> List Loc
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
 firstImplMethodLoc : List ImplMethod -> Option Loc
-followRequireGoal : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
-followRequireLevel : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation -> List (List (UObligation, ReqWalk)) -> (List UObligation, List (UObligation, ReqWalk))
 gatesBodyCascade : MethodBodyKind -> Bool
 globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
 headRemainingKinds : ModuleCtx -> TyConOrigin -> String -> Int -> Option (List Kind)
@@ -92,16 +90,12 @@ methodBodyOwnTyparams : MethodBodyKind -> List String -> List String
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
 methodLevelConstraintMonos : List String -> Ty -> List (String, Mono) -> List Mono
 narrowedImplHead : String -> ImplBodySite -> String
-nestedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> List UObligation -> List UObligation
-nestedRequireGoalsGo : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
-nestedRequireGoalsOnce : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 numCallObls : GraphCtx -> List UObligation -> List UObligation
 numChannelRootSet : List UObligation -> List Mono -> Map String Unit
 numDictObls : GraphCtx -> List PendingDictApp -> List UObligation
 openMethodBodyScope : ModuleCtx -> IfaceRef -> String -> MethodBodyKind -> ScopeId
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List (Option Loc, String)
 phantomMethodMsgs : CeRow -> List (Option Loc, String)
-prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
 pushCoherenceWarning : ModuleCtx -> Option Loc -> String -> Unit
 pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
 registerMethodBodyGivens : GraphCtx -> IfaceRef -> MethodBodyKind -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
@@ -110,14 +104,11 @@ reportImplHeadResidual : ModuleCtx -> String -> List (String, Int) -> Option Loc
 reportMissingSuperImpl : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
 reportSuperContextLeaf : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> (IfaceRef, List Mono) -> Unit
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
-requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
 requirePredicateSlot : ModuleCtx -> List (String, Mono) -> Require -> PredicateSlot
 scopeImplMethods : ModuleCtx -> ScopeId -> List ImplMethod -> List ScopedImplMethod
-selectedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 substParams : List String -> List (String, Ty) -> List Ty
 superContextLeaves : ModuleCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
 superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
-uOblGoalArgs : GraphCtx -> UObligation -> List Mono

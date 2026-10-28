@@ -1,10 +1,11 @@
 # META
-source_lines=2144
+source_lines=2250
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
 -- including the recorded-local site resolution `resolveRLocalSite` (SHADOW S2's inversion at route
--- time), and the admitted-set occurrence checks (S2-DECL (d)).
+-- time), the admitted-set occurrence checks (S2-DECL (d)), and the mark sets a module may name
+-- (`methodMarkCtx`: S1-NS nameability).
 --
 -- Spec: SHADOW-SEMANTICS section 1 S1-S9, section 1.1; S2-DECL (d).
 --
@@ -35,6 +36,8 @@ import types.tc_types.{
   SiteCtx,
   siteFor,
   ValueScheme,
+  MarkCtx(..),
+  MarkSets,
 }
 import types.tc_mono.{
   headMonoNode,
@@ -78,6 +81,8 @@ import types.tc_scope.{
   methodEntryHere,
   methodVisibleHere,
   importedIfaceRows,
+  aliasMethodSpellings,
+  withAliasMethodNames,
 }
 import types.tc_unify.{
   clampPrefix,
@@ -2146,14 +2151,115 @@ shadowBareName : List (String, String) -> String -> String
 shadowBareName sm n = match lookupAssoc n sm
   Some bare => bare
   None => n
+
+-- Method nameability and standalone availability are independent. The wrapper
+-- admits standalone routes only for this module's definitions or actual imported
+-- standalone descriptors, never for private functions elsewhere in the graph.
+export
+methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
+methodMarkCtx gctx ms "" coreProg
+  | omSize (ifaceExportsIndex gctx ()) == 0 = MarkCtx {
+    mcRp = omFromNames ms.msMarkRpNames omEmpty,
+    mcAn = omFromNames ms.msArgNames omEmpty,
+    mcSm = ms.msCoreShadowMap,
+  }
+  | otherwise =
+    let nameable = nameableIfaceMethodSet gctx coreProg
+    let keep = n => omHasKey n nameable
+    MarkCtx {
+      mcRp = omFromNames (filterList keep ms.msMarkRpNames) omEmpty,
+      mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
+      mcSm = ms.msCoreShadowMap,
+    }
+methodMarkCtx gctx ms _ prog
+  -- fail OPEN when the graph index is absent, for the reason stated on
+  -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
+  -- S4/#410 class.
+  -- Guard the index this arm actually reads: the body reads `meIfaceExports`, so the
+  -- guard tests that and not its sibling `meExports` — testing one while reading the
+  -- other is an implicit conjunction of exactly the kind `registry_keying_ratchet`
+  -- exists to forbid.  Run with an empty iface index, the other arm would filter out
+  -- every imported and prelude shadow name, failing closed into the S4/#410 class that
+  -- `nameableIfaceShadows` says must never happen.
+  | omSize (ifaceExportsIndex gctx ()) == 0 =
+    let aliasRows = aliasMethodSpellings gctx prog
+    MarkCtx {
+      mcRp =
+        withAliasMethodNames
+          aliasRows
+          (omFromNames
+            (dedup (ms.msMarkSharedNames ++ ms.msGraphShadowNames))
+            omEmpty),
+      mcAn = withAliasMethodNames aliasRows (omFromNames ms.msArgNames omEmpty),
+      mcSm = gctx.mangledShadowMapRef.value,
+    }
+  | otherwise =
+    -- S1-NS (b), the closure invariant.  The spec requires the predicate deciding
+    -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
+    -- different predicates at the two sites non-conformant whichever way they differ.
+    --
+    -- The invariant is about inputs to dispatch, not about sets or selectors.
+    -- `rewriteArgScoped` dispatches on `rp`, `an` AND `sm`, so every one of those
+    -- inputs must be filtered, `rpNames` included: an unfiltered `rpNames` makes
+    -- dispatch-eligibility a strict superset of shadow-hood, and a return-position
+    -- method of a non-nameable interface then runs with no diagnostic (`run` gave 777
+    -- against a built binary of 42, both exit 0).
+    --
+    -- THE ENUMERATION, so the next reader checks the SET rather than trusting a sentence.
+    -- Every input `rewriteArgScoped` can turn into an `EMethodAt` is filtered here:
+    --   * `rpNames`   — return-position method names AND method-level-constraint method
+    --                   names (`markSharedNames` concatenates both).  BOTH are interface
+    --                   METHOD names — each walks `DInterface`'s `methods` — so both are the
+    --                   same kind of set as `argNames` and both are filtered.
+    --   * `shadowNames` — via `shadowBareName`, because on the emit path these are mangled.
+    --   * `argNames`  — arg-position dispatch indices.
+    --   * `shadowMap` — the emit-path peer of `argNames`.
+    -- `dictNames` is the ONE input deliberately NOT filtered, and it is not an input to
+    -- dispatch at all: it produces `EDictAt`, a dict application of a `=>`-constrained
+    -- FUNCTION, which selects no impl from a receiver.  Filtering it would drop a dict
+    -- argument and UNDER-APPLY the callee (`unbound identifier: $dict_…`, the Phase-134
+    -- shape) — so it is disjoint by node kind, not by name, and that is probed rather than
+    -- argued (see `test/shadow_fixtures/`'s return-position cells and the PR body).
+    let nameable = nameableIfaceMethodSet gctx prog
+    let keep = n => omHasKey n nameable
+    let shadowMap = gctx.mangledShadowMapRef.value
+    -- The occurrence-spelling context, taken ONCE for this module rather than rebuilt
+    -- inside each filter below — per row it was most of this cell's measured
+    -- regression; see `SpellCtx`.
+    let sc = spellCtxOf gctx prog
+    let aliasRows = aliasMethodSpellings gctx prog
+    MarkCtx {
+      mcRp =
+        withAliasMethodNames
+          aliasRows
+          (omFromNames
+            (dedup
+              (filterList keep ms.msMarkSharedNames
+                ++ filterList
+                  (n =>
+                    omHasKey (shadowBareName shadowMap n) nameable
+                      && shadowSymSpelledBare sc shadowMap n)
+                  ms.msGraphShadowNames))
+            omEmpty),
+      mcAn =
+        withAliasMethodNames
+          aliasRows
+          (omFromNames (filterList keep ms.msArgNames) omEmpty),
+      mcSm =
+        filterList
+          (e =>
+            omHasKey (snd e) nameable
+              && moduleSpellsShadowBare sc (fst e) (snd e))
+          shadowMap,
+    }
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false) (mem "MarkCtx" true) (mem "MarkSets" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambiguousShadowHelp" false) (mem "shadowIfaceLabel" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAt" false) (mem "emptyShadowDicts" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "depExportsStandalone" false) (mem "depExportsUnknown" false) (mem "funDefs" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceExportsIndex" false) (mem "ifaceMethodRows" false) (mem "importedBindings" false) (mem "lookupIdxById" false) (mem "lookupStandaloneValue" false) (mem "lookupStandaloneVar" false) (mem "lookupVar" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "removeAllS" false) (mem "standaloneValueFor" false) (mem "hasImportDefiner" false) (mem "lookupImportedStandalone" false) (mem "allIfaceMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "ieImplExistsForHead" false) (mem "ifaceSortKey" false) (mem "methodAdmittedHere" false) (mem "methodDispatchIdx" false) (mem "methodEntryHere" false) (mem "methodVisibleHere" false) (mem "importedIfaceRows" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "ieImplExistsForHead" false) (mem "ifaceSortKey" false) (mem "methodAdmittedHere" false) (mem "methodDispatchIdx" false) (mem "methodEntryHere" false) (mem "methodVisibleHere" false) (mem "importedIfaceRows" false) (mem "aliasMethodSpellings" false) (mem "withAliasMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "clampPrefix" false) (mem "instantiate" false) (mem "instantiateMethodTracked" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "qualConstraintDecl" false) (mem "unifyIn" false) (mem "unifySpineProbe" false) (mem "zipSlotVecs" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "sigToScheme" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
@@ -2438,14 +2544,17 @@ shadowBareName sm n = match lookupAssoc n sm
 (DFunDef false "formBareLocals" ((PVar "gctx") (PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EApp (EVar "depExportsUnknown") (EVar "gctx")) (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EApp (EVar "depExportsStandalone") (EVar "gctx")) (EVar "depId")) (EVar "l")))) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bindings"))) (EFieldAccess (EVar "acc") "blSet"))))))))))
 (DTypeSig true "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
+(DTypeSig true "methodMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkCtx"))))))
+(DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") (PLit (LString "")) (PVar "coreProg")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msMarkRpNames")) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkRpNames"))) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") PWild (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msMarkSharedNames") (EFieldAccess (EVar "ms") "msGraphShadowNames")))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty")))) (fa "mcSm" (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoLet false false (PVar "shadowMap") (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkSharedNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "shadowSymSpelledBare") (EVar "sc")) (EVar "shadowMap")) (EVar "n"))))) (EFieldAccess (EVar "ms") "msGraphShadowNames"))))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty")))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "CDeclaredPrefix" true) (mem "AdmittedAnswer" true) (mem "AdmittedVerdict" true) (mem "BareLocals" true) (mem "CDeclared" true) (mem "DynCtx" true) (mem "ShadowDicts" true) (mem "SpellCtx" true) (mem "TcEnv" true) (mem "CSlot" false) (mem "DriveOutputs" false) (mem "EvCell" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "SiteCtx" false) (mem "siteFor" false) (mem "ValueScheme" false) (mem "MarkCtx" true) (mem "MarkSets" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "headMonoNode" false) (mem "headTyconMono" false) (mem "monoIsTyvarId" false) (mem "nthFunDomain" false) (mem "nthMono" false) (mem "substMono" false) (mem "tyvarId" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambiguousShadowHelp" false) (mem "shadowIfaceLabel" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAt" false) (mem "emptyShadowDicts" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "depExportsStandalone" false) (mem "depExportsUnknown" false) (mem "funDefs" false) (mem "graphPubDefiners" false) (mem "ieImplExistsForHeadOf" false) (mem "ifaceExportsIndex" false) (mem "ifaceMethodRows" false) (mem "importedBindings" false) (mem "lookupIdxById" false) (mem "lookupStandaloneValue" false) (mem "lookupStandaloneVar" false) (mem "lookupVar" false) (mem "methodRowIface" false) (mem "namesToSet" false) (mem "removeAllS" false) (mem "standaloneValueFor" false) (mem "hasImportDefiner" false) (mem "lookupImportedStandalone" false) (mem "allIfaceMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "ieImplExistsForHead" false) (mem "ifaceSortKey" false) (mem "methodAdmittedHere" false) (mem "methodDispatchIdx" false) (mem "methodEntryHere" false) (mem "methodVisibleHere" false) (mem "importedIfaceRows" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "ieImplExistsForHead" false) (mem "ifaceSortKey" false) (mem "methodAdmittedHere" false) (mem "methodDispatchIdx" false) (mem "methodEntryHere" false) (mem "methodVisibleHere" false) (mem "importedIfaceRows" false) (mem "aliasMethodSpellings" false) (mem "withAliasMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "clampPrefix" false) (mem "instantiate" false) (mem "instantiateMethodTracked" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "qualConstraintDecl" false) (mem "unifyIn" false) (mem "unifySpineProbe" false) (mem "zipSlotVecs" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "sigToScheme" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
@@ -2730,3 +2839,6 @@ shadowBareName sm n = match lookupAssoc n sm
 (DFunDef false "formBareLocals" ((PVar "gctx") (PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EApp (EVar "depExportsUnknown") (EVar "gctx")) (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EApp (EVar "depExportsStandalone") (EVar "gctx")) (EVar "depId")) (EVar "l")))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bindings"))) (EFieldAccess (EVar "acc") "blSet"))))))))))
 (DTypeSig true "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
+(DTypeSig true "methodMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkCtx"))))))
+(DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") (PLit (LString "")) (PVar "coreProg")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msMarkRpNames")) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkRpNames"))) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") PWild (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msMarkSharedNames") (EFieldAccess (EVar "ms") "msGraphShadowNames")))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty")))) (fa "mcSm" (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoLet false false (PVar "shadowMap") (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkSharedNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "shadowSymSpelledBare") (EVar "sc")) (EVar "shadowMap")) (EVar "n"))))) (EFieldAccess (EVar "ms") "msGraphShadowNames"))))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty")))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

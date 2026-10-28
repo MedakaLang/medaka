@@ -26,7 +26,6 @@ import types.tc_types.{
   PredicateSlot(..),
   PredicateSlotArgs(..),
   Provenance(..),
-  ReqStep(..),
   ScopedImplMethod(..),
   SiteCtx(..),
   TcEnv(..),
@@ -188,8 +187,6 @@ import types.tc_solve_entail.{
   goalCandidates,
   goalRows,
   reqWalkEnter,
-  reqWalkMemo,
-  reqWalkSeed,
   reqWalkStart,
   superParamsOf,
 }
@@ -199,13 +196,10 @@ import types.tc_solve.{
   dictAppsSince,
   goalsMark,
   improveByUniqueImpl,
-  noteWalkGoalFollowed,
   openScope,
   rigidHeadInstanceContext,
-  solvedCleanly,
   solvedOnWalk,
   uOblArgs,
-  walkGoalFollowed,
 }
 import types.tc_solve_check.{
   callOblsWindow,
@@ -219,7 +213,6 @@ import types.tc_solve_check.{
   numConstrainedIds,
   numObligIds,
   oblPredOf,
-  prerequisiteOnWalk,
   registerImplRequires,
   rejectUndeterminedVectors,
   rejectWithheldAmbiguity,
@@ -240,7 +233,7 @@ import types.tc_effects.{
   recordClauseFileBound,
 }
 import types.tc_occurrence.{mkMethodOccObl}
-import types.tc_groups.{exprLoc, requireGoalsBelow, sccProtectedSignatureIds}
+import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}
 import types.scopes.{DefaultBodyIdentity(..), ScopeOwner(..)}
 import frontend.ast.{
@@ -1544,142 +1537,6 @@ inferDefaultMethod : TcEnv ->
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   inferMethodBody env iface DefaultBody (typarams, mty, dscope) mname pats body
 inferDefaultMethod env _ _ _ _ = ()
-
--- The prerequisites of the instances [obls]' goals select, as goals of the same
--- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
--- only once its `requires` is answered too, so a prerequisite left open is judged
--- like a goal the boundary posed itself.  It is not determined: an open sibling
--- refutes no candidate, so a commit through a prerequisite could choose a
--- structural instance whose open sibling no instance meets (`Num (MyList ?m)`).
--- A goal a given
--- answers whole selects no instance; a goal every variable of which is held rigid
--- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
--- the obligation gate's.  A goal whose verdict waits for quiescence, on a variable
--- of [liveIds], is walked there with it (`judgeQuiescentGoals`), after a later
--- group could ground that variable.  Each prerequisite continues its parent's walk
--- under the shared `requires` measure (`reqWalkEnter`), which bounds a chain that does
--- not shrink; a repeated or out-of-fuel prerequisite is reported at its site.
--- The goals come level by level, in the order the walk reaches them.  A goal one
--- seed's walk reaches again, at the same fuel, after following it cleanly is the same
--- goal with the same prerequisites, so it is kept and followed once (`wmFollowed`).
--- That pass reports nothing; when a step of it repeats a goal or runs out of fuel,
--- the goals come from a second pass that follows every path and reports each such
--- step, because the walk's path then decides what is reported.
-export
-nestedRequireGoals : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List UObligation ->
-  List UObligation
-nestedRequireGoals mctx rigidIds liveIds obls =
-  let seeds = requireGoalSeeds mctx.mcGraph obls
-  let goals =
-    nestedRequireGoalsOnce
-      mctx
-      rigidIds
-      liveIds
-      (flatMap (followRequireGoal mctx rigidIds liveIds) seeds)
-  if anyList (s => (reqWalkMemo (snd s)).wmStopped.value) seeds then
-    nestedRequireGoalsGo
-      mctx
-      rigidIds
-      liveIds
-      (requireGoalSeeds mctx.mcGraph obls)
-  else
-    goals
-
--- Each goal of [obls] as the seed of its own walk.
-requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
-requireGoalSeeds gctx obls =
-  map
-    (o => (o, reqWalkSeed o.pred.iface (map normalize (uOblArgs gctx o))))
-    obls
-
-nestedRequireGoalsGo : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation
-nestedRequireGoalsGo mctx rigidIds liveIds walks =
-  match flatMap (selectedRequireGoals mctx rigidIds liveIds) walks
-    [] => []
-    derived =>
-      map fst derived ++ nestedRequireGoalsGo mctx rigidIds liveIds derived
-
--- The goals from level [walks] down, each goal its walk has already followed left out.
-nestedRequireGoalsOnce : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation
-nestedRequireGoalsOnce mctx _ _ [] = []
-nestedRequireGoalsOnce mctx rigidIds liveIds walks =
-  let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
-  kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
-
--- One level, in order: a goal its walk has already followed is left out,
--- each other is kept and followed, and the goals it selects form the next level.
-followRequireLevel : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation ->
-  List (List (UObligation, ReqWalk)) ->
-  (List UObligation, List (UObligation, ReqWalk))
-followRequireLevel mctx _ _ [] kept derived =
-  (reverse kept, flatMap identity (reverse derived))
-followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
-  if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
-    followRequireLevel mctx rigidIds liveIds rest kept derived
-  else
-    let below = followRequireGoal mctx rigidIds liveIds (o, walk)
-    followRequireLevel mctx rigidIds liveIds rest (o :: kept) (below :: derived)
-
--- [o]'s prerequisites on the pass that reports nothing; [o] is recorded as followed
--- when selecting them detected no error and minted none of their variables
--- (`solvedCleanly`).
-followRequireGoal : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  (UObligation, ReqWalk) ->
-  List (UObligation, ReqWalk)
-followRequireGoal mctx rigidIds liveIds (o, walk) =
-  let (clean, below) =
-    solvedCleanly
-      mctx
-      (goals => flatMap (g => uOblArgs mctx.mcGraph (fst g)) goals)
-      (_ => requireGoalsBelow mctx prerequisiteUnreported rigidIds liveIds (
-        o,
-        walk,
-      ))
-  if clean then
-    noteWalkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o)
-  below
-
-uOblGoalArgs : GraphCtx -> UObligation -> List Mono
-uOblGoalArgs gctx o = map normalize (uOblArgs gctx o)
-
--- [o]'s prerequisites under the one instance its goal selects as it stands, each
--- with the walk that reaches it from [o]'s.
-selectedRequireGoals : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  (UObligation, ReqWalk) ->
-  List (UObligation, ReqWalk)
-selectedRequireGoals mctx rigidIds liveIds walk =
-  requireGoalsBelow mctx (prerequisiteOnWalk mctx) rigidIds liveIds walk
-
--- A prerequisite entered on its parent's walk without a report: a repeated or
--- out-of-fuel one stops the walk (`wmStopped`), which `nestedRequireGoals` then runs
--- again with `prerequisiteOnWalk`.
-prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
-prerequisiteUnreported walk g =
-  match reqWalkEnter walk g.pred.iface (map normalize g.pred.args)
-    ReqOn next => [(g, next)]
-    _ =>
-      let memo = reqWalkMemo walk
-      memo.wmStopped := True
-      []
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
 -- method declarations come from the identity-keyed ClassEnv row at [cur].

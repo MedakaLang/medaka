@@ -6,7 +6,7 @@
 -- report (`importedStandaloneShadowsIn`), the method-cell lookup, the application heads of
 -- an imported shadow (`shadowStandaloneHead`, `plainAppHeadVar`), and the recorded-site
 -- resolution `resolveRLocalSite` for a receiver no impl answers and for one a live impl
--- does.  One property: the shadows a program has do not depend on the order its standalones
+-- does, and the mark sets a module may name (`methodMarkCtx`).  One property: the shadows a program has do not depend on the order its standalones
 -- are declared in.  Each test builds the module record, interface scope and impl
 -- environment it reads; none reaches the inference recursion.
 
@@ -50,6 +50,7 @@ import types.tc_shadow.{
   shadowSymSpelledBare,
   stampMethodArities,
   stampRoutes,
+  methodMarkCtx,
 }
 import types.tc_state.{blankModuleCtx, probeGraphCtx}
 import types.tc_test_support.{
@@ -65,8 +66,13 @@ import types.tc_types.{
   SpellCtx(..),
   TcEnv,
   siteFor,
+  MarkSets(..),
 }
-import support.ordmap.{omEmpty, omInsert}
+import support.ordmap.{
+  omEmpty,
+  omInsert,
+  omKeys,
+}
 import support.util.{joinNl}
 import list.{sort}
 
@@ -527,3 +533,79 @@ shadowsOf order =
 prop "the shadows of a program do not depend on the order its standalones are declared in" (c : OrderCase) =
   let (OrderCase order) = c
   shadowsOf order == shadowsOf (sort order)
+
+-- ── methodMarkCtx ─────────────────────────────────────────────────────────
+
+-- Mark sets over the method names [shared] (return-position and constrained), [shadows] and
+-- [args], and the core shadow map [coreMap].
+marksOf : List String ->
+  List String ->
+  List String ->
+  List (String, String) ->
+  MarkSets
+marksOf rp shared args coreMap = MarkSets {
+  msMarkRpNames = rp,
+  msMarkSharedNames = shared,
+  msGraphShadowNames = [],
+  msArgNames = args,
+  msCoreShadowMap = coreMap,
+  msBareDictNames = [],
+  msUnits = [],
+}
+
+-- A graph whose interface index lists the interface `Sizeable` and its method `size` under core.
+withCoreIndex : GraphCtx -> GraphCtx
+withCoreIndex g =
+  let empty = g.declEnvsRef.value
+  g.declEnvsRef := { empty |
+    deMethods = { empty.deMethods |
+      meIfaceExports = omInsert "core" [("Sizeable", ["size"])] omEmpty,
+    },
+  }
+  g
+
+test "a module marked over a graph with no interface index may name every method the sets hold" =
+  let ctx =
+    methodMarkCtx
+      (probeGraphCtx ())
+      (marksOf [] ["size", "zap"] ["size", "zap"] [])
+      "m"
+      []
+  expectEqual
+    (["size", "zap"], ["size", "zap"])
+    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
+
+test "the prelude marked over a graph with no interface index keeps the return-position and argument names whole" =
+  let ctx =
+    methodMarkCtx
+      (probeGraphCtx ())
+      (marksOf ["size"] ["zap"] ["arg"] [("a", "b")])
+      ""
+      []
+  expectEqual
+    (["size"], ["arg"], [("a", "b")])
+    (omKeys ctx.mcRp, omKeys ctx.mcAn, ctx.mcSm)
+
+test "the prelude marked over an interface index names only the methods of an interface core declares" =
+  let ctx =
+    methodMarkCtx
+      (withCoreIndex (probeGraphCtx ()))
+      (marksOf ["size", "zap"] [] ["size", "zap"] [])
+      ""
+      []
+  expectEqual (["size"], ["size"]) (omKeys ctx.mcRp, omKeys ctx.mcAn)
+
+test "a module marked over an interface index names core's methods and its own, and no others" =
+  let own = parse """
+interface Zap a where
+  zap : a -> Int
+"""
+  let ctx =
+    methodMarkCtx
+      (withCoreIndex (probeGraphCtx ()))
+      (marksOf [] ["size", "zap", "other"] ["size", "zap", "other"] [])
+      "m"
+      own
+  expectEqual
+    (["size", "zap"], ["size", "zap"])
+    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))

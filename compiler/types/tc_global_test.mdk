@@ -5,8 +5,7 @@
 -- `checkGradedImplHeads`, the impl-head projections and `implDeclLoc`, the bodies of interface
 -- defaults and of impls without a requirement (`inferDefaultBodies`,
 -- `inferImplBodies`), and the Num-obligation synthesis of the call window (`numCallObls`,
--- `calleeNumObls`).  Not driven here: `nestedRequireGoals` (its goals come from occurrences the
--- mark pass mints), the bodies of an impl with a requirement (they read marked sites, and
+-- `calleeNumObls`).  Not driven here: the bodies of an impl with a requirement (they read marked sites, and
 -- inference stops on an unminted one), the dictionary-application half of `calleeNumObls`, and
 -- the remaining callers of each check.  What a whole check rejects is observed
 -- through `types.typecheck` in `typecheck_test`.

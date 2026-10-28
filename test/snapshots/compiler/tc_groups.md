@@ -1,11 +1,12 @@
 # META
-source_lines=2077
+source_lines=2227
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
 -- free-variable walk that forms groups, the value restriction and the recursive-value restriction
 -- (`checkRecursiveValue`, `checkRecBindNonFunction`, the `eagerRefs` walk), group generalization,
--- goals required below, signature constraints.  The mark pass over groups and the write-back of
+-- goals required below (`requireGoalsBelow`) and the prerequisite walk over them
+-- (`nestedRequireGoals`), signature constraints.  The mark pass over groups and the write-back of
 -- its clauses are `tc_occurrence`.
 --
 -- Spec: HM-CORE section 1 (gen-value), section 4, section 5 (owed, #2555); DICT section 4.1 G2,
@@ -16,6 +17,7 @@ stages=DESUGAR,MARK
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_pat`,
 -- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import list.{reverse}
 import types.tc_types.{
   OblProjection(..),
   GoalReach(..),
@@ -31,6 +33,7 @@ import types.tc_types.{
   ScopedMember,
   siteFor,
   TcEnv,
+  ReqStep(..),
 }
 import types.tc_mono.{
   abstractSlotIds,
@@ -102,8 +105,18 @@ import types.tc_solve_entail.{
   goalReach,
   goalRows,
   selectedRowReqMatch,
+  reqWalkEnter,
+  reqWalkMemo,
+  reqWalkSeed,
 }
-import types.tc_solve.{goalVarsAllHeld, reqToObligation, uOblArgs}
+import types.tc_solve.{
+  goalVarsAllHeld,
+  reqToObligation,
+  uOblArgs,
+  noteWalkGoalFollowed,
+  solvedCleanly,
+  walkGoalFollowed,
+}
 import types.tc_solve_check.{
   callPredOf,
   ifaceForInferredId,
@@ -111,6 +124,7 @@ import types.tc_solve_check.{
   oblPredOf,
   residualBoundPreds,
   undeterminedGoalExempt,
+  prerequisiteOnWalk,
 }
 import types.tc_effects.{clausesAt, clausesOf}
 import types.tc_occurrence.{ctorHeadShaped}
@@ -795,6 +809,142 @@ requireGoalAt o parentIds (iface, args)
       oblProj = OpProjected,
     },
   ]
+
+-- The prerequisites of the instances [obls]' goals select, as goals of the same
+-- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
+-- only once its `requires` is answered too, so a prerequisite left open is judged
+-- like a goal the boundary posed itself.  It is not determined: an open sibling
+-- refutes no candidate, so a commit through a prerequisite could choose a
+-- structural instance whose open sibling no instance meets (`Num (MyList ?m)`).
+-- A goal a given
+-- answers whole selects no instance; a goal every variable of which is held rigid
+-- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
+-- the obligation gate's.  A goal whose verdict waits for quiescence, on a variable
+-- of [liveIds], is walked there with it (`judgeQuiescentGoals`), after a later
+-- group could ground that variable.  Each prerequisite continues its parent's walk
+-- under the shared `requires` measure (`reqWalkEnter`), which bounds a chain that does
+-- not shrink; a repeated or out-of-fuel prerequisite is reported at its site.
+-- The goals come level by level, in the order the walk reaches them.  A goal one
+-- seed's walk reaches again, at the same fuel, after following it cleanly is the same
+-- goal with the same prerequisites, so it is kept and followed once (`wmFollowed`).
+-- That pass reports nothing; when a step of it repeats a goal or runs out of fuel,
+-- the goals come from a second pass that follows every path and reports each such
+-- step, because the walk's path then decides what is reported.
+export
+nestedRequireGoals : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List UObligation ->
+  List UObligation
+nestedRequireGoals mctx rigidIds liveIds obls =
+  let seeds = requireGoalSeeds mctx.mcGraph obls
+  let goals =
+    nestedRequireGoalsOnce
+      mctx
+      rigidIds
+      liveIds
+      (flatMap (followRequireGoal mctx rigidIds liveIds) seeds)
+  if anyList (s => (reqWalkMemo (snd s)).wmStopped.value) seeds then
+    nestedRequireGoalsGo
+      mctx
+      rigidIds
+      liveIds
+      (requireGoalSeeds mctx.mcGraph obls)
+  else
+    goals
+
+-- Each goal of [obls] as the seed of its own walk.
+requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
+requireGoalSeeds gctx obls =
+  map
+    (o => (o, reqWalkSeed o.pred.iface (map normalize (uOblArgs gctx o))))
+    obls
+
+nestedRequireGoalsGo : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List (UObligation, ReqWalk) ->
+  List UObligation
+nestedRequireGoalsGo mctx rigidIds liveIds walks =
+  match flatMap (selectedRequireGoals mctx rigidIds liveIds) walks
+    [] => []
+    derived =>
+      map fst derived ++ nestedRequireGoalsGo mctx rigidIds liveIds derived
+
+-- The goals from level [walks] down, each goal its walk has already followed left out.
+nestedRequireGoalsOnce : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List (UObligation, ReqWalk) ->
+  List UObligation
+nestedRequireGoalsOnce mctx _ _ [] = []
+nestedRequireGoalsOnce mctx rigidIds liveIds walks =
+  let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
+  kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
+
+-- One level, in order: a goal its walk has already followed is left out,
+-- each other is kept and followed, and the goals it selects form the next level.
+followRequireLevel : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List (UObligation, ReqWalk) ->
+  List UObligation ->
+  List (List (UObligation, ReqWalk)) ->
+  (List UObligation, List (UObligation, ReqWalk))
+followRequireLevel mctx _ _ [] kept derived =
+  (reverse kept, flatMap identity (reverse derived))
+followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
+  if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
+    followRequireLevel mctx rigidIds liveIds rest kept derived
+  else
+    let below = followRequireGoal mctx rigidIds liveIds (o, walk)
+    followRequireLevel mctx rigidIds liveIds rest (o :: kept) (below :: derived)
+
+-- [o]'s prerequisites on the pass that reports nothing; [o] is recorded as followed
+-- when selecting them detected no error and minted none of their variables
+-- (`solvedCleanly`).
+followRequireGoal : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  (UObligation, ReqWalk) ->
+  List (UObligation, ReqWalk)
+followRequireGoal mctx rigidIds liveIds (o, walk) =
+  let (clean, below) =
+    solvedCleanly
+      mctx
+      (goals => flatMap (g => uOblArgs mctx.mcGraph (fst g)) goals)
+      (_ => requireGoalsBelow mctx prerequisiteUnreported rigidIds liveIds (
+        o,
+        walk,
+      ))
+  if clean then
+    noteWalkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o)
+  below
+
+uOblGoalArgs : GraphCtx -> UObligation -> List Mono
+uOblGoalArgs gctx o = map normalize (uOblArgs gctx o)
+
+-- [o]'s prerequisites under the one instance its goal selects as it stands, each
+-- with the walk that reaches it from [o]'s.
+selectedRequireGoals : ModuleCtx ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  (UObligation, ReqWalk) ->
+  List (UObligation, ReqWalk)
+selectedRequireGoals mctx rigidIds liveIds walk =
+  requireGoalsBelow mctx (prerequisiteOnWalk mctx) rigidIds liveIds walk
+
+-- A prerequisite entered on its parent's walk without a report: a repeated or
+-- out-of-fuel one stops the walk (`wmStopped`), which `nestedRequireGoals` then runs
+-- again with `prerequisiteOnWalk`.
+prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
+prerequisiteUnreported walk g =
+  match reqWalkEnter walk g.pred.iface (map normalize g.pred.args)
+    ReqOn next => [(g, next)]
+    _ =>
+      let memo = reqWalkMemo walk
+      memo.wmStopped := True
+      []
 
 -- every variable reference in an expr, bound ones included (an over-approximation
 -- of its free references); the dependency graph uses `freeEVars` instead
@@ -2080,7 +2230,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
   Some (MethodDefault _ body) => allEVars body
   None => []
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ReqStep" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "authIdsIn" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "qualifierAuthIds" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "annotTooGeneralMsg" false) (mem "groundedSigVarMsg" false) (mem "letRecNonFunctionMsg" false) (mem "missingConstraintMsg" false) (mem "missingConstraintVecMsg" false) (mem "sigOverExpansiveMsg" false) (mem "sigTooGeneralMsg" false) (mem "siblingSharedSigVarMsg" false) (mem "varNameForId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "mctxAtIfSome" false))))
@@ -2090,9 +2241,9 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "sigConstraintsOf" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "constraintNameMonos" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "goalGivenAt" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false))))
-(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
+(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
@@ -2268,6 +2419,26 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "unifiedRowReqs" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PAs "row" (PCon "ImplRow" PWild PWild PWild PWild (PVar "reqs") PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "tvs") (PVar "heads")) (EApp (EApp (EVar "freshRowHeadsTvs") (EVar "mctx")) (EVar "row"))) (DoLet false false (PVar "goalIds") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "headsUnifier") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "rigidIds")) (EVar "args")) (EVar "heads")) (arm (PCon "Some" (PVar "scratch")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "b"))) (EVar "goalIds"))) (EApp (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds")) (EApp (EVar "fst") (EVar "b")))))) (EUnOp "!" (EVar "scratch"))) (EBlock (DoLet false false (PVar "sigCells") (EApp (EApp (EVar "sigCellsOf") (EVar "rigidIds")) (EApp (EApp (EVar "flatMap") (EVar "monoVarCells")) (EVar "args")))) (DoLet false false (PVar "bound") (EApp (EApp (EVar "map") (ELam ((PVar "nv")) (ETuple (EApp (EVar "fst") (EVar "nv")) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EApp (EApp (EVar "cohApply") (EVar "scratch")) (EApp (EVar "snd") (EVar "nv"))))))) (EVar "tvs"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "bound") (EApp (EApp (EVar "flatMap") (ELam ((PVar "nv")) (EApp (EVar "monoUnboundIds") (EApp (EVar "snd") (EVar "nv"))))) (EVar "bound")) (EVar "reqs"))))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "requireGoalAt" (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "UObligation"))))))
 (DFunDef false "requireGoalAt" ((PVar "o") (PVar "parentIds") (PTuple (PVar "iface") (PVar "args"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EVar "parentIds")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EListLit) (EIf (EVar "otherwise") (EListLit (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (EFieldAccess (EVar "o") "originId")) (fa "prov" (EFieldAccess (EVar "o") "prov")) (fa "loc" (EFieldAccess (EVar "o") "loc")) (fa "uoScope" (EFieldAccess (EVar "o") "uoScope")) (fa "oblProj" (EVar "OpProjected"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "nestedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "obls")) (EBlock (DoLet false false (PVar "seeds") (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (DoLet false false (PVar "goals") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "seeds")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EApp (EVar "reqWalkMemo") (EApp (EVar "snd") (EVar "s"))) "wmStopped") "value"))) (EVar "seeds")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EVar "goals")))))
+(DTypeSig false "requireGoalSeeds" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
+(DFunDef false "requireGoalSeeds" ((PVar "gctx") (PVar "obls")) (EApp (EApp (EVar "map") (ELam ((PVar "o")) (ETuple (EVar "o") (EApp (EApp (EVar "reqWalkSeed") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))))) (EVar "obls")))
+(DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
+(DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
+(DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
+(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
+(DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
+(DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
+(DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
+(DTypeSig false "uOblGoalArgs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "uOblGoalArgs" ((PVar "gctx") (PVar "o")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))
+(DTypeSig false "selectedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
+(DFunDef false "selectedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walk")) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EApp (EVar "prerequisiteOnWalk") (EVar "mctx"))) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walk")))
+(DTypeSig false "prerequisiteUnreported" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
+(DFunDef false "prerequisiteUnreported" ((PVar "walk") (PVar "g")) (EMatch (EApp (EApp (EApp (EVar "reqWalkEnter") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "args"))) (arm (PCon "ReqOn" (PVar "next")) () (EListLit (ETuple (EVar "g") (EVar "next")))) (arm PWild () (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmStopped")) (EVar "True"))) (DoExpr (EListLit))))))
 (DTypeSig true "allEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allEVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
 (DFunDef false "allEVars" ((PCon "EVarId" (PVar "x") PWild)) (EListLit (EVar "x")))
@@ -2593,7 +2764,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "ifaceMethodEVars" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ifaceMethodEVars" ((PCon "IfaceMethod" PWild PWild (PVar "d") PWild)) (EMatch (EVar "d") (arm (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))) () (EApp (EVar "allEVars") (EVar "body"))) (arm (PCon "None") () (EListLit))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ReqStep" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "authIdsIn" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "qualifierAuthIds" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "annotTooGeneralMsg" false) (mem "groundedSigVarMsg" false) (mem "letRecNonFunctionMsg" false) (mem "missingConstraintMsg" false) (mem "missingConstraintVecMsg" false) (mem "sigOverExpansiveMsg" false) (mem "sigTooGeneralMsg" false) (mem "siblingSharedSigVarMsg" false) (mem "varNameForId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "mctxAtIfSome" false))))
@@ -2603,9 +2775,9 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "sigConstraintsOf" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "constraintNameMonos" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "goalGivenAt" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false))))
-(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
+(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
@@ -2781,6 +2953,26 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "unifiedRowReqs" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PAs "row" (PCon "ImplRow" PWild PWild PWild PWild (PVar "reqs") PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "tvs") (PVar "heads")) (EApp (EApp (EVar "freshRowHeadsTvs") (EVar "mctx")) (EVar "row"))) (DoLet false false (PVar "goalIds") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "headsUnifier") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "rigidIds")) (EVar "args")) (EVar "heads")) (arm (PCon "Some" (PVar "scratch")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "b"))) (EVar "goalIds"))) (EApp (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds")) (EApp (EVar "fst") (EVar "b")))))) (EUnOp "!" (EVar "scratch"))) (EBlock (DoLet false false (PVar "sigCells") (EApp (EApp (EVar "sigCellsOf") (EVar "rigidIds")) (EApp (EApp (EDictApp "flatMap") (EVar "monoVarCells")) (EVar "args")))) (DoLet false false (PVar "bound") (EApp (EApp (EMethodRef "map") (ELam ((PVar "nv")) (ETuple (EApp (EVar "fst") (EVar "nv")) (EApp (EApp (EVar "unrigidSig") (EVar "sigCells")) (EApp (EApp (EVar "cohApply") (EVar "scratch")) (EApp (EVar "snd") (EVar "nv"))))))) (EVar "tvs"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "bound") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "nv")) (EApp (EVar "monoUnboundIds") (EApp (EVar "snd") (EVar "nv"))))) (EVar "bound")) (EVar "reqs"))))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "requireGoalAt" (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "UObligation"))))))
 (DFunDef false "requireGoalAt" ((PVar "o") (PVar "parentIds") (PTuple (PVar "iface") (PVar "args"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EVar "parentIds")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EListLit) (EIf (EVar "otherwise") (EListLit (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (EFieldAccess (EVar "o") "originId")) (fa "prov" (EFieldAccess (EVar "o") "prov")) (fa "loc" (EFieldAccess (EVar "o") "loc")) (fa "uoScope" (EFieldAccess (EVar "o") "uoScope")) (fa "oblProj" (EVar "OpProjected"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "nestedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "obls")) (EBlock (DoLet false false (PVar "seeds") (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (DoLet false false (PVar "goals") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "seeds")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EApp (EVar "reqWalkMemo") (EApp (EVar "snd") (EVar "s"))) "wmStopped") "value"))) (EVar "seeds")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EVar "goals")))))
+(DTypeSig false "requireGoalSeeds" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
+(DFunDef false "requireGoalSeeds" ((PVar "gctx") (PVar "obls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (ETuple (EVar "o") (EApp (EApp (EVar "reqWalkSeed") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))))) (EVar "obls")))
+(DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
+(DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
+(DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
+(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
+(DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
+(DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
+(DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
+(DTypeSig false "uOblGoalArgs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "uOblGoalArgs" ((PVar "gctx") (PVar "o")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))
+(DTypeSig false "selectedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
+(DFunDef false "selectedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walk")) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EApp (EVar "prerequisiteOnWalk") (EVar "mctx"))) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walk")))
+(DTypeSig false "prerequisiteUnreported" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
+(DFunDef false "prerequisiteUnreported" ((PVar "walk") (PVar "g")) (EMatch (EApp (EApp (EApp (EVar "reqWalkEnter") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "args"))) (arm (PCon "ReqOn" (PVar "next")) () (EListLit (ETuple (EVar "g") (EVar "next")))) (arm PWild () (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmStopped")) (EVar "True"))) (DoExpr (EListLit))))))
 (DTypeSig true "allEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allEVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
 (DFunDef false "allEVars" ((PCon "EVarId" (PVar "x") PWild)) (EListLit (EVar "x")))

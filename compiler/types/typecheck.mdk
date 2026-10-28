@@ -658,6 +658,7 @@ import types.tc_shadow.{
   checkAdmittedOccObls,
   definerShadowsFromSet,
   isPreludeMid,
+  methodMarkCtx,
   nameableIfaceMethodSet,
   nameableIfaceRows,
   nameableIfaceShadows,
@@ -701,6 +702,7 @@ import types.tc_occurrence.{
 import types.tc_groups.{
   allEVars,
   checkLetRecDecls,
+  nestedRequireGoals,
   checkRecursiveValue,
   checkSigConstraintCoverage,
   checkSigsFixedByExpansive,
@@ -736,7 +738,6 @@ import types.tc_infer.{
 import types.tc_elab.{
   dictPassModulesIfEnabled,
   drivenEvidence,
-  methodMarkCtx,
   realizeRecDictApps,
   resolveAdmittedSite,
   resolveArgStamps,
@@ -762,7 +763,6 @@ import types.tc_global.{
   implHeadParametric,
   inferDefaultBodies,
   inferImplBodies,
-  nestedRequireGoals,
   numCallObls,
 }
 

@@ -1,5 +1,5 @@
 # META
-source_lines=3001
+source_lines=2858
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -30,7 +30,6 @@ import types.tc_types.{
   PredicateSlot(..),
   PredicateSlotArgs(..),
   Provenance(..),
-  ReqStep(..),
   ScopedImplMethod(..),
   SiteCtx(..),
   TcEnv(..),
@@ -192,8 +191,6 @@ import types.tc_solve_entail.{
   goalCandidates,
   goalRows,
   reqWalkEnter,
-  reqWalkMemo,
-  reqWalkSeed,
   reqWalkStart,
   superParamsOf,
 }
@@ -203,13 +200,10 @@ import types.tc_solve.{
   dictAppsSince,
   goalsMark,
   improveByUniqueImpl,
-  noteWalkGoalFollowed,
   openScope,
   rigidHeadInstanceContext,
-  solvedCleanly,
   solvedOnWalk,
   uOblArgs,
-  walkGoalFollowed,
 }
 import types.tc_solve_check.{
   callOblsWindow,
@@ -223,7 +217,6 @@ import types.tc_solve_check.{
   numConstrainedIds,
   numObligIds,
   oblPredOf,
-  prerequisiteOnWalk,
   registerImplRequires,
   rejectUndeterminedVectors,
   rejectWithheldAmbiguity,
@@ -244,7 +237,7 @@ import types.tc_effects.{
   recordClauseFileBound,
 }
 import types.tc_occurrence.{mkMethodOccObl}
-import types.tc_groups.{exprLoc, requireGoalsBelow, sccProtectedSignatureIds}
+import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}
 import types.scopes.{DefaultBodyIdentity(..), ScopeOwner(..)}
 import frontend.ast.{
@@ -1548,142 +1541,6 @@ inferDefaultMethod : TcEnv ->
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   inferMethodBody env iface DefaultBody (typarams, mty, dscope) mname pats body
 inferDefaultMethod env _ _ _ _ = ()
-
--- The prerequisites of the instances [obls]' goals select, as goals of the same
--- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
--- only once its `requires` is answered too, so a prerequisite left open is judged
--- like a goal the boundary posed itself.  It is not determined: an open sibling
--- refutes no candidate, so a commit through a prerequisite could choose a
--- structural instance whose open sibling no instance meets (`Num (MyList ?m)`).
--- A goal a given
--- answers whole selects no instance; a goal every variable of which is held rigid
--- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
--- the obligation gate's.  A goal whose verdict waits for quiescence, on a variable
--- of [liveIds], is walked there with it (`judgeQuiescentGoals`), after a later
--- group could ground that variable.  Each prerequisite continues its parent's walk
--- under the shared `requires` measure (`reqWalkEnter`), which bounds a chain that does
--- not shrink; a repeated or out-of-fuel prerequisite is reported at its site.
--- The goals come level by level, in the order the walk reaches them.  A goal one
--- seed's walk reaches again, at the same fuel, after following it cleanly is the same
--- goal with the same prerequisites, so it is kept and followed once (`wmFollowed`).
--- That pass reports nothing; when a step of it repeats a goal or runs out of fuel,
--- the goals come from a second pass that follows every path and reports each such
--- step, because the walk's path then decides what is reported.
-export
-nestedRequireGoals : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List UObligation ->
-  List UObligation
-nestedRequireGoals mctx rigidIds liveIds obls =
-  let seeds = requireGoalSeeds mctx.mcGraph obls
-  let goals =
-    nestedRequireGoalsOnce
-      mctx
-      rigidIds
-      liveIds
-      (flatMap (followRequireGoal mctx rigidIds liveIds) seeds)
-  if anyList (s => (reqWalkMemo (snd s)).wmStopped.value) seeds then
-    nestedRequireGoalsGo
-      mctx
-      rigidIds
-      liveIds
-      (requireGoalSeeds mctx.mcGraph obls)
-  else
-    goals
-
--- Each goal of [obls] as the seed of its own walk.
-requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
-requireGoalSeeds gctx obls =
-  map
-    (o => (o, reqWalkSeed o.pred.iface (map normalize (uOblArgs gctx o))))
-    obls
-
-nestedRequireGoalsGo : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation
-nestedRequireGoalsGo mctx rigidIds liveIds walks =
-  match flatMap (selectedRequireGoals mctx rigidIds liveIds) walks
-    [] => []
-    derived =>
-      map fst derived ++ nestedRequireGoalsGo mctx rigidIds liveIds derived
-
--- The goals from level [walks] down, each goal its walk has already followed left out.
-nestedRequireGoalsOnce : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation
-nestedRequireGoalsOnce mctx _ _ [] = []
-nestedRequireGoalsOnce mctx rigidIds liveIds walks =
-  let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
-  kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
-
--- One level, in order: a goal its walk has already followed is left out,
--- each other is kept and followed, and the goals it selects form the next level.
-followRequireLevel : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  List (UObligation, ReqWalk) ->
-  List UObligation ->
-  List (List (UObligation, ReqWalk)) ->
-  (List UObligation, List (UObligation, ReqWalk))
-followRequireLevel mctx _ _ [] kept derived =
-  (reverse kept, flatMap identity (reverse derived))
-followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
-  if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
-    followRequireLevel mctx rigidIds liveIds rest kept derived
-  else
-    let below = followRequireGoal mctx rigidIds liveIds (o, walk)
-    followRequireLevel mctx rigidIds liveIds rest (o :: kept) (below :: derived)
-
--- [o]'s prerequisites on the pass that reports nothing; [o] is recorded as followed
--- when selecting them detected no error and minted none of their variables
--- (`solvedCleanly`).
-followRequireGoal : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  (UObligation, ReqWalk) ->
-  List (UObligation, ReqWalk)
-followRequireGoal mctx rigidIds liveIds (o, walk) =
-  let (clean, below) =
-    solvedCleanly
-      mctx
-      (goals => flatMap (g => uOblArgs mctx.mcGraph (fst g)) goals)
-      (_ => requireGoalsBelow mctx prerequisiteUnreported rigidIds liveIds (
-        o,
-        walk,
-      ))
-  if clean then
-    noteWalkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o)
-  below
-
-uOblGoalArgs : GraphCtx -> UObligation -> List Mono
-uOblGoalArgs gctx o = map normalize (uOblArgs gctx o)
-
--- [o]'s prerequisites under the one instance its goal selects as it stands, each
--- with the walk that reaches it from [o]'s.
-selectedRequireGoals : ModuleCtx ->
-  OrdMap Unit ->
-  OrdMap Unit ->
-  (UObligation, ReqWalk) ->
-  List (UObligation, ReqWalk)
-selectedRequireGoals mctx rigidIds liveIds walk =
-  requireGoalsBelow mctx (prerequisiteOnWalk mctx) rigidIds liveIds walk
-
--- A prerequisite entered on its parent's walk without a report: a repeated or
--- out-of-fuel one stops the walk (`wmStopped`), which `nestedRequireGoals` then runs
--- again with `prerequisiteOnWalk`.
-prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
-prerequisiteUnreported walk g =
-  match reqWalkEnter walk g.pred.iface (map normalize g.pred.args)
-    ReqOn next => [(g, next)]
-    _ =>
-      let memo = reqWalkMemo walk
-      memo.wmStopped := True
-      []
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
 -- method declarations come from the identity-keyed ClassEnv row at [cur].
@@ -3004,7 +2861,7 @@ numDictObls gctx (app :: rest) =
       (zip (map (i => i.irName) app.pdaIfaces) app.pdaMonos)
     ++ numDictObls gctx rest
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClass" true) (mem "CohSweep" true) (mem "DeclaringBinder" true) (mem "GrantBinder" true) (mem "HeadVarRoot" true) (mem "ImplBodySite" true) (mem "Kind" true) (mem "MethodBodyCheck" true) (mem "MethodBodyInstance" true) (mem "MethodBodyKind" true) (mem "MStep" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "ReqStep" true) (mem "ScopedImplMethod" true) (mem "SiteCtx" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "CeRow" false) (mem "ClassEnv" false) (mem "CohImpl" false) (mem "CohScan" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClass" true) (mem "CohSweep" true) (mem "DeclaringBinder" true) (mem "GrantBinder" true) (mem "HeadVarRoot" true) (mem "ImplBodySite" true) (mem "Kind" true) (mem "MethodBodyCheck" true) (mem "MethodBodyInstance" true) (mem "MethodBodyKind" true) (mem "MStep" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "ScopedImplMethod" true) (mem "SiteCtx" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "CeRow" false) (mem "ClassEnv" false) (mem "CohImpl" false) (mem "CohScan" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "anyConcreteHead" false) (mem "anyContainsI" false) (mem "anyMember" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "cohEqMono" false) (mem "cohOverlap" false) (mem "cohPpPair" false) (mem "containsI" false) (mem "dedupI" false) (mem "hasDupI" false) (mem "headVarRootOf" false) (mem "instantiateNamedMonos" false) (mem "isUnboundTvar" false) (mem "matchOneSided" false) (mem "monoRootIdSet" false) (mem "monoTyvarId" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "peelQual" false) (mem "sigTvarIds" false) (mem "stripTyWrap" false) (mem "tyAppSpine" false) (mem "tyStep" false) (mem "tyStructEq" false) (mem "tyvarId" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "backticked" false) (mem "cohCrossModuleMsg" false) (mem "cohIncomparableHelp" false) (mem "cohOverlapMsg" false) (mem "cohPreludeOverlapMsg" false) (mem "collapsesTyvarsMsg" false) (mem "derivableIface" false) (mem "implGoalFixesHeadMsg" false) (mem "implHeadIndexMsg" false) (mem "implKindMismatchMsg" false) (mem "implTupleHeadKindMsg" false) (mem "methodBodyLaunderMsg" false) (mem "methodBodySubject" false) (mem "missingImplMethodMsg" false) (mem "narrowsImplHeadMsg" false) (mem "pinsTyvarMsg" false) (mem "qualifiedIfaceLabel" false) (mem "superContextNoImplMsg" false) (mem "superContextUndeclaredMsg" false) (mem "undeclaredImplPredicateMsg" false) (mem "undeclaredImplPrerequisiteMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
@@ -3014,12 +2871,12 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "noteWalkGoalFollowed" false) (mem "openScope" false) (mem "rigidHeadInstanceContext" false) (mem "solvedCleanly" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false) (mem "walkGoalFollowed" false))))
-(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "prerequisiteOnWalk" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "openScope" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
+(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
-(DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "requireGoalsBelow" false) (mem "sccProtectedSignatureIds" false))))
+(DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeOwner" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "implMethodName" false) (mem "lookupTab" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
@@ -3212,26 +3069,6 @@ numDictObls gctx (app :: rest) =
 (DTypeSig false "inferDefaultMethod" (TyFun (TyCon "TcEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "Unit")))))))
 (DFunDef false "inferDefaultMethod" ((PVar "env") (PVar "iface") (PVar "dscope") (PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodBody") (EVar "env")) (EVar "iface")) (EVar "DefaultBody")) (ETuple (EVar "typarams") (EVar "mty") (EVar "dscope"))) (EVar "mname")) (EVar "pats")) (EVar "body")))
 (DFunDef false "inferDefaultMethod" ((PVar "env") PWild PWild PWild PWild) (ELit LUnit))
-(DTypeSig true "nestedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "obls")) (EBlock (DoLet false false (PVar "seeds") (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (DoLet false false (PVar "goals") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "seeds")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EApp (EVar "reqWalkMemo") (EApp (EVar "snd") (EVar "s"))) "wmStopped") "value"))) (EVar "seeds")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EVar "goals")))))
-(DTypeSig false "requireGoalSeeds" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
-(DFunDef false "requireGoalSeeds" ((PVar "gctx") (PVar "obls")) (EApp (EApp (EVar "map") (ELam ((PVar "o")) (ETuple (EVar "o") (EApp (EApp (EVar "reqWalkSeed") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))))) (EVar "obls")))
-(DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
-(DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
-(DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
-(DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
-(DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
-(DTypeSig false "uOblGoalArgs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "uOblGoalArgs" ((PVar "gctx") (PVar "o")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))
-(DTypeSig false "selectedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
-(DFunDef false "selectedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walk")) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EApp (EVar "prerequisiteOnWalk") (EVar "mctx"))) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walk")))
-(DTypeSig false "prerequisiteUnreported" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
-(DFunDef false "prerequisiteUnreported" ((PVar "walk") (PVar "g")) (EMatch (EApp (EApp (EApp (EVar "reqWalkEnter") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "args"))) (arm (PCon "ReqOn" (PVar "next")) () (EListLit (ETuple (EVar "g") (EVar "next")))) (arm PWild () (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmStopped")) (EVar "True"))) (DoExpr (EListLit))))))
 (DTypeSig true "inferImplBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl"))) (TyCon "Unit")))))))
 (DFunDef false "inferImplBodies" ((PVar "env") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferImplBodies" ((PVar "env") (PVar "rpNames") (PVar "ce") (PVar "cur") (PCons (PTuple (PVar "loc") (PVar "d")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferOneImpl") (EApp (EApp (EVar "envAtIfSome") (EVar "loc")) (EVar "env"))) (EVar "rpNames")) (EVar "ce")) (EVar "cur")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferImplBodies") (EVar "env")) (EVar "rpNames")) (EVar "ce")) (EVar "cur")) (EVar "rest")))))
@@ -3345,7 +3182,7 @@ numDictObls gctx (app :: rest) =
 (DFunDef false "numDictObls" ((PVar "gctx") (PList)) (EListLit))
 (DFunDef false "numDictObls" ((PVar "gctx") (PCons (PVar "app") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EIf (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (ELit (LString "Num"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkMethodOccObl") (EApp (EApp (EVar "builtinIfaceRef") (EVar "gctx")) (EVar "BNum"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EApp (EVar "snd") (EVar "p"))) (EListLit)) (EVar "PNumLit")) (EFieldAccess (EVar "app") "pdaLoc")) (EFieldAccess (EVar "app") "pdaScope"))) (EListLit)))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EFieldAccess (EVar "i") "irName"))) (EFieldAccess (EVar "app") "pdaIfaces"))) (EFieldAccess (EVar "app") "pdaMonos"))) (EApp (EApp (EVar "numDictObls") (EVar "gctx")) (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClass" true) (mem "CohSweep" true) (mem "DeclaringBinder" true) (mem "GrantBinder" true) (mem "HeadVarRoot" true) (mem "ImplBodySite" true) (mem "Kind" true) (mem "MethodBodyCheck" true) (mem "MethodBodyInstance" true) (mem "MethodBodyKind" true) (mem "MStep" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "ReqStep" true) (mem "ScopedImplMethod" true) (mem "SiteCtx" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "CeRow" false) (mem "ClassEnv" false) (mem "CohImpl" false) (mem "CohScan" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClass" true) (mem "CohSweep" true) (mem "DeclaringBinder" true) (mem "GrantBinder" true) (mem "HeadVarRoot" true) (mem "ImplBodySite" true) (mem "Kind" true) (mem "MethodBodyCheck" true) (mem "MethodBodyInstance" true) (mem "MethodBodyKind" true) (mem "MStep" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "ScopedImplMethod" true) (mem "SiteCtx" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "CeRow" false) (mem "ClassEnv" false) (mem "CohImpl" false) (mem "CohScan" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "siteFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "anyConcreteHead" false) (mem "anyContainsI" false) (mem "anyMember" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "cohEqMono" false) (mem "cohOverlap" false) (mem "cohPpPair" false) (mem "containsI" false) (mem "dedupI" false) (mem "hasDupI" false) (mem "headVarRootOf" false) (mem "instantiateNamedMonos" false) (mem "isUnboundTvar" false) (mem "matchOneSided" false) (mem "monoRootIdSet" false) (mem "monoTyvarId" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "peelQual" false) (mem "sigTvarIds" false) (mem "stripTyWrap" false) (mem "tyAppSpine" false) (mem "tyStep" false) (mem "tyStructEq" false) (mem "tyvarId" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "backticked" false) (mem "cohCrossModuleMsg" false) (mem "cohIncomparableHelp" false) (mem "cohOverlapMsg" false) (mem "cohPreludeOverlapMsg" false) (mem "collapsesTyvarsMsg" false) (mem "derivableIface" false) (mem "implGoalFixesHeadMsg" false) (mem "implHeadIndexMsg" false) (mem "implKindMismatchMsg" false) (mem "implTupleHeadKindMsg" false) (mem "methodBodyLaunderMsg" false) (mem "methodBodySubject" false) (mem "missingImplMethodMsg" false) (mem "narrowsImplHeadMsg" false) (mem "pinsTyvarMsg" false) (mem "qualifiedIfaceLabel" false) (mem "superContextNoImplMsg" false) (mem "superContextUndeclaredMsg" false) (mem "undeclaredImplPredicateMsg" false) (mem "undeclaredImplPrerequisiteMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
@@ -3355,12 +3192,12 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
-(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "noteWalkGoalFollowed" false) (mem "openScope" false) (mem "rigidHeadInstanceContext" false) (mem "solvedCleanly" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false) (mem "walkGoalFollowed" false))))
-(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "prerequisiteOnWalk" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
+(DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "openScope" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
+(DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
-(DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "requireGoalsBelow" false) (mem "sccProtectedSignatureIds" false))))
+(DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeOwner" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "implMethodName" false) (mem "lookupTab" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
@@ -3553,26 +3390,6 @@ numDictObls gctx (app :: rest) =
 (DTypeSig false "inferDefaultMethod" (TyFun (TyCon "TcEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "Unit")))))))
 (DFunDef false "inferDefaultMethod" ((PVar "env") (PVar "iface") (PVar "dscope") (PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodBody") (EVar "env")) (EVar "iface")) (EVar "DefaultBody")) (ETuple (EVar "typarams") (EVar "mty") (EVar "dscope"))) (EVar "mname")) (EVar "pats")) (EVar "body")))
 (DFunDef false "inferDefaultMethod" ((PVar "env") PWild PWild PWild PWild) (ELit LUnit))
-(DTypeSig true "nestedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "obls")) (EBlock (DoLet false false (PVar "seeds") (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (DoLet false false (PVar "goals") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "seeds")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EApp (EVar "reqWalkMemo") (EApp (EVar "snd") (EVar "s"))) "wmStopped") "value"))) (EVar "seeds")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EApp (EApp (EVar "requireGoalSeeds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EVar "goals")))))
-(DTypeSig false "requireGoalSeeds" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
-(DFunDef false "requireGoalSeeds" ((PVar "gctx") (PVar "obls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (ETuple (EVar "o") (EApp (EApp (EVar "reqWalkSeed") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))))) (EVar "obls")))
-(DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
-(DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
-(DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
-(DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
-(DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
-(DTypeSig false "uOblGoalArgs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "uOblGoalArgs" ((PVar "gctx") (PVar "o")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EVar "gctx")) (EVar "o"))))
-(DTypeSig false "selectedRequireGoals" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
-(DFunDef false "selectedRequireGoals" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walk")) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EApp (EVar "prerequisiteOnWalk") (EVar "mctx"))) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walk")))
-(DTypeSig false "prerequisiteUnreported" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))
-(DFunDef false "prerequisiteUnreported" ((PVar "walk") (PVar "g")) (EMatch (EApp (EApp (EApp (EVar "reqWalkEnter") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EFieldAccess (EFieldAccess (EVar "g") "pred") "args"))) (arm (PCon "ReqOn" (PVar "next")) () (EListLit (ETuple (EVar "g") (EVar "next")))) (arm PWild () (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmStopped")) (EVar "True"))) (DoExpr (EListLit))))))
 (DTypeSig true "inferImplBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl"))) (TyCon "Unit")))))))
 (DFunDef false "inferImplBodies" ((PVar "env") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferImplBodies" ((PVar "env") (PVar "rpNames") (PVar "ce") (PVar "cur") (PCons (PTuple (PVar "loc") (PVar "d")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferOneImpl") (EApp (EApp (EVar "envAtIfSome") (EVar "loc")) (EVar "env"))) (EVar "rpNames")) (EVar "ce")) (EVar "cur")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferImplBodies") (EVar "env")) (EVar "rpNames")) (EVar "ce")) (EVar "cur")) (EVar "rest")))))

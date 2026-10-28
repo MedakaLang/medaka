@@ -64,7 +64,6 @@ localGrantIds : GraphCtx -> String -> List Int
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 methodDictArityAtOrigin : ModuleCtx -> TyConOrigin -> String -> Int
 methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
-methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
 methodTerms : GraphCtx -> String -> MethodGrant -> GrantOcc -> List Expr
 mintMethodCellWith : ModuleCtx -> PassEvidence -> String -> Int -> Route -> List Route -> EvId
 modInScope : String -> Map String Unit -> Bool
