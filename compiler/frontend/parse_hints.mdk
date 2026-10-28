@@ -8,6 +8,14 @@ import frontend.parse_locate.{locateTokenDiagnostic}
 import frontend.parse_diagnostic.{ParseDiagnostic, ParseDiagnosticKind(..)}
 import support.source_index.{SourceIndex, offsetToLineColFast}
 
+data HintInput = {
+  hintTokens : Array Token,
+  hintOffsets : Array (Int, Int),
+  hintLines : Array Int,
+}
+data HintEnv = { hintInput : HintInput, hintAnchor : Int, hintColumn : Int }
+data IslandEvidence = NoIsland | IslandNoArrow | IslandArrow
+
 -- A bounded evidence scan for a conditional diagnostic, never a grammar.
 export
 matchContinuationHint : Array Token ->
@@ -27,115 +35,83 @@ matchContinuationHint toks offs lines matchPos armPos =
     let (line, matchCol) =
       offsetToLineColFast lines (fst (arrayGetUnsafe matchPos offs))
     let lineStart = arrayGetUnsafe (line - 1) lines
-    let (header, left) = matchHeaderStart toks offs lineStart matchPos 4088
-    let anchor = matchHeaderAnchor toks offs lines header matchPos matchCol
+    let input =
+      HintInput { hintTokens = toks, hintOffsets = offs, hintLines = lines }
+    let (header, left) = matchHeaderStart input lineStart matchPos 4088
+    let anchor = matchHeaderAnchor input header matchPos matchCol
     match anchor
       None => None
-      Some col => matchCandidate toks offs lines armPos col left
+      Some col => matchCandidate input armPos col left
 
-matchHeaderStart : Array Token ->
-  Array (Int, Int) ->
-  Int ->
-  Int ->
-  Int ->
-  (Int, Int)
-matchHeaderStart toks offs start i left
+matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
+matchHeaderStart input start i left
   | left <= 0 || i <= 0 = (i, left)
-  | i - 1 >= arrayLength offs = (i, 0)
-  | fst (arrayGetUnsafe (i - 1) offs) < start = (i, left)
-  | isLayoutTok (peekTok toks (i - 1)) = (i, left - 1)
-  | otherwise = matchHeaderStart toks offs start (i - 1) (left - 1)
+  | i - 1 >= arrayLength input.hintOffsets = (i, 0)
+  | fst (arrayGetUnsafe (i - 1) input.hintOffsets) < start = (i, left)
+  | isLayoutTok (peekTok input.hintTokens (i - 1)) = (i, left - 1)
+  | otherwise = matchHeaderStart input start (i - 1) (left - 1)
 
-matchHeaderAnchor : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option Int
-matchHeaderAnchor toks offs lines header matchPos matchCol =
+matchHeaderAnchor : HintInput -> Int -> Int -> Int -> Option Int
+matchHeaderAnchor input header matchPos matchCol =
   if header == matchPos then
     Some matchCol
-  else match peekTok toks header
-    TLet => matchHeaderBinding toks offs lines (header + 1) matchPos
+  else match peekTok input.hintTokens header
+    TLet => matchHeaderBinding input (header + 1) matchPos
     _ => None
 
-matchHeaderBinding : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Option Int
-matchHeaderBinding toks offs lines i matchPos =
-  let namePos = if peekTok toks i == TRec then i + 1 else i
-  match peekTok toks namePos
+matchHeaderBinding : HintInput -> Int -> Int -> Option Int
+matchHeaderBinding input i matchPos =
+  let namePos = if peekTok input.hintTokens i == TRec then i + 1 else i
+  match peekTok input.hintTokens namePos
     TIdent _ =>
-      if namePos + 2 == matchPos && peekTok toks (namePos + 1) == TEqual then
-        Some
-          (snd (offsetToLineColFast lines (fst (arrayGetUnsafe namePos offs))))
+      if namePos + 2 == matchPos
+        && peekTok input.hintTokens (namePos + 1) == TEqual then
+        arrayGetUnsafe namePos input.hintOffsets
+          |> fst
+          |> offsetToLineColFast input.hintLines
+          |> snd
+          |> Some
       else
         None
     _ => None
 
-matchCandidate : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option ParseDiagnosticKind
-matchCandidate toks offs lines i anchor left =
-  let (_, col) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
-  matchCandidateGo toks offs lines i anchor col left [] 0 False False
+matchCandidate : HintInput -> Int -> Int -> Int -> Option ParseDiagnosticKind
+matchCandidate input i anchor left =
+  let (_, col) =
+    offsetToLineColFast
+      input.hintLines
+      (fst (arrayGetUnsafe i input.hintOffsets))
+  let env = HintEnv { hintInput = input, hintAnchor = anchor, hintColumn = col }
+  matchCandidateGo env i left [] 0 NoIsland
 
-matchCandidateGo : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
+matchCandidateGo : HintEnv ->
   Int ->
   Int ->
   List Token ->
   Int ->
-  Bool ->
-  Bool ->
+  IslandEvidence ->
   Option ParseDiagnosticKind
-matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArrow
-  | left <= 0 || i >= arrayLength toks = None
+matchCandidateGo env i left stack depth evidence
+  | left <= 0 || i >= arrayLength env.hintInput.hintTokens = None
   | otherwise =
-    let t = peekTok toks i
+    let raw = peekTok env.hintInput.hintTokens i
+    let t = if raw == TLBracketTight then TLBracket else raw
     match (stack, t)
       ([], TDedent) =>
-        if depth == 0 && sawIsland && sawArrow then
-          matchFollowing toks offs lines (i + 1) anchor col (left - 1)
+        if depth == 0
+          && (match evidence
+            IslandArrow => True
+            _ => False) then
+          matchFollowing env (i + 1) (left - 1)
         else
           None
       ([], TLParen) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          [TRParen]
-          depth
-          True
-          sawArrow
+        let next = match evidence
+          NoIsland => IslandNoArrow
+          _ => evidence
+        matchCandidateGo env (i + 1) (left - 1) [TRParen] depth next
       ([], TNewline) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          []
-          depth
-          sawIsland
-          sawArrow
+        matchCandidateGo env (i + 1) (left - 1) [] depth evidence
       ([], _) => None
       (_, TEof) => None
       (_, TLexError _) => None
@@ -143,167 +119,66 @@ matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArro
       (_, TRArray) => None
       (_, TDotLBrace) => None
       (_, TIndent) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          stack
-          (depth + 1)
-          sawIsland
-          sawArrow
+        matchCandidateGo env (i + 1) (left - 1) stack (depth + 1) evidence
       (_, TDedent) =>
         if depth <= 0 then
           None
         else
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            stack
-            (depth - 1)
-            sawIsland
-            sawArrow
+          matchCandidateGo env (i + 1) (left - 1) stack (depth - 1) evidence
       (_, TLParen) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRParen :: stack)
           depth
-          sawIsland
-          sawArrow
+          evidence
       (_, TLBracket) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRBracket :: stack)
           depth
-          sawIsland
-          sawArrow
-      (_, TLBracketTight) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          (TRBracket :: stack)
-          depth
-          sawIsland
-          sawArrow
+          evidence
       (_, TLBrace) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRBrace :: stack)
           depth
-          sawIsland
-          sawArrow
-      (top :: rest, TRParen) =>
-        if top == TRParen then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
-        else
-          None
-      (top :: rest, TRBracket) =>
-        if top == TRBracket then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
-        else
-          None
-      (top :: rest, TRBrace) =>
-        if top == TRBrace then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
+          evidence
+      (top :: rest, _) if isBracketCloseTok t =>
+        if top == t then
+          matchCandidateGo env (i + 1) (left - 1) rest depth evidence
         else
           None
       (_, _) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          stack
-          depth
-          sawIsland
-          (sawArrow || t == TFatArrow || t == TArrow)
+        let next =
+          if t == TFatArrow || t == TArrow then IslandArrow else evidence
+        matchCandidateGo env (i + 1) (left - 1) stack depth next
 
-matchFollowing : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option ParseDiagnosticKind
-matchFollowing toks offs lines i anchor col left =
-  if left <= 0 || i >= arrayLength toks || i >= arrayLength offs then
+matchFollowing : HintEnv -> Int -> Int -> Option ParseDiagnosticKind
+matchFollowing env i left =
+  let input = env.hintInput
+  if left <= 0
+    || i >= arrayLength input.hintTokens
+    || i >= arrayLength input.hintOffsets then
     None
-  else if peekTok toks i == TNewline then
-    matchFollowing toks offs lines (i + 1) anchor col (left - 1)
+  else if peekTok input.hintTokens i == TNewline then
+    matchFollowing env (i + 1) (left - 1)
   else
-    let (_, nextCol) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
-    if nextCol <= anchor || nextCol >= col || peekTok toks i == TFatArrow then
+    let (_, nextCol) =
+      offsetToLineColFast
+        input.hintLines
+        (fst (arrayGetUnsafe i input.hintOffsets))
+    if nextCol <= env.hintAnchor
+      || nextCol >= env.hintColumn
+      || peekTok input.hintTokens i == TFatArrow then
       None
     else
-      matchFollowingGo toks i left []
+      matchFollowingGo input.hintTokens i left []
 
 matchFollowingGo : Array Token ->
   Int ->
@@ -313,44 +188,32 @@ matchFollowingGo : Array Token ->
 matchFollowingGo toks i left stack =
   if left <= 0 || i >= arrayLength toks then
     None
-  else match (stack, peekTok toks i)
-    ([], TFatArrow) => Some MatchContinuationHint
-    ([], TEqual) => None
-    ([], TLArrow) => None
-    ([], TArrow) => None
-    ([], TNewline) => None
-    ([], TDedent) => None
-    ([], TIndent) => None
-    (_, TEof) => None
-    (_, TLexError _) => None
-    (_, TLArray) => None
-    (_, TRArray) => None
-    (_, TDotLBrace) => None
-    (_, TLParen) => matchFollowingGo toks (i + 1) (left - 1) (TRParen :: stack)
-    (_, TLBracket) =>
-      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
-    (_, TLBracketTight) =>
-      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
-    (_, TLBrace) => matchFollowingGo toks (i + 1) (left - 1) (TRBrace :: stack)
-    (top :: rest, TRParen) =>
-      if top == TRParen then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    (top :: rest, TRBracket) =>
-      if top == TRBracket then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    (top :: rest, TRBrace) =>
-      if top == TRBrace then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    ([], TRParen) => None
-    ([], TRBracket) => None
-    ([], TRBrace) => None
-    (_, _) => matchFollowingGo toks (i + 1) (left - 1) stack
+  else
+    let raw = peekTok toks i
+    let t = if raw == TLBracketTight then TLBracket else raw
+    match (stack, t)
+      ([], TFatArrow) => Some MatchContinuationHint
+      ([], TEqual) => None
+      ([], TLArrow) => None
+      ([], TArrow) => None
+      ([], TNewline) => None
+      ([], TDedent) => None
+      ([], TIndent) => None
+      (_, TEof) => None
+      (_, TLexError _) => None
+      (_, TLArray) => None
+      (_, TRArray) => None
+      (_, TDotLBrace) => None
+      (_, TLParen) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRParen :: stack)
+      (_, TLBracket) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
+      (_, TLBrace) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRBrace :: stack)
+      (top :: rest, _) if isBracketCloseTok t =>
+        if top == t then matchFollowingGo toks (i + 1) (left - 1) rest else None
+      ([], _) if isBracketCloseTok t => None
+      (_, _) => matchFollowingGo toks (i + 1) (left - 1) stack
 
 -- The single parser rejection message for `let mut` (used at both the
 -- expression-level and statement-level `let` productions). Points at `Ref`/`:=`.

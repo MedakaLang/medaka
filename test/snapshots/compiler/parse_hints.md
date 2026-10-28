@@ -1,5 +1,5 @@
 # META
-source_lines=1095
+source_lines=958
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.lex_token.{
@@ -11,6 +11,14 @@ import frontend.lex_token.{
 import frontend.parse_locate.{locateTokenDiagnostic}
 import frontend.parse_diagnostic.{ParseDiagnostic, ParseDiagnosticKind(..)}
 import support.source_index.{SourceIndex, offsetToLineColFast}
+
+data HintInput = {
+  hintTokens : Array Token,
+  hintOffsets : Array (Int, Int),
+  hintLines : Array Int,
+}
+data HintEnv = { hintInput : HintInput, hintAnchor : Int, hintColumn : Int }
+data IslandEvidence = NoIsland | IslandNoArrow | IslandArrow
 
 -- A bounded evidence scan for a conditional diagnostic, never a grammar.
 export
@@ -31,115 +39,83 @@ matchContinuationHint toks offs lines matchPos armPos =
     let (line, matchCol) =
       offsetToLineColFast lines (fst (arrayGetUnsafe matchPos offs))
     let lineStart = arrayGetUnsafe (line - 1) lines
-    let (header, left) = matchHeaderStart toks offs lineStart matchPos 4088
-    let anchor = matchHeaderAnchor toks offs lines header matchPos matchCol
+    let input =
+      HintInput { hintTokens = toks, hintOffsets = offs, hintLines = lines }
+    let (header, left) = matchHeaderStart input lineStart matchPos 4088
+    let anchor = matchHeaderAnchor input header matchPos matchCol
     match anchor
       None => None
-      Some col => matchCandidate toks offs lines armPos col left
+      Some col => matchCandidate input armPos col left
 
-matchHeaderStart : Array Token ->
-  Array (Int, Int) ->
-  Int ->
-  Int ->
-  Int ->
-  (Int, Int)
-matchHeaderStart toks offs start i left
+matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
+matchHeaderStart input start i left
   | left <= 0 || i <= 0 = (i, left)
-  | i - 1 >= arrayLength offs = (i, 0)
-  | fst (arrayGetUnsafe (i - 1) offs) < start = (i, left)
-  | isLayoutTok (peekTok toks (i - 1)) = (i, left - 1)
-  | otherwise = matchHeaderStart toks offs start (i - 1) (left - 1)
+  | i - 1 >= arrayLength input.hintOffsets = (i, 0)
+  | fst (arrayGetUnsafe (i - 1) input.hintOffsets) < start = (i, left)
+  | isLayoutTok (peekTok input.hintTokens (i - 1)) = (i, left - 1)
+  | otherwise = matchHeaderStart input start (i - 1) (left - 1)
 
-matchHeaderAnchor : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option Int
-matchHeaderAnchor toks offs lines header matchPos matchCol =
+matchHeaderAnchor : HintInput -> Int -> Int -> Int -> Option Int
+matchHeaderAnchor input header matchPos matchCol =
   if header == matchPos then
     Some matchCol
-  else match peekTok toks header
-    TLet => matchHeaderBinding toks offs lines (header + 1) matchPos
+  else match peekTok input.hintTokens header
+    TLet => matchHeaderBinding input (header + 1) matchPos
     _ => None
 
-matchHeaderBinding : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Option Int
-matchHeaderBinding toks offs lines i matchPos =
-  let namePos = if peekTok toks i == TRec then i + 1 else i
-  match peekTok toks namePos
+matchHeaderBinding : HintInput -> Int -> Int -> Option Int
+matchHeaderBinding input i matchPos =
+  let namePos = if peekTok input.hintTokens i == TRec then i + 1 else i
+  match peekTok input.hintTokens namePos
     TIdent _ =>
-      if namePos + 2 == matchPos && peekTok toks (namePos + 1) == TEqual then
-        Some
-          (snd (offsetToLineColFast lines (fst (arrayGetUnsafe namePos offs))))
+      if namePos + 2 == matchPos
+        && peekTok input.hintTokens (namePos + 1) == TEqual then
+        arrayGetUnsafe namePos input.hintOffsets
+          |> fst
+          |> offsetToLineColFast input.hintLines
+          |> snd
+          |> Some
       else
         None
     _ => None
 
-matchCandidate : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option ParseDiagnosticKind
-matchCandidate toks offs lines i anchor left =
-  let (_, col) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
-  matchCandidateGo toks offs lines i anchor col left [] 0 False False
+matchCandidate : HintInput -> Int -> Int -> Int -> Option ParseDiagnosticKind
+matchCandidate input i anchor left =
+  let (_, col) =
+    offsetToLineColFast
+      input.hintLines
+      (fst (arrayGetUnsafe i input.hintOffsets))
+  let env = HintEnv { hintInput = input, hintAnchor = anchor, hintColumn = col }
+  matchCandidateGo env i left [] 0 NoIsland
 
-matchCandidateGo : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
+matchCandidateGo : HintEnv ->
   Int ->
   Int ->
   List Token ->
   Int ->
-  Bool ->
-  Bool ->
+  IslandEvidence ->
   Option ParseDiagnosticKind
-matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArrow
-  | left <= 0 || i >= arrayLength toks = None
+matchCandidateGo env i left stack depth evidence
+  | left <= 0 || i >= arrayLength env.hintInput.hintTokens = None
   | otherwise =
-    let t = peekTok toks i
+    let raw = peekTok env.hintInput.hintTokens i
+    let t = if raw == TLBracketTight then TLBracket else raw
     match (stack, t)
       ([], TDedent) =>
-        if depth == 0 && sawIsland && sawArrow then
-          matchFollowing toks offs lines (i + 1) anchor col (left - 1)
+        if depth == 0
+          && (match evidence
+            IslandArrow => True
+            _ => False) then
+          matchFollowing env (i + 1) (left - 1)
         else
           None
       ([], TLParen) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          [TRParen]
-          depth
-          True
-          sawArrow
+        let next = match evidence
+          NoIsland => IslandNoArrow
+          _ => evidence
+        matchCandidateGo env (i + 1) (left - 1) [TRParen] depth next
       ([], TNewline) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          []
-          depth
-          sawIsland
-          sawArrow
+        matchCandidateGo env (i + 1) (left - 1) [] depth evidence
       ([], _) => None
       (_, TEof) => None
       (_, TLexError _) => None
@@ -147,167 +123,66 @@ matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArro
       (_, TRArray) => None
       (_, TDotLBrace) => None
       (_, TIndent) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          stack
-          (depth + 1)
-          sawIsland
-          sawArrow
+        matchCandidateGo env (i + 1) (left - 1) stack (depth + 1) evidence
       (_, TDedent) =>
         if depth <= 0 then
           None
         else
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            stack
-            (depth - 1)
-            sawIsland
-            sawArrow
+          matchCandidateGo env (i + 1) (left - 1) stack (depth - 1) evidence
       (_, TLParen) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRParen :: stack)
           depth
-          sawIsland
-          sawArrow
+          evidence
       (_, TLBracket) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRBracket :: stack)
           depth
-          sawIsland
-          sawArrow
-      (_, TLBracketTight) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          (TRBracket :: stack)
-          depth
-          sawIsland
-          sawArrow
+          evidence
       (_, TLBrace) =>
         matchCandidateGo
-          toks
-          offs
-          lines
+          env
           (i + 1)
-          anchor
-          col
           (left - 1)
           (TRBrace :: stack)
           depth
-          sawIsland
-          sawArrow
-      (top :: rest, TRParen) =>
-        if top == TRParen then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
-        else
-          None
-      (top :: rest, TRBracket) =>
-        if top == TRBracket then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
-        else
-          None
-      (top :: rest, TRBrace) =>
-        if top == TRBrace then
-          matchCandidateGo
-            toks
-            offs
-            lines
-            (i + 1)
-            anchor
-            col
-            (left - 1)
-            rest
-            depth
-            sawIsland
-            sawArrow
+          evidence
+      (top :: rest, _) if isBracketCloseTok t =>
+        if top == t then
+          matchCandidateGo env (i + 1) (left - 1) rest depth evidence
         else
           None
       (_, _) =>
-        matchCandidateGo
-          toks
-          offs
-          lines
-          (i + 1)
-          anchor
-          col
-          (left - 1)
-          stack
-          depth
-          sawIsland
-          (sawArrow || t == TFatArrow || t == TArrow)
+        let next =
+          if t == TFatArrow || t == TArrow then IslandArrow else evidence
+        matchCandidateGo env (i + 1) (left - 1) stack depth next
 
-matchFollowing : Array Token ->
-  Array (Int, Int) ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Option ParseDiagnosticKind
-matchFollowing toks offs lines i anchor col left =
-  if left <= 0 || i >= arrayLength toks || i >= arrayLength offs then
+matchFollowing : HintEnv -> Int -> Int -> Option ParseDiagnosticKind
+matchFollowing env i left =
+  let input = env.hintInput
+  if left <= 0
+    || i >= arrayLength input.hintTokens
+    || i >= arrayLength input.hintOffsets then
     None
-  else if peekTok toks i == TNewline then
-    matchFollowing toks offs lines (i + 1) anchor col (left - 1)
+  else if peekTok input.hintTokens i == TNewline then
+    matchFollowing env (i + 1) (left - 1)
   else
-    let (_, nextCol) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
-    if nextCol <= anchor || nextCol >= col || peekTok toks i == TFatArrow then
+    let (_, nextCol) =
+      offsetToLineColFast
+        input.hintLines
+        (fst (arrayGetUnsafe i input.hintOffsets))
+    if nextCol <= env.hintAnchor
+      || nextCol >= env.hintColumn
+      || peekTok input.hintTokens i == TFatArrow then
       None
     else
-      matchFollowingGo toks i left []
+      matchFollowingGo input.hintTokens i left []
 
 matchFollowingGo : Array Token ->
   Int ->
@@ -317,44 +192,32 @@ matchFollowingGo : Array Token ->
 matchFollowingGo toks i left stack =
   if left <= 0 || i >= arrayLength toks then
     None
-  else match (stack, peekTok toks i)
-    ([], TFatArrow) => Some MatchContinuationHint
-    ([], TEqual) => None
-    ([], TLArrow) => None
-    ([], TArrow) => None
-    ([], TNewline) => None
-    ([], TDedent) => None
-    ([], TIndent) => None
-    (_, TEof) => None
-    (_, TLexError _) => None
-    (_, TLArray) => None
-    (_, TRArray) => None
-    (_, TDotLBrace) => None
-    (_, TLParen) => matchFollowingGo toks (i + 1) (left - 1) (TRParen :: stack)
-    (_, TLBracket) =>
-      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
-    (_, TLBracketTight) =>
-      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
-    (_, TLBrace) => matchFollowingGo toks (i + 1) (left - 1) (TRBrace :: stack)
-    (top :: rest, TRParen) =>
-      if top == TRParen then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    (top :: rest, TRBracket) =>
-      if top == TRBracket then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    (top :: rest, TRBrace) =>
-      if top == TRBrace then
-        matchFollowingGo toks (i + 1) (left - 1) rest
-      else
-        None
-    ([], TRParen) => None
-    ([], TRBracket) => None
-    ([], TRBrace) => None
-    (_, _) => matchFollowingGo toks (i + 1) (left - 1) stack
+  else
+    let raw = peekTok toks i
+    let t = if raw == TLBracketTight then TLBracket else raw
+    match (stack, t)
+      ([], TFatArrow) => Some MatchContinuationHint
+      ([], TEqual) => None
+      ([], TLArrow) => None
+      ([], TArrow) => None
+      ([], TNewline) => None
+      ([], TDedent) => None
+      ([], TIndent) => None
+      (_, TEof) => None
+      (_, TLexError _) => None
+      (_, TLArray) => None
+      (_, TRArray) => None
+      (_, TDotLBrace) => None
+      (_, TLParen) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRParen :: stack)
+      (_, TLBracket) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
+      (_, TLBrace) =>
+        matchFollowingGo toks (i + 1) (left - 1) (TRBrace :: stack)
+      (top :: rest, _) if isBracketCloseTok t =>
+        if top == t then matchFollowingGo toks (i + 1) (left - 1) rest else None
+      ([], _) if isBracketCloseTok t => None
+      (_, _) => matchFollowingGo toks (i + 1) (left - 1) stack
 
 -- The single parser rejection message for `let mut` (used at both the
 -- expression-level and statement-level `let` productions). Points at `Ref`/`:=`.
@@ -1102,22 +965,25 @@ prescanDiagnostic index toks offs ends srcLen =
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateTokenDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToLineColFast" false))))
+(DData Private "HintInput" () ((variant "HintInput" (ConNamed (field "hintTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "hintOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "hintLines" (TyApp (TyCon "Array") (TyCon "Int")))))) ())
+(DData Private "HintEnv" () ((variant "HintEnv" (ConNamed (field "hintInput" (TyCon "HintInput")) (field "hintAnchor" (TyCon "Int")) (field "hintColumn" (TyCon "Int"))))) ())
+(DData Private "IslandEvidence" () ((variant "NoIsland" (ConPos)) (variant "IslandNoArrow" (ConPos)) (variant "IslandArrow" (ConPos))) ())
 (DTypeSig true "matchContinuationHint" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))
-(DFunDef false "matchContinuationHint" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "matchPos") (PVar "armPos")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "arrayLength") (EVar "lines")) (ELit (LInt 0))) (EBinOp "<" (EVar "matchPos") (ELit (LInt 0)))) (EBinOp "<" (EVar "armPos") (ELit (LInt 0)))) (EBinOp ">=" (EVar "matchPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp ">=" (EVar "armPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "line") (PVar "matchCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "matchPos")) (EVar "offs"))))) (DoLet false false (PVar "lineStart") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "lines"))) (DoLet false false (PTuple (PVar "header") (PVar "left")) (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "toks")) (EVar "offs")) (EVar "lineStart")) (EVar "matchPos")) (ELit (LInt 4088)))) (DoLet false false (PVar "anchor") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderAnchor") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "header")) (EVar "matchPos")) (EVar "matchCol"))) (DoExpr (EMatch (EVar "anchor") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "col")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidate") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "armPos")) (EVar "col")) (EVar "left"))))))))
-(DTypeSig false "matchHeaderStart" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "matchHeaderStart" ((PVar "toks") (PVar "offs") (PVar "start") (PVar "i") (PVar "left")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp "<=" (EVar "i") (ELit (LInt 0)))) (ETuple (EVar "i") (EVar "left")) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "offs"))) (ETuple (EVar "i") (ELit (LInt 0))) (EIf (EBinOp "<" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "offs"))) (EVar "start")) (ETuple (EVar "i") (EVar "left")) (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (ETuple (EVar "i") (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "toks")) (EVar "offs")) (EVar "start")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DTypeSig false "matchHeaderAnchor" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "matchHeaderAnchor" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "header") (PVar "matchPos") (PVar "matchCol")) (EIf (EBinOp "==" (EVar "header") (EVar "matchPos")) (EApp (EVar "Some") (EVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "header")) (arm (PCon "TLet") () (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderBinding") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "header") (ELit (LInt 1)))) (EVar "matchPos"))) (arm PWild () (EVar "None")))))
-(DTypeSig false "matchHeaderBinding" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "matchHeaderBinding" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "matchPos")) (EBlock (DoLet false false (PVar "namePos") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TRec")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "namePos")) (arm (PCon "TIdent" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EBinOp "+" (EVar "namePos") (ELit (LInt 2))) (EVar "matchPos")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "namePos") (ELit (LInt 1)))) (EVar "TEqual"))) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "namePos")) (EVar "offs")))))) (EVar "None"))) (arm PWild () (EVar "None"))))))
-(DTypeSig false "matchCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))))
-(DFunDef false "matchCandidate" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "left")) (EBlock (DoLet false false (PTuple PWild (PVar "col")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "i")) (EVar "anchor")) (EVar "col")) (EVar "left")) (EListLit)) (ELit (LInt 0))) (EVar "False")) (EVar "False")))))
-(DTypeSig false "matchCandidateGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))))))))
-(DFunDef false "matchCandidateGo" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "col") (PVar "left") (PVar "stack") (PVar "depth") (PVar "sawIsland") (PVar "sawArrow")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TDedent")) () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "sawIsland")) (EVar "sawArrow")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchFollowing") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "None"))) (arm (PTuple (PList) (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit (EVar "TRParen"))) (EVar "depth")) (EVar "True")) (EVar "sawArrow"))) (arm (PTuple (PList) (PCon "TNewline")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit)) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple (PList) PWild) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TIndent")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TDedent")) () (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "sawIsland")) (EVar "sawArrow")))) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBracketTight")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRParen")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRParen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBracket")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBracket")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBrace")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBrace")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EVar "depth")) (EVar "sawIsland")) (EBinOp "||" (EBinOp "||" (EVar "sawArrow") (EBinOp "==" (EVar "t") (EVar "TFatArrow"))) (EBinOp "==" (EVar "t") (EVar "TArrow")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "matchFollowing" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))))
-(DFunDef false "matchFollowing" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "col") (PVar "left")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchFollowing") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBlock (DoLet false false (PTuple PWild (PVar "nextCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "nextCol") (EVar "anchor")) (EBinOp ">=" (EVar "nextCol") (EVar "col"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TFatArrow"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EVar "i")) (EVar "left")) (EListLit))))))))
+(DFunDef false "matchContinuationHint" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "matchPos") (PVar "armPos")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "arrayLength") (EVar "lines")) (ELit (LInt 0))) (EBinOp "<" (EVar "matchPos") (ELit (LInt 0)))) (EBinOp "<" (EVar "armPos") (ELit (LInt 0)))) (EBinOp ">=" (EVar "matchPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp ">=" (EVar "armPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "line") (PVar "matchCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "matchPos")) (EVar "offs"))))) (DoLet false false (PVar "lineStart") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "lines"))) (DoLet false false (PVar "input") (ERecordCreate "HintInput" ((fa "hintTokens" (EVar "toks")) (fa "hintOffsets" (EVar "offs")) (fa "hintLines" (EVar "lines"))))) (DoLet false false (PTuple (PVar "header") (PVar "left")) (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "input")) (EVar "lineStart")) (EVar "matchPos")) (ELit (LInt 4088)))) (DoLet false false (PVar "anchor") (EApp (EApp (EApp (EApp (EVar "matchHeaderAnchor") (EVar "input")) (EVar "header")) (EVar "matchPos")) (EVar "matchCol"))) (DoExpr (EMatch (EVar "anchor") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "col")) () (EApp (EApp (EApp (EApp (EVar "matchCandidate") (EVar "input")) (EVar "armPos")) (EVar "col")) (EVar "left"))))))))
+(DTypeSig false "matchHeaderStart" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "matchHeaderStart" ((PVar "input") (PVar "start") (PVar "i") (PVar "left")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp "<=" (EVar "i") (ELit (LInt 0)))) (ETuple (EVar "i") (EVar "left")) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintOffsets"))) (ETuple (EVar "i") (ELit (LInt 0))) (EIf (EBinOp "<" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EFieldAccess (EVar "input") "hintOffsets"))) (EVar "start")) (ETuple (EVar "i") (EVar "left")) (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (ETuple (EVar "i") (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "input")) (EVar "start")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DTypeSig false "matchHeaderAnchor" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "matchHeaderAnchor" ((PVar "input") (PVar "header") (PVar "matchPos") (PVar "matchCol")) (EIf (EBinOp "==" (EVar "header") (EVar "matchPos")) (EApp (EVar "Some") (EVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "header")) (arm (PCon "TLet") () (EApp (EApp (EApp (EVar "matchHeaderBinding") (EVar "input")) (EBinOp "+" (EVar "header") (ELit (LInt 1)))) (EVar "matchPos"))) (arm PWild () (EVar "None")))))
+(DTypeSig false "matchHeaderBinding" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "matchHeaderBinding" ((PVar "input") (PVar "i") (PVar "matchPos")) (EBlock (DoLet false false (PVar "namePos") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TRec")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "namePos")) (arm (PCon "TIdent" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EBinOp "+" (EVar "namePos") (ELit (LInt 2))) (EVar "matchPos")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EBinOp "+" (EVar "namePos") (ELit (LInt 1)))) (EVar "TEqual"))) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "namePos")) (EFieldAccess (EVar "input") "hintOffsets")) (EVar "fst")) (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines"))) (EVar "snd")) (EVar "Some")) (EVar "None"))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "matchCandidate" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))
+(DFunDef false "matchCandidate" ((PVar "input") (PVar "i") (PVar "anchor") (PVar "left")) (EBlock (DoLet false false (PTuple PWild (PVar "col")) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "input") "hintOffsets"))))) (DoLet false false (PVar "env") (ERecordCreate "HintEnv" ((fa "hintInput" (EVar "input")) (fa "hintAnchor" (EVar "anchor")) (fa "hintColumn" (EVar "col"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EVar "i")) (EVar "left")) (EListLit)) (ELit (LInt 0))) (EVar "NoIsland")))))
+(DTypeSig false "matchCandidateGo" (TyFun (TyCon "HintEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "IslandEvidence") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))))
+(DFunDef false "matchCandidateGo" ((PVar "env") (PVar "i") (PVar "left") (PVar "stack") (PVar "depth") (PVar "evidence")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EVar "env") "hintInput") "hintTokens")))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "peekTok") (EFieldAccess (EFieldAccess (EVar "env") "hintInput") "hintTokens")) (EVar "i"))) (DoLet false false (PVar "t") (EIf (EBinOp "==" (EVar "raw") (EVar "TLBracketTight")) (EVar "TLBracket") (EVar "raw"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TDedent")) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EMatch (EVar "evidence") (arm (PCon "IslandArrow") () (EVar "True")) (arm PWild () (EVar "False")))) (EApp (EApp (EApp (EVar "matchFollowing") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "None"))) (arm (PTuple (PList) (PCon "TLParen")) () (EBlock (DoLet false false (PVar "next") (EMatch (EVar "evidence") (arm (PCon "NoIsland") () (EVar "IslandNoArrow")) (arm PWild () (EVar "evidence")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit (EVar "TRParen"))) (EVar "depth")) (EVar "next"))))) (arm (PTuple (PList) (PCon "TNewline")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit)) (EVar "depth")) (EVar "evidence"))) (arm (PTuple (PList) PWild) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TIndent")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "evidence"))) (arm (PTuple PWild (PCon "TDedent")) () (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "evidence")))) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EIf (EBinOp "==" (EVar "top") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "evidence")) (EVar "None"))) (arm (PTuple PWild PWild) () (EBlock (DoLet false false (PVar "next") (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "TFatArrow")) (EBinOp "==" (EVar "t") (EVar "TArrow"))) (EVar "IslandArrow") (EVar "evidence"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EVar "depth")) (EVar "next")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "matchFollowing" (TyFun (TyCon "HintEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))
+(DFunDef false "matchFollowing" ((PVar "env") (PVar "i") (PVar "left")) (EBlock (DoLet false false (PVar "input") (EFieldAccess (EVar "env") "hintInput")) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintTokens")))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintOffsets")))) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EVar "matchFollowing") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBlock (DoLet false false (PTuple PWild (PVar "nextCol")) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "input") "hintOffsets"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "nextCol") (EFieldAccess (EVar "env") "hintAnchor")) (EBinOp ">=" (EVar "nextCol") (EFieldAccess (EVar "env") "hintColumn"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TFatArrow"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "left")) (EListLit))))))))))
 (DTypeSig false "matchFollowingGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))
-(DFunDef false "matchFollowingGo" ((PVar "toks") (PVar "i") (PVar "left") (PVar "stack")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EMatch (ETuple (EVar "stack") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (arm (PTuple (PList) (PCon "TFatArrow")) () (EApp (EVar "Some") (EVar "MatchContinuationHint"))) (arm (PTuple (PList) (PCon "TEqual")) () (EVar "None")) (arm (PTuple (PList) (PCon "TLArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TNewline")) () (EVar "None")) (arm (PTuple (PList) (PCon "TDedent")) () (EVar "None")) (arm (PTuple (PList) (PCon "TIndent")) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracketTight")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack")))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRParen")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRParen")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBracket")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBracket")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBrace")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBrace")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PList) (PCon "TRParen")) () (EVar "None")) (arm (PTuple (PList) (PCon "TRBracket")) () (EVar "None")) (arm (PTuple (PList) (PCon "TRBrace")) () (EVar "None")) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack"))))))
+(DFunDef false "matchFollowingGo" ((PVar "toks") (PVar "i") (PVar "left") (PVar "stack")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (DoLet false false (PVar "t") (EIf (EBinOp "==" (EVar "raw") (EVar "TLBracketTight")) (EVar "TLBracket") (EVar "raw"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TFatArrow")) () (EApp (EVar "Some") (EVar "MatchContinuationHint"))) (arm (PTuple (PList) (PCon "TEqual")) () (EVar "None")) (arm (PTuple (PList) (PCon "TLArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TNewline")) () (EVar "None")) (arm (PTuple (PList) (PCon "TDedent")) () (EVar "None")) (arm (PTuple (PList) (PCon "TIndent")) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack")))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EIf (EBinOp "==" (EVar "top") (EVar "t")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PList) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EVar "None")) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack"))))))))
 (DTypeSig true "letMutRemovedMsg" (TyCon "String"))
 (DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed; bindings are immutable, so use a `Ref` cell: `let x = Ref 0`, then `x := v` and `!x`")))
 (DTypeSig false "recordRemovedMsg" (TyCon "String"))
@@ -1238,22 +1104,25 @@ prescanDiagnostic index toks offs ends srcLen =
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateTokenDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToLineColFast" false))))
+(DData Private "HintInput" () ((variant "HintInput" (ConNamed (field "hintTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "hintOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "hintLines" (TyApp (TyCon "Array") (TyCon "Int")))))) ())
+(DData Private "HintEnv" () ((variant "HintEnv" (ConNamed (field "hintInput" (TyCon "HintInput")) (field "hintAnchor" (TyCon "Int")) (field "hintColumn" (TyCon "Int"))))) ())
+(DData Private "IslandEvidence" () ((variant "NoIsland" (ConPos)) (variant "IslandNoArrow" (ConPos)) (variant "IslandArrow" (ConPos))) ())
 (DTypeSig true "matchContinuationHint" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))
-(DFunDef false "matchContinuationHint" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "matchPos") (PVar "armPos")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "arrayLength") (EVar "lines")) (ELit (LInt 0))) (EBinOp "<" (EVar "matchPos") (ELit (LInt 0)))) (EBinOp "<" (EVar "armPos") (ELit (LInt 0)))) (EBinOp ">=" (EVar "matchPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp ">=" (EVar "armPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "line") (PVar "matchCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "matchPos")) (EVar "offs"))))) (DoLet false false (PVar "lineStart") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "lines"))) (DoLet false false (PTuple (PVar "header") (PVar "left")) (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "toks")) (EVar "offs")) (EVar "lineStart")) (EVar "matchPos")) (ELit (LInt 4088)))) (DoLet false false (PVar "anchor") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderAnchor") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "header")) (EVar "matchPos")) (EVar "matchCol"))) (DoExpr (EMatch (EVar "anchor") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "col")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidate") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "armPos")) (EVar "col")) (EVar "left"))))))))
-(DTypeSig false "matchHeaderStart" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "matchHeaderStart" ((PVar "toks") (PVar "offs") (PVar "start") (PVar "i") (PVar "left")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp "<=" (EVar "i") (ELit (LInt 0)))) (ETuple (EVar "i") (EVar "left")) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "offs"))) (ETuple (EVar "i") (ELit (LInt 0))) (EIf (EBinOp "<" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "offs"))) (EVar "start")) (ETuple (EVar "i") (EVar "left")) (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (ETuple (EVar "i") (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "toks")) (EVar "offs")) (EVar "start")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DTypeSig false "matchHeaderAnchor" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "matchHeaderAnchor" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "header") (PVar "matchPos") (PVar "matchCol")) (EIf (EBinOp "==" (EVar "header") (EVar "matchPos")) (EApp (EVar "Some") (EVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "header")) (arm (PCon "TLet") () (EApp (EApp (EApp (EApp (EApp (EVar "matchHeaderBinding") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "header") (ELit (LInt 1)))) (EVar "matchPos"))) (arm PWild () (EVar "None")))))
-(DTypeSig false "matchHeaderBinding" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "matchHeaderBinding" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "matchPos")) (EBlock (DoLet false false (PVar "namePos") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TRec")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "namePos")) (arm (PCon "TIdent" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EBinOp "+" (EVar "namePos") (ELit (LInt 2))) (EVar "matchPos")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "namePos") (ELit (LInt 1)))) (EVar "TEqual"))) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "namePos")) (EVar "offs")))))) (EVar "None"))) (arm PWild () (EVar "None"))))))
-(DTypeSig false "matchCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))))
-(DFunDef false "matchCandidate" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "left")) (EBlock (DoLet false false (PTuple PWild (PVar "col")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EVar "i")) (EVar "anchor")) (EVar "col")) (EVar "left")) (EListLit)) (ELit (LInt 0))) (EVar "False")) (EVar "False")))))
-(DTypeSig false "matchCandidateGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))))))))
-(DFunDef false "matchCandidateGo" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "col") (PVar "left") (PVar "stack") (PVar "depth") (PVar "sawIsland") (PVar "sawArrow")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TDedent")) () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "sawIsland")) (EVar "sawArrow")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchFollowing") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "None"))) (arm (PTuple (PList) (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit (EVar "TRParen"))) (EVar "depth")) (EVar "True")) (EVar "sawArrow"))) (arm (PTuple (PList) (PCon "TNewline")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit)) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple (PList) PWild) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TIndent")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TDedent")) () (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "sawIsland")) (EVar "sawArrow")))) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBracketTight")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack"))) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRParen")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRParen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBracket")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBracket")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBrace")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBrace")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "sawIsland")) (EVar "sawArrow")) (EVar "None"))) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EVar "depth")) (EVar "sawIsland")) (EBinOp "||" (EBinOp "||" (EVar "sawArrow") (EBinOp "==" (EVar "t") (EVar "TFatArrow"))) (EBinOp "==" (EVar "t") (EVar "TArrow")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "matchFollowing" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))))))
-(DFunDef false "matchFollowing" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "i") (PVar "anchor") (PVar "col") (PVar "left")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchFollowing") (EVar "toks")) (EVar "offs")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "anchor")) (EVar "col")) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBlock (DoLet false false (PTuple PWild (PVar "nextCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "nextCol") (EVar "anchor")) (EBinOp ">=" (EVar "nextCol") (EVar "col"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TFatArrow"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EVar "i")) (EVar "left")) (EListLit))))))))
+(DFunDef false "matchContinuationHint" ((PVar "toks") (PVar "offs") (PVar "lines") (PVar "matchPos") (PVar "armPos")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "arrayLength") (EVar "lines")) (ELit (LInt 0))) (EBinOp "<" (EVar "matchPos") (ELit (LInt 0)))) (EBinOp "<" (EVar "armPos") (ELit (LInt 0)))) (EBinOp ">=" (EVar "matchPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp ">=" (EVar "armPos") (EApp (EVar "arrayLength") (EVar "offs")))) (EVar "None") (EBlock (DoLet false false (PTuple (PVar "line") (PVar "matchCol")) (EApp (EApp (EVar "offsetToLineColFast") (EVar "lines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "matchPos")) (EVar "offs"))))) (DoLet false false (PVar "lineStart") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "lines"))) (DoLet false false (PVar "input") (ERecordCreate "HintInput" ((fa "hintTokens" (EVar "toks")) (fa "hintOffsets" (EVar "offs")) (fa "hintLines" (EVar "lines"))))) (DoLet false false (PTuple (PVar "header") (PVar "left")) (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "input")) (EVar "lineStart")) (EVar "matchPos")) (ELit (LInt 4088)))) (DoLet false false (PVar "anchor") (EApp (EApp (EApp (EApp (EVar "matchHeaderAnchor") (EVar "input")) (EVar "header")) (EVar "matchPos")) (EVar "matchCol"))) (DoExpr (EMatch (EVar "anchor") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "col")) () (EApp (EApp (EApp (EApp (EVar "matchCandidate") (EVar "input")) (EVar "armPos")) (EVar "col")) (EVar "left"))))))))
+(DTypeSig false "matchHeaderStart" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "matchHeaderStart" ((PVar "input") (PVar "start") (PVar "i") (PVar "left")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp "<=" (EVar "i") (ELit (LInt 0)))) (ETuple (EVar "i") (EVar "left")) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintOffsets"))) (ETuple (EVar "i") (ELit (LInt 0))) (EIf (EBinOp "<" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EFieldAccess (EVar "input") "hintOffsets"))) (EVar "start")) (ETuple (EVar "i") (EVar "left")) (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (ETuple (EVar "i") (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "matchHeaderStart") (EVar "input")) (EVar "start")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DTypeSig false "matchHeaderAnchor" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "matchHeaderAnchor" ((PVar "input") (PVar "header") (PVar "matchPos") (PVar "matchCol")) (EIf (EBinOp "==" (EVar "header") (EVar "matchPos")) (EApp (EVar "Some") (EVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "header")) (arm (PCon "TLet") () (EApp (EApp (EApp (EVar "matchHeaderBinding") (EVar "input")) (EBinOp "+" (EVar "header") (ELit (LInt 1)))) (EVar "matchPos"))) (arm PWild () (EVar "None")))))
+(DTypeSig false "matchHeaderBinding" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "matchHeaderBinding" ((PVar "input") (PVar "i") (PVar "matchPos")) (EBlock (DoLet false false (PVar "namePos") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TRec")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "namePos")) (arm (PCon "TIdent" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EBinOp "+" (EVar "namePos") (ELit (LInt 2))) (EVar "matchPos")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EBinOp "+" (EVar "namePos") (ELit (LInt 1)))) (EVar "TEqual"))) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "namePos")) (EFieldAccess (EVar "input") "hintOffsets")) (EVar "fst")) (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines"))) (EVar "snd")) (EVar "Some")) (EVar "None"))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "matchCandidate" (TyFun (TyCon "HintInput") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))
+(DFunDef false "matchCandidate" ((PVar "input") (PVar "i") (PVar "anchor") (PVar "left")) (EBlock (DoLet false false (PTuple PWild (PVar "col")) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "input") "hintOffsets"))))) (DoLet false false (PVar "env") (ERecordCreate "HintEnv" ((fa "hintInput" (EVar "input")) (fa "hintAnchor" (EVar "anchor")) (fa "hintColumn" (EVar "col"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EVar "i")) (EVar "left")) (EListLit)) (ELit (LInt 0))) (EVar "NoIsland")))))
+(DTypeSig false "matchCandidateGo" (TyFun (TyCon "HintEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "IslandEvidence") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))))
+(DFunDef false "matchCandidateGo" ((PVar "env") (PVar "i") (PVar "left") (PVar "stack") (PVar "depth") (PVar "evidence")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EVar "env") "hintInput") "hintTokens")))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "peekTok") (EFieldAccess (EFieldAccess (EVar "env") "hintInput") "hintTokens")) (EVar "i"))) (DoLet false false (PVar "t") (EIf (EBinOp "==" (EVar "raw") (EVar "TLBracketTight")) (EVar "TLBracket") (EVar "raw"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TDedent")) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EMatch (EVar "evidence") (arm (PCon "IslandArrow") () (EVar "True")) (arm PWild () (EVar "False")))) (EApp (EApp (EApp (EVar "matchFollowing") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "None"))) (arm (PTuple (PList) (PCon "TLParen")) () (EBlock (DoLet false false (PVar "next") (EMatch (EVar "evidence") (arm (PCon "NoIsland") () (EVar "IslandNoArrow")) (arm PWild () (EVar "evidence")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit (EVar "TRParen"))) (EVar "depth")) (EVar "next"))))) (arm (PTuple (PList) (PCon "TNewline")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EListLit)) (EVar "depth")) (EVar "evidence"))) (arm (PTuple (PList) PWild) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TIndent")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "evidence"))) (arm (PTuple PWild (PCon "TDedent")) () (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "evidence")))) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack"))) (EVar "depth")) (EVar "evidence"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EIf (EBinOp "==" (EVar "top") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "depth")) (EVar "evidence")) (EVar "None"))) (arm (PTuple PWild PWild) () (EBlock (DoLet false false (PVar "next") (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "TFatArrow")) (EBinOp "==" (EVar "t") (EVar "TArrow"))) (EVar "IslandArrow") (EVar "evidence"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchCandidateGo") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack")) (EVar "depth")) (EVar "next")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "matchFollowing" (TyFun (TyCon "HintEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind"))))))
+(DFunDef false "matchFollowing" ((PVar "env") (PVar "i") (PVar "left")) (EBlock (DoLet false false (PVar "input") (EFieldAccess (EVar "env") "hintInput")) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintTokens")))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "input") "hintOffsets")))) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EVar "matchFollowing") (EVar "env")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBlock (DoLet false false (PTuple PWild (PVar "nextCol")) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "input") "hintLines")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "input") "hintOffsets"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<=" (EVar "nextCol") (EFieldAccess (EVar "env") "hintAnchor")) (EBinOp ">=" (EVar "nextCol") (EFieldAccess (EVar "env") "hintColumn"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "TFatArrow"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EFieldAccess (EVar "input") "hintTokens")) (EVar "i")) (EVar "left")) (EListLit))))))))))
 (DTypeSig false "matchFollowingGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "Option") (TyCon "ParseDiagnosticKind")))))))
-(DFunDef false "matchFollowingGo" ((PVar "toks") (PVar "i") (PVar "left") (PVar "stack")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EMatch (ETuple (EVar "stack") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (arm (PTuple (PList) (PCon "TFatArrow")) () (EApp (EVar "Some") (EVar "MatchContinuationHint"))) (arm (PTuple (PList) (PCon "TEqual")) () (EVar "None")) (arm (PTuple (PList) (PCon "TLArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TNewline")) () (EVar "None")) (arm (PTuple (PList) (PCon "TDedent")) () (EVar "None")) (arm (PTuple (PList) (PCon "TIndent")) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracketTight")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack")))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRParen")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRParen")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBracket")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBracket")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) (PCon "TRBrace")) () (EIf (EBinOp "==" (EVar "top") (EVar "TRBrace")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PList) (PCon "TRParen")) () (EVar "None")) (arm (PTuple (PList) (PCon "TRBracket")) () (EVar "None")) (arm (PTuple (PList) (PCon "TRBrace")) () (EVar "None")) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack"))))))
+(DFunDef false "matchFollowingGo" ((PVar "toks") (PVar "i") (PVar "left") (PVar "stack")) (EIf (EBinOp "||" (EBinOp "<=" (EVar "left") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks")))) (EVar "None") (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (DoLet false false (PVar "t") (EIf (EBinOp "==" (EVar "raw") (EVar "TLBracketTight")) (EVar "TLBracket") (EVar "raw"))) (DoExpr (EMatch (ETuple (EVar "stack") (EVar "t")) (arm (PTuple (PList) (PCon "TFatArrow")) () (EApp (EVar "Some") (EVar "MatchContinuationHint"))) (arm (PTuple (PList) (PCon "TEqual")) () (EVar "None")) (arm (PTuple (PList) (PCon "TLArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TArrow")) () (EVar "None")) (arm (PTuple (PList) (PCon "TNewline")) () (EVar "None")) (arm (PTuple (PList) (PCon "TDedent")) () (EVar "None")) (arm (PTuple (PList) (PCon "TIndent")) () (EVar "None")) (arm (PTuple PWild (PCon "TEof")) () (EVar "None")) (arm (PTuple PWild (PCon "TLexError" PWild)) () (EVar "None")) (arm (PTuple PWild (PCon "TLArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TRArray")) () (EVar "None")) (arm (PTuple PWild (PCon "TDotLBrace")) () (EVar "None")) (arm (PTuple PWild (PCon "TLParen")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRParen") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBracket")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBracket") (EVar "stack")))) (arm (PTuple PWild (PCon "TLBrace")) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EBinOp "::" (EVar "TRBrace") (EVar "stack")))) (arm (PTuple (PCons (PVar "top") (PVar "rest")) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EIf (EBinOp "==" (EVar "top") (EVar "t")) (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "rest")) (EVar "None"))) (arm (PTuple (PList) PWild) ((GBool (EApp (EVar "isBracketCloseTok") (EVar "t")))) (EVar "None")) (arm (PTuple PWild PWild) () (EApp (EApp (EApp (EApp (EVar "matchFollowingGo") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "left") (ELit (LInt 1)))) (EVar "stack"))))))))
 (DTypeSig true "letMutRemovedMsg" (TyCon "String"))
 (DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed; bindings are immutable, so use a `Ref` cell: `let x = Ref 0`, then `x := v` and `!x`")))
 (DTypeSig false "recordRemovedMsg" (TyCon "String"))

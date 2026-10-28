@@ -1,8 +1,11 @@
+import frontend.lex_token.{Token(..)}
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.parse_hints.{prescanDiagnostic}
-import frontend.parse_diagnostic.{diagnosticCode, renderParseDiagnostic}
+import frontend.parse_hints.{prescanDiagnostic, matchContinuationHint}
+import frontend.parse_diagnostic.{
+  ParseDiagnosticKind(..), diagnosticCode, renderParseDiagnostic
+}
 import support.source_index.{indexSource}
-import test.{expectEqual, expectNone}
+import test.{expectEqual, expectEach, expectNone}
 
 hintSummary : String -> Option (String, String)
 hintSummary src =
@@ -39,3 +42,49 @@ test "brace-block if still reports its hint" =
       "Medaka has no `{ ... }` blocks; indent the body after `then` and `else`",
     ))
     (hintSummary "main = if True { 1 } else { 0 }")
+
+hintTokens : List Token -> Bool
+hintTokens body =
+  let tokens = [TMatch] ++ body
+  let offset t = match t
+    TMatch => (0, 0)
+    TIdent "arm" => (2, 2)
+    _ => (6, 6)
+  let result =
+    matchContinuationHint
+      (arrayFromList tokens)
+      (arrayFromList (map offset tokens))
+      (arrayFromList [0])
+      0
+      1
+  match result
+    Some _ => True
+    None => False
+
+test "match evidence keeps delimiter matching and stop tokens" =
+  let following = [TRParen, TDedent, TIdent "arm", TFatArrow]
+  let candidate open close = [TLParen, TFatArrow, open, close] ++ following
+  let rows = [
+    (True, candidate TLParen TRParen),
+    (True, candidate TLBracket TRBracket),
+    (True, candidate TLBracketTight TRBracket),
+    (True, candidate TLBrace TRBrace),
+    (False, candidate TLParen TRBracket),
+    (False, candidate TLBracket TRBrace),
+    (False, candidate TLBracketTight TRParen),
+    (False, candidate TLBrace TRParen),
+    (False, candidate TLArray TRArray),
+    (False, [TLParen, TFatArrow, TRArray] ++ following),
+    (False, [TLParen, TFatArrow, TLexError UnterminatedString] ++ following),
+    (False, [TRParen, TDedent, TIdent "arm", TFatArrow]),
+    (False, [TRBracket, TDedent, TIdent "arm", TFatArrow]),
+    (False, [TRBrace, TDedent, TIdent "arm", TFatArrow]),
+    (False, [TLParen, TRParen, TFatArrow, TDedent, TIdent "arm", TFatArrow]),
+    (False, [TLParen, TFatArrow, TEof]),
+    (True, [TLParen, TIndent, TFatArrow, TDedent] ++ following),
+  ]
+  expectEach
+    (map
+      ((expected, tokens) =>
+        ("delimiter", expectEqual expected (hintTokens tokens)))
+      rows)
