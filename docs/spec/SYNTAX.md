@@ -482,6 +482,41 @@ e21 = inc << double  -- right-to-left composition
 e22 = person.name  -- dot = field/module access ONLY
 ```
 
+### Precedence and grouping
+
+The rows below run from loosest to tightest. Operators in a row group as
+shown; parentheses override the grouping. This contract follows the historical
+operator grammar (`lib/parser.mly` before its removal, commit `06356a803^`),
+the pipe/composition decision in `archive/PLAN-ARCHIVE.md`, and the assignment
+and postfix decisions in `archive/design/INDEX-DESIGN.md`. The current spelling
+for inequality is `/=`.
+
+| Form | Associativity |
+|---|---|
+| Reference assignment `:=` | right |
+| Pipe `\|>` | left |
+| Composition `>>`, `<<` | left |
+| Boolean `\|\|` | left |
+| Boolean `&&` | left |
+| Comparisons `==`, `/=`, `<`, `>`, `<=`, `>=` | left |
+| Cons `::` | right |
+| Append `++` | left |
+| Additive `+`, `-` | left |
+| Multiplicative `*`, `/`, `%` | left |
+| Prefix `-`, `!` | prefix; its operand includes application |
+| Function application | left |
+| Postfix field access and indexing | left |
+| Parentheses | explicit grouping |
+
+For example, `a + b * c` groups as `a + (b * c)`, `a :: b :: c`
+as `a :: (b :: c)`, `a - b - c` as `(a - b) - c`, and
+`a := b := c` as `a := (b := c)`. Application groups as `(f x) y`;
+`-f x` means `-(f x)`. Parentheses override these rules: `(a + b) * c`.
+A tight negative literal after a nonnumeric application head is an argument:
+`f -1` means `f (-1)`. After a numeric head it is subtraction: `5 -1`
+means `5 - 1`. See `LAYOUT-SEMANTICS.md` §5 for the distinct rule for a
+minus at the start of a line.
+
 There is no backtick-infix operator syntax (`` x `f` y ``) — see "Removed — do not use".
 
 Sections (parenthesized partial operators):
@@ -492,6 +527,9 @@ p2 = (2 * _)  -- left section   x => 2 * x
 p3 = (+)  -- bare operator as function
 p4 = (-)
 ```
+
+`(- 1)` is unary negation, not a right section; use a lambda for
+subtraction from a fixed right operand.
 
 Indexing & slicing:
 
@@ -512,6 +550,17 @@ p3 = [|1..=100|]  -- Array Int, inclusive
 ```
 
 ## Match & patterns
+
+A match arm has a pattern, an optional `if` guard, `=>`, and a body. After
+the scrutinee, an indented block starts the arms; wrap the whole scrutinee in
+parentheses to continue it across such a line. In malformed input an expression
+can also be a pattern, so a diagnostic cannot infer which was intended. The
+compiler reports the missing arm or arrow and offers conditional continuation
+help only for narrowly recognizable parenthesized arrow expressions. Uncertain
+forms receive no continuation suggestion. A tab anywhere in the source also
+suppresses this optional suggestion, because raw character columns do not prove
+layout indentation. A root `->` before a supposed following arm suppresses it.
+This diagnostic policy does not change the grammar.
 
 ```medaka
 data Person = Person { name : String, age : Int }
@@ -1349,8 +1398,9 @@ main = println "ok"
 - For the exact wrapping rules, see `LAYOUT-SEMANTICS.md` §11. In brief:
   a deeper-indented line continues the current logical line (no `INDENT`) when
   the previous token is a trailing-continuation operator, **or** the line starts
-  with a leading-continuation operator (`|> >> << && || ++ ::`), **or** the
-  previous token can end an expression and the new line starts with an atom.
+  with a leading-continuation operator from §5.0 of `LAYOUT-SEMANTICS.md`
+  (a leading `-` requires an immediate ASCII space), **or** the previous token
+  can end an expression and the new line starts with an atom.
   Otherwise the deeper line opens a block, causing a parse error in expression-RHS
   position.
 - `then` **may** start a line — like `else`, a leading `then` continues the
@@ -1430,7 +1480,7 @@ fails:
 2. **Reserved-but-removed constructs** — `mut`, `function`, `with` have *no
    remaining valid grammar use at all* (unlike group 1's keywords, which are
    legal in their own declaration form — just not as a name elsewhere). A
-   dedicated pre-grammar scan in `parser.mdk` (`prescanWalk`, via
+   dedicated pre-grammar scan in `parse_hints.mdk` (`prescanWalk`, via
    `prescanTokHit`) catches every occurrence of these three
    before the generic diagnostic ever fires, and reports the *removal*
    directly — e.g. a bare `mut = 5` fails as `` `let mut` has been removed —

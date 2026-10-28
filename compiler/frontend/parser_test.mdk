@@ -4,7 +4,7 @@
    binary-operator ladder: precedence, associativity, and an operator whose
    right operand fails. -}
 
-import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..)}
+import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..), Section(..)}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parse_engine.{
   PR(..),
@@ -92,7 +92,7 @@ test "expect failure text: identifier and punctuation tokens" =
 test "expect failure text survives to the diagnostic" =
   expectEqual
     [
-      "unexpected line break; expected `)`",
+      "unexpected end of input; expected `)`",
       "unexpected `=`; expected the end of the block",
     ]
     [
@@ -137,16 +137,17 @@ test "a tie goes to the later alternative" =
     (failText (runP (E.orElse (failP "first") (failP "second")) twoToks 0))
 
 -- ── The binary-operator ladder ──────────────────────────────────────────
--- Expected values follow the ladder `binLevelOf` encodes, which is the one the
--- combinator ladder it replaced encoded: loosest first `|>`, `>>` `<<`, `||`,
--- `&&`, comparisons, `::`, `++`, `+` `-`, `*` `/` `%`; all left-associative but
--- `::`; application binds tighter than any operator.
+-- Expectations follow the precedence contract in docs/spec/SYNTAX.md.
 
 -- The operator skeleton of `x = <src>`'s body, fully parenthesised.
 shape : Expr -> String
 shape (ELoc _ e) = shape e
 shape (EBinOp op l r _) = "(\{shape l} \{op} \{shape r})"
 shape (EApp f a) = "(\{shape f} \{shape a})"
+shape (EUnOp op e _) = "(\{op}\{shape e})"
+shape (ESection (SecBare op)) = "(bare \{op})"
+shape (ESection (SecRight op e)) = "(right \{op} \{shape e})"
+shape (ESection (SecLeft e op)) = "(left \{shape e} \{op})"
 shape (EVar v) = v
 shape (ENumLit _ _ lx) = lx
 shape _ = "?"
@@ -230,6 +231,42 @@ test "every level is left-associative except cons" =
       "a / b * c",
     ])
 
+test "parentheses, application, unary and assignment group by the syntax contract" =
+  expectEqual
+    [
+      "((a + b) * c)", "(a - (b - c))", "((f a) b)", "(-(f a))",
+      "(a := (b := c))", "(a := (b + c))"
+    ]
+    (map bodyShape [
+      "(a + b) * c", "a - (b - c)", "f a b", "-f a", "a := b := c", "a := b + c"
+    ])
+
+test "sections and parenthesized negation keep their distinct shapes" =
+  expectEqual
+    ["(right + 5)", "(left 2 *)", "(bare +)", "(-1)"]
+    (map bodyShape ["(+ 5)", "(2 * _)", "(+)", "(- 1)"])
+
+test "leading continuation includes arithmetic and comparison, but not tight minus" =
+  expectEqual
+    [
+      "(1 + 2)", "(1 < 2)", "(8 - 3)",
+      "error: unexpected `-`; this line is indented to column 2, which matches no enclosing block"
+    ]
+    (map bodyShape [
+      stringSlice 0 7 """1
+  + 2
+""",
+      stringSlice 0 7 """1
+  < 2
+""",
+      stringSlice 0 7 """8
+  - 3
+""",
+      stringSlice 0 6 """8
+  -3
+""",
+    ])
+
 -- A tight minus after a numeric head is subtraction; after any other head it
 -- is a negative argument.
 test "a tight minus is subtraction only after a numeric head" =
@@ -247,16 +284,14 @@ test "an application stops at a token that cannot start an argument" =
     ["unexpected `)`", "unexpected `,`", "unexpected `]`"]
     [parseMsg "x = f a )\n", parseMsg "x = f a , b\n", parseMsg "x = f a ]\n"]
 
--- An operator whose right operand does not parse is not consumed, so the
--- leftover-token diagnostic names that operator, at every level.
-test "an operator with no right operand is left for the diagnostic" =
+test "an operator with no right operand reports the missing expression" =
   expectEqual
     [
-      "unexpected `+`",
-      "unexpected `::`",
-      "unexpected `++`",
-      "unexpected `|>`",
-      "unexpected `>`",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
     ]
     [
       parseMsg "x = a * b +\n",
@@ -264,6 +299,70 @@ test "an operator with no right operand is left for the diagnostic" =
       parseMsg "x = a :: b ++\n",
       parseMsg "x = a || b |>\n",
       parseMsg "x = (a > b) >\n",
+    ]
+
+test "match advice requires a parenthesized arrow island and a following arm" =
+  expectEqual
+    [
+      "expected `=>` after the match pattern or guard",
+      "expected a match arm (`pattern => body`); if this line continues the scrutinee, wrap the whole scrutinee in parentheses",
+      "expected a match arm (`pattern => body`)",
+    ]
+    [
+      parseMsg """main =
+  match f x
+      Some y
+    _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    k = a => a
+""",
+    ]
+
+test "match advice suppresses tabs and root type arrows" =
+  expectEqual
+    [
+      "expected a match arm (`pattern => body`)",
+      "expected a match arm (`pattern => body`)",
+      "expected a match arm (`pattern => body`)",
+    ]
+    [
+      parseMsg """main =
+	match f x
+            (a => a)
+        _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    y : Int -> Int => 0
+""",
+      parseMsg
+        ("-- \t\n" ++ """main =
+  match f x
+      (a => a)
+    _ => 0
+"""),
+    ]
+
+test "malformed operands retain their enclosing context" =
+  expectEqual
+    [
+      "expected an expression after the binary operator",
+      "expected a record field value after `=`",
+      "expected a complete parenthesized expression",
+    ]
+    [
+      parseMsg "main = f (1 + )\n",
+      parseMsg "main = R { field = }\n",
+      parseMsg "main = f (\n",
     ]
 
 -- ── fmt's parse check: prescanError vs parseResult ────────────────────────
@@ -283,6 +382,40 @@ parseVerdict : String -> Option (Int, Int, String)
 parseVerdict src = match parseResult src
   Err e => Some (parseErrorLine e, parseErrorCol e, parseErrorMessage e)
   Ok _ => None
+
+test "match hint fallback retains diagnostic location" =
+  expectEqual
+    [
+      Some (3, 12, "expected a match arm (`pattern => body`)"),
+      Some (3, 6, "expected a match arm (`pattern => body`)"),
+      Some (
+        3,
+        6,
+        "expected a match arm (`pattern => body`); if this line continues the scrutinee, wrap the whole scrutinee in parentheses",
+      ),
+    ]
+    (map parseVerdict [
+      """main =
+	match f x
+            (a => a)
+        _ => 0
+""",
+      """main =
+  match f x
+      (a => a)
+    y : Int -> Int => 0
+""",
+      """main =
+  match f x
+      (a => a)
+    _ => 0
+""",
+    ])
+
+test "missing operand after an astral character is located at EOF" =
+  expectEqual
+    (Some (2, 0, "expected an expression after the binary operator"))
+    (parseVerdict "main = (\"🐟\" +\n")
 
 prescanTriggers : List (String, String)
 prescanTriggers = [
@@ -551,10 +684,12 @@ test "raw operator RHS fallback discards cues from its failed operand" =
   let (outcome, cues) = boundedCues "main = a + Box { [1, 2,]\n"
   expectAll [expectEqual "ok" (fst outcome), expectEqual ([], []) cues]
 
-test "a failed match with expression lookahead restores its entry cues" =
+test "a failed match arm restores its entry cues" =
   let (outcome, cues) = boundedCues "main = match x\n  [1, 2,]\n"
   expectAll [
-    expectEqual "unexpected `[`; expected the end of the block" (fst outcome),
+    expectEqual
+      "fatal: expected `=>` after the match pattern or guard"
+      (fst outcome),
     expectEqual ([], []) cues,
   ]
 
@@ -626,3 +761,15 @@ publishedView p =
     commas,
     units,
   )
+
+test "guarded match arm accepts a record body" =
+  expectOkThen
+    (decls => expectEqual 2 (length decls))
+    (mapErr
+      parseErrorMessage
+      (P.parseResult
+        """data R = { a : Int }
+main = match Some 1
+  Some n if n > 0 => R { a = n }.a
+  _ => 0
+"""))
