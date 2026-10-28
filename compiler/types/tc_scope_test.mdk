@@ -7,6 +7,7 @@
 -- built with the envelope's own builders, so each test needs a minted `ModuleCtx` and none
 -- is a doctest.
 
+import support.diag_codes.{codeText}
 import list.{last}
 import test.{
   expectAll,
@@ -346,7 +347,7 @@ test "an alias-qualified method spelling resolves to the aliased module's declar
 test "two modules aliased under one name give no entry and one ambiguity, in either import order" =
   let ab = readTwo "import ma as A\nimport mb as A\n"
   let ba = readTwo "import mb as A\nimport ma as A\n"
-  let codes = m => map tcCode (wAll m.mcCells.typeErrors)
+  let codes = m => map (d => codeText (tcCode d)) (wAll m.mcCells.typeErrors)
   let rowsAb = aliasTable ab (readerProg ab)
   let rowsBa = aliasTable ba (readerProg ba)
   expectAll [

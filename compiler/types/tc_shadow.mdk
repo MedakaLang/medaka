@@ -11,6 +11,7 @@
 -- `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`,
 -- `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   StandaloneOrigin(..),
   CDeclaredPrefix(..),
@@ -353,7 +354,7 @@ checkAdmittedOccObl mctx env (name, mono, loc) =
         None => "this receiver"
       pushTypeErrorAt
         mctx
-        "T-NO-IMPL"
+        TNoImpl
         loc
         "no impl of \{joinWith " or " (map (ir => ir.irName) ifs)} for \{recv}; write an impl of one of them for it"
 
@@ -1310,7 +1311,7 @@ pushAmbiguousShadowDecl : ModuleCtx ->
 pushAmbiguousShadowDecl mctx name ifs dloc =
   pushTypeErrorHelpFixAt
     mctx
-    "T-AMBIGUOUS-SHADOW-DECL"
+    TAmbiguousShadowDecl
     dloc
     "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}` and are both in scope; \{ambiguousShadowHelp}"
     ambiguousShadowHelp
@@ -1323,7 +1324,7 @@ pushAmbiguousMethod : ModuleCtx -> String -> List IfaceRef -> Option Loc -> Unit
 pushAmbiguousMethod mctx name ifs loc =
   pushTypeErrorHelpFixAt
     mctx
-    "T-AMBIGUOUS-METHOD"
+    TAmbiguousMethod
     loc
     "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}`, and this use does not decide which one it means; bring only one of those interfaces into scope"
     ambiguousShadowHelp
@@ -1342,7 +1343,7 @@ pushUnroutableAdmitted : ModuleCtx ->
 pushUnroutableAdmitted mctx name ifs sel loc =
   pushTypeErrorHelpFixAt
     mctx
-    "T-AMBIGUOUS-METHOD"
+    TAmbiguousMethod
     loc
     "`\{name}` names a method of more than one interface here (\{joinWith " and " (map shadowIfaceLabel ifs)}); the one this use selects, `\{sel.irName}.\{name}`, has method-level constraints, and a use of a name that more than one interface declares cannot supply their dictionaries; bring only one of those interfaces into scope"
     ambiguousShadowHelp

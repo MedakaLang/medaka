@@ -676,6 +676,9 @@ test "arch_boundaries: backend.wasm_symbols closure matches its golden" =
 test "arch_boundaries: backend.llvm_symbols closure matches its golden" =
   closurePin "backend.llvm_symbols"
 
+test "arch_boundaries: support.diag_codes closure matches its golden" =
+  closurePin "support.diag_codes"
+
 -- Defined names (column-0, first word not a declaration keyword): an
 -- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
 definedName : String -> Option String

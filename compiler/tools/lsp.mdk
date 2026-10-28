@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..), codeText}
 import tools.syntax_queries.{
   strictDocumentSymbols, symbolsFromRecovered, wholeLineRange, innerDecl,
   jPosition, jRange
@@ -51,6 +52,7 @@ import json.{
 }
 import driver.diagnostics.{
   Diag,
+  diagIdIsSyntax,
   Severity(..),
   mkDiag,
   fileFront,
@@ -1658,8 +1660,7 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 -- Publish a publishDiagnostics notification for each (file, diags) bucket,
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
 hasParseDiagnosticFix : Diag -> Bool
-hasParseDiagnosticFix (Diag _ code _ _ _ (Some _)) =
-  startsWith "P-" code || startsWith "L-" code
+hasParseDiagnosticFix (Diag _ code _ _ _ (Some _)) = diagIdIsSyntax code
 hasParseDiagnosticFix _ = False
 
 publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
@@ -1721,7 +1722,7 @@ selectProjectProfileFor file docs = match carryProjectProfile None file
       let _ = publishEach docs omEmpty [
         (
           path,
-          [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))],
+          [mkDiag SevError RModuleLoad msg (Some (Loc path 1 1 1 1))],
         ),
       ]
       docsFlag path docs
@@ -1843,7 +1844,10 @@ handleCodeAction id params docs =
               |> map toList
               |> optionOr []
           if any
-            (actionDiagnosticMatches snapshot (diagnosticCode pd) range)
+            (actionDiagnosticMatches
+              snapshot
+              (codeText (diagnosticCode pd))
+              range)
             diagnostics then
             parseDiagnosticActions snapshot [pd]
           else

@@ -1,5 +1,5 @@
 # META
-source_lines=6234
+source_lines=6235
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -21,6 +21,7 @@ stages=DESUGAR,MARK
 -- one `ResError` type, so they live together.  A module's export surface
 -- (`ModuleExports`) is `frontend/visibility.mdk`, which this file imports.
 
+import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patBindings,
@@ -3004,46 +3005,46 @@ ppResError (ReassignImmutable n _) =
 -- the two ResError→Diag conversion sites need no per-call-site change.  Codes are
 -- append-only; never renumber.
 export
-resErrorCode : ResError -> String
-resErrorCode (UnboundVariable _ _ _) = "R-UNBOUND"
-resErrorCode (UnboundVariableExported _ _ _) = "R-UNBOUND"
-resErrorCode (UnboundVariableIsModule _ _) = "R-UNBOUND"
-resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = "R-UNBOUND"
-resErrorCode (UnknownConstructor _ _ _) = "R-UNKNOWN-CTOR"
-resErrorCode (UnknownType _ _ _) = "R-UNKNOWN-TYPE"
-resErrorCode (UnknownEffect _ _) = "R-UNKNOWN-EFFECT"
-resErrorCode (UnknownField _ _) = "R-UNKNOWN-FIELD"
-resErrorCode (FieldNotInRecord _ _ _) = "R-FIELD-NOT-IN-RECORD"
-resErrorCode (DuplicateDefinition _ _ _) = "R-DUPLICATE-DEF"
-resErrorCode (UnknownInterface _ _) = "R-UNKNOWN-INTERFACE"
-resErrorCode (MethodNotInInterface _ _ _) = "R-METHOD-NOT-IN-INTERFACE"
-resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
-resErrorCode (PrivateNameAccess _ _ _ _) = "R-PRIVATE-NAME"
-resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
-resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
-resErrorCode (BareCtorImport _ _ _) = "R-BARE-CTOR-IMPORT"
-resErrorCode (AbstractCtorImport _ _ _ _) = "R-ABSTRACT-CTOR-IMPORT"
-resErrorCode (EffectLabelNoMembers _ _ _) = "R-EFFECT-LABEL-NO-MEMBERS"
-resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
-resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
-resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
-resErrorCode (DuplicateBinding _ _) = "R-DUPLICATE-BINDING"
-resErrorCode (DuplicateValueBinding _ _) = "R-DUP-BINDING"
-resErrorCode (DuplicateSignature _ _ _) = "R-DUPLICATE-SIGNATURE"
-resErrorCode (OrphanSignature _ _ _) = "R-ORPHAN-SIGNATURE"
-resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
-resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
-resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
-resErrorCode (AmbiguousConstructor _ _ _) = "R-AMBIGUOUS-CTOR"
-resErrorCode (AmbiguousAliasCtor _ _ _) = "R-AMBIGUOUS-CTOR"
-resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
-resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
-resErrorCode (AmbiguousEffect _ _ _) = "R-AMBIGUOUS-EFFECT"
-resErrorCode (UnboundAuthority _ _) = "R-UNBOUND-AUTHORITY"
-resErrorCode (MisplacedAuthorityBinder _ _) = "R-MISPLACED-AUTHORITY-BINDER"
-resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
-resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
-resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
+resErrorCode : ResError -> DiagCode
+resErrorCode (UnboundVariable _ _ _) = RUnbound
+resErrorCode (UnboundVariableExported _ _ _) = RUnbound
+resErrorCode (UnboundVariableIsModule _ _) = RUnbound
+resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = RUnbound
+resErrorCode (UnknownConstructor _ _ _) = RUnknownCtor
+resErrorCode (UnknownType _ _ _) = RUnknownType
+resErrorCode (UnknownEffect _ _) = RUnknownEffect
+resErrorCode (UnknownField _ _) = RUnknownField
+resErrorCode (FieldNotInRecord _ _ _) = RFieldNotInRecord
+resErrorCode (DuplicateDefinition _ _ _) = RDuplicateDef
+resErrorCode (UnknownInterface _ _) = RUnknownInterface
+resErrorCode (MethodNotInInterface _ _ _) = RMethodNotInInterface
+resErrorCode (ExternWithBody _ _) = RExternWithBody
+resErrorCode (PrivateNameAccess _ _ _ _) = RPrivateName
+resErrorCode (NoExportedConstructors _ _ _) = RNoExportedCtors
+resErrorCode (NewtypeCtorNotExported _ _ _) = RNewtypeCtorPrivate
+resErrorCode (BareCtorImport _ _ _) = RBareCtorImport
+resErrorCode (AbstractCtorImport _ _ _ _) = RAbstractCtorImport
+resErrorCode (EffectLabelNoMembers _ _ _) = REffectLabelNoMembers
+resErrorCode (AbstractFieldAccess _ _ _) = RAbstractField
+resErrorCode (UnknownModule _ _) = RUnknownModule
+resErrorCode (NonRecursiveValueLet _ _) = RNonrecValueLet
+resErrorCode (DuplicateBinding _ _) = RDuplicateBinding
+resErrorCode (DuplicateValueBinding _ _) = RDupBinding
+resErrorCode (DuplicateSignature _ _ _) = RDuplicateSignature
+resErrorCode (OrphanSignature _ _ _) = ROrphanSignature
+resErrorCode (DuplicateBinder _ _ _) = RDupBinder
+resErrorCode (AsPatternMisplaced _) = RAsPatternMisplaced
+resErrorCode (AmbiguousOccurrence _ _ _) = RAmbiguousOccurrence
+resErrorCode (AmbiguousConstructor _ _ _) = RAmbiguousCtor
+resErrorCode (AmbiguousAliasCtor _ _ _) = RAmbiguousCtor
+resErrorCode (AmbiguousType _ _ _) = RAmbiguousType
+resErrorCode (AmbiguousInterface _ _ _) = RAmbiguousInterface
+resErrorCode (AmbiguousEffect _ _ _) = RAmbiguousEffect
+resErrorCode (UnboundAuthority _ _) = RUnboundAuthority
+resErrorCode (MisplacedAuthorityBinder _ _) = RMisplacedAuthorityBinder
+resErrorCode (InternalExternAccess _ _) = RInternalExtern
+resErrorCode (ReassignImmutable _ _) = RImmutableAssign
+resErrorCode (DuplicateInterfaceMethod _ _ _ _) = RDuplicateIfaceMethod
 
 -- Two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.
@@ -6237,6 +6238,7 @@ addOriginsProvenance acc n base (m :: rest) =
     base
     rest
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "declBinderNames" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -7004,46 +7006,46 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ppResError" ((PCon "InternalExternAccess" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` is an internal-only primitive and cannot be used outside the standard library; pass `--allow-internal` to override"))))
 (DFunDef false "ppResError" ((PCon "DuplicateInterfaceMethod" (PVar "m") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` is declared by two interfaces in this module, `"))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "` and `"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "`; rename it in one of them"))))
 (DFunDef false "ppResError" ((PCon "ReassignImmutable" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot reassign `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`: bindings are immutable; shadow it with `let "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " = ...`, or make it a `Ref` and write `"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " := ...`"))))
-(DTypeSig true "resErrorCode" (TyFun (TyCon "ResError") (TyCon "String")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariable" PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariableExported" PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariableIsModule" PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundQualifiedElsewhere" PWild PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnknownConstructor" PWild PWild PWild)) (ELit (LString "R-UNKNOWN-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "UnknownType" PWild PWild PWild)) (ELit (LString "R-UNKNOWN-TYPE")))
-(DFunDef false "resErrorCode" ((PCon "UnknownEffect" PWild PWild)) (ELit (LString "R-UNKNOWN-EFFECT")))
-(DFunDef false "resErrorCode" ((PCon "UnknownField" PWild PWild)) (ELit (LString "R-UNKNOWN-FIELD")))
-(DFunDef false "resErrorCode" ((PCon "FieldNotInRecord" PWild PWild PWild)) (ELit (LString "R-FIELD-NOT-IN-RECORD")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-DEF")))
-(DFunDef false "resErrorCode" ((PCon "UnknownInterface" PWild PWild)) (ELit (LString "R-UNKNOWN-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "MethodNotInInterface" PWild PWild PWild)) (ELit (LString "R-METHOD-NOT-IN-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "ExternWithBody" PWild PWild)) (ELit (LString "R-EXTERN-WITH-BODY")))
-(DFunDef false "resErrorCode" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (ELit (LString "R-PRIVATE-NAME")))
-(DFunDef false "resErrorCode" ((PCon "NoExportedConstructors" PWild PWild PWild)) (ELit (LString "R-NO-EXPORTED-CTORS")))
-(DFunDef false "resErrorCode" ((PCon "NewtypeCtorNotExported" PWild PWild PWild)) (ELit (LString "R-NEWTYPE-CTOR-PRIVATE")))
-(DFunDef false "resErrorCode" ((PCon "BareCtorImport" PWild PWild PWild)) (ELit (LString "R-BARE-CTOR-IMPORT")))
-(DFunDef false "resErrorCode" ((PCon "AbstractCtorImport" PWild PWild PWild PWild)) (ELit (LString "R-ABSTRACT-CTOR-IMPORT")))
-(DFunDef false "resErrorCode" ((PCon "EffectLabelNoMembers" PWild PWild PWild)) (ELit (LString "R-EFFECT-LABEL-NO-MEMBERS")))
-(DFunDef false "resErrorCode" ((PCon "AbstractFieldAccess" PWild PWild PWild)) (ELit (LString "R-ABSTRACT-FIELD")))
-(DFunDef false "resErrorCode" ((PCon "UnknownModule" PWild PWild)) (ELit (LString "R-UNKNOWN-MODULE")))
-(DFunDef false "resErrorCode" ((PCon "NonRecursiveValueLet" PWild PWild)) (ELit (LString "R-NONREC-VALUE-LET")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (ELit (LString "R-DUPLICATE-BINDING")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (ELit (LString "R-DUP-BINDING")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-SIGNATURE")))
-(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (ELit (LString "R-ORPHAN-SIGNATURE")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (ELit (LString "R-DUP-BINDER")))
-(DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "R-AS-PATTERN-MISPLACED")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-OCCURRENCE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousConstructor" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousAliasCtor" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousType" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-TYPE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousInterface" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousEffect" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-EFFECT")))
-(DFunDef false "resErrorCode" ((PCon "UnboundAuthority" PWild PWild)) (ELit (LString "R-UNBOUND-AUTHORITY")))
-(DFunDef false "resErrorCode" ((PCon "MisplacedAuthorityBinder" PWild PWild)) (ELit (LString "R-MISPLACED-AUTHORITY-BINDER")))
-(DFunDef false "resErrorCode" ((PCon "InternalExternAccess" PWild PWild)) (ELit (LString "R-INTERNAL-EXTERN")))
-(DFunDef false "resErrorCode" ((PCon "ReassignImmutable" PWild PWild)) (ELit (LString "R-IMMUTABLE-ASSIGN")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild PWild)) (ELit (LString "R-DUPLICATE-IFACE-METHOD")))
+(DTypeSig true "resErrorCode" (TyFun (TyCon "ResError") (TyCon "DiagCode")))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariable" PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariableExported" PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariableIsModule" PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundQualifiedElsewhere" PWild PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnknownConstructor" PWild PWild PWild)) (EVar "RUnknownCtor"))
+(DFunDef false "resErrorCode" ((PCon "UnknownType" PWild PWild PWild)) (EVar "RUnknownType"))
+(DFunDef false "resErrorCode" ((PCon "UnknownEffect" PWild PWild)) (EVar "RUnknownEffect"))
+(DFunDef false "resErrorCode" ((PCon "UnknownField" PWild PWild)) (EVar "RUnknownField"))
+(DFunDef false "resErrorCode" ((PCon "FieldNotInRecord" PWild PWild PWild)) (EVar "RFieldNotInRecord"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "RDuplicateDef"))
+(DFunDef false "resErrorCode" ((PCon "UnknownInterface" PWild PWild)) (EVar "RUnknownInterface"))
+(DFunDef false "resErrorCode" ((PCon "MethodNotInInterface" PWild PWild PWild)) (EVar "RMethodNotInInterface"))
+(DFunDef false "resErrorCode" ((PCon "ExternWithBody" PWild PWild)) (EVar "RExternWithBody"))
+(DFunDef false "resErrorCode" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "RPrivateName"))
+(DFunDef false "resErrorCode" ((PCon "NoExportedConstructors" PWild PWild PWild)) (EVar "RNoExportedCtors"))
+(DFunDef false "resErrorCode" ((PCon "NewtypeCtorNotExported" PWild PWild PWild)) (EVar "RNewtypeCtorPrivate"))
+(DFunDef false "resErrorCode" ((PCon "BareCtorImport" PWild PWild PWild)) (EVar "RBareCtorImport"))
+(DFunDef false "resErrorCode" ((PCon "AbstractCtorImport" PWild PWild PWild PWild)) (EVar "RAbstractCtorImport"))
+(DFunDef false "resErrorCode" ((PCon "EffectLabelNoMembers" PWild PWild PWild)) (EVar "REffectLabelNoMembers"))
+(DFunDef false "resErrorCode" ((PCon "AbstractFieldAccess" PWild PWild PWild)) (EVar "RAbstractField"))
+(DFunDef false "resErrorCode" ((PCon "UnknownModule" PWild PWild)) (EVar "RUnknownModule"))
+(DFunDef false "resErrorCode" ((PCon "NonRecursiveValueLet" PWild PWild)) (EVar "RNonrecValueLet"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (EVar "RDuplicateBinding"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (EVar "RDupBinding"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (EVar "RDuplicateSignature"))
+(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (EVar "ROrphanSignature"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (EVar "RDupBinder"))
+(DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (EVar "RAsPatternMisplaced"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (EVar "RAmbiguousOccurrence"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousConstructor" PWild PWild PWild)) (EVar "RAmbiguousCtor"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousAliasCtor" PWild PWild PWild)) (EVar "RAmbiguousCtor"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousType" PWild PWild PWild)) (EVar "RAmbiguousType"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousInterface" PWild PWild PWild)) (EVar "RAmbiguousInterface"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousEffect" PWild PWild PWild)) (EVar "RAmbiguousEffect"))
+(DFunDef false "resErrorCode" ((PCon "UnboundAuthority" PWild PWild)) (EVar "RUnboundAuthority"))
+(DFunDef false "resErrorCode" ((PCon "MisplacedAuthorityBinder" PWild PWild)) (EVar "RMisplacedAuthorityBinder"))
+(DFunDef false "resErrorCode" ((PCon "InternalExternAccess" PWild PWild)) (EVar "RInternalExtern"))
+(DFunDef false "resErrorCode" ((PCon "ReassignImmutable" PWild PWild)) (EVar "RImmutableAssign"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild PWild)) (EVar "RDuplicateIfaceMethod"))
 (DTypeSig false "ambigModPhrase" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "ambigModPhrase" ((PCons (PVar "a") (PCons (PVar "b") (PList)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "both `")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "` and `"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "`"))))
 (DFunDef false "ambigModPhrase" ((PVar "mods")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "m")) (ELit (LString "`"))))) (EVar "mods"))))
@@ -7695,6 +7697,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "addOriginsProvenance" ((PVar "acc") PWild PWild (PList)) (EVar "acc"))
 (DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "declBinderNames" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -8462,46 +8465,46 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ppResError" ((PCon "InternalExternAccess" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` is an internal-only primitive and cannot be used outside the standard library; pass `--allow-internal` to override"))))
 (DFunDef false "ppResError" ((PCon "DuplicateInterfaceMethod" (PVar "m") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` is declared by two interfaces in this module, `"))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "` and `"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "`; rename it in one of them"))))
 (DFunDef false "ppResError" ((PCon "ReassignImmutable" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot reassign `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`: bindings are immutable; shadow it with `let "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " = ...`, or make it a `Ref` and write `"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " := ...`"))))
-(DTypeSig true "resErrorCode" (TyFun (TyCon "ResError") (TyCon "String")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariable" PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariableExported" PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundVariableIsModule" PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnboundQualifiedElsewhere" PWild PWild PWild PWild)) (ELit (LString "R-UNBOUND")))
-(DFunDef false "resErrorCode" ((PCon "UnknownConstructor" PWild PWild PWild)) (ELit (LString "R-UNKNOWN-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "UnknownType" PWild PWild PWild)) (ELit (LString "R-UNKNOWN-TYPE")))
-(DFunDef false "resErrorCode" ((PCon "UnknownEffect" PWild PWild)) (ELit (LString "R-UNKNOWN-EFFECT")))
-(DFunDef false "resErrorCode" ((PCon "UnknownField" PWild PWild)) (ELit (LString "R-UNKNOWN-FIELD")))
-(DFunDef false "resErrorCode" ((PCon "FieldNotInRecord" PWild PWild PWild)) (ELit (LString "R-FIELD-NOT-IN-RECORD")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-DEF")))
-(DFunDef false "resErrorCode" ((PCon "UnknownInterface" PWild PWild)) (ELit (LString "R-UNKNOWN-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "MethodNotInInterface" PWild PWild PWild)) (ELit (LString "R-METHOD-NOT-IN-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "ExternWithBody" PWild PWild)) (ELit (LString "R-EXTERN-WITH-BODY")))
-(DFunDef false "resErrorCode" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (ELit (LString "R-PRIVATE-NAME")))
-(DFunDef false "resErrorCode" ((PCon "NoExportedConstructors" PWild PWild PWild)) (ELit (LString "R-NO-EXPORTED-CTORS")))
-(DFunDef false "resErrorCode" ((PCon "NewtypeCtorNotExported" PWild PWild PWild)) (ELit (LString "R-NEWTYPE-CTOR-PRIVATE")))
-(DFunDef false "resErrorCode" ((PCon "BareCtorImport" PWild PWild PWild)) (ELit (LString "R-BARE-CTOR-IMPORT")))
-(DFunDef false "resErrorCode" ((PCon "AbstractCtorImport" PWild PWild PWild PWild)) (ELit (LString "R-ABSTRACT-CTOR-IMPORT")))
-(DFunDef false "resErrorCode" ((PCon "EffectLabelNoMembers" PWild PWild PWild)) (ELit (LString "R-EFFECT-LABEL-NO-MEMBERS")))
-(DFunDef false "resErrorCode" ((PCon "AbstractFieldAccess" PWild PWild PWild)) (ELit (LString "R-ABSTRACT-FIELD")))
-(DFunDef false "resErrorCode" ((PCon "UnknownModule" PWild PWild)) (ELit (LString "R-UNKNOWN-MODULE")))
-(DFunDef false "resErrorCode" ((PCon "NonRecursiveValueLet" PWild PWild)) (ELit (LString "R-NONREC-VALUE-LET")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (ELit (LString "R-DUPLICATE-BINDING")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (ELit (LString "R-DUP-BINDING")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-SIGNATURE")))
-(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (ELit (LString "R-ORPHAN-SIGNATURE")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (ELit (LString "R-DUP-BINDER")))
-(DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "R-AS-PATTERN-MISPLACED")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-OCCURRENCE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousConstructor" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousAliasCtor" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-CTOR")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousType" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-TYPE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousInterface" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-INTERFACE")))
-(DFunDef false "resErrorCode" ((PCon "AmbiguousEffect" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-EFFECT")))
-(DFunDef false "resErrorCode" ((PCon "UnboundAuthority" PWild PWild)) (ELit (LString "R-UNBOUND-AUTHORITY")))
-(DFunDef false "resErrorCode" ((PCon "MisplacedAuthorityBinder" PWild PWild)) (ELit (LString "R-MISPLACED-AUTHORITY-BINDER")))
-(DFunDef false "resErrorCode" ((PCon "InternalExternAccess" PWild PWild)) (ELit (LString "R-INTERNAL-EXTERN")))
-(DFunDef false "resErrorCode" ((PCon "ReassignImmutable" PWild PWild)) (ELit (LString "R-IMMUTABLE-ASSIGN")))
-(DFunDef false "resErrorCode" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild PWild)) (ELit (LString "R-DUPLICATE-IFACE-METHOD")))
+(DTypeSig true "resErrorCode" (TyFun (TyCon "ResError") (TyCon "DiagCode")))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariable" PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariableExported" PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundVariableIsModule" PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnboundQualifiedElsewhere" PWild PWild PWild PWild)) (EVar "RUnbound"))
+(DFunDef false "resErrorCode" ((PCon "UnknownConstructor" PWild PWild PWild)) (EVar "RUnknownCtor"))
+(DFunDef false "resErrorCode" ((PCon "UnknownType" PWild PWild PWild)) (EVar "RUnknownType"))
+(DFunDef false "resErrorCode" ((PCon "UnknownEffect" PWild PWild)) (EVar "RUnknownEffect"))
+(DFunDef false "resErrorCode" ((PCon "UnknownField" PWild PWild)) (EVar "RUnknownField"))
+(DFunDef false "resErrorCode" ((PCon "FieldNotInRecord" PWild PWild PWild)) (EVar "RFieldNotInRecord"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "RDuplicateDef"))
+(DFunDef false "resErrorCode" ((PCon "UnknownInterface" PWild PWild)) (EVar "RUnknownInterface"))
+(DFunDef false "resErrorCode" ((PCon "MethodNotInInterface" PWild PWild PWild)) (EVar "RMethodNotInInterface"))
+(DFunDef false "resErrorCode" ((PCon "ExternWithBody" PWild PWild)) (EVar "RExternWithBody"))
+(DFunDef false "resErrorCode" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "RPrivateName"))
+(DFunDef false "resErrorCode" ((PCon "NoExportedConstructors" PWild PWild PWild)) (EVar "RNoExportedCtors"))
+(DFunDef false "resErrorCode" ((PCon "NewtypeCtorNotExported" PWild PWild PWild)) (EVar "RNewtypeCtorPrivate"))
+(DFunDef false "resErrorCode" ((PCon "BareCtorImport" PWild PWild PWild)) (EVar "RBareCtorImport"))
+(DFunDef false "resErrorCode" ((PCon "AbstractCtorImport" PWild PWild PWild PWild)) (EVar "RAbstractCtorImport"))
+(DFunDef false "resErrorCode" ((PCon "EffectLabelNoMembers" PWild PWild PWild)) (EVar "REffectLabelNoMembers"))
+(DFunDef false "resErrorCode" ((PCon "AbstractFieldAccess" PWild PWild PWild)) (EVar "RAbstractField"))
+(DFunDef false "resErrorCode" ((PCon "UnknownModule" PWild PWild)) (EVar "RUnknownModule"))
+(DFunDef false "resErrorCode" ((PCon "NonRecursiveValueLet" PWild PWild)) (EVar "RNonrecValueLet"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (EVar "RDuplicateBinding"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (EVar "RDupBinding"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (EVar "RDuplicateSignature"))
+(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (EVar "ROrphanSignature"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (EVar "RDupBinder"))
+(DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (EVar "RAsPatternMisplaced"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (EVar "RAmbiguousOccurrence"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousConstructor" PWild PWild PWild)) (EVar "RAmbiguousCtor"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousAliasCtor" PWild PWild PWild)) (EVar "RAmbiguousCtor"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousType" PWild PWild PWild)) (EVar "RAmbiguousType"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousInterface" PWild PWild PWild)) (EVar "RAmbiguousInterface"))
+(DFunDef false "resErrorCode" ((PCon "AmbiguousEffect" PWild PWild PWild)) (EVar "RAmbiguousEffect"))
+(DFunDef false "resErrorCode" ((PCon "UnboundAuthority" PWild PWild)) (EVar "RUnboundAuthority"))
+(DFunDef false "resErrorCode" ((PCon "MisplacedAuthorityBinder" PWild PWild)) (EVar "RMisplacedAuthorityBinder"))
+(DFunDef false "resErrorCode" ((PCon "InternalExternAccess" PWild PWild)) (EVar "RInternalExtern"))
+(DFunDef false "resErrorCode" ((PCon "ReassignImmutable" PWild PWild)) (EVar "RImmutableAssign"))
+(DFunDef false "resErrorCode" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild PWild)) (EVar "RDuplicateIfaceMethod"))
 (DTypeSig false "ambigModPhrase" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "ambigModPhrase" ((PCons (PVar "a") (PCons (PVar "b") (PList)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "both `")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "` and `"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "`"))))
 (DFunDef false "ambigModPhrase" ((PVar "mods")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "m")) (ELit (LString "`"))))) (EVar "mods"))))

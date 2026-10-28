@@ -14,6 +14,7 @@
 -- `checkOneDiags`/`elaborateOne` expect (see their own header comments) — so
 -- prelude names like `println` resolve.
 
+import support.diag_codes.{codeText}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{defaultDriveInputs, checkOneDiags, tcCode}
@@ -47,6 +48,6 @@ run runtimeP coreP targetP = match readFile runtimeP
             putStrLn "-"
           e :: _ =>
             putStrLn "REJECT"
-            putStrLn (tcCode e)
+            putStrLn (codeText (tcCode e))
 
 main = oracleMain ()

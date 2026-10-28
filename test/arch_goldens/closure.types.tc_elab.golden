@@ -5,6 +5,7 @@ frontend.marker
 frontend.resolve
 frontend.visibility
 support.char
+support.diag_codes
 support.opcount
 support.ordmap
 support.path

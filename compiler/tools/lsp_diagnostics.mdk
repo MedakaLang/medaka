@@ -1,4 +1,6 @@
-import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+import driver.diagnostic_value.{
+  Diag(..), Fix(..), DiagId(..), diagIdText, Severity(..)
+}
 import support.source_index.{SourceIndex, sourcePositionToOffset}
 import tools.lsp_positions.{locToLspRange}
 import tools.source_snapshot.{SourceSnapshot(..), SnapshotId(..), snapshotId}
@@ -21,7 +23,7 @@ fields range (Diag sev code msg _ help _) =
       ("severity", JInt (severityCode sev)),
       ("source", JString "medaka"),
       ("message", JString msg),
-      ("code", JString code),
+      ("code", JString (diagIdText code)),
     ]
     ++ (match help
       Some h => [("help", JString h)]
@@ -71,7 +73,7 @@ parseDiagnosticJson snapshot fallback d pd = match snapshot
     Diag _ code _ loc _ _ =>
       let base = diagnosticJsonOr index fallback d
       let matching =
-        code == diagnosticCode pd
+        code == Coded (diagnosticCode pd)
           && (match loc
             Some l =>
               locToLspRange index l == locToLspRange index (diagnosticLoc pd)

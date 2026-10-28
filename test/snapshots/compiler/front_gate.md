@@ -1,7 +1,8 @@
 # META
-source_lines=511
+source_lines=513
 stages=DESUGAR,MARK
 # SOURCE
+import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
 -- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
@@ -24,6 +25,7 @@ import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
 import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
+  DiagId(..),
   Severity(..),
   cjDiagnostic,
   cjFoldIntoFile,
@@ -105,7 +107,7 @@ moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
     ppDiagCliSrc
       csrc
       cpath
-      (Diag SevError "R-MODULE-LOAD" lmsg (Some loc) None None)
+      (Diag SevError (Coded RModuleLoad) lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg
@@ -117,7 +119,7 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
           ppDiagCliSrc
             tsrc
             target
-            (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
+            (Diag SevError (Coded RModuleLoad) msg (Some loc) None None)
 
 -- ── the `build` front-end gate ───────────────────────────────────────────────
 -- `medaka build` sets this variable on the `medaka_emitter` child it spawns, and
@@ -514,6 +516,7 @@ fileWithNotes key notes (JObject members) = match toList members
   _ => None
 fileWithNotes _ _ _ = None
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
@@ -521,7 +524,7 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -533,8 +536,8 @@ fileWithNotes _ _ _ = None
 (DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "file")) (EApp (EVar "parseErrorDiagnostic") (EVar "e")))))
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
-(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
-(DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
+(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
+(DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
 (DTypeSig true "frontGateEnv" (TyCon "String"))
 (DFunDef false "frontGateEnv" () (ELit (LString "MEDAKA_FRONT_GATE")))
 (DTypeSig true "frontGateAssignment" (TyFun (TyCon "Bool") (TyCon "String")))
@@ -598,6 +601,7 @@ fileWithNotes _ _ _ = None
 (DFunDef false "fileWithNotes" ((PVar "key") (PVar "notes") (PCon "JObject" (PVar "members"))) (EMatch (EApp (EVar "toList") (EVar "members")) (arm (PList (PTuple (PLit (LString "file")) (PCon "JString" (PVar "p"))) (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) () (EIf (EBinOp "==" (EVar "p") (EVar "key")) (EApp (EVar "Some") (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "p"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EBinOp "++" (EApp (EVar "toList") (EVar "ds")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "p")) (ELit (LString "")))) (EVar "notes")))))))))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "fileWithNotes" (PWild PWild PWild) (EVar "None"))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
@@ -605,7 +609,7 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -617,8 +621,8 @@ fileWithNotes _ _ _ = None
 (DFunDef false "ppParseError" ((PVar "src") (PVar "file") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "file")) (EApp (EVar "parseErrorDiagnostic") (EVar "e")))))
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
-(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
-(DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
+(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
+(DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
 (DTypeSig true "frontGateEnv" (TyCon "String"))
 (DFunDef false "frontGateEnv" () (ELit (LString "MEDAKA_FRONT_GATE")))
 (DTypeSig true "frontGateAssignment" (TyFun (TyCon "Bool") (TyCon "String")))

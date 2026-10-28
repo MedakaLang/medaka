@@ -10,6 +10,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_infer_records`,
 -- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   DynCtx,
   dynFor,
@@ -164,7 +165,7 @@ inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
 inferPatRng mctx lo hi =
   pushTypeError
     mctx
-    "T-TYPE-MISMATCH"
+    TTypeMismatch
     "type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
   (tconBuiltin "Int", [])
 
@@ -174,7 +175,7 @@ inferPatRec : TcEnv ->
   (Mono, List (String, Scheme))
 inferPatRec env name fields = match lookupRecordByName env.teDyn.dcModule name
   None =>
-    pushTypeError env.teDyn.dcModule "T-UNKNOWN-RECORD" (unknownRecordMsg name)
+    pushTypeError env.teDyn.dcModule TUnknownRecord (unknownRecordMsg name)
     (freshVar env.teDyn.dcModule (), bindRecPatFieldsFresh env fields)
   Some ri => inferPatRecWith env name ri fields
 
@@ -218,7 +219,7 @@ inferRecPatField env rname fieldTypes fname bid mp =
     None =>
       pushTypeError
         env.teDyn.dcModule
-        "T-UNKNOWN-FIELD"
+        TUnknownField
         (unknownFieldMsg fname rname)
       inferRecPatFieldWith env (freshVar env.teDyn.dcModule ()) fname bid mp
     Some ft => inferRecPatFieldWith env ft fname bid mp
@@ -303,7 +304,7 @@ refuseOpenedExistentials mctx _ =
     cell :: _ =>
       pushTypeErrorAt
         mctx
-        "T-AUTHORITY-EXISTENTIAL-SCOPE"
+        TAuthorityExistentialScope
         mctx.mcLoc
         (existentialScopeMsg (authvarName cell))
   match mctx.mcCells.openedExistentialsStackRef.value
@@ -353,7 +354,7 @@ refuseBoxedLitPat mctx tag lit loc =
   recordTypeError
     mctx
     (TcDiag
-      "T-TYPE-MISMATCH"
+      TTypeMismatch
       1
       (orElseLoc loc mctx.mcLoc)
       (boxedLitPatMsg tag lit)
@@ -368,7 +369,7 @@ inferU64LitPat mctx hi lo =
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatCon env name pats = match lookupCtor env name
   None =>
-    pushTypeError env.teDyn.dcModule "T-UNKNOWN-CTOR" (unknownCtorMsg name)
+    pushTypeError env.teDyn.dcModule TUnknownCtor (unknownCtorMsg name)
     let pr = inferPats env pats
     (freshVar env.teDyn.dcModule (), snd pr)
   Some scheme => inferPatConWith env scheme pats
@@ -492,7 +493,7 @@ closeExistentialScope mctx (ExistentialScope opened level) t loc =
             mctx.mcCells.escapedExistentialsRef.value
         pushTypeErrorAt
           mctx
-          "T-AUTHORITY-ESCAPE"
+          TAuthorityEscape
           loc
           (existentialEscapeMsg (authvarName cell)))
     opened

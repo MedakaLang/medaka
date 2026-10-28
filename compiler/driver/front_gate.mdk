@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
 -- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
@@ -20,6 +21,7 @@ import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
 import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
+  DiagId(..),
   Severity(..),
   cjDiagnostic,
   cjFoldIntoFile,
@@ -101,7 +103,7 @@ moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
     ppDiagCliSrc
       csrc
       cpath
-      (Diag SevError "R-MODULE-LOAD" lmsg (Some loc) None None)
+      (Diag SevError (Coded RModuleLoad) lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg
@@ -113,7 +115,7 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
           ppDiagCliSrc
             tsrc
             target
-            (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
+            (Diag SevError (Coded RModuleLoad) msg (Some loc) None None)
 
 -- ── the `build` front-end gate ───────────────────────────────────────────────
 -- `medaka build` sets this variable on the `medaka_emitter` child it spawns, and

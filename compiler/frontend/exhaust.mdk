@@ -11,6 +11,7 @@
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
+import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   variantName,
@@ -855,7 +856,7 @@ guardWarning = "Warning: guards may not be exhaustive"
 checkGroup : Oracle ->
   String ->
   List (List Pat, Expr) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGroup oracle name clauses
   -- A group with a *guarded partial* clause → the guard may fall through; keep
   -- the flat "guards may not be exhaustive" wording (guard gaps aren't named by a
@@ -865,7 +866,9 @@ checkGroup oracle name clauses
   -- cover every constructor, naming the missing case like the `match` path.
   | otherwise = checkGroupClauses oracle name clauses
 
-checkGroupCovered : Oracle -> List (List Pat, Expr) -> List (String, Option Loc)
+checkGroupCovered : Oracle ->
+  List (List Pat, Expr) ->
+  List (DiagCode, String, Option Loc)
 checkGroupCovered oracle clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
@@ -875,7 +878,7 @@ checkGroupCovered oracle clauses =
     (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
     rows
     query then
-    [(guardWarning, groupLoc clauses)]
+    [(WGuardInexhaustive, guardWarning, groupLoc clauses)]
   else
     []
 
@@ -886,7 +889,7 @@ checkGroupCovered oracle clauses =
 checkGroupClauses : Oracle ->
   String ->
   List (List Pat, Expr) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGroupClauses oracle name clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
@@ -896,7 +899,13 @@ checkGroupClauses oracle name clauses =
     (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
     rows
     query then
-    [(nonExhaustiveClausesMsg oracle name arity rows, groupLoc clauses)]
+    [
+      (
+        WNonexhaustiveClauses,
+        nonExhaustiveClausesMsg oracle name arity rows,
+        groupLoc clauses,
+      ),
+    ]
   else
     []
 
@@ -1015,11 +1024,11 @@ firstSeenNames ((n, _) :: rest) seen
   | otherwise = n :: firstSeenNames rest (omInsert n () seen)
 
 -- ── collect where-group (ELetGroup) clause groups from an expr tree ────────
-letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
+letGroupWarnings : Oracle -> Expr -> List (DiagCode, String, Option Loc)
 letGroupWarnings oracle body =
   flatMap (checkLetBind oracle) (collectLetBinds body)
 
-checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
+checkLetBind : Oracle -> LetBind -> List (DiagCode, String, Option Loc)
 checkLetBind oracle (LetBind name funclauses _ _) =
   checkGroup oracle name (map funClauseToClause funclauses)
 
@@ -1119,7 +1128,7 @@ interpBinds (InterpExpr e) = collectLetBinds e
 export
 checkGuardExhaustivenessWith : List Decl ->
   List Decl ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
   let _ = stageBump "exhaust.guards"
   let oracle = buildOracle (checkDecls ++ oracleDecls)
@@ -1128,14 +1137,18 @@ checkGuardExhaustivenessWith oracleDecls checkDecls =
 
 checkNamedGroup : Oracle ->
   (String, List (List Pat, Expr)) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkNamedGroup oracle (name, clauses) = checkGroup oracle name clauses
 
 -- Back-compat: build the oracle from the checked decls only (the historical
 -- entry-only oracle) and drop the loc channel to a plain message list.
 export
 checkGuardExhaustiveness : List Decl -> List String
-checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
+checkGuardExhaustiveness prog =
+  map warningMessage (checkGuardExhaustivenessWith prog prog)
+
+warningMessage : (DiagCode, String, Option Loc) -> String
+warningMessage (_, msg, _) = msg
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
@@ -1143,7 +1156,7 @@ topFunDefClauses ((DFunDef _ n pats body _ _) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
 topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
-declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
+declBodyWarnings : Oracle -> Decl -> List (DiagCode, String, Option Loc)
 declBodyWarnings oracle (DFunDef _ _ _ body _ _) = letGroupWarnings oracle body
 declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
@@ -1167,11 +1180,15 @@ ifaceDefaultClauses ((IfaceMethod n _ (Some (MethodDefault pats body)) _) :: res
   (n, (pats, body)) :: ifaceDefaultClauses rest
 ifaceDefaultClauses (_ :: rest) = ifaceDefaultClauses rest
 
-implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
+implMethodBodyWarnings : Oracle ->
+  ImplMethod ->
+  List (DiagCode, String, Option Loc)
 implMethodBodyWarnings oracle (ImplMethod _ _ body) =
   letGroupWarnings oracle body
 
-ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
+ifaceMethodWarnings : Oracle ->
+  IfaceMethod ->
+  List (DiagCode, String, Option Loc)
 ifaceMethodWarnings _ (IfaceMethod _ _ None _) = []
 ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body)) _) =
   letGroupWarnings oracle body
@@ -1180,7 +1197,8 @@ ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body)) _) =
 export
 exhaustToLinesWith : List Decl -> List Decl -> String
 exhaustToLinesWith oracleDecls checkDecls =
-  joinNl (map fst (checkGuardExhaustivenessWith oracleDecls checkDecls))
+  joinNl
+    (map warningMessage (checkGuardExhaustivenessWith oracleDecls checkDecls))
 
 -- entry-only oracle (self-contained single file: no imports available)
 export

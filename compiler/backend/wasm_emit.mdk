@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import backend.wasm_repr.{
   WasmRepr(..), WasmValue(..), LocalSlot(..), valueRepr, valueLines, slotIndex,
   physicalType
@@ -1000,7 +1001,7 @@ jsffiWrapperW prog imp =
     if imp.result == "Int" then
       wasmTrap
         emit
-        "E-PANIC"
+        EPanic
         "\{call} returned a value outside Int's range -4611686018427387904..4611686018427387903 (docs/spec/WASM-SEMANTICS.md section 3.1); declare the result I64 to receive the full 64-bit range"
     else
       []
@@ -1008,7 +1009,7 @@ jsffiWrapperW prog imp =
     if imp.result == "Char" then
       wasmTrap
         emit
-        "E-PANIC"
+        EPanic
         "\{call} returned a value that is not a valid Char: a Char must be a Unicode scalar, i.e. in 0..1114111 excluding the UTF-16 surrogates 55296..57343 (docs/spec/WASM-SEMANTICS.md section 3.1)"
     else
       []
@@ -1016,7 +1017,7 @@ jsffiWrapperW prog imp =
     if contains "Array" imp.params then
       wasmTrap
         emit
-        "E-PANIC"
+        EPanic
         "\{call} wrote a value outside Int's range -4611686018427387904..4611686018427387903 into an Array Int argument (docs/spec/WASM-SEMANTICS.md section 3.1)"
     else
       []
@@ -2944,7 +2945,7 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let cyclic =
     wasmTrapNamed
       (progEmit prog)
-      "E-CYCLIC-VALUE"
+      ECyclicValue
       name
       " refers to itself during initialization (non-productive cyclic value)\n"
   let value = "$" ++ g
@@ -5499,8 +5500,7 @@ siteDynInstrs prog env d e =
 -- the non-exhaustive-match trap at [site]: one call of the shared helper when
 -- located, today's unrolled line when not.
 wasmNonexhTrap : WasmEmit -> Int -> List String
-wasmNonexhTrap emit 0 =
-  wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+wasmNonexhTrap emit 0 = wasmTrap emit ENonexhaustiveMatch "non-exhaustive match"
 wasmNonexhTrap emit site = [
   "i64.const " ++ intToString site,
   trapCallW emit "mdk_trap_nonexh" 1,
@@ -5517,8 +5517,7 @@ failSiteW emit (LetRefuted l) = sitePackedW emit l
 wasmFailTrap : WasmEmit -> FailSite -> List String
 wasmFailTrap emit (LetRefuted l) =
   let site = sitePackedW emit l
-  siteLocInstrs emit site
-    ++ wasmTrap emit "E-LET-REFUTE" "let pattern match failed"
+  siteLocInstrs emit site ++ wasmTrap emit ELetRefute "let pattern match failed"
 wasmFailTrap emit fs = wasmNonexhTrap emit (failSiteW emit fs)
 
 -- ── B5: coded runtime-trap helpers (RUNTIME-TRAP-UNIFY-DESIGN §3 (5), §7 forks 1-2) ──
@@ -5573,7 +5572,7 @@ trapMsgRuntimeOf : WasmEmit -> List String
 trapMsgRuntimeOf emit = reverseL !emit.trapMsgFns
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
-wasmTrap : WasmEmit -> String -> String -> List String
+wasmTrap : WasmEmit -> DiagCode -> String -> List String
 wasmTrap emit code msg =
   wasmTrapBytes emit "runtime error [\{code}]: \{msg}\n" ++ ["unreachable"]
 
@@ -5584,7 +5583,7 @@ wasmTrap emit code msg =
 -- emission; the stderr bytes are the same as the whole message spelled out.  The name
 -- bytes call the error-byte import themselves, so the import flag is set here rather
 -- than left to the interned prefix.
-wasmTrapNamed : WasmEmit -> String -> String -> String -> List String
+wasmTrapNamed : WasmEmit -> DiagCode -> String -> String -> List String
 wasmTrapNamed emit code name after =
   wasmTrapBytes emit "runtime error [\{code}]: "
     ++ flatMap (trapByteInstr emit) (strBytesW name)
@@ -5598,7 +5597,7 @@ wasmTrapNamed emit code name after =
 -- emitted (a fixed-text trap alone must not pull it in -- that would move every
 -- existing wasm golden).
 wasmTrapNum : WasmEmit ->
-  String ->
+  DiagCode ->
   String ->
   List String ->
   String ->
@@ -5620,7 +5619,7 @@ wasmTrapNum emit code before valIns after =
 -- then-branch ends in `unreachable` so the branch is stack-polymorphic.)
 emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String
 emitDivZeroGuard emit op dloc site =
-  let code = if op == "/" then "E-DIV-ZERO" else "E-MOD-ZERO"
+  let code = if op == "/" then EDivZero else EModZero
   let msg = if op == "/" then "division by zero" else "modulo by zero"
   ["local.set " ++ dloc, "local.get " ++ dloc, "i64.eqz", "if"]
     ++ indent (siteLocInstrs emit site ++ wasmTrap emit code msg)
@@ -6595,7 +6594,7 @@ emitLeafExternRef prog env d "ioPoll" [fds, interests, timeout] =
     ++ ["drop"]
     ++ wasmTrap
       (progEmit prog)
-      "E-WASM-NO-BINDING"
+      EWasmNoBinding
       "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
 emitLeafExternRef prog env d "ioPoll" _ =
   gapLP prog "wasm: ioPoll takes exactly three arguments"
@@ -6716,7 +6715,7 @@ emitLeafExternRef prog env d "writeFileMode" _ =
 -- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
 emitLeafExternRef prog env d "panic" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "
+  wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "
     ++ emitRefExpr prog env d msg
     ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
     ++ trapByteInstr (progEmit prog) 10
@@ -6728,7 +6727,7 @@ emitLeafExternRef prog env d "panic" _ =
 -- and the same line native's @mdk_oob_msg and the interpreter both print.  The
 -- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
 emitLeafExternRef prog env d "indexError" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [E-INDEX-OOB]: "
+  wasmTrapBytes (progEmit prog) "runtime error [\{EIndexOob}]: "
     ++ emitRefExpr prog env d msg
     ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
     ++ trapByteInstr (progEmit prog) 10
@@ -6743,7 +6742,7 @@ emitLeafExternRef prog env d "indexError" _ =
 emitLeafExternRef prog env d "indexErrorAt" [idx] =
   wasmTrapNum
     (progEmit prog)
-    "E-INDEX-OOB"
+    EIndexOob
     "index "
     (emitRefExpr prog env d idx)
     " out of bounds"
@@ -6768,7 +6767,7 @@ emitLeafExternRef prog env d "panicAt" _ =
 -- same fixed text the built-in slice path emits) -- both bound arguments are
 -- dropped, where native's @mdk_slice_oob formats them into the line.
 emitLeafExternRef prog env d "sliceError" [lo, hi] =
-  wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds"
+  wasmTrap (progEmit prog) ESliceOob "slice out of bounds"
 emitLeafExternRef prog env d "sliceError" _ =
   gapLP prog "wasm #670: sliceError takes exactly two arguments"
 -- The `int`-prefixed bit externs are the originals under unshadowable names.
@@ -9572,7 +9571,7 @@ emitIndexRef prog env d a i =
       "i32.ge_s",
     ]
     ++ ["i32.or", "if"]
-    ++ indent (wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds")
+    ++ indent (wasmTrap (progEmit prog) EIndexOob "index out of bounds")
     ++ ["end"]
     ++ [
       "local.get " ++ arrL,
@@ -9659,7 +9658,7 @@ emitSliceRef prog env d a lo hi incl =
         "i32.or",
       ]
       ++ ["if"]
-      ++ indent (wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds")
+      ++ indent (wasmTrap (progEmit prog) ESliceOob "slice out of bounds")
       ++ ["end"]
       ++ [
         "local.get " ++ lenL,

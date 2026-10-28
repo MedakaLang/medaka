@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
   helperOrder, hasWasmHelper, jsWireParam, jsWireResult, unaryF64Sig,
@@ -414,7 +415,7 @@ siteRuntimeLines files nonexh =
           "    (call $mdk_write_err_loc (local.get $s))",
         ]
         ++ asciiTrapBytesW
-          "runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n"
+          "runtime error [\{ENonexhaustiveMatch}]: non-exhaustive match\n"
         ++ ["    unreachable)"]
     else
       [])
@@ -503,7 +504,7 @@ intOverflowLines =
       "  (func $mdk_int_overflow (param $op i32) (param $a i64) (param $b i64) (param $s i64)",
       "    (call $mdk_write_err_loc (local.get $s))",
     ]
-    ++ asciiTrapBytesW "runtime error [E-INT-OVERFLOW]: "
+    ++ asciiTrapBytesW "runtime error [\{EIntOverflow}]: "
     ++ [
       "    (if (i32.eqz (local.get $op))",
       "      (then",
@@ -588,7 +589,7 @@ intShiftHeadW dir name =
       "    (if (i64.lt_s (local.get $k) (i64.const 0))",
       "      (then",
     ]
-    ++ asciiTrapBytesW "runtime error [E-PANIC]: \{name}: negative shift "
+    ++ asciiTrapBytesW "runtime error [\{EPanic}]: \{name}: negative shift "
     ++ [
       "        (call $mdk_write_err_int (local.get $k))",
       "        (call $mdk_write_err_byte (i32.const 10))",
@@ -1362,12 +1363,12 @@ asciiTrapGoW cs n i =
 -- mdk_num_mod message bytes exactly (runtime/medaka_rt.c:622,627).
 valueDivZeroTrapW : List String
 valueDivZeroTrapW =
-  asciiTrapBytesW "runtime error [E-DIV-ZERO]: division by zero\n"
+  asciiTrapBytesW "runtime error [\{EDivZero}]: division by zero\n"
     ++ ["        unreachable"]
 
 valueModZeroTrapW : List String
 valueModZeroTrapW =
-  asciiTrapBytesW "runtime error [E-MOD-ZERO]: modulo by zero\n"
+  asciiTrapBytesW "runtime error [\{EModZero}]: modulo by zero\n"
     ++ ["        unreachable"]
 
 -- S2/#2359: split into one list PER OPERATOR (add/sub/mul/div/mod) so a program
@@ -2194,7 +2195,7 @@ ioRefusedPanicLines = [
 ]
 
 panicBannerWat : String
-panicBannerWat = asciiU8arrWat "runtime error [E-PANIC]: "
+panicBannerWat = asciiU8arrWat "runtime error [\{EPanic}]: "
 
 ioResultLines : List String
 ioResultLines = [

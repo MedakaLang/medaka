@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import backend.core_validate.{validateForEmission, coreDefectMessage}
 import backend.emit_target.{Backend(..)}
@@ -106,6 +107,7 @@ import driver.diagnostics.{
   exportsAmong,
   sourcesMentioning,
   Diag(..),
+  DiagId(..),
   Severity(..),
   cjPosition,
   cjRange,
@@ -114,7 +116,6 @@ import driver.diagnostics.{
   cjFileEntry,
   cjAllToJson,
   readDiagSrc,
-  codeKind,
   missingMainDiag,
   renderSymbolDefects,
 }
@@ -300,7 +301,7 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
                   (
                     cfile,
                     csrc,
-                    [Diag SevError "R-MODULE-LOAD" cmsg cloc None None],
+                    [Diag SevError (Coded RModuleLoad) cmsg cloc None None],
                   ),
                 ])
             Err (LoadMsg lmsg) =>
@@ -316,7 +317,7 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
                   (
                     entry,
                     tsrc,
-                    [Diag SevError "R-MODULE-LOAD" lmsg mloc None None],
+                    [Diag SevError (Coded RModuleLoad) lmsg mloc None None],
                   ),
                 ])
             Ok triples =>
@@ -534,7 +535,13 @@ mainShapeError : List Decl -> Option Diag
 mainShapeError decls = match findMainFunDef decls
   Some (_ :: _, body) =>
     Some
-      (Diag SevError "W-MAIN-SHAPE" mainArityMsg (mainHeadLoc body) None None)
+      (Diag
+        SevError
+        (Coded WMainShape)
+        mainArityMsg
+        (mainHeadLoc body)
+        None
+        None)
   Some ([], _) => None
   None => Some (missingMainDiag decls)
 
@@ -604,7 +611,7 @@ doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
           (
             entry,
             tsrc,
-            [Diag SevError "E-MAIN-ASYNC-PAYLOAD" msg None None None],
+            [Diag SevError (Coded EMainAsyncPayload) msg None None None],
           ),
         ])
     None =>
@@ -803,7 +810,7 @@ emitLoadFail : String -> String -> <IO> Unit
 emitLoadFail entry msg =
   emitDiagnostics
     (cjAllToJson [
-      (entry, "", [Diag SevError "R-MODULE-LOAD" msg None None None]),
+      (entry, "", [Diag SevError (Coded RModuleLoad) msg None None None]),
     ])
 
 cjHasErr : (String, List Diag) -> Bool

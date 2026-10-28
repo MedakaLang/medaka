@@ -1,5 +1,5 @@
 # META
-source_lines=326
+source_lines=327
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical symbols of one LLVM module under emission: each function and
@@ -22,6 +22,7 @@ stages=DESUGAR,MARK
 -- object) is the only Medaka code in its link, so there a generated symbol that is
 -- only declared is unresolved too; a module half declares the other half's.
 
+import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
 }
@@ -301,11 +302,11 @@ paramText (LlvmParam t "") = t
 paramText (LlvmParam t r) = "\{t} \{r}"
 
 export
-defectCode : SymbolDefect -> String
-defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
-defectCode (PrototypeConflict _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
+defectCode : SymbolDefect -> DiagCode
+defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
+defectCode (PrototypeConflict _ _ _ _ _) = EPhysShape
+defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (UndefinedReference _ _) = EPhysUndefined
 
 -- The binding and position the defect is reported at.
 export
@@ -329,6 +330,7 @@ defectMessage (UndefinedReference name at) =
 shapeText : CallShape -> String
 shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false))))
@@ -408,11 +410,11 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DTypeSig false "paramText" (TyFun (TyCon "LlvmParam") (TyCon "String")))
 (DFunDef false "paramText" ((PCon "LlvmParam" (PVar "t") (PLit (LString "")))) (EVar "t"))
 (DFunDef false "paramText" ((PCon "LlvmParam" (PVar "t") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "t"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "r"))) (ELit (LString ""))))
-(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "String")))
-(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "E-PHYS-DUPLICATE")))
-(DFunDef false "defectCode" ((PCon "PrototypeConflict" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (ELit (LString "E-PHYS-UNDEFINED")))
+(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "DiagCode")))
+(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "EPhysDuplicate"))
+(DFunDef false "defectCode" ((PCon "PrototypeConflict" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (EVar "EPhysUndefined"))
 (DTypeSig true "defectOrigin" (TyFun (TyCon "SymbolDefect") (TyCon "SymbolOrigin")))
 (DFunDef false "defectOrigin" ((PCon "DuplicateDefinition" PWild (PVar "at") PWild)) (EVar "at"))
 (DFunDef false "defectOrigin" ((PCon "PrototypeConflict" PWild PWild PWild (PVar "at") PWild)) (EVar "at"))
@@ -426,6 +428,7 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DTypeSig false "shapeText" (TyFun (TyCon "CallShape") (TyCon "String")))
 (DFunDef false "shapeText" ((PCon "CallShape" (PVar "ret") (PVar "operands"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ret"))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "operands")))) (ELit (LString ")"))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false))))
@@ -505,11 +508,11 @@ shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
 (DTypeSig false "paramText" (TyFun (TyCon "LlvmParam") (TyCon "String")))
 (DFunDef false "paramText" ((PCon "LlvmParam" (PVar "t") (PLit (LString "")))) (EVar "t"))
 (DFunDef false "paramText" ((PCon "LlvmParam" (PVar "t") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString ""))))
-(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "String")))
-(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "E-PHYS-DUPLICATE")))
-(DFunDef false "defectCode" ((PCon "PrototypeConflict" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (ELit (LString "E-PHYS-UNDEFINED")))
+(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "DiagCode")))
+(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "EPhysDuplicate"))
+(DFunDef false "defectCode" ((PCon "PrototypeConflict" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (EVar "EPhysUndefined"))
 (DTypeSig true "defectOrigin" (TyFun (TyCon "SymbolDefect") (TyCon "SymbolOrigin")))
 (DFunDef false "defectOrigin" ((PCon "DuplicateDefinition" PWild (PVar "at") PWild)) (EVar "at"))
 (DFunDef false "defectOrigin" ((PCon "PrototypeConflict" PWild PWild PWild (PVar "at") PWild)) (EVar "at"))

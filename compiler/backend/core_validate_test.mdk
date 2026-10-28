@@ -1,3 +1,4 @@
+import support.diag_codes.{codeText}
 import types.capability_manifest.{
   ManifestRequirement(..), CapabilityManifest(..), ManifestRequest(..),
   EntryKey(..), InvocationProtocol(..), FrozenAtom(..), FrozenAuthority(..)
@@ -126,16 +127,16 @@ wasmUnchecked wi plan cp = textOrCodes (wasmUncheckedChecked wi plan cp)
 wasmRecord : WasmEmitInput -> EmitPlan -> CProgram -> (String, List String)
 wasmRecord wi plan cp = match wasmRecordChecked wi plan cp
   Ok emitted => emitted
-  Err defects => ("", map defectCode defects)
+  Err defects => ("", map (d => codeText (defectCode d)) defects)
 
 emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps wi plan cp = match wasmCensusChecked wi plan cp
   Ok events => events
-  Err defects => map defectCode defects
+  Err defects => map (d => codeText (defectCode d)) defects
 
 textOrCodes : Result (List SymbolDefect) String -> String
 textOrCodes (Ok text) = text
-textOrCodes (Err defects) = joinNl (map defectCode defects)
+textOrCodes (Err defects) = joinNl (map (d => codeText (defectCode d)) defects)
 
 -- The LLVM emitters the same way.
 llvmStrict : EmitInput -> EmitPlan -> CProgram -> String
@@ -159,7 +160,7 @@ llvmCensus li plan cp = match llvmCensusChecked li plan cp
   Err defects => llvmCodes defects
 
 llvmCodes : List LlvmSymbols.SymbolDefect -> List String
-llvmCodes defects = map LlvmSymbols.defectCode defects
+llvmCodes defects = map (d => codeText (LlvmSymbols.defectCode d)) defects
 
 lowered : String -> CProgram
 lowered src =

@@ -55,6 +55,7 @@
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{Decl(..), Expr, Loc(..), Ty}
 import tools.target_parse.{
   parseTargetResult,
@@ -716,10 +717,10 @@ loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
 loadErrorDiags target (LoadCycle e cpath csite) = match csite
-  Some (_, loc) => [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])]
-  None => [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
+  Some (_, loc) => [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])]
+  None => [(target, [mkDiag SevError RModuleLoad e None])]
 loadErrorDiags target (LoadMsg e) =
-  [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
+  [(target, [mkDiag SevError RModuleLoad e None])]
 
 diagnosticGate : OrdMap String ->
   List (String, List Diag) ->

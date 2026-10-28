@@ -1,0 +1,492 @@
+-- diag_codes: the closed set of diagnostic codes the compiler mints, as one flat type.
+-- It holds `DiagCode` (one nullary constructor per live code; `T-TYPE-MISMATCH` is
+-- `TTypeMismatch`, the prefix letter then the CamelCase of the dash segments; constructors share
+-- the `E*`/`P*`/`T*` namespace with the AST constructors, so a code whose camel name collides
+-- with one is renamed in the registry), the one place
+-- a code's text exists (`codeText`), its prefix family (`DiagKind`, `codeKind`), the list of
+-- every code (`allDiagCodes`) and the inverse of `codeText` (`codeOfText`).
+--
+-- Spec: DIAGNOSTIC-CODES-DESIGN.md section 2 (code taxonomy: prefixes, `kind` derived from the
+-- prefix, names stable and append-only); ARCHITECTURE.md A1 (support is the bottom layer).
+--
+-- Closure rule: this module imports only the prelude and `string`; it may not import any
+-- module of `frontend`, `types`, `ir`, `backend`, `eval`, `driver`, `tools` or `entries`.
+-- A retired or reserved code text has no constructor and is never reused.  There is no `Ord`
+-- on `DiagCode`: a derived `Ord` is one arm per constructor pair; order by `codeText`.
+
+import string.{startsWith}
+
+-- The coarse family of a code, as the JSON `kind` field renders it.  `E-*` codes render as
+-- "error".
+public export data DiagKind =
+  | DkLex
+  | DkParse
+  | DkResolve
+  | DkType
+  | DkWarning
+  | DkError
+  deriving (Eq, Debug)
+
+public export data DiagCode =
+  | EAmbiguousDispatch
+  | ECyclicValue
+  | EDivZero
+  | EIndexOob
+  | EIntOverflow
+  | ELetRefute
+  | EMainAsyncPayload
+  | EModZero
+  | ENoMain
+  | ENonexhaustiveMatch
+  | ENotAFunction
+  | EPanic
+  | EPhysDuplicate
+  | EPhysShape
+  | EPhysUndeclaredFuncref
+  | EPhysUndeclaredType
+  | EPhysUndefined
+  | ESliceOob
+  | EStackOverflow
+  | EWasmNoBinding
+  | LBadChar
+  | LBadCharLiteral
+  | LBadEscape
+  | LBadUnicodeEscape
+  | LBareUnicodeEscape
+  | LBlockcomment
+  | LFloatOverflow
+  | LHsDollar
+  | LHsLambda
+  | LIntOverflow
+  | LMalformedFloat
+  | LMalformedRadix
+  | LNestedInterpolation
+  | LSemicolon
+  | LUnterminatedComment
+  | LUnterminatedString
+  | PBadNeq
+  | PBraceBlock
+  | PDefKeyword
+  | PDoEndsInBinding
+  | PForWhile
+  | PGuardBarInMatch
+  | PGuardIfInEquation
+  | PHsCase
+  | PHsSig
+  | PMissingWhere
+  | PNoPowOperator
+  | POcamlMatchWith
+  | PParse
+  | PReservedKeyword
+  | PUnexpectedEof
+  | PWhereBodySameLine
+  | RAbstractCtorImport
+  | RAbstractField
+  | RAmbiguousCtor
+  | RAmbiguousEffect
+  | RAmbiguousInterface
+  | RAmbiguousOccurrence
+  | RAmbiguousType
+  | RAsPatternMisplaced
+  | RBareCtorImport
+  | RBuildFailed
+  | RCannotDerive
+  | RDupBinder
+  | RDupBinding
+  | RDuplicateBinding
+  | RDuplicateDef
+  | RDuplicateIfaceMethod
+  | RDuplicateSignature
+  | REffectLabelNoMembers
+  | RExternWithBody
+  | RFieldNotInRecord
+  | RFileNotFound
+  | RFileNotUtf8
+  | RImmutableAssign
+  | RInternalExtern
+  | RMethodNotInInterface
+  | RMisplacedAuthorityBinder
+  | RModuleLoad
+  | RNewtypeCtorPrivate
+  | RNoExportedCtors
+  | RNonrecValueLet
+  | ROrphanSignature
+  | RPrivateName
+  | RUnbound
+  | RUnboundAuthority
+  | RUnknownCtor
+  | RUnknownEffect
+  | RUnknownField
+  | RUnknownInterface
+  | RUnknownModule
+  | RUnknownType
+  | TAbstractField
+  | TAliasArity
+  | TAmbiguousAliasMethod
+  | TAmbiguousField
+  | TAmbiguousInstance
+  | TAmbiguousMethod
+  | TAmbiguousReexport
+  | TAmbiguousShadowDecl
+  | TAuthority
+  | TAuthorityBinder
+  | TAuthorityDomain
+  | TAuthorityEscape
+  | TAuthorityExistentialScope
+  | TAuthorityIndexMismatch
+  | TAuthorityKind
+  | TAuthorityPattern
+  | TAuthorityPhantomExport
+  | TBangOnBool
+  | TBindOutsideDo
+  | TConflictingImpl
+  | TCyclicSuperinterface
+  | TDiscardedValue
+  | TDoNotMonad
+  | TEffectArgUncovered
+  | TEffectIndexEager
+  | TEffectIndexMismatch
+  | TEffectKindMismatch
+  | TEffectLaunder
+  | TEffectLeak
+  | TEffectParam
+  | TEffectParamVariance
+  | TEffectUndetermined
+  | TExportUnsolvedAuthority
+  | TFfiBuiltinBind
+  | TFfiBuiltinShadow
+  | TFfiCatalogNarrow
+  | TFfiCSymbol
+  | TFfiDuplicateHost
+  | TFfiJsName
+  | TFfiNoHost
+  | TFfiNoncrossable
+  | TFfiNullary
+  | TFfiReservedName
+  | TFfiUnboundHost
+  | TFfiUnknownHost
+  | TFfiUnlabelled
+  | TFieldNotInAllCtors
+  | TFieldPositionDiffers
+  | TFieldTypeDiffers
+  | TFileBoundValue
+  | TImplKindMismatch
+  | TImplMissingRequires
+  | TImplTooSpecific
+  | TIncompleteImpl
+  | TInfiniteType
+  | TInternalOrdinal
+  | TMainUsed
+  | TManifestEntry
+  | TManifestInvalid
+  | TManifestWrapper
+  | TMethodMismatch
+  | TMissingConstraint
+  | TMissingField
+  | TMissingSuperImpl
+  | TNoImpl
+  | TNonrecValueLet
+  | TNotAFunction
+  | TPhantomMethod
+  | TRecursiveAlias
+  | TRequiresCycle
+  | TRequiresDepth
+  | TRequiresUnrouted
+  | TResidual
+  | TSigOverExpansive
+  | TTargetCapability
+  | TTargetNoBinding
+  | TTargetNotProvided
+  | TTypeMismatch
+  | TTypeTooGeneral
+  | TUnbound
+  | TUnknownCtor
+  | TUnknownField
+  | TUnknownRecord
+  | TUnroutedDispatch
+  | TUpdateMultiCtor
+  | WGuardInexhaustive
+  | WImportMethodShadow
+  | WIncomparableImpls
+  | WKeepIrFailed
+  | WMainMissing
+  | WMainShape
+  | WNonexhaustive
+  | WNonexhaustiveClauses
+  | WPreludeMethodShadow
+  | WUnreachableArm
+  deriving (Eq, Debug)
+
+-- The text of [c], as it appears in `--json` output, the LSP and the interface cache.
+export
+codeText : DiagCode -> String
+codeText EAmbiguousDispatch = "E-AMBIGUOUS-DISPATCH"
+codeText ECyclicValue = "E-CYCLIC-VALUE"
+codeText EDivZero = "E-DIV-ZERO"
+codeText EIndexOob = "E-INDEX-OOB"
+codeText EIntOverflow = "E-INT-OVERFLOW"
+codeText ELetRefute = "E-LET-REFUTE"
+codeText EMainAsyncPayload = "E-MAIN-ASYNC-PAYLOAD"
+codeText EModZero = "E-MOD-ZERO"
+codeText ENoMain = "E-NO-MAIN"
+codeText ENonexhaustiveMatch = "E-NONEXHAUSTIVE-MATCH"
+codeText ENotAFunction = "E-NOT-A-FUNCTION"
+codeText EPanic = "E-PANIC"
+codeText EPhysDuplicate = "E-PHYS-DUPLICATE"
+codeText EPhysShape = "E-PHYS-SHAPE"
+codeText EPhysUndeclaredFuncref = "E-PHYS-UNDECLARED-FUNCREF"
+codeText EPhysUndeclaredType = "E-PHYS-UNDECLARED-TYPE"
+codeText EPhysUndefined = "E-PHYS-UNDEFINED"
+codeText ESliceOob = "E-SLICE-OOB"
+codeText EStackOverflow = "E-STACK-OVERFLOW"
+codeText EWasmNoBinding = "E-WASM-NO-BINDING"
+codeText LBadChar = "L-BAD-CHAR"
+codeText LBadCharLiteral = "L-BAD-CHAR-LITERAL"
+codeText LBadEscape = "L-BAD-ESCAPE"
+codeText LBadUnicodeEscape = "L-BAD-UNICODE-ESCAPE"
+codeText LBareUnicodeEscape = "L-BARE-UNICODE-ESCAPE"
+codeText LBlockcomment = "L-BLOCKCOMMENT"
+codeText LFloatOverflow = "L-FLOAT-OVERFLOW"
+codeText LHsDollar = "L-HS-DOLLAR"
+codeText LHsLambda = "L-HS-LAMBDA"
+codeText LIntOverflow = "L-INT-OVERFLOW"
+codeText LMalformedFloat = "L-MALFORMED-FLOAT"
+codeText LMalformedRadix = "L-MALFORMED-RADIX"
+codeText LNestedInterpolation = "L-NESTED-INTERPOLATION"
+codeText LSemicolon = "L-SEMICOLON"
+codeText LUnterminatedComment = "L-UNTERMINATED-COMMENT"
+codeText LUnterminatedString = "L-UNTERMINATED-STRING"
+codeText PBadNeq = "P-BAD-NEQ"
+codeText PBraceBlock = "P-BRACE-BLOCK"
+codeText PDefKeyword = "P-DEF-KEYWORD"
+codeText PDoEndsInBinding = "P-DO-ENDS-IN-BINDING"
+codeText PForWhile = "P-FOR-WHILE"
+codeText PGuardBarInMatch = "P-GUARD-BAR-IN-MATCH"
+codeText PGuardIfInEquation = "P-GUARD-IF-IN-EQUATION"
+codeText PHsCase = "P-HS-CASE"
+codeText PHsSig = "P-HS-SIG"
+codeText PMissingWhere = "P-MISSING-WHERE"
+codeText PNoPowOperator = "P-NO-POW-OPERATOR"
+codeText POcamlMatchWith = "P-OCAML-MATCH-WITH"
+codeText PParse = "P-PARSE"
+codeText PReservedKeyword = "P-RESERVED-KEYWORD"
+codeText PUnexpectedEof = "P-UNEXPECTED-EOF"
+codeText PWhereBodySameLine = "P-WHERE-BODY-SAME-LINE"
+codeText RAbstractCtorImport = "R-ABSTRACT-CTOR-IMPORT"
+codeText RAbstractField = "R-ABSTRACT-FIELD"
+codeText RAmbiguousCtor = "R-AMBIGUOUS-CTOR"
+codeText RAmbiguousEffect = "R-AMBIGUOUS-EFFECT"
+codeText RAmbiguousInterface = "R-AMBIGUOUS-INTERFACE"
+codeText RAmbiguousOccurrence = "R-AMBIGUOUS-OCCURRENCE"
+codeText RAmbiguousType = "R-AMBIGUOUS-TYPE"
+codeText RAsPatternMisplaced = "R-AS-PATTERN-MISPLACED"
+codeText RBareCtorImport = "R-BARE-CTOR-IMPORT"
+codeText RBuildFailed = "R-BUILD-FAILED"
+codeText RCannotDerive = "R-CANNOT-DERIVE"
+codeText RDupBinder = "R-DUP-BINDER"
+codeText RDupBinding = "R-DUP-BINDING"
+codeText RDuplicateBinding = "R-DUPLICATE-BINDING"
+codeText RDuplicateDef = "R-DUPLICATE-DEF"
+codeText RDuplicateIfaceMethod = "R-DUPLICATE-IFACE-METHOD"
+codeText RDuplicateSignature = "R-DUPLICATE-SIGNATURE"
+codeText REffectLabelNoMembers = "R-EFFECT-LABEL-NO-MEMBERS"
+codeText RExternWithBody = "R-EXTERN-WITH-BODY"
+codeText RFieldNotInRecord = "R-FIELD-NOT-IN-RECORD"
+codeText RFileNotFound = "R-FILE-NOT-FOUND"
+codeText RFileNotUtf8 = "R-FILE-NOT-UTF8"
+codeText RImmutableAssign = "R-IMMUTABLE-ASSIGN"
+codeText RInternalExtern = "R-INTERNAL-EXTERN"
+codeText RMethodNotInInterface = "R-METHOD-NOT-IN-INTERFACE"
+codeText RMisplacedAuthorityBinder = "R-MISPLACED-AUTHORITY-BINDER"
+codeText RModuleLoad = "R-MODULE-LOAD"
+codeText RNewtypeCtorPrivate = "R-NEWTYPE-CTOR-PRIVATE"
+codeText RNoExportedCtors = "R-NO-EXPORTED-CTORS"
+codeText RNonrecValueLet = "R-NONREC-VALUE-LET"
+codeText ROrphanSignature = "R-ORPHAN-SIGNATURE"
+codeText RPrivateName = "R-PRIVATE-NAME"
+codeText RUnbound = "R-UNBOUND"
+codeText RUnboundAuthority = "R-UNBOUND-AUTHORITY"
+codeText RUnknownCtor = "R-UNKNOWN-CTOR"
+codeText RUnknownEffect = "R-UNKNOWN-EFFECT"
+codeText RUnknownField = "R-UNKNOWN-FIELD"
+codeText RUnknownInterface = "R-UNKNOWN-INTERFACE"
+codeText RUnknownModule = "R-UNKNOWN-MODULE"
+codeText RUnknownType = "R-UNKNOWN-TYPE"
+codeText TAbstractField = "T-ABSTRACT-FIELD"
+codeText TAliasArity = "T-ALIAS-ARITY"
+codeText TAmbiguousAliasMethod = "T-AMBIGUOUS-ALIAS-METHOD"
+codeText TAmbiguousField = "T-AMBIGUOUS-FIELD"
+codeText TAmbiguousInstance = "T-AMBIGUOUS-INSTANCE"
+codeText TAmbiguousMethod = "T-AMBIGUOUS-METHOD"
+codeText TAmbiguousReexport = "T-AMBIGUOUS-REEXPORT"
+codeText TAmbiguousShadowDecl = "T-AMBIGUOUS-SHADOW-DECL"
+codeText TAuthority = "T-AUTHORITY"
+codeText TAuthorityBinder = "T-AUTHORITY-BINDER"
+codeText TAuthorityDomain = "T-AUTHORITY-DOMAIN"
+codeText TAuthorityEscape = "T-AUTHORITY-ESCAPE"
+codeText TAuthorityExistentialScope = "T-AUTHORITY-EXISTENTIAL-SCOPE"
+codeText TAuthorityIndexMismatch = "T-AUTHORITY-INDEX-MISMATCH"
+codeText TAuthorityKind = "T-AUTHORITY-KIND"
+codeText TAuthorityPattern = "T-AUTHORITY-PATTERN"
+codeText TAuthorityPhantomExport = "T-AUTHORITY-PHANTOM-EXPORT"
+codeText TBangOnBool = "T-BANG-ON-BOOL"
+codeText TBindOutsideDo = "T-BIND-OUTSIDE-DO"
+codeText TConflictingImpl = "T-CONFLICTING-IMPL"
+codeText TCyclicSuperinterface = "T-CYCLIC-SUPERINTERFACE"
+codeText TDiscardedValue = "T-DISCARDED-VALUE"
+codeText TDoNotMonad = "T-DO-NOT-MONAD"
+codeText TEffectArgUncovered = "T-EFFECT-ARG-UNCOVERED"
+codeText TEffectIndexEager = "T-EFFECT-INDEX-EAGER"
+codeText TEffectIndexMismatch = "T-EFFECT-INDEX-MISMATCH"
+codeText TEffectKindMismatch = "T-EFFECT-KIND-MISMATCH"
+codeText TEffectLaunder = "T-EFFECT-LAUNDER"
+codeText TEffectLeak = "T-EFFECT-LEAK"
+codeText TEffectParam = "T-EFFECT-PARAM"
+codeText TEffectParamVariance = "T-EFFECT-PARAM-VARIANCE"
+codeText TEffectUndetermined = "T-EFFECT-UNDETERMINED"
+codeText TExportUnsolvedAuthority = "T-EXPORT-UNSOLVED-AUTHORITY"
+codeText TFfiBuiltinBind = "T-FFI-BUILTIN-BIND"
+codeText TFfiBuiltinShadow = "T-FFI-BUILTIN-SHADOW"
+codeText TFfiCatalogNarrow = "T-FFI-CATALOG-NARROW"
+codeText TFfiCSymbol = "T-FFI-C-SYMBOL"
+codeText TFfiDuplicateHost = "T-FFI-DUPLICATE-HOST"
+codeText TFfiJsName = "T-FFI-JS-NAME"
+codeText TFfiNoHost = "T-FFI-NO-HOST"
+codeText TFfiNoncrossable = "T-FFI-NONCROSSABLE"
+codeText TFfiNullary = "T-FFI-NULLARY"
+codeText TFfiReservedName = "T-FFI-RESERVED-NAME"
+codeText TFfiUnboundHost = "T-FFI-UNBOUND-HOST"
+codeText TFfiUnknownHost = "T-FFI-UNKNOWN-HOST"
+codeText TFfiUnlabelled = "T-FFI-UNLABELLED"
+codeText TFieldNotInAllCtors = "T-FIELD-NOT-IN-ALL-CTORS"
+codeText TFieldPositionDiffers = "T-FIELD-POSITION-DIFFERS"
+codeText TFieldTypeDiffers = "T-FIELD-TYPE-DIFFERS"
+codeText TFileBoundValue = "T-FILE-BOUND-VALUE"
+codeText TImplKindMismatch = "T-IMPL-KIND-MISMATCH"
+codeText TImplMissingRequires = "T-IMPL-MISSING-REQUIRES"
+codeText TImplTooSpecific = "T-IMPL-TOO-SPECIFIC"
+codeText TIncompleteImpl = "T-INCOMPLETE-IMPL"
+codeText TInfiniteType = "T-INFINITE-TYPE"
+codeText TInternalOrdinal = "T-INTERNAL-ORDINAL"
+codeText TMainUsed = "T-MAIN-USED"
+codeText TManifestEntry = "T-MANIFEST-ENTRY"
+codeText TManifestInvalid = "T-MANIFEST-INVALID"
+codeText TManifestWrapper = "T-MANIFEST-WRAPPER"
+codeText TMethodMismatch = "T-METHOD-MISMATCH"
+codeText TMissingConstraint = "T-MISSING-CONSTRAINT"
+codeText TMissingField = "T-MISSING-FIELD"
+codeText TMissingSuperImpl = "T-MISSING-SUPER-IMPL"
+codeText TNoImpl = "T-NO-IMPL"
+codeText TNonrecValueLet = "T-NONREC-VALUE-LET"
+codeText TNotAFunction = "T-NOT-A-FUNCTION"
+codeText TPhantomMethod = "T-PHANTOM-METHOD"
+codeText TRecursiveAlias = "T-RECURSIVE-ALIAS"
+codeText TRequiresCycle = "T-REQUIRES-CYCLE"
+codeText TRequiresDepth = "T-REQUIRES-DEPTH"
+codeText TRequiresUnrouted = "T-REQUIRES-UNROUTED"
+codeText TResidual = "T-RESIDUAL"
+codeText TSigOverExpansive = "T-SIG-OVER-EXPANSIVE"
+codeText TTargetCapability = "T-TARGET-CAPABILITY"
+codeText TTargetNoBinding = "T-TARGET-NO-BINDING"
+codeText TTargetNotProvided = "T-TARGET-NOT-PROVIDED"
+codeText TTypeMismatch = "T-TYPE-MISMATCH"
+codeText TTypeTooGeneral = "T-TYPE-TOO-GENERAL"
+codeText TUnbound = "T-UNBOUND"
+codeText TUnknownCtor = "T-UNKNOWN-CTOR"
+codeText TUnknownField = "T-UNKNOWN-FIELD"
+codeText TUnknownRecord = "T-UNKNOWN-RECORD"
+codeText TUnroutedDispatch = "T-UNROUTED-DISPATCH"
+codeText TUpdateMultiCtor = "T-UPDATE-MULTI-CTOR"
+codeText WGuardInexhaustive = "W-GUARD-INEXHAUSTIVE"
+codeText WImportMethodShadow = "W-IMPORT-METHOD-SHADOW"
+codeText WIncomparableImpls = "W-INCOMPARABLE-IMPLS"
+codeText WKeepIrFailed = "W-KEEP-IR-FAILED"
+codeText WMainMissing = "W-MAIN-MISSING"
+codeText WMainShape = "W-MAIN-SHAPE"
+codeText WNonexhaustive = "W-NONEXHAUSTIVE"
+codeText WNonexhaustiveClauses = "W-NONEXHAUSTIVE-CLAUSES"
+codeText WPreludeMethodShadow = "W-PRELUDE-METHOD-SHADOW"
+codeText WUnreachableArm = "W-UNREACHABLE-ARM"
+
+-- The JSON `kind` text of [k].
+export
+kindText : DiagKind -> String
+kindText DkLex = "lex"
+kindText DkParse = "parse"
+kindText DkResolve = "resolve"
+kindText DkType = "type"
+kindText DkWarning = "warning"
+kindText DkError = "error"
+
+-- The family of [c], from the prefix letter of its text.
+export
+codeKind : DiagCode -> DiagKind
+codeKind c = kindOfText (codeText c)
+
+kindOfText : String -> DiagKind
+kindOfText t
+  | startsWith "L-" t = DkLex
+  | startsWith "P-" t = DkParse
+  | startsWith "R-" t = DkResolve
+  | startsWith "T-" t = DkType
+  | startsWith "W-" t = DkWarning
+  | otherwise = DkError
+
+-- Every code, once, in the order of the declaration.
+export
+allDiagCodes : List DiagCode
+allDiagCodes = [
+  EAmbiguousDispatch, ECyclicValue, EDivZero, EIndexOob, EIntOverflow,
+  ELetRefute, EMainAsyncPayload, EModZero, ENoMain, ENonexhaustiveMatch,
+  ENotAFunction, EPanic, EPhysDuplicate, EPhysShape, EPhysUndeclaredFuncref,
+  EPhysUndeclaredType, EPhysUndefined, ESliceOob, EStackOverflow,
+  EWasmNoBinding, LBadChar, LBadCharLiteral, LBadEscape, LBadUnicodeEscape,
+  LBareUnicodeEscape, LBlockcomment, LFloatOverflow, LHsDollar, LHsLambda,
+  LIntOverflow, LMalformedFloat, LMalformedRadix, LNestedInterpolation,
+  LSemicolon, LUnterminatedComment, LUnterminatedString, PBadNeq, PBraceBlock,
+  PDefKeyword, PDoEndsInBinding, PForWhile, PGuardBarInMatch,
+  PGuardIfInEquation, PHsCase, PHsSig, PMissingWhere, PNoPowOperator,
+  POcamlMatchWith, PParse, PReservedKeyword, PUnexpectedEof, PWhereBodySameLine,
+  RAbstractCtorImport, RAbstractField, RAmbiguousCtor, RAmbiguousEffect,
+  RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
+  RAsPatternMisplaced, RBareCtorImport, RBuildFailed, RCannotDerive, RDupBinder,
+  RDupBinding, RDuplicateBinding, RDuplicateDef, RDuplicateIfaceMethod,
+  RDuplicateSignature, REffectLabelNoMembers, RExternWithBody,
+  RFieldNotInRecord, RFileNotFound, RFileNotUtf8, RImmutableAssign,
+  RInternalExtern, RMethodNotInInterface, RMisplacedAuthorityBinder,
+  RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors, RNonrecValueLet,
+  ROrphanSignature, RPrivateName, RUnbound, RUnboundAuthority, RUnknownCtor,
+  RUnknownEffect, RUnknownField, RUnknownInterface, RUnknownModule,
+  RUnknownType, TAbstractField, TAliasArity, TAmbiguousAliasMethod,
+  TAmbiguousField, TAmbiguousInstance, TAmbiguousMethod, TAmbiguousReexport,
+  TAmbiguousShadowDecl, TAuthority, TAuthorityBinder, TAuthorityDomain,
+  TAuthorityEscape, TAuthorityExistentialScope, TAuthorityIndexMismatch,
+  TAuthorityKind, TAuthorityPattern, TAuthorityPhantomExport, TBangOnBool,
+  TBindOutsideDo, TConflictingImpl, TCyclicSuperinterface, TDiscardedValue,
+  TDoNotMonad, TEffectArgUncovered, TEffectIndexEager, TEffectIndexMismatch,
+  TEffectKindMismatch, TEffectLaunder, TEffectLeak, TEffectParam,
+  TEffectParamVariance, TEffectUndetermined, TExportUnsolvedAuthority,
+  TFfiBuiltinBind, TFfiBuiltinShadow, TFfiCatalogNarrow, TFfiCSymbol,
+  TFfiDuplicateHost, TFfiJsName, TFfiNoHost, TFfiNoncrossable, TFfiNullary,
+  TFfiReservedName, TFfiUnboundHost, TFfiUnknownHost, TFfiUnlabelled,
+  TFieldNotInAllCtors, TFieldPositionDiffers, TFieldTypeDiffers,
+  TFileBoundValue, TImplKindMismatch, TImplMissingRequires, TImplTooSpecific,
+  TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
+  TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
+  TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
+  TPhantomMethod, TRecursiveAlias, TRequiresCycle, TRequiresDepth,
+  TRequiresUnrouted, TResidual, TSigOverExpansive, TTargetCapability,
+  TTargetNoBinding, TTargetNotProvided, TTypeMismatch, TTypeTooGeneral,
+  TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord, TUnroutedDispatch,
+  TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow, WIncomparableImpls,
+  WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
+  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableArm
+]
+
+-- The code whose text is [t], or `None` when [t] is no live code.
+export
+codeOfText : String -> Option DiagCode
+codeOfText t = find (c => codeText c == t) allDiagCodes
+
+impl Display DiagCode where
+  display = codeText

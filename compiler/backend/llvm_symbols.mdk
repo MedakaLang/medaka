@@ -18,6 +18,7 @@
 -- object) is the only Medaka code in its link, so there a generated symbol that is
 -- only declared is unresolved too; a module half declares the other half's.
 
+import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
 }
@@ -297,11 +298,11 @@ paramText (LlvmParam t "") = t
 paramText (LlvmParam t r) = "\{t} \{r}"
 
 export
-defectCode : SymbolDefect -> String
-defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
-defectCode (PrototypeConflict _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
+defectCode : SymbolDefect -> DiagCode
+defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
+defectCode (PrototypeConflict _ _ _ _ _) = EPhysShape
+defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (UndefinedReference _ _) = EPhysUndefined
 
 -- The binding and position the defect is reported at.
 export

@@ -8,6 +8,7 @@
 -- below; the checker is observed only through its verdicts, error codes and
 -- rendered schemes.
 
+import support.diag_codes.{codeText}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import frontend.resolve.{resErrorCode, resolveProgram}
@@ -116,7 +117,7 @@ frontEndCodes source =
   let prog = desugar (parseLocated source)
   let resolved =
     map
-      resErrorCode
+      (e => codeText (resErrorCode e))
       (resolveProgram [] (desugar (parseLocated lawPrelude)) prog)
   resolved ++ codesFlat source
 

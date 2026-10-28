@@ -11,6 +11,7 @@
 -- A link-bearing effect cell survives only as a join member that carries labels
 -- (the shared labelled suffix `effect_rows` keeps on purpose); `liveCells`
 -- accepts exactly that and nothing else.
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{Loc, Decl, EvTable, EvId}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..), ppSchemeCon
@@ -49,10 +50,10 @@ import types.manifest_publish.{
 -- would cycle.  `fix` is a plain (Loc span, replacement) pair, converted to a
 -- real `Fix` on the diagnostics side.
 public export data TcDiag =
-  TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
+  TcDiag DiagCode Int (Option Loc) String (Option String) (Option (Loc, String))
 
 export
-tcCode : TcDiag -> String
+tcCode : TcDiag -> DiagCode
 tcCode (TcDiag c _ _ _ _ _) = c
 
 export
@@ -212,7 +213,7 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
             && isEmpty (wrappers request) then
             [
               TcDiag
-                "T-MANIFEST-WRAPPER"
+                TManifestWrapper
                 1
                 None
                 "no checked Async driver selected for executed main"
@@ -231,7 +232,7 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
           else
             [
               TcDiag
-                "T-MANIFEST-ENTRY"
+                TManifestEntry
                 1
                 None
                 ("no '" ++ request.entry.binding ++ "' entry found")
@@ -247,7 +248,7 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
       missing
         ++ map
           ((ManifestDefect message) =>
-            TcDiag "T-MANIFEST-INVALID" 1 None message None None)
+            TcDiag TManifestInvalid 1 None message None None)
           defects,
     )
 

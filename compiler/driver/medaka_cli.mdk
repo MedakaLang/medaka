@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..), codeText}
 import driver.main_autoprint.{executedMainInputs}
 import types.capability_manifest.{
   EntryKey(..), ManifestSelector(..), InvocationProtocol(..)
@@ -171,6 +172,8 @@ import driver.diagnostics.{
   relDiagPath,
   srcLinesArr,
   Diag(..),
+  DiagId(..),
+  diagIdIsSyntax,
   Severity(..),
   Severity(..),
   cjPosition,
@@ -183,7 +186,6 @@ import driver.diagnostics.{
   pendingStaleNotice,
   pendingPreludeNotices,
   readDiagSrc,
-  codeKind,
   optField,
   cjFixJson,
   mkDiag,
@@ -1009,7 +1011,7 @@ genericResidualDiag : String -> Diag
 genericResidualDiag target =
   mkDiag
     SevError
-    "T-RESIDUAL"
+    TResidual
     ("type error in "
       ++ target
       ++ ", detected during elaboration; no located diagnostic is available,"
@@ -1531,7 +1533,7 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
 cjBuildFailedJson : String -> String -> String
 cjBuildFailedJson target msg = cjAllToJson [
-  (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
+  (target, "", [Diag SevError (Coded RBuildFailed) msg None None None]),
 ]
 
 -- `medaka build --json`: one typecheck, in the emitter child, whose front-end
@@ -1653,23 +1655,20 @@ withPreludeFields notices envelope = match parseJson envelope
 -- doesn't exist" (R-MODULE-LOAD).
 cjFileNotFoundJson : String -> String -> String
 cjFileNotFoundJson target err =
-  cjUnlocatedJson
-    target
-    "R-FILE-NOT-FOUND"
-    "cannot read file `\{target}`: \{err}"
+  cjUnlocatedJson target RFileNotFound "cannot read file `\{target}`: \{err}"
 
 -- The envelope for a target the entry read refused: `R-FILE-NOT-UTF8` for a
 -- file that exists but is not UTF-8 text, else `R-FILE-NOT-FOUND`.
 cjSourceReadJson : String -> Option String -> String
 cjSourceReadJson target (Some e) = cjFileNotFoundJson target e
 cjSourceReadJson target None =
-  cjUnlocatedJson target "R-FILE-NOT-UTF8" (sourceNotUtf8Message target)
+  cjUnlocatedJson target RFileNotUtf8 (sourceNotUtf8Message target)
 
 -- A one-diagnostic, unlocated `{"files":[...]}` envelope for `target`.
-cjUnlocatedJson : String -> String -> String -> String
+cjUnlocatedJson : String -> DiagCode -> String -> String
 cjUnlocatedJson target code msg =
   let diagJson = jObject [
-    ("code", JString code),
+    ("code", JString (codeText code)),
     ("kind", JString "resolve"),
     ("message", JString msg),
     ("range", JNull),
@@ -1878,7 +1877,7 @@ trimEntryTriple (t :: rest) = t :: trimEntryTriple rest
 -- `Diag`s the entry report does not print (see `trimEntryTriple`'s own comment), so
 -- this is a one-code test, not a membership test over `runBuildWarnCodes`.
 onTypecheckWarnChannel : Diag -> Bool
-onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == coherenceWarnCode
+onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == Coded coherenceWarnCode
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
@@ -3754,7 +3753,7 @@ analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
           if isNone
             front.foReport.trChecked then match front.foReport.trResidual
             missing@(_ :: _) if all
-              (p => tcCode (snd p) == "T-MANIFEST-ENTRY")
+              (p => tcCode (snd p) == TManifestEntry)
               missing => Err "no '\{fn}' entry found"
             _ => Err (residualOrGeneric pathMap target residual)
           else
@@ -4120,8 +4119,7 @@ lintBaselineParseFailures (path, src, diags) =
   map (ppDiagCliSrc src path) (filter isLintParseDiagnostic diags)
 
 isLintParseDiagnostic : Diag -> Bool
-isLintParseDiagnostic (Diag _ code _ _ _ _) =
-  startsWith "P-" code || startsWith "L-" code
+isLintParseDiagnostic (Diag _ code _ _ _ _) = diagIdIsSyntax code
 
 -- #1173 rejected the SPACE form of `--disable`/`--only`/`--deny` outright,
 -- because the old `lintTargets` skipped any `--`-prefixed token without

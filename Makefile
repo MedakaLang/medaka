@@ -191,6 +191,12 @@ inlang-support-sexp-value-test:
 inlang-support-symbol-origin-test:
 	./medaka test compiler/support/symbol_origin_test.mdk
 
+inlang-support-diag-codes-test:
+	./medaka test compiler/support/diag_codes_test.mdk
+
+inlang-support-diag-codes-doc-test:
+	./medaka test compiler/support/diag_codes_doc_test.mdk
+
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
