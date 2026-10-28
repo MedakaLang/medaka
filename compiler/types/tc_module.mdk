@@ -2925,7 +2925,7 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
     checkBodyImpl gctx runSeed seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
-  -- here, in place of per-module stamping, for the one graph-end drain
+  -- here, for the one graph-end drain
   -- (`drainStampQueue`, DICT §6.2 T4).  A driver that queues and never drains
   -- leaves the queue for the next driver entry, so every Module-arm driver ends
   -- with a drain (`driveGraphK`'s, or `checkGraphFinish` on a memo path).
@@ -3230,12 +3230,12 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- (`dataEnv`, `Module` arm): the overlay sits BELOW this module's own `prog0`, so a
 -- sibling decl riding along can never clobber a locally-declared constructor.  What it
 -- can still do is out-rank a ctor the unit names from a DIFFERENT module in an EARLIER
--- import clause, decided by source order.  It is the pre-existing `(..)` hazard (#674's remainder) now also
--- reachable via (b), and it is order-dependent on `main` too.
+-- import clause, decided by source order.  It is the pre-existing `(..)` hazard
+-- (#674's remainder), also reachable via (b), and it is order-dependent on `main` too.
 --
 -- IT IS **#1284** (#1283 is the RE-EXPORT spelling; #733 item 1a is marked FIXED and
--- item 1c is wildcards only).  Pinned self-
--- drainingly by `test/must_fail_fixtures/1284-a26-overlay-sibling-ctor-beats-named-
+-- item 1c is wildcards only).  Pinned self-drainingly by
+-- `test/must_fail_fixtures/1284-a26-overlay-sibling-ctor-beats-named-
 -- import/`, whose CONTROL is the discriminator that dates it: the NON-sibling case is
 -- rejected on `main` and accepted here, so A-2.6 repairs that one and leaves exactly
 -- the sibling one.
@@ -3967,8 +3967,7 @@ cutRanges lo hi ((a, b) :: rest) =
 -- view becomes a graph-wide LOSS: the rows masked while checking module `mid` never reach
 -- the modules processed after it.
 --
--- MEASURED, not hypothetical.  Masking
--- `count` while checking `vector` (which declares an unconstrained `count`) deleted the
+-- Masking `count` while checking `vector` (which declares an unconstrained `count`) deleted the
 -- PRELUDE's constrained `count` row from the accumulator, so every later module lost it and
 -- an ordinary `count (x => x > 1) [1, 2, 3]` in the entry panicked at `run`.  Prelude names
 -- are the ones that expose it, because `importDefinersOf` skips `core` — a prelude name is
