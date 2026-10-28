@@ -1,9 +1,9 @@
 # Workstream: TYPECHECK
 
-**Owns:** the consolidation arc for `compiler/types/typecheck.mdk` — dict-elaboration dedupe, the
+**Owns:** the consolidation arc for the typechecker (`compiler/types/`: the `tc_*` modules and the entry `typecheck.mdk`) — dict-elaboration dedupe, the
 entailment engine, driver/entry-point unification, state discipline, and the file's scaling
 liabilities.
-**Touches:** `compiler/types/typecheck.mdk` (almost exclusively), `compiler/driver/diagnostics.mdk`,
+**Touches:** `compiler/types/*.mdk` (almost exclusively), `compiler/driver/diagnostics.mdk`,
 `test/diff_compiler_perf_scaling.sh`.
 
 ```sh
@@ -39,7 +39,7 @@ closes that gap.
    diagnostic), what was the reject keeping programs AWAY from downstream, and have you taken
    newly-accepted programs all the way to the **built binary, executed** — not `check`, not `run`?
 
-**Why this exists.** `compiler/types/typecheck.mdk` is the most fragile, highest-consequence file
+**Why this exists.** the typechecker (`compiler/types/`) is the most fragile, highest-consequence code
 in the tree, and its bug history is dominated by fixes that *relocated* a defect rather than
 removing it:
 
@@ -70,7 +70,7 @@ removing it:
   front end became identity-correct for a record-namespace collision (`Type mismatch: Cfg vs Cfg`
   no longer fires on legal programs) — every gate green: 29-gate preflight, `selfproc` 16 ok,
   `engines` 528/0, `must_fail` 69/69, LEG A additive-only, CI 12/12. The back end still resolves
-  field layout by **bare name**, and `inferFieldAccess` (`compiler/types/typecheck.mdk:6440`)
+  field layout by **bare name**, and `inferFieldAccess` (`compiler/types/tc_infer.mdk`)
   `setRef`s the receiver's *unmangled* head name onto the AST node the emitter reads. Before the
   fix, the selected `RecordInfo` **was** `lookupRecordByName r` — key and stamp agreed by
   construction. After it, they can name different records: `check` 0, `medaka run` correct,

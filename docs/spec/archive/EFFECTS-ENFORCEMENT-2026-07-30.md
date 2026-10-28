@@ -8,7 +8,7 @@ ongoing migration is [EFFECTS-ARCHITECTURE](../../../compiler/EFFECTS-ARCHITECTU
 
 ## 11. Per-clause enforcement table (clause → site → keying assumption)
 
-Seeded from [`compiler/TYPECHECK-ARCHITECTURE.md`](../../../compiler/TYPECHECK-ARCHITECTURE.md)
+Seeded from [`archive/design/TYPECHECK-ARCHITECTURE.md`](../../../archive/design/TYPECHECK-ARCHITECTURE.md)
 §4 Layer 1 (the densest open-S0 layer per that map's finding #2) and re-verified
 directly against source at `c4ef6dbe` (this document's `$BASE`; line numbers drift —
 re-derive with `grep -n '^<symbol>' <file>` rather than trusting them). Follows

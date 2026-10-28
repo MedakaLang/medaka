@@ -1,6 +1,6 @@
 # Typechecker Architecture — the derived map
 
-**Status:** CURRENT — derived first-hand from `compiler/types/typecheck.mdk` at `main`
+**Status:** ARCHIVED (the pre-split map; the current one is `compiler/types/ARCHITECTURE.md`) — derived first-hand from `compiler/types/typecheck.mdk` at `main`
 `1691922a` (2026-07-29), then corrected against four adversarial reviews. **Numbers rot —
 re-derive before trusting them**; §0 gives the commands and §9 records what this document
 itself got wrong.
@@ -22,17 +22,17 @@ made so a future reader does not relitigate them.
 
 The module boundaries below reflect the scoped-contract and ownership changes;
 the inventories in the numbered sections retain their dated derivation. The
-[destination contracts](TYPECHECK-CONTRACTS.md) define the target. Implementation
+[destination contracts](../../compiler/TYPECHECK-CONTRACTS.md) define the target. Implementation
 plans and remaining work belong to [#2549](https://github.com/MedakaLang/medaka/issues/2549)
 and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
 
 | Module | Responsibility |
 |---|---|
-| [repr.mdk](types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
-| [evidence.mdk](types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
-| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return and arithmetic sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
-| [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
-| [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
+| [repr.mdk](../../compiler/types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
+| [evidence.mdk](../../compiler/types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
+| [solver_contract.mdk](../../compiler/types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return and arithmetic sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
+| [scopes.mdk](../../compiler/types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
+| [typecheck.mdk](../../compiler/types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
 
 GraphRun owns the scope store; ModuleCtx owns the current lexical cursor. A graph
 copy detaches the frame array and counter. Raw scope IDs are meaningful only with
@@ -61,7 +61,7 @@ types remain determination channels; deeper generalized locals are not captured.
 The SCC fallback retains its unrestricted defaulting policy. Expected-result
 propagation, whole-graph defaulting, and finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
-[performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
+[performance log](../../compiler/PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
 
 Numeric return sites carry the prelude's Num predicate from occurrence inference
 to obligation checking and route construction. The route and prerequisite

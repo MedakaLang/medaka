@@ -138,7 +138,7 @@ if roadmap:
         "where the change lands and load the matching skill from AGENTS.md's "
         "task-playbook table — skills are PLANNING inputs, so load during "
         "exploration, not after the plan is approved.\n"
-        "- Typechecker-internal work in compiler/types/typecheck.mdk (most of "
+        "- Typechecker-internal work in compiler/types/ (the tc_* modules and typecheck.mdk; most of "
         "the Phase 62-72 arc: a new type_error, constraint/coherence/unification "
         "tightening) -> load harden-typechecker.\n"
         "- Cross-cutting items threading compiler/frontend/resolve.mdk / "

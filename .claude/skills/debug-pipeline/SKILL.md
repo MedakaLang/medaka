@@ -68,7 +68,7 @@ Reason about which stage owns the failure:
   `compiler/frontend/parser.mdk`.
 - **Resolve/Typecheck** (`R-*` / `T-*` / `W-*`) — unbound name, type mismatch, or
   non-exhaustive-match warning → `compiler/frontend/resolve.mdk`,
-  `compiler/types/typecheck.mdk`, `compiler/frontend/exhaust.mdk`. Errors are
+  `compiler/types/tc_infer.mdk`, `compiler/frontend/exhaust.mdk`. Errors are
   collected by `compiler/driver/diagnostics.mdk` (no exit-on-error), so a later
   message can be downstream of an earlier real cause — **fix the first one.**
 - **Wrong value at runtime** — do NOT jump straight to `compiler/eval/eval.mdk`.

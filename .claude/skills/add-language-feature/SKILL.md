@@ -33,7 +33,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    `Expr` constructor must get an arm in every exhaustive match over `Expr` in
    the pipeline: `compiler/tools/printer.mdk`, `compiler/frontend/resolve.mdk`,
    `compiler/frontend/desugar.mdk`, `compiler/frontend/marker.mdk`,
-   `compiler/types/typecheck.mdk`, `compiler/eval/eval.mdk`,
+   `compiler/types/tc_*.mdk`, `compiler/eval/eval.mdk`,
    `compiler/tools/lsp.mdk`, **and `compiler/ir/core_ir_lower.mdk`** (see step 8 —
    without it the construct runs but does not *build*). Let the compiler's
    non-exhaustive warnings guide you.
@@ -46,7 +46,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    warnings guide you.
 4. **Resolve** — `compiler/frontend/resolve.mdk`. Bind every new name/reference.
    Add an arm for the new node so nothing falls through unresolved.
-5. **Typecheck** — `compiler/types/typecheck.mdk`. ⚠️ If this step touches a typechecker *bug*
+5. **Typecheck** — `compiler/types/tc_*.mdk` (owners: `compiler/types/ARCHITECTURE.md`; the entry is `typecheck.mdk`). ⚠️ If this step touches a typechecker *bug*
    (not just new-construct plumbing), the standing gate in
    `.claude/workstreams/TYPECHECK.md` still applies even though you're following this skill, not
    `harden-typechecker` — it's keyed to the `ws:typecheck` label, not to a skill, precisely

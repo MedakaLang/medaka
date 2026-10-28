@@ -1,6 +1,6 @@
 ---
 name: harden-typechecker
-description: Typechecker-internal work in compiler/types/typecheck.mdk — type errors, constraint/coherence/unification logic, over/under-generalization. Use when the fix lives inside the typechecker, not in new surface syntax.
+description: Typechecker-internal work in compiler/types/ (the tc_* modules and the typecheck.mdk entry) — type errors, constraint/coherence/unification logic, over/under-generalization. Use when the fix lives inside the typechecker, not in new surface syntax.
 ---
 
 # Harden the typechecker
@@ -10,8 +10,11 @@ description: Typechecker-internal work in compiler/types/typecheck.mdk — type 
 on the issue/PR — `typecheck.mdk`'s bug history is dominated by fixes that relocated a defect
 rather than removing it.
 
-Almost everything here happens in one file, `compiler/types/typecheck.mdk`. The
-work is narrower than `add-language-feature` (no lexer/parser/AST changes): you
+The typechecker is the 26 `tc_*` modules plus the entry `compiler/types/typecheck.mdk`
+(the graph drive and the verb-facing API). Which module owns a concern, and the spec
+sections that govern it, are in `compiler/types/ARCHITECTURE.md` (the Parts table and
+the module-to-spec map); the placement rules are `compiler/ARCHITECTURE-PLAYBOOK.md`
+section 6. The work is narrower than `add-language-feature` (no lexer/parser/AST changes): you
 are making the checker *reject more*, *diagnose better*, or *generalize
 correctly*, without disturbing the two invariants below.
 
@@ -19,22 +22,21 @@ Read the relevant archive/PLAN-ARCHIVE.md phase first — each entry has a **Whe
 section with approximate locations and a **Done when.** acceptance test. Those
 locations drift; **confirm every name with `grep` before trusting it.** (An
 earlier version of this skill carried ~19 symbol names that had not existed since
-the OCaml compiler was deleted. Verify, don't assume — including the names below,
-which carry line numbers as of 2026-07-13.)
+the OCaml compiler was deleted. Verify, don't assume, including the names below.)
 
 ## Two invariants you must not break
 
 - **Errors accumulate; phases don't exit on first failure.** They push into
-  `compiler/driver/diagnostics.mdk`. Inside `typecheck.mdk` errors are plain
+  `compiler/driver/diagnostics.mdk`. Inside the typechecker errors are plain
   `String` messages pushed via the `pushTypeError*` family (see below) — there is
   no `TypeError` ADT and no `fail`/`raise` path. Don't add early exit/panic paths,
   and don't short-circuit a later phase because an earlier one failed.
 - **Level bracketing must be exception-safe.** Generalization uses Rémy levels:
-  hand-balanced `enterLevel ()` (`typecheck.mdk:854`) / `exitLevel ()` (`:857`)
-  pairs around `currentLevel` (`:745`). A non-local exit *between* them permanently
+  hand-balanced `enterLevel ()` / `exitLevel ()` (`tc_unify.mdk`)
+  pairs around the `currentLevel` cell (`ModuleCells`, `tc_types.mdk`). A non-local exit *between* them permanently
   increments the level. Each module check mints a fresh `ModuleCtx` (`freshModuleCtx`)
   on entry, so a leak is wiped before the next run; and within a single run the
-  leak is *relative* — `processSCC` (`:10799`) brackets against whatever base it
+  leak is *relative* — `processSCC` (`tc_module.mdk`) brackets against whatever base it
   starts at and generalizes against that same base, so a uniform leak does not by
   itself break generalization. Still: if you add a path that can exit mid-bracket,
   restore the level at the boundary.
@@ -48,25 +50,25 @@ impossibilities, and **don't `panic` on anything a user program can actually
 reach.** A *recoverable* condition a real program can trigger — notably a
 cross-module lookup that can miss — must `pushTypeError` a clear user-facing
 message rather than panic. **Exception:** a *rendering* path must never panic —
-`ppMono` (`:2603`) returns the placeholder `"_"` for a post-normalize `Link`
+`ppMono` (`repr.mdk`) returns the placeholder `"_"` for a post-normalize `Link`
 rather than crashing, because it runs while formatting an error message.
 
 ## Generalization is value-restricted (Phase 66)
 
 `let`/`do`-`let` bindings are only generalized when their RHS is a **syntactic
-value**. The gate is `isNonexpansive` (`:2424`) — literal / var / lambda; tuple or
+value**. The gate is `isNonexpansive` (`tc_groups.mdk`) — literal / var / lambda; tuple or
 list-literal of values; `ELoc`/`EAnnot` transparent — *everything else, including
 all applications, is expansive*. Generalization goes through
-`genBindingRestricted isValue t` (`:2494`), not bare `generalize` (`:2398`), at every
+`genBindingRestricted isValue t` (`tc_groups.mdk`), not bare `generalize` (`tc_unify.mdk`), at every
 binding site.
 
 The non-obvious rule if you touch any of this: **a non-generalized binding must
 have its free vars *lowered* to `currentLevel`, not merely wrapped in a
 monotype.** Otherwise the vars sit at a deeper level and an *enclosing* `let`'s
 `generalize` picks them up — reopening the unsoundness one scope out.
-`genBindingRestricted` does this via `lowerToCurrent` (`:2470`); the non-`PVar` pattern
-path gets it for free because `unify` (`:2305`) lowers through `occursAdjust`
-(`:2277`). Note `Ref` is a *constructor* (`extern Ref : a -> Ref a`), so — like
+`genBindingRestricted` does this via `lowerToCurrent` (`tc_unify.mdk`); the non-`PVar` pattern
+path gets it for free because `unify` lowers through `occursAdjust`
+(both `tc_unify.mdk`). Note `Ref` is a *constructor* (`extern Ref : a -> Ref a`), so — like
 SML/OCaml's `ref` — constructor applications are deliberately expansive.
 
 ## Adding a type error
@@ -79,17 +81,18 @@ its *first* argument. Before you write the message:
 - write the message against **`compiler/ERROR-QUALITY.md`** (the rubric: located,
   names the rule, actionable fix, carries a code).
 
-The real API (`compiler/types/typecheck.mdk`):
+The real API (`compiler/types/tc_diag.mdk`):
 
 ```
-pushTypeError          : String -> String -> <Mut> Unit                                   -- :1991
-pushTypeErrorOnce      : String -> String -> <Mut> Unit                                   -- :2005  (dedups)
-pushTypeErrorOnceAt    : String -> Option Loc -> String -> <Mut> Unit                     -- :2018
-pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> <Mut> Unit  -- :2055
+pushTypeError          : ModuleCtx -> String -> String -> Unit
+pushTypeErrorAt        : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorOnce      : ModuleCtx -> String -> String -> Unit                      -- dedups
+pushTypeErrorOnceAt    : ModuleCtx -> String -> Option Loc -> String -> Unit        -- dedups
+pushTypeErrorHelpFixAt : ModuleCtx -> String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 ```
 
-Real call sites read `pushTypeError "T-EFFECT-LEAK" (effectLeakMsg bound escaping)`
-(`:923`) and `pushTypeError "T-CONFLICTING-IMPL" msg` (`:7752`).
+Real call sites read `pushTypeErrorAt mctx "T-EFFECT-LEAK" loc msg` (`tc_effects.mdk`)
+and `pushTypeErrorAt mctx "T-CONFLICTING-IMPL" loc msg` (`tc_global.mdk`).
 
 - **`pushTypeError` does NOT dedup** — it plain-conses. `pushTypeErrorOnce` is the
   deduping variant.
@@ -98,8 +101,8 @@ Real call sites read `pushTypeError "T-EFFECT-LEAK" (effectLeakMsg bound escapin
   span, `mctxAt`/`envAt`). That is right *during* the `infer` walk, but a post-HM
   pass runs outside every construct and holds no span. If your error fires from a deferred/post-HM pass,
   capture the loc at *record* time into the obligation tuple (that is why
-  `pendingCallObligations` (`:1530`) and `pendingImplObligations` (`:1368`) both
-  carry an `Option Loc`) and raise with `pushTypeErrorOnceAt` / `pushTypeErrorHelpFixAt`.
+  the call and impl obligation records both
+  carry an `Option Loc`; their cells are listed in `compiler/types/CELL-LIFETIMES.md`) and raise with `pushTypeErrorOnceAt` / `pushTypeErrorHelpFixAt`.
 - Use `pushTypeErrorHelpFixAt` when you can offer a machine-applicable fix — it is
   what surfaces `help` + `fix` in `medaka check --json`.
 
@@ -107,13 +110,14 @@ The mechanical loop:
 
 1. **Message builder** — write (or reuse) a `…Msg : … -> String` helper that formats
    the message from the names + `Mono`s involved. Real examples: `effectLeakMsg`
-   (`:925`), `effectParamMsg` (`:930`), `ambiguousImplMsg` (`:8594`). Grep for an
+   (`tc_unify.mdk`), `effectParamMsg` (`effect_param_decode.mdk`), `ambiguousImplMsg` (`tc_diag_text.mdk`; the
+   context-free message builders live there). Grep for an
    existing `Msg` builder near the error family you're adding and mirror it.
    **When a message names two or more types**, render them through one shared
-   naming context — `ppMonosShared : List Mono -> <Mut> String` (`:10147`) — not
+   naming context — `ppMonosShared : List Mono -> <Mut> String` (`repr.mdk`) — not
    separate `ppMono` calls, or two distinct tyvars can both print as `a`.
-   (`ppMono` (`:2603`) / `ppScheme` (`:2565`) render a single type/scheme.)
-2. **Raise site** — `pushTypeError "T-YOUR-CODE" (yourMsg …)` from the phase that
+   (`ppMono` / `ppScheme`, `repr.mdk`, render a single type/scheme.)
+2. **Raise site** — `pushTypeError mctx "T-YOUR-CODE" (yourMsg …)` from the phase that
    detects it.
 3. **Test** — add a fixture to `test/diff_compiler_check_test.mdk`'s corpus.
    **Watch for prelude name collisions:** a fixture that reuses a stdlib interface
@@ -128,23 +132,24 @@ The mechanical loop:
 
 ## Where things live
 
-All in `compiler/types/typecheck.mdk`. Line numbers are as of 2026-07-13 — grep
-the name, not the number.
+Owners below are the `compiler/types/` modules, verified by grep at the time of writing; the
+layer table and each module's spec are in `compiler/types/ARCHITECTURE.md`. Grep the name.
 
 | Area | Real names |
 |---|---|
-| Unification / generalization | `unify` (:2305), `normalize` (:2261), `generalize` (:2398), `instantiate` (:2518), `freshVar` (:754), `enterLevel`/`exitLevel` (:854/:857), `currentLevel` (:745), `freshModuleCtx` |
-| Value restriction | `isNonexpansive` (:2424), `genBindingRestricted` (:2494), `lowerToCurrent` (:2470), `occursAdjust` (:2277) |
-| Errors / rendering | `pushTypeError` (:1991), `pushTypeErrorOnce` (:2005), `pushTypeErrorOnceAt` (:2018), `pushTypeErrorHelpFixAt` (:2055), `mctxAt`, `ppMono` (:2603), `ppScheme` (:2565), `ppMonosShared` (:10147) |
-| Group inference (letrec/SCC) | `processSCCs` (:10751) → `processSCC` (:10799) → `sccSchemes` (:11089), `isLetrecGroup` (:10867) |
-| Constraint obligations | `recordCallObligations` (:3561), `recordImplObligation` (:4635), `recordSchemeCallObligations` (:4615); state in `pendingCallObligations` (:1530), `pendingImplObligations` (:1368), `schemeObligationsRef` (:1555). `allConcreteHeads` (:14345) is the is-it-ground test the obligation checkers actually gate on (`checkCallObligationsU` :13838, `checkReqOne` :14135). ⚠️ This row used to name a monoConcrete helper — which never served that role: it was the swapped-argument hint's private predicate, deleted with that hint (issue 1147). |
-| Interfaces / supers | `methodEntryHere`, `lookupQualPayload`, `ifaceSelfAndSupers`; the one closure combinator `superClosure`/`directSupers` (`compiler/types/superclass.mdk`). A dictionary carries its direct supers (DICT §2): an instance's supers are solved at its construction goal (`directSuperGoals`, `superRoutesAt`), and a given's super is a projection (`RProj`, `assumAnswerRoute`), never selected again |
-| Impls | `ImplRow` (the impl-table row, :5726), `ieSelectRowByIface` (the interface-keyed row selector, :25488) |
-| Coherence | `checkCoherence` → `cohRowsOwnedBy` → `cohImplOfRow` → `cohScan` → `cohOverlap` (bidirectional unification: two impls overlap iff their head-type lists unify under one substitution). ⚠️ Since **A-3.7** (#1559) the input is a projection of stage K's `IE` rows, not a decl walk (the old decl-walking adapters are deleted — see the 🪦 tombstone above `cohFreshTys`), and the interface half is compared by identity via `cohSameIface` = `sameTyConHead` — **never** `ifaceIdMatches`, which is its exact inverse and would turn every unstamped-origin conflict into a silent accept. **Program impls are paired with the prelude's impls** (ordinal 0 on the Module arm; `cohPreludeRows`), so a program impl α-equal to a prelude impl is a hard `T-CONFLICTING-IMPL` at the program's impl (DICT §6.1 point 5); prelude-vs-prelude pairs are never reported, and the whole-graph sweep (`cohRowsOf`) leaves the prelude to the per-module sweep. ⚠️ Since **F-3d** (#614/#311) the sweep is CLASSIFIED, not single-verdict: `cohClassify` splits an overlapping non-ranked pair into a HARD `T-CONFLICTING-IMPL` (mutually ⊑ / α-equal heads — a DICT §6 C1 violation nothing downstream catches) and a SOFT `W-INCOMPARABLE-IMPLS` warning (⊑-incomparable heads — condition (a) alone, whose acceptance is per-goal and belongs to `pickMostSpecificEntry`). `cohScan` therefore returns ONE OF EACH class rather than the first conflict: reporting only the first would let a soft pair hide a hard one. |
-| Data / record / alias registration | `registerData` (:6004), `registerVariants` (:6044), `registerRecordInfoKeyed` (:6016), `aliasTableRef` (:1101), `buildAliasGraphEntry` (:2761), `rejectCyclicAliases` (:2806), `fromAstType` (:2886) |
+| Unification / generalization | `tc_unify.mdk`: `unify`, `generalize`, `instantiate`, `freshVar`, `enterLevel`/`exitLevel`, `lowerToCurrent`, `occursAdjust`; `repr.mdk`: `normalize`; `tc_state.mdk`: `freshModuleCtx` |
+| Value restriction | `tc_groups.mdk`: `isNonexpansive`, `genBindingRestricted`; `tc_unify.mdk`: `lowerToCurrent`, `occursAdjust` |
+| Errors / rendering | `tc_diag.mdk`: `pushTypeError`, `pushTypeErrorOnce`, `pushTypeErrorOnceAt`, `pushTypeErrorHelpFixAt`; `tc_state.mdk`: `mctxAt`; `repr.mdk`: `ppMono`, `ppScheme`, `ppMonosShared`; `tc_diag_text.mdk`: the context-free message builders |
+| Group inference (letrec/SCC) | `tc_module.mdk`: `processSCCs` → `processSCC`; `tc_groups.mdk`: `sccSchemes`, `isLetrecGroup` |
+| Constraint obligations | `tc_occurrence.mdk`: `recordCallObligations`, `recordImplObligation`; `tc_unify.mdk`: `recordSchemeCallObligations`; `schemeObligationsRef` is a `ModuleCells` cell. `allConcreteHeads` (`tc_mono.mdk`) is the is-it-ground test the obligation checkers gate on (`checkCallObligationsU`, `checkReqOne` in `tc_solve_check.mdk`). |
+| Interfaces / supers | `tc_scope.mdk`: `methodEntryHere`; `tc_unify.mdk`: `lookupQualPayload`; `tc_solve_check.mdk`: `ifaceSelfAndSupers`; the one closure combinator `superClosure`/`directSupers` (`compiler/types/superclass.mdk`). A dictionary carries its direct supers (DICT §2): an instance's supers are solved at its construction goal (`directSuperGoals`, `superRoutesAt`, `tc_solve_entail.mdk`), and a given's super is a projection (`RProj`, `assumAnswerRoute` in `tc_solve_givens.mdk`), never selected again |
+| Impls | `ImplRow` (the impl-table row, `tc_types.mdk`), `ieSelectRowByIface` (the interface-keyed row selector, `tc_solve_entail.mdk`) |
+| Coherence | All in `tc_global.mdk` except `cohOverlap` (`tc_mono.mdk`): `checkCoherence` → `cohRowsOwnedBy` → `cohImplOfRow` → `cohScan` → `cohOverlap` (bidirectional unification: two impls overlap iff their head-type lists unify under one substitution). The input is a projection of stage K's `IE` rows, not a decl walk, and the interface half is compared by identity via `cohSameIface` = `sameTyConHead`, **never** `ifaceIdMatches`, which is its exact inverse and would turn every unstamped-origin conflict into a silent accept. **Program impls are paired with the prelude's impls** (ordinal 0 on the Module arm; `cohPreludeRows`), so a program impl α-equal to a prelude impl is a hard `T-CONFLICTING-IMPL` at the program's impl (DICT §6.1 point 5); prelude-vs-prelude pairs are never reported, and the whole-graph sweep (`cohRowsOf`) leaves the prelude to the per-module sweep. The sweep is CLASSIFIED, not single-verdict: `cohClassify` splits an overlapping non-ranked pair into a HARD `T-CONFLICTING-IMPL` (mutually ⊑ / α-equal heads, a DICT §6 C1 violation nothing downstream catches) and a SOFT `W-INCOMPARABLE-IMPLS` warning (⊑-incomparable heads, condition (a) alone, whose acceptance is per-goal and belongs to `pickMostSpecificEntry` in `tc_solve_entail.mdk`). `cohScan` therefore returns ONE OF EACH class rather than the first conflict: reporting only the first would let a soft pair hide a hard one. |
+| Data / record / alias registration | `tc_decls.mdk`: `registerData`, `registerVariants`, `registerRecordInfoKeyed`, `buildAliasGraphEntry`, `rejectCyclicAliases`; `tc_decls_types.mdk`: `fromAstType`; `aliasTableRef` is a `ModuleCells` cell |
+| The entry and the verbs | `typecheck.mdk`: `checkOneDiags`, `checkOneSchemeFullK`, `driveGraphK`, `checkModules`, `elaborateModules` |
 
 **`fromAstType` gotcha.** Its signature is
-`fromAstType : List (String, Mono) -> Ty -> <Mut> Mono` (`:2886`) — the tvar table
+`fromAstType : List (String, Mono) -> Ty -> <Mut> Mono` (`tc_decls_types.mdk`) — the tvar table
 is an **ordinary first positional argument** (`tvs`). (Medaka has **no labeled
 arguments**.) Call it with a fresh `[]` and the same source name `a` in two separate
 calls becomes two unrelated TVars. When two `Ty` values must share variables (impl
@@ -154,18 +159,18 @@ both calls.**
 ## Whole-program routes — audit both
 
 Per-node `infer`/`check` arms are shared, and both routes funnel group inference
-through `processSCCs`/`processSCC`. Trace registration order, coherence, and the
+through `processSCCs`/`processSCC` (`tc_module.mdk`). Trace registration order, coherence, and the
 final passes through both routes:
 
 - one-program: `checkOneDiags`, with `checkOneSchemeFullK` for scheme queries — locate
   them with `grep -n '^checkOneDiags \|^checkOneSchemeFullK ' compiler/types/typecheck.mdk`
   (line numbers in this file rot; derive them)
-- multi-module: `checkModuleFullDiags`, driven by the one graph driver `driveGraphK`
+- multi-module: `checkModuleFullDiags` (`tc_module.mdk`), driven by the one graph driver `driveGraphK`
   (`GOutDiags` for diagnostics and schemes, `GOutTrees` for the elaborated tree that
   `elaborateModules` projects) / `checkModules` for the schemes-only fast path
 
-Both routes reach `checkCoherence` / `checkInterfaceCycles` / `checkPhantomMethods` /
-`checkSuperImpls`. **A new whole-program pass that one route skips is silently absent
+Both routes reach `checkCoherence` / `checkPhantomMethods` / `checkSuperImpls` (`tc_global.mdk`) and
+`checkInterfaceCycles` (`tc_module.mdk`). **A new whole-program pass that one route skips is silently absent
 from part of the compiler** — and real projects use the module graph path.
 
 ## Writing tests: a parameter's type is a free var during body inference
@@ -182,8 +187,8 @@ exercise a type-directed branch, ground the value at the expression itself
 `main` is protected — work on a branch and land via PR. Before you push:
 
 ```sh
-medaka fmt --write compiler/types/typecheck.mdk   # pre-commit hook REJECTS unformatted .mdk
-medaka lint compiler/types/typecheck.mdk          # hook is a max ratchet: any new finding fails
+medaka fmt --write <abs path of each touched compiler/types/*.mdk>   # pre-commit hook REJECTS unformatted .mdk
+medaka lint <same paths>                                              # hook is a max ratchet: any new finding fails
 make preflight                                    # derives the gate set from your diff
 ```
 
@@ -210,10 +215,10 @@ bash test/diff_compiler_eval.sh            # the typechecker loads the real stdl
 If a change rejects something the stdlib relies on, the prelude fails to load and
 many gates break at once — that's the signal your rule is too broad. The usual
 culprit is feeding a new global impl check the *seeded* impls instead of the
-module's own impl rows (`cohRowsOwnedBy` in `compiler/types/typecheck.mdk`).
+module's own impl rows (`cohRowsOwnedBy` in `compiler/types/tc_global.mdk`).
 
 **The compiler's own source is in the snapshot corpus**, so a change to
-`typecheck.mdk` moves its own golden — bless it (by naming the path) in the same
+a `compiler/types/*.mdk` file moves its own golden — bless it (by naming the path) in the same
 commit, or `main` goes red.
 
 ## Diagnosing before fixing
