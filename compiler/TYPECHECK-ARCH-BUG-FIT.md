@@ -2401,7 +2401,7 @@ distinctions of 2026-07-31 apply to every prediction referenced here.
 ## References
 
 - [`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) — the design (authority)
-- [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map
+- [`TYPECHECK-ARCHITECTURE.md`](../archive/design/TYPECHECK-ARCHITECTURE.md) — the derived map
 - [`../docs/spec/DICT-SEMANTICS.md`](../docs/spec/DICT-SEMANTICS.md) §11, [`../docs/spec/EFFECTS-SEMANTICS.md`](../docs/spec/EFFECTS-SEMANTICS.md) §11 — per-clause enforcement tables (clause → site → keying assumption)
 - Epic **#1122** — stage table and dependency spine
 - `.claude/workstreams/TYPECHECK.md` — the standing gate

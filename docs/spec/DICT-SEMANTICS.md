@@ -3091,7 +3091,7 @@ specific clause; that mapping is the audit's starting point.
 
 ## 11. Per-clause enforcement table (clause → site → keying assumption)
 
-Seeded from [`compiler/TYPECHECK-ARCHITECTURE.md`](../../compiler/TYPECHECK-ARCHITECTURE.md)
+Seeded from [`archive/design/TYPECHECK-ARCHITECTURE.md`](../../archive/design/TYPECHECK-ARCHITECTURE.md)
 §4 (every subsystem row there already cites its governing clause) and re-verified
 directly against source at `c4ef6dbe` (this document's `$BASE`; line numbers drift —
 re-derive with `grep -n '^<symbol>' <file>` rather than trusting them). Follows

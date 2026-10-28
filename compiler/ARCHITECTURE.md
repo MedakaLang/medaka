@@ -260,7 +260,7 @@ Six decisions sat under these laws when they were drafted. Val ruled all six on
 
 ## 5. Settled, and not reopened here
 
-- The HM core is standard and good; it is not redesigned (TYPECHECK-ARCHITECTURE.md).
+- The HM core is standard and good; it is not redesigned (archive/design/TYPECHECK-ARCHITECTURE.md).
 - Separate physical backends; no shared instruction builder (EMITTER-TARGET-ARCHITECTURE
   L4; rustc's Cranelift shares facts, not the builder).
 - The file split is in the refactor and is sequenced behind the state-lifetime split

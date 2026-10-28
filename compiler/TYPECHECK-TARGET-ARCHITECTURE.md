@@ -20,7 +20,7 @@ issue closeout and the current tree determine what remains implemented.
 (resolve identity → declaration analysis → inference → entailment → elaboration →
 global checks), designed from the semantics in `docs/spec/DICT-SEMANTICS.md`,
 `docs/spec/EFFECTS-SEMANTICS.md`, and `docs/spec/SHADOW-SEMANTICS.md`, informed by
-the derived map in [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md). It
+the derived map in [`TYPECHECK-ARCHITECTURE.md`](../archive/design/TYPECHECK-ARCHITECTURE.md). It
 answers *"what would this system look like designed from scratch, knowing what we
 now know?"* and maps every element to the current implementation and to a staged
 migration in which `main` stays green at every step.
@@ -4371,7 +4371,7 @@ of a duplicate key, not the ORDER a whole-table walk produces.
 
 ## References
 
-- [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map this design targets
+- [`TYPECHECK-ARCHITECTURE.md`](../archive/design/TYPECHECK-ARCHITECTURE.md) — the derived map this design targets
 - `docs/spec/DICT-SEMANTICS.md`, `docs/spec/EFFECTS-SEMANTICS.md`,
   `docs/spec/SHADOW-SEMANTICS.md` — the governing semantics
 - `archive/design/ARCH-REVIEW.md` (PASS 2), `archive/design/DRIVER-COLLAPSE-PLAN.md` — prior
