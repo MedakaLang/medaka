@@ -25,10 +25,9 @@ will bisect in the wrong half of the compiler:
   A misbehaviour that needs the *sugar shape* to explain it is a `desugar.mdk` bug,
   and it cannot be downstream of typecheck.
 - **`exhaust` is NOT a stage in the chain.** `compiler/frontend/exhaust.mdk` is
-  called *from inside* `compiler/types/typecheck.mdk` — once per `EMatch`, with the
-  scrutinee type known (`checkMatchExhaustive` / `checkMatchRedundant`,
-  `typecheck.mdk:5841` / `:5862`). (The one exception is
-  `checkGuardExhaustiveness` (`exhaust.mdk:835`), a standalone pass on the RAW
+  called *from inside* `compiler/types/tc_infer.mdk` — once per `EMatch`, with the
+  scrutinee type known (`checkMatchExhaustive` / `checkMatchRedundant`). (The one exception is
+  `checkGuardExhaustiveness` (`exhaust.mdk`), a standalone pass on the RAW
   pre-desugar AST.)
 - **Production marking happens inside typechecking, per binding group.**
   `checkBodyImpl` → `processSCC` → `markGroupClauses` mints `EMethodAt`/`EDictAt`

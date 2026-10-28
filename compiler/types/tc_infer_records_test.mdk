@@ -1,0 +1,499 @@
+-- Tests of `types.tc_infer_records`'s own API: the field and record rows a module declares
+-- (`recordFieldNames`, `recordFieldMap`, `stampedRecordHead`), the instantiation of a record
+-- (`instantiateRecordShared`, `instantiateRecordUpdate`), the field owner ladder that picks the
+-- record a field belongs to (`resolveFieldRecord`: the receiver's own record, the owners the
+-- module can reach, the declarations of same-named records of two modules, the abstract record),
+-- the rejections of a construction, access or update by code (`checkMissingFields`,
+-- `unknownRecordFresh`, `inferFieldOfRecord` and its nearest-field suggestion,
+-- `fieldSelectionWellTyped`, `recordUpdateWellTyped`, the three constructor disagreements and
+-- the existential-authority update) and the field assignment readers (`fieldAssignNamePair`,
+-- `assignedFieldNames`, `firstFieldName`).  Each test calls these functions directly over a
+-- module record that declares the records it names; the record arms of the inference recursion
+-- (`inferRecordCreate*`, `inferFieldAccess`, `inferValueField`, `inferRecordUpdate*`) belong to
+-- `tc_infer` and are driven in `tc_infer_test`.  Not driven here: the owner rungs that need a
+-- sibling constructor declared in another module (`ctorRecordFromCompanion`).
+-- `typecheck_test` drives whole checks.
+
+import test.{Expectation, expectAll, expectEqual}
+import frontend.ast.{Expr(..), FieldAssign(..), Lit(..), TyConOrigin(..)}
+import types.repr.{Mono(..), ppMono}
+import types.tc_env.{envFor, lookupRecordByName}
+import types.tc_infer_records.{
+  assignedFieldNames,
+  checkMissingFields,
+  fieldAssignNamePair,
+  fieldSelectionWellTyped,
+  firstFieldName,
+  inferFieldOfRecord,
+  instantiateRecordShared,
+  instantiateRecordUpdate,
+  recordFieldMap,
+  recordFieldNames,
+  recordUpdateWellTyped,
+  resolveFieldRecord,
+  stampedRecordHead,
+  substRecordField,
+  unknownRecordFresh,
+}
+import types.registry.{headKeyTag}
+import types.tc_mono.{headTyconMono, tconBuiltin, tconFrom, tconUnresolved}
+import types.tc_test_support.{
+  boolM,
+  codesOf,
+  declareData,
+  envWithData,
+  intM,
+  messagesOf,
+  recordShapes,
+  scoped,
+  scopedWith,
+  varM,
+}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.effect_domain.{Param(..)}
+import types.tc_types.{ModuleCtx(..), RecordInfo(..), RecordSubst(..), dynFor}
+import map as IdMap
+import types.tc_unify.{unifyIn}
+import support.ordmap.{OrdMap, omEmpty, omFromNames, omInsert, omKeys, omLookup}
+import list.{sort}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- [k] applied to the record row [name] of `recordShapes` in a fresh module; a missing row fails.
+withRecord : String -> (ModuleCtx -> RecordInfo -> Expectation) -> Expectation
+withRecord name k = withData recordShapes name k
+
+-- ── the rows a module declares ────────────────────────────────────────────
+
+test "a record row lists its fields in declaration order and indexes each by name" = withRecord
+  "Cfg"
+  (m ri =>
+    expectEqual
+      (["name", "count"], ["count", "name"], [Some "String", Some "Int"])
+      (
+        recordFieldNames ri,
+        sort (omKeys (recordFieldMap ri)),
+        map
+          (f => map ppMono (omLookup f (recordFieldMap ri)))
+          (recordFieldNames ri),
+      ))
+
+test "a record's stamped head is its owner module's name for it, or its own name without an owner" = withRecord
+  "P"
+  (m ri =>
+    expectEqual
+      ("m__P", "P")
+      (
+        stampedRecordHead "P" ri,
+        stampedRecordHead "P" (RecordInfo [] [] (tconUnresolved "P") [] omEmpty),
+      ))
+
+test "the readers of a field assignment name the field and the first one assigned" =
+  let fields = [FieldAssign "a" (ELit LUnit), FieldAssign "b" (ELit LUnit)]
+  expectEqual
+    (["a", "b"], Some "a", None, "b")
+    (
+      assignedFieldNames fields,
+      firstFieldName fields,
+      firstFieldName [],
+      fst (fieldAssignNamePair (FieldAssign "b" (ELit LUnit))),
+    )
+
+-- ── construction ──────────────────────────────────────────────────────────
+
+test "checkMissingFields names every missing field in declaration order" =
+  let m = scoped ()
+  checkMissingFields m "P" ["a", "b"] omEmpty
+  expectEqual ["T-MISSING-FIELD", "T-MISSING-FIELD"] (codesOf m)
+
+test "checkMissingFields accepts a construction that supplies every field" =
+  let m = scoped ()
+  checkMissingFields m "P" ["a", "b"] (omFromNames ["b", "a"] omEmpty)
+  expectEqual [] (codesOf m)
+
+test "unknownRecordFresh pushes the code and hands back a fresh type" =
+  let m = scoped ()
+  expectEqual
+    ("a", ["T-UNKNOWN-RECORD"], ["unknown record type `Z`"])
+    (ppMono (unknownRecordFresh m "Z"), codesOf m, messagesOf m)
+
+-- ── instantiation ─────────────────────────────────────────────────────────
+
+test "each instantiation of a record takes its own fresh parameters" = withRecord
+  "Box"
+  (m ri =>
+    let first = instantiateRecordShared m ri
+    let second = instantiateRecordShared m ri
+    unifyIn
+      (dynFor m)
+      (snd first)
+      (TApp (tconFrom (OriginModule "m") "Box") (tconBuiltin "Char"))
+    expectEqual ("Box Char", "Box a") (ppMono (snd first), ppMono (snd second)))
+
+test "a field's type is restated over the parameters of the instantiation" = withRecord
+  "Pair"
+  (m ri =>
+    let (subst, result) = instantiateRecordShared m ri
+    unifyIn
+      (dynFor m)
+      result
+      (TApp
+        (TApp (tconFrom (OriginModule "m") "Pair") (tconBuiltin "Char"))
+        (tconBuiltin "Bool"))
+    expectEqual
+      [Some "Char", Some "Bool"]
+      (map
+        (f =>
+          map
+            (substRecordField m.mcGraph subst >> ppMono)
+            (omLookup f (recordFieldMap ri)))
+        (recordFieldNames ri)))
+
+-- ── the checks on their own ───────────────────────────────────────────────
+
+-- A module record declaring [src] as the module "m", and the record row of [name].
+withData : String ->
+  String ->
+  (ModuleCtx -> RecordInfo -> Expectation) ->
+  Expectation
+withData src name k =
+  let m = scopedWith src
+  let _ = envWithData m src
+  match lookupRecordByName m name
+    Some ri => k m ri
+    None => expectEqual ("a record row for " ++ name) "none"
+
+-- The type `W` the constructors of the data declarations below construct.
+tyW : Mono
+tyW = tconFrom (OriginModule "m") "W"
+
+wideSource : String
+wideSource = """
+data W = Wa { x : Int } | Wb { z : Int }
+"""
+
+test "fieldSelectionWellTyped rejects a field a sibling constructor withholds at the record's own type" = withData
+  wideSource
+  "Wa"
+  (m ri =>
+    expectEqual
+      ("a", ["T-FIELD-NOT-IN-ALL-CTORS"])
+      (ppMono (fieldSelectionWellTyped m tyW "Wa" ri "x" intM), codesOf m))
+
+test "fieldSelectionWellTyped leaves a receiver of another type or an unknown one to its own mismatch" = withData
+  wideSource
+  "Wa"
+  (m ri =>
+    expectEqual
+      (["Int", "Int"], [])
+      (
+        [
+          ppMono (fieldSelectionWellTyped m boolM "Wa" ri "x" intM),
+          ppMono (fieldSelectionWellTyped m (varM 3) "Wa" ri "x" intM),
+        ],
+        codesOf m,
+      ))
+
+test "recordUpdateWellTyped rejects an update of a type with several constructors at the record's own type" = withData
+  wideSource
+  "Wa"
+  (m ri =>
+    recordUpdateWellTyped m tyW "Wa" ri "x"
+    expectEqual ["T-UPDATE-MULTI-CTOR"] (codesOf m))
+
+test "recordUpdateWellTyped leaves a receiver of another type or an unknown one alone" = withData
+  wideSource
+  "Wa"
+  (m ri =>
+    recordUpdateWellTyped m boolM "Wa" ri "x"
+    recordUpdateWellTyped m (varM 3) "Wa" ri "x"
+    expectEqual [] (codesOf m))
+
+test "inferFieldOfRecord unifies the receiver with the record and reads the field's type" = withRecord
+  "P"
+  (m ri =>
+    let recv = varM 9
+    let t = inferFieldOfRecord (dynFor m) recv "P" ri "a"
+    expectEqual ("P", "Int", []) (ppMono recv, ppMono t, codesOf m))
+
+test "inferFieldOfRecord rejects a receiver of another type" = withRecord
+  "P"
+  (m ri =>
+    let t = inferFieldOfRecord (dynFor m) boolM "P" ri "a"
+    expectEqual ("Int", ["T-TYPE-MISMATCH"]) (ppMono t, codesOf m))
+
+test "inferFieldOfRecord rejects a field the record does not declare and offers the nearest" = withRecord
+  "Cfg"
+  (m ri =>
+    let t = inferFieldOfRecord (dynFor m) (varM 9) "Cfg" ri "nmae"
+    expectEqual
+      ("a", ["no field `nmae` in `Cfg`; did you mean `name`?"])
+      (ppMono t, messagesOf m))
+
+test "a field name too short to suggest from is rejected without a suggestion" = withRecord
+  "P"
+  (m ri =>
+    let _ = inferFieldOfRecord (dynFor m) (varM 9) "P" ri "ab"
+    expectEqual ["no field `ab` in `P`"] (messagesOf m))
+
+-- ── the owner ladder ──────────────────────────────────────────────────────
+
+-- The record the ladder picks for [fname] at receiver type [te] in [m], by name.
+pickedName : ModuleCtx -> Mono -> String -> Option String
+pickedName m te fname = map fst (resolveFieldRecord m te fname)
+
+test "a receiver of a known record picks that record" = withRecord "P" (m ri =>
+  expectEqual
+    (Some "P", [])
+    (pickedName m (tconFrom (OriginModule "m") "P") "a", codesOf m))
+
+-- A receiver of the record `P` declared by another module than the one that declares `recordShapes`.
+foreignP : Mono
+foreignP = tconFrom (OriginModule "n") "P"
+
+-- The key the abstract-record table holds for a record of type [te].
+abstractKeys : Mono -> List String
+abstractKeys te = match headTyconMono te
+  Some hk => [headKeyTag hk]
+  None => []
+
+test "an abstract record's field is rejected by code and picks nothing" = withRecord
+  "P"
+  (m ri =>
+    m.mcGraph.abstractRecordTypesRef :=
+      omFromNames (abstractKeys foreignP) m.mcGraph.abstractRecordTypesRef.value
+    expectEqual
+      (None, ["T-ABSTRACT-FIELD"])
+      (pickedName m foreignP "a", codesOf m))
+
+test "the same receiver of a record that is not abstract resolves to the record the module sees" = withRecord
+  "P"
+  (m ri => expectEqual (Some "P", []) (pickedName m foreignP "a", codesOf m))
+
+test "a field no record declares picks nothing and is rejected by code" = withRecord
+  "P"
+  (m ri =>
+    expectEqual
+      (None, ["T-UNKNOWN-FIELD"])
+      (pickedName m (varM 4) "nowhere", codesOf m))
+
+test "owners the module cannot reach are dropped before the field is judged ambiguous" =
+  let m = scoped ()
+  let _ = declareData "m1" m (envFor m) "data L = L { shared : Int }"
+  let _ = declareData "m2" m (envFor m) "data R = R { shared : Bool }"
+  m.mcCells.fieldOwnerModulesRef := omOwners
+  m.mcCells.fieldOwnerReachRef := omFromNames ["m1"] omEmpty
+  expectEqual (Some "L", []) (pickedName m (varM 4) "shared", codesOf m)
+
+omOwners : OrdMap (List String)
+omOwners = omInsert "R" ["m2"] (omInsert "L" ["m1"] omEmpty)
+
+test "when no owner is reachable all of them stay candidates" =
+  let m = scoped ()
+  let _ = declareData "m1" m (envFor m) "data L = L { shared : Int }"
+  let _ = declareData "m2" m (envFor m) "data R = R { shared : Bool }"
+  m.mcCells.fieldOwnerModulesRef := omOwners
+  m.mcCells.fieldOwnerReachRef := omFromNames ["m3"] omEmpty
+  expectEqual
+    (None, ["T-AMBIGUOUS-FIELD"])
+    (pickedName m (varM 4) "shared", codesOf m)
+
+-- ── existential authorities of an update ──────────────────────────────────
+
+-- A record of two fields that read one authority variable (id 5), the shape an existential
+-- binder gives.
+authRecord : Ref Authvar -> RecordInfo
+authRecord cell =
+  RecordInfo
+    []
+    [5]
+    (tconUnresolved "S")
+    [("f", TAuth (AVar cell)), ("g", TAuth (AVar cell))]
+    omEmpty
+
+-- Whether the authority an update gives variable 5 is a fresh variable, not the domain's top.
+isFresh : RecordSubst -> Bool
+isFresh (RecordSubst _ asub) = match filter (p => fst p == 5) asub
+  (_, AVar _) :: _ => True
+  _ => False
+
+-- Whether the module holds authority 5 as an existential.
+data Binder = Existential | Plain deriving (Eq)
+
+-- The codes pushed and whether authority 5 was freshened, updating [assigned] of an
+-- authority record in a module that does or does not hold 5 as an existential.
+updateAuth : Binder -> List String -> (List String, Bool)
+updateAuth binder assigned =
+  let m = scoped ()
+  let cell = Ref (AUnbound 5 0 PUnit False None)
+  if binder == Existential then
+    m.mcGraph.graphRun.ctorExistentialsRef := IdMap.set 5 () IdMap.Tip
+  let sr = instantiateRecordUpdate m "S" (authRecord cell) assigned
+  (codesOf m, isFresh (fst sr))
+
+test "an update that assigns none of the fields an existential authority sits in keeps it opaque" =
+  expectEqual ([], False) (updateAuth Existential [])
+
+test "an update that assigns every field an existential authority sits in gives it a fresh variable" =
+  expectEqual ([], True) (updateAuth Existential ["f", "g"])
+
+test "an update that assigns only some of those fields is rejected by code" =
+  expectEqual
+    (["T-AUTHORITY-EXISTENTIAL-SCOPE"], True)
+    (updateAuth Existential ["f"])
+
+test "an authority that is not an existential is freshened whatever is assigned" = expectAll
+  [
+    expectEqual ([], True) (updateAuth Plain []),
+    expectEqual ([], True) (updateAuth Plain ["f"]),
+  ]
+
+test "the shared instantiation keeps an existential authority opaque and freshens any other" =
+  let m = scoped ()
+  let cell = Ref (AUnbound 5 0 PUnit False None)
+  m.mcGraph.graphRun.ctorExistentialsRef := IdMap.set 5 () IdMap.Tip
+  let opaque = instantiateRecordShared m (authRecord cell)
+  m.mcGraph.graphRun.ctorExistentialsRef := IdMap.Tip
+  let fresh = instantiateRecordShared m (authRecord cell)
+  expectEqual (False, True) (isFresh (fst opaque), isFresh (fst fresh))
+
+-- ── more of the checks on their own ───────────────────────────────────────
+
+otherSource : String
+otherSource =
+  """
+data W = Wa { x : Int } | Wb { z : Int }
+data V = Va { x : Int } | Vb { z : Int }
+"""
+
+tyV : Mono
+tyV = tconFrom (OriginModule "m") "V"
+
+test "fieldSelectionWellTyped asks only about a receiver of the selected record's own type" = withData
+  otherSource
+  "Wa"
+  (m ri =>
+    expectEqual
+      ("Int", [])
+      (ppMono (fieldSelectionWellTyped m tyV "Wa" ri "x" intM), codesOf m))
+
+test "recordUpdateWellTyped asks only about a receiver of the selected record's own type" = withData
+  otherSource
+  "Wa"
+  (m ri =>
+    recordUpdateWellTyped m tyV "Wa" ri "x"
+    expectEqual [] (codesOf m))
+
+test "a reserved constructor name is never qualified with its owner" = withData
+  "data Some = Some { v : Int }"
+  "Some"
+  (m ri => expectEqual "Some" (stampedRecordHead "Some" ri))
+
+-- ── the nearest field to offer ────────────────────────────────────────────
+
+-- The messages of an access of [fname] on a record of [fields] (all of type Int).
+suggestionFor : String -> String -> List String
+suggestionFor fields fname =
+  let m = scopedWith "data S = S { \{fields} }"
+  let _ = envWithData m "data S = S { \{fields} }"
+  match lookupRecordByName m "S"
+    Some ri =>
+      let _ = inferFieldOfRecord (dynFor m) (varM 9) "S" ri fname
+      messagesOf m
+    None => ["no record S"]
+
+test "the nearest field is offered, and of two equally near the earlier in alphabetical order" = expectAll
+  [
+    expectEqual
+      ["no field `namex` in `S`; did you mean `nama`?"]
+      (suggestionFor "namb : Int, nama : Int" "namex"),
+    expectEqual
+      ["no field `namexx` in `S`; did you mean `namex1`?"]
+      (suggestionFor "nameab : Int, namex1 : Int" "namexx"),
+  ]
+
+test "a field name nothing in the record is near is rejected without a suggestion" =
+  expectEqual
+    ["no field `zzzz` in `S`"]
+    (suggestionFor "name : Int, count : Int" "zzzz")
+
+-- ── the same record name declared by two modules ──────────────────────────
+
+-- A module record that sees `L { shared : Int }` from "m1" and `L { shared : Bool }` from "m2".
+twoModules : Unit -> ModuleCtx
+twoModules _ =
+  let m = scoped ()
+  let _ = declareData "m1" m (envFor m) "data L = L { shared : Int }"
+  let _ = declareData "m2" m (envFor m) "data L = L { shared : Bool }"
+  m
+
+-- The type of `shared` in the record picked for a receiver of type [te], if one is.
+sharedAt : ModuleCtx -> Mono -> Option (Option String)
+sharedAt m te =
+  map
+    (p => map ppMono (omLookup "shared" (recordFieldMap (snd p))))
+    (resolveFieldRecord m te "shared")
+
+test "a receiver picks the record its own module declared, not a same-named one" =
+  let m = twoModules ()
+  expectEqual
+    (Some (Some "Int"), Some (Some "Bool"), [])
+    (
+      sharedAt m (tconFrom (OriginModule "m1") "L"),
+      sharedAt m (tconFrom (OriginModule "m2") "L"),
+      codesOf m,
+    )
+
+test "at an unknown receiver a same-named record the module cannot reach is not a candidate" =
+  let m = twoModules ()
+  m.mcCells.fieldOwnerReachRef := omFromNames ["m1"] omEmpty
+  expectEqual (Some (Some "Int"), []) (sharedAt m (varM 4), codesOf m)
+
+test "at an unknown receiver two reachable same-named records are ambiguous" =
+  let m = twoModules ()
+  expectEqual (None, ["T-AMBIGUOUS-FIELD"]) (sharedAt m (varM 4), codesOf m)
+
+test "an owner with no recorded declaring module stays reachable" =
+  let m = scoped ()
+  let _ = declareData "m1" m (envFor m) "data L = L { shared : Int }"
+  let _ = declareData "m2" m (envFor m) "data R = R { shared : Bool }"
+  m.mcCells.fieldOwnerModulesRef := omInsert "L" ["m1"] omEmpty
+  m.mcCells.fieldOwnerReachRef := omFromNames ["m1", "m2"] omEmpty
+  expectEqual (None, ["T-AMBIGUOUS-FIELD"]) (sharedAt m (varM 4), codesOf m)
+
+test "an update that assigns only some fields under an existential authority names the fields that must change together" =
+  let m = scoped ()
+  let cell = Ref (AUnbound 5 0 PUnit False None)
+  m.mcGraph.graphRun.ctorExistentialsRef := IdMap.set 5 () IdMap.Tip
+  let _ = instantiateRecordUpdate m "S" (authRecord cell) ["f"]
+  expectEqual
+    [
+      "updating `S` replaces a field under an existential authority binder, but the binder's fields `f`, `g` must change together; replace them all, or rebuild the record",
+    ]
+    (messagesOf m)
+
+test "an ambiguous field names the module of each record when they share a name" =
+  let m = twoModules ()
+  let found = sharedAt m (varM 4)
+  expectEqual
+    (
+      None,
+      [
+        "ambiguous field `.shared`: it is declared by `L` from module `m1` and by `L` from module `m2` and the record type is undetermined; annotate the record, as in `(r : L).shared`",
+      ],
+    )
+    (found, messagesOf m)
+
+test "owners whose records are not visible are named by their keys" =
+  let m = scoped ()
+  m.mcCells.fieldOwnersRef := omInsert "shared" ["B", "A"] omEmpty
+  expectEqual (None, ["T-AMBIGUOUS-FIELD"]) (sharedAt m (varM 4), codesOf m)
+
+test "an owner the module cannot reach is dropped before its record is looked at" =
+  let m = scoped ()
+  let _ = declareData "m1" m (envFor m) "data L = L { shared : Int }"
+  let _ = declareData "m1" m (envFor m) "data R = R { shared : Bool }"
+  m.mcCells.fieldOwnerModulesRef :=
+    omInsert "R" ["m3"] (omInsert "L" ["m1"] omEmpty)
+  m.mcCells.fieldOwnerReachRef := omFromNames ["m1"] omEmpty
+  expectEqual (Some (Some "Int"), []) (sharedAt m (varM 4), codesOf m)

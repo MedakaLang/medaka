@@ -27,13 +27,10 @@ import types.private_mangle.{mangledName}
 import types.repr.{Mono, ppMono, ppTy}
 import types.tc_env.{
   buildImplEnvGo,
-  bindingWithStandalone,
   declEnvModule,
   envFor,
-  extendBindings,
   implAccFinish,
   methodEnvGo,
-  ordinaryEnvBinding,
   emptyDeclEnvAcc,
 }
 import types.tc_mono.{monoScheme}
@@ -55,7 +52,9 @@ import types.tc_shadow.{
   stampRoutes,
 }
 import types.tc_state.{blankModuleCtx, probeGraphCtx}
-import types.tc_test_support.{boolM, fresh, intM, readerOfLib, varM}
+import types.tc_test_support.{
+  boolM, fresh, intM, methodOccurrence, readerOfLib, shadowEnvOf, varM
+}
 import types.tc_types.{
   BareLocals(..),
   DeclEnvAcc(..),
@@ -65,8 +64,6 @@ import types.tc_types.{
   ModuleCtx(..),
   SpellCtx(..),
   TcEnv,
-  ValueScheme(..),
-  StandaloneOrigin(..),
   siteFor,
 }
 import support.ordmap.{omEmpty, omInsert}
@@ -429,21 +426,10 @@ test "a definer shadow is stamped as the standalone even where a live impl answe
 
 -- ── the heads of an imported shadow ───────────────────────────────────────
 
--- The reader of `lib` with `size` also bound in its term environment as a standalone
--- imported from another module, which is what makes `size` an importer shadow.
+-- The reader of `lib` with `size` also bound as a standalone `Int` imported from another
+-- module.
 shadowEnv : ModuleCtx -> TcEnv
-shadowEnv m =
-  m.mcCells.standaloneValuesRef := omInsert "size" () omEmpty
-  let scheme = monoScheme intM
-  extendBindings (envFor m) [
-    (
-      "size",
-      bindingWithStandalone (ordinaryEnvBinding scheme) (
-        ImportedStandalone,
-        ValueScheme { vsScheme = scheme, vsDeclared = None },
-      ),
-    ),
-  ]
+shadowEnv m = shadowEnvOf (monoScheme intM) (monoScheme intM) m
 
 -- The name `shadowStandaloneHead` finds at the head of [e], with how many arity and route
 -- cells it hands back to stamp.
@@ -453,24 +439,6 @@ headOf env e =
     (r => match r
       (name, arities, routes) => (name, length arities, length routes))
     (shadowStandaloneHead env e)
-
--- A method occurrence of `name` whose evidence cell the module [m] holds at ordinal 0.
-methodOccurrence : ModuleCtx -> String -> Expr
-methodOccurrence m name =
-  let ev = EvId "probe" 0
-  let cell = EvCell {
-    ecId = ev,
-    ecIface = Ref "",
-    ecArity = Ref None,
-    ecTag = Ref RNone,
-    ecImpl = Ref [],
-    ecMeth = Ref [],
-    ecLoc = Ref None,
-    ecName = Ref "",
-    ecInner = Ref innerNone,
-  }
-  m.mcGraph.graphRun.evCells := arrayMake 1 (Some cell)
-  EMethodAt name "" ev
 
 test "an unmarked head naming an importer shadow hands back no cell to stamp, under any located wrapper" =
   let env = shadowEnv (readerOfLib ())

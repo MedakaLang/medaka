@@ -36,7 +36,7 @@ typecheck (calls exhaust per EMatch) → eval`. All in `compiler/frontend/` exce
 - ⚠️ **[P-DESUGAR-FIRST]** `desugar.mdk` runs before resolve/typecheck. Sugar-shape checks must
   run on the raw AST (`checkGuardExhaustiveness`, `compiler/frontend/exhaust.mdk`).
 - ⚠️ **[P-EXHAUST-IN-TYPECHECK]** `checkMatchExhaustive` is called from
-  `compiler/types/typecheck.mdk`, once per `EMatch`; it sees only core patterns.
+  `compiler/types/tc_infer.mdk`, once per `EMatch`; it sees only core patterns.
 - ⚠️ **[P-NO-MARK-PASS]** `markWithPrelude` (`compiler/frontend/marker.mdk`) is NOT on
   `check`/`run`/`build`/LSP — those mark inside typecheck per binding group
   (`markGroupClauses`), so no production verb sees an `EMethodRef`. The file stays live for

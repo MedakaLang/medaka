@@ -33,7 +33,6 @@ import types.effect_rows.{
   renderAtom,
 }
 import types.effect_solver.{noScopeRoles}
-import types.publish.{tcMsg}
 import types.repr.{AuthResidual(..), IfaceRef(..), Mono(..), Scheme(..)}
 import types.tc_effects.{
   appSpineArgCount,
@@ -65,9 +64,10 @@ import types.tc_effects.{
   recordValueFileBound,
   spineHeadEv,
 }
-import types.tc_state.{probeGraphCtx, wAll}
+import types.tc_state.{probeGraphCtx}
 import types.tc_test_support.{
   codesOf,
+  messagesOf,
   firstSig,
   fresh,
   ifaceOf,
@@ -599,10 +599,6 @@ test "a method that no longer quantifies an authority loses its recorded grants"
   expectEqual None (readGrants gctx)
 
 -- ── the escape walk's report ──────────────────────────────────────────────
-
--- The messages the module has been given, oldest first.
-messagesOf : ModuleCtx -> List String
-messagesOf m = reverse (map tcMsg (wAll m.mcCells.typeErrors))
 
 -- A group record holding the walk's findings [pending], newest first.
 groupWith : List (String, Option Loc, String) -> GroupCtx

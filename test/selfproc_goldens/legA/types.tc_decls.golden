@@ -108,6 +108,7 @@ fieldNameOf : Field -> String
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
+headAnnotTy : ModuleCtx -> Ty -> Mono
 ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 inferParamRowAtoms : GraphCtx -> List String -> List Variant -> List (List Atom)

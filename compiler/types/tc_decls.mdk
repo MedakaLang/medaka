@@ -4,8 +4,8 @@
 -- (`addAliasDecl`, cycle rejection by `rejectCyclicAliases`, the expansion normal form
 -- `tyAliasNormalForm`), the recording of declared kinds (`recordDeclKinds`, `recordDeclaredKinds`),
 -- the method scheme rows, and the signature layer over the conversion (`sigToScheme`, `sigVarsFor`,
--- `instantiateSigTracked`, `astTypeFreshTbl`). The conversion itself and the kind, authority,
--- effect-domain and effect-parameter checks are `tc_decls_types`.
+-- `instantiateSigTracked`, `astTypeFreshTbl`, `headAnnotTy`). The conversion itself and the kind,
+-- authority, effect-domain and effect-parameter checks are `tc_decls_types`.
 --
 -- Spec: DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.1 (kinds), section 6.2
 -- (kind annotations bind parameters at declaration heads), section 6.4 (kind consistency and indices
@@ -110,6 +110,7 @@ import types.tc_unify.{
   freshTvMap,
   freshVar,
   namedArgDomains,
+  freshVars,
 }
 import types.tc_decls_variance.{
   declEnvPolarityChain,
@@ -1018,6 +1019,21 @@ astTypeFreshTbl outer ty = atSignature outer ty (mctx =>
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
   (fromAstTypeE mctx etbl tvs ty, tvs))
+
+-- The head-pin's target type: if the annotation's head is a TyCon with a known
+-- declared arity (from `dataParamKindsRef`), rebuild it at that arity with fresh
+-- vars (so an empty literal's wrong-arity pin is corrected); otherwise fall back
+-- to the literal annotation type.
+export
+headAnnotTy : ModuleCtx -> Ty -> Mono
+headAnnotTy mctx ty = match tyAppSpine ty
+  -- OCCURRENCE MINT (#1110): same source as `fromAstTypeE`'s — the identity of
+  -- the annotation head being rebuilt at its declared arity.
+  (TyCon { tyConName = n, tyConOrigin = o }, _) =>
+    match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
+      Some kinds => applyParams (tconFrom o n) (freshVars mctx (listLen kinds))
+      None => fst (astTypeFreshTbl mctx ty)
+  _ => fst (astTypeFreshTbl mctx ty)
 
 -- A diagnostic a signature's elaboration raises without a span of its own
 -- lands on the signature, not on whatever the walk last visited.

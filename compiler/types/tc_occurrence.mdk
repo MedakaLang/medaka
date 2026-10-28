@@ -1,9 +1,9 @@
--- tc_occurrence: method, operator and literal occurrence inference and dispatch-site recording
+-- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
 -- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
--- groups and the write-back of its marked clauses over the declarations
--- (`rebuildGroupDecls`), the constrained-signature set, and the test-only evidence-cell and
--- method-return probes (the `cellGoalInnerAliasing` family, `cellStoreMisses`, the
--- `methodRow*Probe` and `methodReturn*Probe` rows).
+-- groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the
+-- constrained-signature set, and the test-only evidence-cell and method-return probes (the
+-- `cellGoalInnerAliasing` family, `cellStoreMisses`, the `methodRow*Probe` and `methodReturn*Probe`
+-- rows).
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --

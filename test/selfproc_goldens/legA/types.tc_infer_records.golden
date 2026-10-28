@@ -1,0 +1,70 @@
+assignedFieldNames : List FieldAssign -> List String
+bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
+checkMissingFields : ModuleCtx -> String -> List String -> Map String Unit -> Unit
+ctorFieldConflict : ModuleCtx -> HeadKey -> String -> String -> Option CtorFieldConflict
+ctorFieldConflictHere : ModuleCtx -> Mono -> String -> RecordInfo -> String -> Option CtorFieldConflict
+ctorFieldSlot : ModuleCtx -> HeadKey -> String -> String -> Option (String, Int, RecordInfo)
+ctorFieldSlots : ModuleCtx -> HeadKey -> String -> List String -> List (String, Int, RecordInfo)
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorRecordFromCompanion : GraphCtx -> HeadKey -> String -> Option RecordInfo
+ctorRecordOfType : ModuleCtx -> HeadKey -> String -> Option RecordInfo
+ctorSiblingWithholdingName : ModuleCtx -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholds : ModuleCtx -> HeadKey -> String -> String -> Bool
+ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
+fieldAssignNamePair : FieldAssign -> (String, Unit)
+fieldDeclReachFilter : ModuleCtx -> List (String, RecordInfo) -> List (String, RecordInfo)
+fieldDeclReachable : ModuleCtx -> (String, RecordInfo) -> Bool
+fieldDeclTypeKey : (String, RecordInfo) -> String
+fieldOwnerAnyReachable : ModuleCtx -> List String -> Bool
+fieldOwnerNames : ModuleCtx -> String -> List String
+fieldOwnerReachFilter : ModuleCtx -> List String -> List String
+fieldOwnerReachable : ModuleCtx -> String -> Bool
+fieldSelectionWellTyped : ModuleCtx -> Mono -> String -> RecordInfo -> String -> Mono -> Mono
+fieldTypeSame : Mono -> Mono -> Bool
+firstCtorSiblingWithholding : ModuleCtx -> HeadKey -> String -> String -> List String -> Option String
+firstFieldName : List FieldAssign -> Option String
+firstSlotDisagreement : List (String, Int, RecordInfo) -> Option CtorFieldConflict
+firstTypeDisagreement : GraphCtx -> String -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
+inferFieldOfRecord : DynCtx -> Mono -> String -> RecordInfo -> String -> Mono
+instantiateRecordShared : ModuleCtx -> RecordInfo -> (RecordSubst, Mono)
+instantiateRecordUpdate : ModuleCtx -> String -> RecordInfo -> List String -> (RecordSubst, Mono)
+keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
+keyFieldDecls : ModuleCtx -> String -> String -> List (String, RecordInfo)
+lookupRecordForReceiver : ModuleCtx -> Mono -> String -> Option RecordInfo
+narrowedPick : ModuleCtx -> Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
+narrowingBlockedByCtorSibling : ModuleCtx -> Option HeadKey -> String -> String -> Bool
+ownerCandidates : ModuleCtx -> List String -> List (String, RecordInfo)
+ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
+ownerDeclOfReceiver : ModuleCtx -> Mono -> String -> List String -> Option (String, RecordInfo)
+ownerQualifiedHead : String -> String -> String
+pairRecordByName : ModuleCtx -> String -> Option (String, RecordInfo)
+paramRenaming : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+pushCtorFieldConflict : ModuleCtx -> String -> String -> CtorFieldConflict -> Unit
+pushUnknownField : ModuleCtx -> String -> String -> Unit
+pushUnknownFieldMaybeSuggest : ModuleCtx -> String -> String -> List String -> Unit
+receiverTypeIdent : Mono -> Option Ident
+receiverTypeWord : Mono -> String -> String
+recordCandForType : Ident -> List (Ident, String, RecordInfo) -> Option RecordInfo
+recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
+recordCandIsType : Ident -> Ident -> String -> Bool
+recordFieldMap : RecordInfo -> Map String Mono
+recordFieldNames : RecordInfo -> List String
+recordForReceiverIdent : GraphCtx -> Mono -> String -> Option RecordInfo
+recordOfOtherType : Mono -> RecordInfo -> Bool
+recordUpdateWellTyped : ModuleCtx -> Mono -> String -> RecordInfo -> String -> Unit
+renameParam : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+resolveFieldAmbiguous : ModuleCtx -> Mono -> String -> List String -> Option (String, RecordInfo)
+resolveFieldByOwners : ModuleCtx -> Mono -> String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed : ModuleCtx -> Mono -> String -> List String -> Option (String, RecordInfo)
+resolveFieldRecord : ModuleCtx -> Mono -> String -> Option (String, RecordInfo)
+resolveFieldUnknownReceiver : ModuleCtx -> String -> List String -> Option (String, RecordInfo)
+sharedAuthority : ModuleCtx -> Int -> Option (Ref Authvar) -> Authority
+slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
+stampedRecordHead : String -> RecordInfo -> String
+substRecordField : GraphCtx -> RecordSubst -> Mono -> Mono
+suggestField : String -> List String -> Option String
+typeOtherThan : GraphCtx -> String -> String -> RecordInfo -> Mono -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
+unknownFieldFresh : ModuleCtx -> String -> String -> List String -> Mono
+unknownRecordFresh : ModuleCtx -> String -> Mono
+updateAuthority : ModuleCtx -> String -> List (String, Mono) -> List String -> Int -> Option (Ref Authvar) -> Authority
+visibleFieldDecls : ModuleCtx -> String -> List String -> List (String, RecordInfo)

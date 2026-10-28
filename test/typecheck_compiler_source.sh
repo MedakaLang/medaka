@@ -959,7 +959,7 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk"
+predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk"
 cat $predicate_slot_row_files > "$predicate_slot_rows_src"
 tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
 tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"
@@ -1513,7 +1513,7 @@ done || exit 1
 numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
 # A group, a method body and a test or property body keep the candidates D3 clause 3
 # withheld for their verdict.
-numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_src")"
+numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_rows_src")"
 if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
   echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"
   exit 1

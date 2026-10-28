@@ -126,12 +126,12 @@ import types.typecheck.{
   elaborateOne,
   elaborateOneFacts,
   isLiveSpan,
-  matchWarningsNow,
   ModDiags,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
 }
+import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omKeys, omEmpty, omFromNames}

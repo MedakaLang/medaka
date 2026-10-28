@@ -1,0 +1,157 @@
+appArgExpr : Expr -> Option Expr
+appArgLoc : Expr -> Option Loc
+appNodeArg : Expr -> Expr
+appSpanLoc : Option Loc -> Expr -> Option Loc
+appSpineExpr : Expr -> (Expr, List Expr)
+appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
+appSpineHeadLoc : Expr -> Option Loc
+appendOp : DynCtx -> Mono -> Mono -> Mono
+applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
+argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
+argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
+armIsUnguarded : List Guard -> Bool
+armUnreachable : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+beginsWithSpan : Option Loc -> Loc -> Bool
+binderMarker : String
+binopSpanLoc : Expr -> Expr -> Option Loc
+blockLet : TcEnv -> Pat -> Expr -> TcEnv
+blockRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> TcEnv
+boolOp : DynCtx -> Mono -> Mono -> Mono
+buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
+checkBinderPat : TcEnv -> Mono -> Pat -> Unit
+checkBinderPats : TcEnv -> List Mono -> List Pat -> Unit
+checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
+checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
+checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit
+checkRedundantGo : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
+checkStmtNotDiscarded : DynCtx -> List UObligation -> Mono -> Expr -> Unit
+checkWideLiterals : ModuleCtx -> List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
+checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
+clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
+closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
+composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
+consOp : DynCtx -> Mono -> Mono -> Mono
+declareQuantified : ModuleCtx -> Scheme -> Unit
+declareRigidVars : ModuleCtx -> List String -> Unit
+derefOp : DynCtx -> Mono -> Mono
+doChainIsDeferred : Expr -> Bool
+eqCompareOp : DynCtx -> Mono -> Mono -> Mono
+exemptInPlaceIndexMutHeads : List String
+finishValueEffectsKeeping : DynCtx -> List (Bool, Mono) -> List (Int, AuthResidual)
+forgetLocalAbs : GraphCtx -> String -> Unit
+funDomain : ModuleCtx -> Mono -> Mono
+groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
+infer : TcEnv -> Expr -> Mono
+inferAnnot : TcEnv -> Expr -> Ty -> Mono
+inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
+inferAppArgsAgainst : TcEnv -> Expr -> Mono -> List Expr -> Mono
+inferAppExpr : TcEnv -> Expr -> Expr -> Mono
+inferAppNodes : TcEnv -> Mono -> List (Expr, Mono) -> Mono
+inferAppNotFunction : ModuleCtx -> Expr -> Mono -> Mono -> Mono
+inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
+inferArm : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
+inferArmGuards : TcEnv -> List Guard -> TcEnv
+inferArmOpening : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
+inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
+inferArrayLit : TcEnv -> List Expr -> Mono
+inferBindingChecked : Bool -> TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
+inferBinop : DynCtx -> String -> Mono -> Mono -> Mono
+inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> Mono
+inferBlock : TcEnv -> List DoStmt -> Mono
+inferClauseEff : TcEnv -> Option Mono -> (List Pat, Expr) -> (Mono, EffRow)
+inferClauseValues : TcEnv -> Option Mono -> BindingSummary -> List (List Pat, Expr) -> (List (Option Loc, Mono), List EffRow)
+inferDefinerShadowApp : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref Inner -> Expr -> Expr -> Mono
+inferDefinerShadowAppAt : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref Inner -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
+inferDefinerShadowVarAppAt : TcEnv -> String -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerStandaloneVarAppAt : TcEnv -> String -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Option Loc -> Mono
+inferDictAt : TcEnv -> String -> EvId -> Mono
+inferEach : TcEnv -> List Expr -> List Mono
+inferExpected : TcEnv -> Expr -> Mono -> Mono
+inferFieldAccess : TcEnv -> Expr -> String -> EvId -> Mono
+inferGlobalDictAt : TcEnv -> String -> EvId -> Mono
+inferGrantedAt : TcEnv -> String -> EvId -> Mono
+inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
+inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
+inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
+inferIntRange : TcEnv -> Expr -> Expr -> Mono -> Mono
+inferLam : TcEnv -> List Pat -> Expr -> Mono
+inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
+inferLastStmt : TcEnv -> DoStmt -> Mono
+inferLet : TcEnv -> Bool -> Pat -> Expr -> Expr -> Mono
+inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> List (Option ScopeId)
+inferLetBody : TcEnv -> Option Loc -> Pat -> Mono -> List (Int, AuthResidual) -> Expr -> Expr -> Int -> Int -> Int -> Option ScopeId -> Mono
+inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
+inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
+inferListLit : TcEnv -> List Expr -> Mono
+inferLocalDictAt : TcEnv -> String -> EvId -> Mono
+inferMatch : TcEnv -> Mono -> List Arm -> Mono
+inferMemberClauses : TcEnv -> Option Mono -> BindingSummary -> List (List Pat, Expr) -> List Atom
+inferProduced : TcEnv -> List Expr -> List (Option Loc, Mono)
+inferRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> Expr -> Mono
+inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
+inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> Mono
+inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> EvId -> Mono
+inferRecordUpdateField : TcEnv -> Expr -> List FieldAssign -> String -> EvId -> Mono
+inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> Mono
+inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
+inferRecursiveValue : TcEnv -> String -> Expr -> (Mono, List (Int, AuthResidual))
+inferShadowApp : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> Expr -> Mono
+inferShadowAppAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferShadowAppHead : TcEnv -> Expr -> Mono
+inferShadowStandaloneArm : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> Expr -> Mono -> Mono
+inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Mono
+inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
+inferStmt : TcEnv -> DoStmt -> TcEnv
+inferStmtAt : TcEnv -> DoStmt -> TcEnv
+inferUnop : DynCtx -> String -> Mono -> Mono
+inferUnopE : TcEnv -> String -> Expr -> Ref Route -> Mono
+inferValueField : TcEnv -> Expr -> Mono
+inferVar : TcEnv -> String -> Mono
+inferVarId : TcEnv -> String -> Int -> Mono
+inferVarPlainId : TcEnv -> String -> Int -> Mono
+inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
+isBinderArms : List Arm -> Bool
+isConPat : Pat -> Bool
+isDoLoweredAndThenCallee : Expr -> Bool
+isDoLoweredAndThenCalleeExpr : Expr -> Bool
+isExemptInPlaceSetIndex : Mono -> Expr -> Bool
+isOmittedElse : Expr -> Bool
+lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
+localRole : Bool -> BindingRole
+matchWarningLoc : Option Loc -> List Arm -> Option Loc
+matchWarningsNow : ModuleCtx -> Bool
+negateOp : ModuleCtx -> Mono -> Mono
+nonExhaustiveMsg : ModuleCtx -> Mono -> List (List Pat) -> Bool -> (String, Option String)
+nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
+noteHeadCtor : Pat -> Map String Unit -> Map String Unit
+numArithOp : DynCtx -> Mono -> Mono -> Mono
+openLocalScope : ModuleCtx -> String -> ScopeId
+openLocalScopeIf : ModuleCtx -> String -> Option ScopeId
+ordCompareOp : DynCtx -> Mono -> Mono -> Mono
+patIsVar : Pat -> Bool
+peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
+pipeOp : TcEnv -> Expr -> Expr -> Mono -> Mono -> Mono
+plainAppHead : TcEnv -> Expr -> Bool
+preunifySigsEx : ModuleCtx -> List (String, Ty) -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
+processLetGroup : TcEnv -> List LetBind -> TcEnv
+publishProducedResults : DynCtx -> BindingSummary -> List (Option Loc, Mono) -> Unit
+pushDiscardedValueDesc : ModuleCtx -> String -> Expr -> Unit
+pushDiscardedValueError : ModuleCtx -> Mono -> Expr -> Unit
+recordLocalRecOcc : ModuleCtx -> String -> EvId -> Unit
+registerLocalScheme : ModuleCtx -> String -> Scheme -> Int -> Int -> Int -> Unit
+scheduleMatchChecks : TcEnv -> Mono -> List Arm -> Option Loc -> Unit
+shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
+sourceBindingArity : Expr -> Int
+stmtCalleeName : Expr -> Option String
+stmtSpanLoc : DoStmt -> Option Loc
+tupleArgElems : Expr -> Option (List Expr)
+tupleCallShapeHint : Expr -> Expr -> Mono -> Option (String, Option (Loc, String))
+tupleCallSpanLoc : Expr -> Expr -> Option Loc
+unboundVarFresh : ModuleCtx -> String -> Mono
+unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
+unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
+unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
+valueSpanLoc : Expr -> Option Loc
+warnedAt : Option Loc -> TcDiag -> Bool
+wideFitsI64 : Int -> Int -> Bool -> Bool

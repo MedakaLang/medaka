@@ -31,7 +31,7 @@ after a codegen change — run it TWICE**) and `test/selfcompile_fixpoint.sh`.
   typecheck/exhaust** — it must run pre-desugar (see `checkGuardExhaustiveness` in
   `compiler/frontend/exhaust.mdk`, a standalone pass on the raw AST).
 - **`exhaust.mdk` is not a standalone later stage** — `checkMatchExhaustive` is *called from inside*
-  `compiler/types/typecheck.mdk` (once per `EMatch`, with the scrutinee type known). It only ever sees
+  `compiler/types/tc_infer.mdk` (once per `EMatch`, with the scrutinee type known). It only ever sees
   core patterns.
 
 ---
