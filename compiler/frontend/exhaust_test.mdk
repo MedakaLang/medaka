@@ -139,3 +139,25 @@ test "a range inside an alternative is seen by patHasRange" =
       patHasRange (POr [PLit (LInt 1), PRng (LInt 2) (LInt 3) True]),
       patHasRange (POr [PLit (LInt 1), PLit (LInt 2)]),
     )
+
+-- ── ranges cover only what they name ──────────────────────────────────────
+
+rng : Pat
+rng = PRng (LInt 97) (LInt 122) True
+
+test "a range-only column leaves a witness" =
+  expectEqual (Some "_") (witnessOf [rng])
+
+test "a range plus a literal still leaves a witness" =
+  expectEqual (Some "_") (witnessOf [rng, PLit (LInt 65)])
+
+test "a range plus a catch-all is exhaustive" =
+  expectEqual None (witnessOf [rng, PWild])
+
+test "a range in an or-pattern behaves like the separate arms" =
+  expectEqual
+    (witnessOf [rng, PLit (LInt 65)])
+    (witnessOf [POr [rng, PLit (LInt 65)]])
+
+test "a range does not cover a constructor field" =
+  expectEqual (Some "Full _") (witnessOf [con "Empty", full rng])

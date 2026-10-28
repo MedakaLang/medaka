@@ -1,5 +1,5 @@
 # META
-source_lines=1233
+source_lines=1230
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -381,7 +381,7 @@ desugarPat oracle (PList (h :: rest)) =
 desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
-desugarPat _ (PRng _ _ _) = PWild
+desugarPat _ (PRng lo hi incl) = PRng lo hi incl
 desugarPat oracle (POr alts) = POr (map (desugarPat oracle) alts)
 
 desugarRecPat : Oracle -> String -> List RecPatField -> Pat
@@ -681,15 +681,12 @@ patUnreachable oracle col0 precMatrix qpat =
   not (useful oracle col0 precMatrix [qpat])
 
 -- Does the (RAW, pre-desugar) pattern contain a range anywhere?  `desugarPat`
--- collapses a `PRng` to `PWild` (the matrix machinery can't reason about the
--- values a range covers), which OVER-approximates its coverage.  That's harmless
--- for the exhaustiveness direction (it only ever makes the check miss a
--- non-exhaustive match — never a false warning), but for redundancy it would let
--- a preceding range arm masquerade as a catch-all and falsely flag every later
--- arm.  So `checkMatchRedundant` uses this to keep range-bearing arms OUT of the
--- accumulated covered-matrix: we never claim a range covers anything, staying
--- conservative (we may miss a genuinely-dead arm covered only by a range, but we
--- never flag a reachable one).
+-- keeps a `PRng` as a head that matches no constructor and no literal, so for
+-- exhaustiveness a range covers nothing (it UNDER-approximates: a set of ranges
+-- that together cover a finite type still warns).  Redundancy must not do the
+-- same in reverse: a range arm that is never accumulated into the covered matrix
+-- can only miss a dead arm, never flag a reachable one.  `checkMatchRedundant`
+-- uses this to keep range-bearing arms OUT of the covered matrix.
 export
 patHasRange : Pat -> Bool
 patHasRange (PRng _ _ _) = True
@@ -1336,7 +1333,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
-(DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "desugarPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "POr" (PVar "alts"))) (EApp (EVar "POr") (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "alts"))))
 (DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
 (DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
@@ -1765,7 +1762,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
-(DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "desugarPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "POr" (PVar "alts"))) (EApp (EVar "POr") (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "alts"))))
 (DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
 (DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))

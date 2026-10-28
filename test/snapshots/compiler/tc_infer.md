@@ -3070,7 +3070,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
         :: mctx.mcCells.matchWarnings.value
   warnUnreachableAlts mctx col0 prec pat dp body
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
-  -- may not fire, and a range collapses to a wildcard that over-states coverage
+  -- may not fire, and a range covers part of its type that the matrix cannot name
   -- (patHasRange) — either would produce a false "redundant" on a later arm.
   let contributes = armIsUnguarded gs && not (patHasRange pat)
   let prec2 = if contributes then [dp] :: prec else prec
@@ -3081,7 +3081,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
 -- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or the
 -- alternatives before it in the same arm, already cover.  The arm as a whole being
 -- unreachable is reported once, as the arm.  An arm with a range stays out: a range
--- desugars to a wildcard that would make every later alternative look covered.
+-- is not in the covered matrix, so its alternatives cannot be judged against it.
 warnUnreachableAlts : ModuleCtx ->
   Option TabKey ->
   List (List Pat) ->
