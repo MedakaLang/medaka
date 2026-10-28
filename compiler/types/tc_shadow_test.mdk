@@ -6,11 +6,12 @@
 -- report (`importedStandaloneShadowsIn`), the method-cell lookup, the application heads of
 -- an imported shadow (`shadowStandaloneHead`, `plainAppHeadVar`), and the recorded-site
 -- resolution `resolveRLocalSite` for a receiver no impl answers and for one a live impl
--- does, and the mark sets a module may name (`methodMarkCtx`).  One property: the shadows a program has do not depend on the order its standalones
+-- does, the mark sets a module may name (`methodMarkCtx`) and those it marks with
+-- (`moduleMarkCtx`), and the externs a module declares (`directExternSigs`, `declExternNames`).  One property: the shadows a program has do not depend on the order its standalones
 -- are declared in.  Each test builds the module record, interface scope and impl
 -- environment it reads; none reaches the inference recursion.
 
-import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{
   Decl(..),
   EvId(..),
@@ -45,6 +46,9 @@ import types.tc_shadow.{
   stampMethodArities,
   stampRoutes,
   methodMarkCtx,
+  declExternNames,
+  directExternSigs,
+  moduleMarkCtx,
 }
 import types.tc_state.{
   probeGraphCtx,
@@ -58,6 +62,7 @@ import types.tc_types.{
   DeclEnvs(..),
   EvCell(..),
   GraphCtx(..),
+  MarkCtx(..),
   ModuleCtx(..),
   SpellCtx(..),
   TcEnv,
@@ -605,3 +610,86 @@ interface Zap a where
   expectEqual
     (["size", "zap"], ["size", "zap"])
     (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
+
+-- ── moduleMarkCtx ─────────────────────────────────────────────────────────
+
+-- The mark context of module "m" over [prog], the method-constraint names [rp] and argument names [args] and the
+-- shadow table [shadows] a graph read off the emit path holds, importing [imported].
+markedWith : List String ->
+  List String ->
+  List (String, String) ->
+  List String ->
+  List Decl ->
+  MarkCtx
+markedWith rp args shadows imported prog =
+  let g = probeGraphCtx ()
+  g.mangledShadowMapRef := shadows
+  moduleMarkCtx
+    g
+    (marksOf [] rp args [])
+    "m"
+    prog
+    (fold (acc n => omInsert n (monoScheme intM) acc) omEmpty imported)
+
+test "a name the module declares as an extern is never a method occurrence in it" =
+  let ctx =
+    markedWith
+      ["size", "zap"]
+      ["size", "zap"]
+      []
+      []
+      (parse "extern size : Int -> Int")
+  expectEqual
+    (["zap"], ["zap"])
+    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
+
+test "a module with no extern keeps every name the method mark sets hold" =
+  let ctx = markedWith ["size", "zap"] ["size"] [] [] (parse (standalone "f"))
+  expectEqual
+    (["size", "zap"], ["size"])
+    (sort (omKeys ctx.mcRp), sort (omKeys ctx.mcAn))
+
+test "a shadow row is kept for a function the module defines or a name it imports, and dropped otherwise" = expectEach
+  [
+    (
+      "defined here",
+      expectEqual
+        [("f", "size")]
+        (markedWith [] [] [("f", "size")] [] (parse (standalone "f"))).mcSm,
+    ),
+    (
+      "imported",
+      expectEqual
+        [("g", "size")]
+        (markedWith [] [] [("g", "size")] ["size"] []).mcSm,
+    ),
+    (
+      "neither",
+      expectEqual
+        []
+        (markedWith [] [] [("g", "size")] [] (parse (standalone "f"))).mcSm,
+    ),
+  ]
+
+-- ── the externs a module declares ─────────────────────────────────────────
+
+externs : String
+externs =
+  """
+extern first : Int -> Int
+plain : Int
+plain = 1
+extern second : Bool
+"""
+
+test "the extern signatures of a module are its extern declarations in source order, others skipped" =
+  expectEqual ["first", "second"] (map fst (directExternSigs (parse externs)))
+
+test "the extern names of a module are those of its extern declarations in source order" = expectEach
+  [
+    (
+      "two externs",
+      expectEqual ["first", "second"] (declExternNames (parse externs)),
+    ),
+    ("none", expectEqual [] (declExternNames (parse (standalone "f")))),
+  ]

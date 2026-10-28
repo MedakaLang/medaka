@@ -1,0 +1,575 @@
+-- Tests of `types.tc_module`'s own API.  Modules are driven below the entry: a graph record
+-- with its declaration envelope and mark sets installed by hand (`prepared`), then each module
+-- checked with `checkModuleFullDiags`, `checkBodyImpl`, `checkModuleFull` or `elabModuleStamp`
+-- and the queue drained with `drainStampQueue`.  Covered: the signed and unsigned bindings a
+-- module publishes, the diagnostics of its bodies (binding, impl method, `test`, `prop`, extern),
+-- the interface-cycle and impl-coherence checks that end the module, the import of an earlier
+-- module's data, the stamp queue and its drain (what is enqueued, what is reported, that a
+-- drain empties the queue), `publicValNames`, `externSchemesGo`, `stampGraphDecls`,
+-- `captureTypeErrors`, `verdictFinding`, `isLiveSpan`, `spanKeys` and `settleClosedBody`.
+-- Not driven here, because no export reaches them: the import-overlay rows and the plural site
+-- resolvers.  Their effect is observed as the module's errors and as the drain's
+-- unrouted-dispatch findings, and an overlay that changes no verdict is not observable below
+-- the entry.  What a whole check elaborates is observed through `types.typecheck` in
+-- `typecheck_test`.
+
+import test.{
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectTrue,
+}
+import list.{drop, sort, take}
+import frontend.ast.{
+  Decl(..), EvEntry(..), EvVal(..), Loc(..), Route(..), Ty(..)
+}
+import types.tc_elab.{drivenEvidence}
+import support.ordmap.{omEmpty, omFromNames}
+import types.repr.{Scheme(..), ppScheme}
+import types.publish.{TcDiag(..), tcCode}
+import types.tc_diag.{pushTypeError}
+import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
+import types.tc_env.{declEnvModule, emptyDeclEnvAcc}
+import types.tc_mono.{tconBuiltin}
+import types.tc_occurrence.{markSetsOf}
+import types.tc_state.{checkRunResidue, plainModuleSeed}
+import types.tc_test_support.{codesOf, declsOf, fresh, routeTag}
+import types.tc_types.{
+  DrainFinding(..),
+  GraphCtx,
+  ModuleCtx,
+  PreludeMarkFacts(..),
+}
+import types.tc_module.{
+  captureTypeErrors,
+  checkBodyImpl,
+  checkModuleFull,
+  checkModuleFullDiags,
+  drainStampQueue,
+  elabModuleStamp,
+  externSchemesGo,
+  isLiveSpan,
+  publicValNames,
+  settleClosedBody,
+  spanKeys,
+  stampGraphDecls,
+  verdictFinding,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- What one module's check handed back: the schemes it published (rendered), its error codes
+-- and its warning codes.
+data Checked = Checked {
+  chSchemes : List (String, String),
+  chErrors : List String,
+  chWarnings : List String,
+} deriving (Eq, Debug)
+
+-- The mark sets of a graph with no prelude facts: the driver preamble a module check reads.
+noPreludeFacts : PreludeMarkFacts
+noPreludeFacts = PreludeMarkFacts {
+  pmfReturnPos = [],
+  pmfMethodConstraints = [],
+  pmfArgDispatch = [],
+  pmfArgDispatchById = [],
+  pmfConstrainedNames = [],
+}
+
+-- A graph record over the modules [mods] (id, source), in order after an empty prelude, with
+-- the declaration envelope and the mark sets a driver's preamble installs.
+prepared : List (String, String) -> (ModuleCtx, List (String, List Decl))
+prepared mods =
+  let m = fresh ()
+  let g = m.mcGraph
+  let decls = map (p => (fst p, declsOf (fst p) (snd p))) mods
+  g.declEnvsRef :=
+    buildDeclEnvs
+      g
+      emptyDeclEnvAcc
+      (declEnvModule g 0 "core" [])
+      (declEnvModulesFrom g 1 decls)
+  let _ = markSetsOf g noPreludeFacts [] decls (flatMap snd decls)
+  (m, decls)
+
+-- Each module checked in the graph, later ones seeded with the schemes of the earlier ones.
+checkEach : GraphCtx ->
+  List (String, Scheme) ->
+  List (String, List Decl) ->
+  List Checked
+checkEach _ _ [] = []
+checkEach g seed ((mid, ds) :: rest) =
+  let (b, _, errs, warns, _) =
+    checkModuleFullDiags g mid (plainModuleSeed seed) [] [] ds
+  Checked {
+      chSchemes = map (q => (fst q, ppScheme (snd q))) b.mbSchemes,
+      chErrors = map tcCode errs,
+      chWarnings = map tcCode warns,
+    }
+    :: checkEach g (seed ++ b.mbSchemes) rest
+
+-- What a drain reported: the module and code of each finding, in the order reported.
+findingsOf : List DrainFinding -> List (String, String)
+findingsOf = map (f => (f.dfModule, tcCode f.dfDiag))
+
+-- The modules [mods] checked in one graph, then the graph drained.
+driven : List (String, String) -> (List Checked, List (String, String))
+driven mods =
+  let (m, decls) = prepared mods
+  let checked = checkEach m.mcGraph [] decls
+  (checked, findingsOf (drainStampQueue m))
+
+-- The one module "m" of source [src], checked and drained; a source that is not one module
+-- reads as an error no test expects.
+onlyModule : String -> (Checked, List (String, String))
+onlyModule src = match driven [("m", src)]
+  ([c], fs) => (c, fs)
+  _ => (Checked [] ["not a single module"] [], [])
+
+-- The route each method occurrence of the graph was published with.
+methodRoutes : GraphCtx -> List String
+methodRoutes g =
+  flatMap
+    (e => match e
+      EvEntry _ (EvMethod _ _ route _ _) => [routeTag route]
+      _ => [])
+    (drivenEvidence g ())
+
+-- The errors of the one module "m" of [src].
+errorsOf : String -> List String
+errorsOf src = (fst (onlyModule src)).chErrors
+
+-- The type constructor each impl head among the declarations names; a head that is not a bare
+-- constructor reads as its own marker.
+implHeads : List Decl -> List String
+implHeads [] = []
+implHeads ((DImpl { tys = ts, ... }) :: rest) =
+  map headName ts ++ implHeads rest
+implHeads (_ :: rest) = implHeads rest
+
+headName : Ty -> String
+headName (TyCon { tyConName = c, ... }) = c
+headName _ = "not a constructor"
+
+sizeable : String
+sizeable =
+  """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz x = x
+"""
+
+-- `sizeable` and a binding `y` that calls its method at [arg].
+callingSz : String -> String
+callingSz arg = sizeable ++ "y : Int\ny = sz \{arg}\n"
+
+-- ── a module's published schemes ──────────────────────────────────────────
+
+test "a signed binding publishes its declared type" =
+  expectEqual
+    (Checked [("x", "Int")] [] [])
+    (fst (onlyModule """
+x : Int
+x = 1
+"""))
+
+test "an unsigned function is generalized and each use instantiates it" =
+  expectEqual
+    (Checked [("f", "a -> a"), ("g", "Int"), ("h", "Bool")] [] [])
+    (fst (onlyModule """
+f x = x
+g = f 1
+h = f True
+"""))
+
+test "a mutually recursive group is inferred together and both members are published" =
+  let (c, _) = onlyModule """
+ev n = od n
+od n = ev n
+"""
+  expectEqual (["ev", "od"], []) (map fst c.chSchemes, c.chErrors)
+
+test "an interface publishes its method at the interface's own type" =
+  let (c, _) = onlyModule sizeable
+  expectEqual ([("sz", "a -> Int")], []) (c.chSchemes, c.chErrors)
+
+-- ── the diagnostics of a module's bodies ──────────────────────────────────
+
+test "a body that disagrees with its signature is a type mismatch and the signature is still published" =
+  expectEqual
+    (Checked [("x", "Int")] ["T-TYPE-MISMATCH"] [])
+    (fst (onlyModule """
+x : Int
+x = True
+"""))
+
+test "an impl method body is checked against the interface method's type" =
+  expectEqual
+    ["T-TYPE-MISMATCH"]
+    (errorsOf
+      """
+interface Sz a where
+  sz : a -> Int
+impl Sz Bool where
+  sz x = True
+""")
+
+test "a test body is inferred, so a body that cannot type is reported" = expectEach
+  [
+    (
+      "ill-typed",
+      expectEqual ["T-TYPE-MISMATCH"] (errorsOf "test \"t\" = 1 + True"),
+    ),
+  ]
+
+test "a property body is inferred and must be a Bool" = expectEach [
+  (
+    "not a Bool",
+    expectEqual ["T-TYPE-MISMATCH"] (errorsOf "prop \"p\" (x : Int) = x"),
+  ),
+  ("a Bool", expectEqual [] (errorsOf "prop \"p\" (x : Int) = True")),
+]
+
+test "a call of an extern is checked against its declared type, which the module publishes" =
+  expectEqual
+    (Checked [("foo", "Int -> Int"), ("y", "Int")] ["T-TYPE-MISMATCH"] [])
+    (fst (onlyModule """
+extern foo : Int -> Int
+y : Int
+y = foo True
+"""))
+
+-- ── the checks that end a module ──────────────────────────────────────────
+
+test "interfaces that require each other are a cyclic superinterface and a chain is not" = expectEach
+  [
+    (
+      "a cycle",
+      expectEqual
+        ["T-CYCLIC-SUPERINTERFACE"]
+        (errorsOf
+          """
+interface A a requires B a where
+  a : a -> Int
+interface B a requires A a where
+  b : a -> Int
+"""),
+    ),
+    (
+      "a chain",
+      expectEqual
+        []
+        (errorsOf
+          """
+interface A a where
+  a : a -> Int
+interface B a requires A a where
+  b : a -> Int
+"""),
+    ),
+  ]
+
+test "two impls of one interface at one type are a conflicting impl" =
+  expectEqual
+    ["T-CONFLICTING-IMPL"]
+    (errorsOf (sizeable ++ """
+impl Sz Int where
+  sz x = x
+"""))
+
+test "an impl that defines no method the interface declares is an incomplete impl" =
+  expectEqual
+    ["T-INCOMPLETE-IMPL"]
+    (errorsOf
+      """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sy x = x
+""")
+
+-- ── importing an earlier module ───────────────────────────────────────────
+
+test "a later module reads an imported constructor at its home type, and another type is a mismatch" =
+  let (checked, _) = driven [
+    ("m", "public export data T = A | B"),
+    (
+      "n",
+      """
+import m.{T(..)}
+f : T -> Int
+f A = 1
+f B = 2
+""",
+    ),
+    ("k", "f : Int\nf = A"),
+  ]
+  expectEqual
+    [([], []), ([("f", "T -> Int")], []), ([("f", "Int")], ["T-TYPE-MISMATCH"])]
+    (map (c => (c.chSchemes, c.chErrors)) checked)
+
+-- ── the stamp queue and its drain ─────────────────────────────────────────
+
+test "a module whose calls all find an impl leaves nothing to drain" =
+  expectEqual
+    (Checked [("sz", "a -> Int"), ("y", "Int")] [] [], [])
+    (onlyModule (callingSz "1"))
+
+test "a call with no impl is an error of the module and an unrouted-dispatch finding of the drain" =
+  expectEqual
+    (
+      Checked [("sz", "a -> Int"), ("y", "Int")] ["T-NO-IMPL"] [],
+      [("m", "T-UNROUTED-DISPATCH")],
+    )
+    (onlyModule (callingSz "True"))
+
+test "every module that was checked is drained, each finding under its own module" =
+  let (_, fs) = driven [
+    (
+      "m",
+      """
+export interface Sz a where
+  sz : a -> Int
+export impl Sz Int where
+  sz x = x
+""",
+    ),
+    ("n", "import m.{Sz(..)}\ny : Int\ny = sz True\n"),
+    ("o", "import m.{Sz(..)}\ny : Int\ny = sz False\n"),
+  ]
+  expectEqual
+    [("n", "T-UNROUTED-DISPATCH"), ("o", "T-UNROUTED-DISPATCH")]
+    (sort fs)
+
+test "a drain reports a finding once, so a second drain over the same graph finds nothing" =
+  let (m, decls) = prepared [("m", callingSz "True")]
+  let _ = checkEach m.mcGraph [] decls
+  let first = findingsOf (drainStampQueue m)
+  let second = findingsOf (drainStampQueue m)
+  expectEqual ([("m", "T-UNROUTED-DISPATCH")], []) (first, second)
+
+-- A module of its own interface `name` with no impl, and a call of the method at a type that
+-- has none.
+unanswered : String -> String
+unanswered name =
+  """
+interface \{name} a where
+  m\{name} : a -> Int
+y : Int
+y = m\{name} True
+"""
+
+test "a module checked after a drain has its finding drained under its own module id" =
+  let (m, decls) = prepared [("m", unanswered "Sz"), ("n", unanswered "Tz")]
+  let _ = checkEach m.mcGraph [] (take 1 decls)
+  let first = findingsOf (drainStampQueue m)
+  let _ = checkEach m.mcGraph [] (drop 1 decls)
+  let second = findingsOf (drainStampQueue m)
+  expectEqual
+    ([("m", "T-UNROUTED-DISPATCH")], [("n", "T-UNROUTED-DISPATCH")])
+    (first, second)
+
+test "the module check queues its stamping, so the drain routes a method call to its impl" =
+  let (m, decls) = prepared [("m", callingSz "1")]
+  let _ = checkEach m.mcGraph [] decls
+  let _ = drainStampQueue m
+  expectEqual ["key:m::Sz|Int|"] (methodRoutes m.mcGraph)
+
+test "the body check alone queues no stamping, so a drain leaves the method call unrouted" =
+  let (m, decls) = prepared [("m", callingSz "1")]
+  let (_, _, ctx) =
+    checkBodyImpl
+      m.mcGraph
+      (checkRunResidue m)
+      (plainModuleSeed [])
+      "m"
+      []
+      (flatMap snd decls)
+  let _ = drainStampQueue ctx
+  expectEqual ["none"] (methodRoutes m.mcGraph)
+
+test "an evidence hole is found by a drain whether or not a stamping context was queued" =
+  let (m, decls) = prepared [("m", callingSz "True")]
+  let (_, _, ctx) =
+    checkBodyImpl
+      m.mcGraph
+      (checkRunResidue m)
+      (plainModuleSeed [])
+      "m"
+      []
+      (flatMap snd decls)
+  expectEqual
+    (["T-NO-IMPL"], [("m", "T-UNROUTED-DISPATCH")])
+    (codesOf ctx, findingsOf (drainStampQueue ctx))
+
+test "a finding the drain makes of a hole is not a verdict" =
+  let (m, decls) = prepared [("m", callingSz "True")]
+  let _ = checkEach m.mcGraph [] decls
+  expectEqual [False] (map (f => f.dfVerdict) (drainStampQueue m))
+
+test "the elaborating check is the module check over an impl universe" =
+  let src = callingSz "True"
+  let (m, decls) = prepared [("m", src)]
+  let prog = flatMap snd decls
+  let (b, _, ctx) = elabModuleStamp m "m" [] [] prog prog
+  expectEqual (onlyModule src) (
+    Checked (map (q => (fst q, ppScheme (snd q))) b.mbSchemes) (codesOf ctx) [],
+    findingsOf (drainStampQueue ctx),
+  )
+
+test "the core pass publishes its declarations and raises no error" =
+  let (m, decls) = prepared [("m", "x : Int\nx = 1\n")]
+  let (b, _, ctx) = checkModuleFull m [] [] (flatMap snd decls)
+  expectEqual
+    ([("x", "Int")], [])
+    (map (q => (fst q, ppScheme (snd q))) b.mbSchemes, codesOf ctx)
+
+-- ── errors captured out of a record ───────────────────────────────────────
+
+test "the errors an action pushes are returned oldest first and leave the record as it was" =
+  let m = fresh ()
+  pushTypeError m "T-BEFORE" "kept"
+  let taken = captureTypeErrors m (_ =>
+    pushTypeError m "T-ONE" "one"
+    pushTypeError m "T-TWO" "two")
+  expectEqual (["T-ONE", "T-TWO"], ["T-BEFORE"]) (map tcCode taken, codesOf m)
+
+test "an action that pushes no error captures none" =
+  expectEqual [] (map tcCode (captureTypeErrors (fresh ()) (_ => ())))
+
+test "a verdict finding carries its module, its diagnostic and its liveness, and is a verdict" =
+  let d = TcDiag "T-X" 1 None "msg" None None
+  let f = verdictFinding "mod" True d
+  expectAll [
+    expectEqual "mod" f.dfModule,
+    expectEqual "T-X" (tcCode f.dfDiag),
+    expectTrue f.dfLive,
+    expectTrue f.dfVerdict,
+    expectFalse (verdictFinding "mod" False d).dfLive,
+  ]
+
+-- ── what a module exports and what a graph is stamped with ───────────────
+
+test "a public signature and its public definition each name the binding, a private one names nothing" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["f", "f"]
+        (publicValNames (declsOf "m" "export f : Int\nexport f = 1")),
+    ),
+    ("private", expectEqual [] (publicValNames (declsOf "m" "g : Int\ng = 2"))),
+  ]
+
+test "a public interface names its methods and a private one does not" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["q"]
+        (publicValNames
+          (declsOf "m" "export interface Q a where\n  q : a -> Int")),
+    ),
+    (
+      "private",
+      expectEqual
+        []
+        (publicValNames (declsOf "m" "interface R a where\n  r : a -> Int")),
+    ),
+  ]
+
+test "a public extern is named" =
+  expectEqual
+    ["foo"]
+    (publicValNames (declsOf "m" "export extern foo : Int -> Int"))
+
+test "the schemes of the externs among a module's declarations are those and no others" =
+  expectEqual
+    [("foo", "Int -> Int")]
+    (map
+      (p => (fst p, ppScheme (snd p)))
+      (externSchemesGo
+        (fresh ())
+        (declsOf "m" """
+extern foo : Int -> Int
+bar : Int
+bar = 1
+""")))
+
+test "an impl head that names an alias is rewritten to the type the alias stands for" =
+  let (_, mods) = stampGraphDecls [] [
+    (
+      "m",
+      declsOf
+        "m"
+        """
+type A = Int
+interface Sz a where
+  sz : a -> Int
+impl Sz A where
+  sz x = x
+""",
+    ),
+  ]
+  expectEqual ["Int"] (implHeads (flatMap snd mods))
+
+test "a graph with no alias keeps the heads it came with" =
+  let (core, mods) = stampGraphDecls [] [("m", declsOf "m" sizeable)]
+  expectEqual ([], ["Int"]) (implHeads core, implHeads (flatMap snd mods))
+
+test "settling a closed body with nothing recorded raises no error" =
+  let m = fresh ()
+  settleClosedBody m (tconBuiltin "Unit") 0 0 0
+  expectEqual [] (codesOf m)
+
+-- ── the drain's live spans ────────────────────────────────────────────────
+
+-- A finding is live when its span is a live goal's.  Goals built after a drain
+-- (`pushArithGoal` and its siblings) carry no location, so an unlocated live goal must not
+-- make every unlocated finding live.
+test "an unlocated drain finding is never live, even beside an unlocated live goal" =
+  let at = Some (Loc "m.mdk" 3 4 3 9)
+  let live = omFromNames (spanKeys [None, at]) omEmpty
+  expectAll [
+    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
+    expectFalse (isLiveSpan live None),
+    expectTrue (isLiveSpan live at),
+    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
+  ]
+
+test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
+  let first = Some (Loc "probe.mdk" 3 1 3 5)
+  let second = Some (Loc "probe.mdk" 9 1 9 5)
+  expectAll [
+    expectEqual [] (spanKeys [None, None]),
+    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
+    expectNotEqual (spanKeys [first]) (spanKeys [second]),
+    expectEqual
+      (spanKeys [first] ++ spanKeys [second])
+      (spanKeys [first, None, second]),
+  ]
+
+-- The location a generated number stands for: none for a multiple of 4, else the line its
+-- residue mod 6 names, so two draws often stand at one place.
+locOf : Int -> Option Loc
+locOf n = if n % 4 == 0 then None else Some (Loc "p.mdk" (n % 6) 1 (n % 6) 2)
+
+-- Law: the keys of goals followed by goals are the keys of each in turn.  No precondition.
+prop "the span keys of two lists of goals are the keys of each in turn" (xs : List Int) (ys : List Int) =
+  spanKeys (map locOf (xs ++ ys))
+    == spanKeys (map locOf xs) ++ spanKeys (map locOf ys)
+
+-- The same answer as `isLiveSpan`, read off the numbers: [y] stands at a place and some live goal
+-- stands at that place.
+standsLive : List Int -> Int -> Bool
+standsLive xs y = y % 4 /= 0 && any (x => x % 4 /= 0 && x % 6 == y % 6) xs
+
+-- Law: a finding is live exactly when a live goal stands at its place.  Precondition for the law
+-- to say anything: a located finding, and live goals of which some stand at its place and some do
+-- not; the examples above pin both verdicts by hand.
+prop "a span is live exactly when a live goal stands at it" (xs : List Int) (y : Int) =
+  isLiveSpan (omFromNames (spanKeys (map locOf xs)) omEmpty) (locOf y)
+    == standsLive xs y

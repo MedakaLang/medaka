@@ -131,10 +131,9 @@ import types.typecheck.{
 }
 import string as S
 import types.tc_infer.{matchWarningsNow}
-import types.tc_module.{isLiveSpan, spanKeys}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
-import support.ordmap.{omKeys, omEmpty, omFromNames}
+import support.ordmap.{omKeys}
 import frontend.exhaust.{buildOracle}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
@@ -6320,19 +6319,6 @@ test "a default body's sibling call is answered by the body's receiver (#2095)" 
     [(EOKGiven, Some "$self_sz")]
     (map (e => (e.eoeOutcome, e.eoeGivenBinder)) abstractSibling)
 
--- A drain finding is live when its span is a live goal's.  Goals built after a
--- drain (`pushArithGoal` and its siblings) carry no location, so an unlocated live
--- goal must not make every unlocated finding live.
-test "an unlocated drain finding is never live, even beside an unlocated live goal" =
-  let at = Some (Loc "m.mdk" 3 4 3 9)
-  let live = omFromNames (spanKeys [None, at]) omEmpty
-  expectAll [
-    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
-    expectFalse (isLiveSpan live None),
-    expectTrue (isLiveSpan live at),
-    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
-  ]
-
 -- Exports a ground value, a declared-context binding and an inferred-context
 -- binding, so the published context rides three routes.
 accPrefix : Bool -> String
@@ -6620,15 +6606,3 @@ test "an integer literal at a type with no Num instance is a type mismatch" =
   expectEqual
     ["T-TYPE-MISMATCH"]
     (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))
-
-test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
-  let first = Some (Loc "probe.mdk" 3 1 3 5)
-  let second = Some (Loc "probe.mdk" 9 1 9 5)
-  expectAll [
-    expectEqual [] (spanKeys [None, None]),
-    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
-    expectNotEqual (spanKeys [first]) (spanKeys [second]),
-    expectEqual
-      (spanKeys [first] ++ spanKeys [second])
-      (spanKeys [first, None, second]),
-  ]

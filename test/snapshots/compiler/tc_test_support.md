@@ -1,5 +1,5 @@
 # META
-source_lines=437
+source_lines=446
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -88,6 +88,15 @@ import types.tc_types.{
   UObligation(..),
   ValueScheme(..),
 }
+
+-- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
+export
+routeTag : Route -> String
+routeTag (RScalar tag) = "scalar:\{tag}"
+routeTag RNone = "none"
+routeTag (RDict d) = "dict:\{d}"
+routeTag (RKey word _ _) = "key:\{word}"
+routeTag _ = "other"
 
 -- A source position and a variable pattern at it, for tests that build syntax by hand.
 export
@@ -459,6 +468,12 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
+(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
+(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "display") (EVar "d"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "routeTag" (PWild) (ELit (LString "other")))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
 (DTypeSig true "pvar" (TyFun (TyCon "String") (TyCon "Pat")))
@@ -582,6 +597,12 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
+(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
+(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "routeTag" (PWild) (ELit (LString "other")))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
 (DTypeSig true "pvar" (TyFun (TyCon "String") (TyCon "Pat")))

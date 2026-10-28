@@ -5,7 +5,9 @@
 -- match schedules (`checkMatchChecks`, and the check deferred while the scrutinee type is
 -- unknown), the wide-literal check (`checkWideLiterals`), the clause inference of a binding
 -- group (`inferMemberClauses`, `inferBindingChecked`), the signature pre-unification
--- (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the span readers (`appArgLoc`,
+-- (`preunifySigsEx`, `declareRigidVars`, `closeScope`), the range check of a literal at a
+-- fixed-width type (`checkFixedWidthLiterals`), the match checks a module defers to its end
+-- (`checkDeferredMatches`), the span readers (`appArgLoc`,
 -- `valueSpanLoc`), the applications of an importer shadow (a bare head, a marked head, and a
 -- spine whose receiver is not its first argument) and of a definer shadow with a marked head.
 -- The operator rows pair operands of different types, so an operator that stops unifying them
@@ -21,7 +23,7 @@
 -- effect a standalone's arrow performs at its call. `typecheck_test` drives whole checks and
 -- `drive_independence_test` the match-warning flag.
 
-import test.{Expectation, expectAll, expectEqual, expectTrue}
+import test.{Expectation, expectAll, expectEach, expectEqual, expectTrue}
 import frontend.ast.{
   Decl(..),
   EvId(..),
@@ -39,11 +41,13 @@ import frontend.ast.{
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import list.{drop, nub, range, reverse, sort, zip}
-import types.publish.{TcDiag(..), tcCode, tcMsg}
+import types.publish.{TcDiag(..), tcCode, tcLoc, tcMsg}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), ppMono}
 import types.tc_env.{envFor, extendVars}
 import types.tc_infer.{
   appArgLoc,
+  checkDeferredMatches,
+  checkFixedWidthLiterals,
   checkMatchChecks,
   checkWideLiterals,
   declareRigidVars,
@@ -1933,3 +1937,132 @@ test "a read of a field the update leaves alone is its record's, one it assigns 
       (readsUntouched untouched, readsUntouched assigned),
       map (e => ppMono (infer env e)) (mainOf m (updateSource untouched)),
     )
+
+-- ── literals at a fixed-width type, and the matches deferred to a module's end ──
+
+-- The codes and messages `checkFixedWidthLiterals` pushes for the literals [lits].
+fixedWidthReport : List (Mono, Int, Option Loc) -> (List String, List String)
+fixedWidthReport lits =
+  let m = scoped ()
+  checkFixedWidthLiterals m lits
+  (codesOf m, messagesOf m)
+
+test "a literal outside the range of its fixed-width type is an overflow naming the type and the range" = expectEach
+  [
+    (
+      "above U8",
+      expectEqual
+        (["L-INT-OVERFLOW"], ["integer literal 256 does not fit U8 (0..255)"])
+        (fixedWidthReport [(tconBuiltin "U8", 256, None)]),
+    ),
+    (
+      "below U8",
+      expectEqual
+        (["L-INT-OVERFLOW"], ["integer literal -1 does not fit U8 (0..255)"])
+        (fixedWidthReport [(tconBuiltin "U8", 0 - 1, None)]),
+    ),
+    (
+      "below I32",
+      expectEqual
+        (
+          ["L-INT-OVERFLOW"],
+          [
+            "integer literal -2147483649 does not fit I32 (-2147483648..2147483647)",
+          ],
+        )
+        (fixedWidthReport [(tconBuiltin "I32", 0 - 2147483649, None)]),
+    ),
+  ]
+
+test "a literal at the edge of its fixed-width range, or at a type with no fixed width, raises nothing" = expectEach
+  [
+    (
+      "U8 top",
+      expectEqual ([], []) (fixedWidthReport [(tconBuiltin "U8", 255, None)]),
+    ),
+    (
+      "U8 bottom",
+      expectEqual ([], []) (fixedWidthReport [(tconBuiltin "U8", 0, None)]),
+    ),
+    (
+      "I32 bottom",
+      expectEqual
+        ([], [])
+        (fixedWidthReport [(tconBuiltin "I32", 0 - 2147483648, None)]),
+    ),
+    ("Int", expectEqual ([], []) (fixedWidthReport [(intM, 1000000, None)])),
+  ]
+
+test "a negative literal at U64 is an overflow" =
+  expectEqual
+    (
+      ["L-INT-OVERFLOW"],
+      ["integer literal -1 does not fit U64 (0..18446744073709551615)"],
+    )
+    (fixedWidthReport [(tconBuiltin "U64", 0 - 1, None)])
+
+test "each out-of-range literal is its own error, in source order, and one in range among them is skipped" =
+  expectEqual
+    [
+      "integer literal 300 does not fit U8 (0..255)",
+      "integer literal 301 does not fit U8 (0..255)",
+    ]
+    (snd
+      (fixedWidthReport [
+        (tconBuiltin "U8", 300, None),
+        (tconBuiltin "U8", 7, None),
+        (tconBuiltin "U8", 301, None),
+      ]))
+
+test "an overflow is reported at the literal's own location" =
+  let m = scoped ()
+  let loc = Some (Loc "lit.mdk" 4 2 4 5)
+  checkFixedWidthLiterals m [(tconBuiltin "U8", 300, loc)]
+  expectEqual
+    ["lit.mdk:4:2"]
+    (map (d => locKey (tcLoc d)) (reverse (wAll m.mcCells.typeErrors)))
+
+-- The warning codes pushed by `checkDeferredMatches` over [entries], each a scrutinee type
+-- and arms at no location.
+deferredCodes : List (Mono, List Arm) -> List String
+deferredCodes entries =
+  let m = scopedWith shapes
+  let _ = envWithData m shapes
+  checkDeferredMatches m (map (e => (fst e, snd e, None)) entries)
+  warningCodes m
+
+test "a deferred match is checked as an immediate one is" = expectEach [
+  (
+    "missing",
+    expectEqual ["W-NONEXHAUSTIVE"] (deferredCodes [(tyT, [armOf "Ta"])]),
+  ),
+  (
+    "complete",
+    expectEqual [] (deferredCodes [(tyT, [armOf "Ta", armOf "Tb"])]),
+  ),
+  (
+    "unreachable",
+    expectEqual
+      ["W-UNREACHABLE-ARM"]
+      (deferredCodes [(tyT, [armOf "Ta", armOf "Tb", armOf "Ta"])]),
+  ),
+]
+
+test "every deferred match is checked, in the order they were deferred" =
+  expectEqual
+    ["W-NONEXHAUSTIVE", "W-UNREACHABLE-ARM"]
+    (deferredCodes [
+      (tyT, [armOf "Ta"]),
+      (tyT, [armOf "Ta", armOf "Tb", armOf "Ta"]),
+    ])
+
+test "no deferred match raises no warning" = expectEqual [] (deferredCodes [])
+
+test "a deferred match warns at the span it was deferred from" =
+  let m = scopedWith shapes
+  let _ = envWithData m shapes
+  let loc = Some (Loc "m.mdk" 9 3 9 12)
+  checkDeferredMatches m [(tyT, [armOf "Ta"], loc)]
+  expectEqual
+    ["m.mdk:9:3"]
+    (map (d => locKey (tcLoc d)) m.mcCells.matchWarnings.value)

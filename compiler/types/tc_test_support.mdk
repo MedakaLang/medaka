@@ -85,6 +85,15 @@ import types.tc_types.{
   ValueScheme(..),
 }
 
+-- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
+export
+routeTag : Route -> String
+routeTag (RScalar tag) = "scalar:\{tag}"
+routeTag RNone = "none"
+routeTag (RDict d) = "dict:\{d}"
+routeTag (RKey word _ _) = "key:\{word}"
+routeTag _ = "other"
+
 -- A source position and a variable pattern at it, for tests that build syntax by hand.
 export
 at : Loc

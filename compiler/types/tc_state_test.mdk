@@ -1,9 +1,24 @@
 -- Tests of `types.tc_state`'s own API: the state-record mints and carries, the span copy,
--- the process interners cell, the `Windowed` channel ops, and the trace-sink builders.
+-- the process interners cell, the `Windowed` channel ops, the trace-sink builders, the seeds a
+-- check run and a module start from (`seedCheckRun`, `plainModuleSeed`) and the variable high
+-- water a serving drive carries to the next (`noteHighWater`, `raiseToHighWater`).
 -- A minted `ModuleCtx` or `GraphCtx` is needed throughout, so none of these is a doctest.
 
-import list.{reverse}
-import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import list.{reverse, sort}
+import test.{
+  expectAll,
+  expectAtLeast,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectTrue,
+}
+import frontend.parser.{parse}
+import support.ordmap.{omKeys}
+import support.util.{contains}
+import types.repr.{ppScheme}
+import types.tc_mono.{monoScheme}
+import types.tc_test_support.{intM}
 import frontend.ast.{Loc(..)}
 import types.tc_diag.{recordTypeError}
 import types.tc_state.{
@@ -21,8 +36,12 @@ import types.tc_state.{
   interners,
   mctxAt,
   mctxAtIfSome,
+  noteHighWater,
   noteInterners,
+  plainModuleSeed,
   probeGraphCtx,
+  raiseToHighWater,
+  seedCheckRun,
   wAll,
   wMark,
   wPush,
@@ -197,3 +216,70 @@ test "dictionary parameter names are keyed by function and slot" = expectAll [
   expectNotEqual (dictParamName "f" 1) (dictParamName "f" 0),
   expectNotEqual (dictParamName "g" 0) (dictParamName "f" 0),
 ]
+
+-- ── the seeds a check run and a module start from ─────────────────────────
+
+test "a plain module seed carries the schemes it was given and imports nothing" =
+  let seed = plainModuleSeed [("x", monoScheme intM)]
+  expectEqual
+    ([("x", "Int")], [], [], [])
+    (
+      map (p => (fst p, ppScheme (snd p))) seed.msSchemes,
+      omKeys seed.msImportedValues,
+      omKeys seed.msImportedNames,
+      omKeys seed.msImportedExterns,
+    )
+
+test "a check run is seeded with an oracle over the declarations it was given and no warnings" =
+  let seed = seedCheckRun (parse "data T = A | B Int")
+  let bare = seedCheckRun []
+  expectEqual
+    (["A", "B"], [])
+    (
+      sort
+        (filter
+          (n => not (contains n (omKeys bare.crsOracle.ctorArity)))
+          (omKeys seed.crsOracle.ctorArity)),
+      map tcMsg seed.crsWarnings,
+    )
+
+-- ── the variable high water ──────────────────────────────────────────────
+
+-- The counters sit far above anything another test's graph reaches, so a lineage another test
+-- raised cannot change what these rows read.
+highTyvar : Int
+highTyvar = 7000000
+
+highEffvar : Int
+highEffvar = 8000000
+
+test "a graph raised to the high water an earlier graph noted starts above its type and effect variables" =
+  let earlier = probeGraphCtx ()
+  earlier.graphRun.tyvarCounter := highTyvar
+  earlier.graphRun.effvarCounter := highEffvar
+  noteHighWater earlier
+  let later = probeGraphCtx ()
+  raiseToHighWater later
+  expectAll [
+    expectAtLeast highTyvar later.graphRun.tyvarCounter.value,
+    expectAtLeast highEffvar later.graphRun.effvarCounter.value,
+  ]
+
+test "a graph already above the high water keeps its counters" =
+  let above = probeGraphCtx ()
+  above.graphRun.tyvarCounter := highTyvar * 10
+  above.graphRun.effvarCounter := highEffvar * 10
+  raiseToHighWater above
+  expectEqual
+    (highTyvar * 10, highEffvar * 10)
+    (above.graphRun.tyvarCounter.value, above.graphRun.effvarCounter.value)
+
+test "noting the high water of a graph that is lower than the lineage leaves the lineage where it was" =
+  let high = probeGraphCtx ()
+  high.graphRun.tyvarCounter := highTyvar
+  noteHighWater high
+  let low = probeGraphCtx ()
+  noteHighWater low
+  let later = probeGraphCtx ()
+  raiseToHighWater later
+  expectAtLeast highTyvar later.graphRun.tyvarCounter.value

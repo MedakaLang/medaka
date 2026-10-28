@@ -2,24 +2,30 @@
 -- mints, the per-function site index, the small id and name
 -- projections, the enclosing-variable and return-position projections, the method-slot
 -- projections, the dispatch-mono walk of a declared type against an occurrence
--- (`walkGoalFollowed`), the numeric return route (`numericReturnRoute`) and the
--- obligation arguments (`uOblArgs`).  Each test builds its
+-- (`walkGoalFollowed`), the numeric return route (`numericReturnRoute`), the
+-- obligation arguments (`uOblArgs`) and the commits filed again under the variable that
+-- now heads their goal (`refileDeterminedRows`).  Each test builds its
 -- inputs from the parsed signature, a fresh walk or a hand-built slot.  What a whole check
 -- resolves for a return-position method, the method-return trace and memo, the drain's live
 -- spans and the route stamps are observed through `types.typecheck` in `typecheck_test`.
 
-import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectFalse, expectTrue
+}
 import frontend.ast.{Loc(..), Route(..)}
 import frontend.parser.{parse}
 import types.effect_rows.{pureRow}
-import types.repr.{Mono(..), Tyvar(..), ppMono}
+import types.repr.{Mono(..), Tyvar(..), normalize, ppMono}
 import types.tc_types.{
-  GoalKind(..), MethodPredicateSlot(..), PredicateSlot(..),
-  PredicateSlotArgs(..)
+  GoalKind(..), ImplRow(..), InstRef(..), MethodPredicateSlot(..),
+  ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
 }
+import types.tc_unify.{freshVar, unify}
+import types.tc_mono.{tyvarId}
+import map as IdMap
 import types.tc_state.{probeGraphCtx}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omKeys}
-import support.util.{joinNl}
+import support.util.{joinNl, listLen}
 import types.tc_solve.{
   collectByParam,
   consSiteFn,
@@ -38,6 +44,7 @@ import types.tc_solve.{
   noteWalkGoalDischarged,
   noteWalkGoalFollowed,
   numericReturnRoute,
+  refileDeterminedRows,
   uOblArgs,
   walkGoalFollowed,
   occurrenceDispatchMonos,
@@ -53,7 +60,9 @@ import types.tc_solve.{
 import types.tc_solve_entail.{reqWalkSeed}
 import list.{nub, sort}
 import types.tc_mono.{tconBuiltin}
-import types.tc_test_support.{boolM, ifaceOf, intM, oblOver, sigsOf, varM}
+import types.tc_test_support.{
+  boolM, fresh, ifaceOf, intM, oblOver, sigsOf, varM
+}
 
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
 -- solving walks' memo must not, in either order.
@@ -339,3 +348,79 @@ test "the arguments of a projected obligation are the ones it was built over" =
     (map
       ppMono
       (uOblArgs (probeGraphCtx ()) (oblOver (ifaceOf "A") [intM, boolM])))
+
+-- ── refileDeterminedRows ──────────────────────────────────────────────────
+
+-- A commit's instance row; the tests tell commits apart by the goal arguments filed with it.
+commitRow : ImplRow
+commitRow = ImplRow 0 (InstRef "probe" 0 0) (ifaceOf "A") [] [] [] None
+
+-- The variable ids the table of determined rows is keyed by, ascending.
+filedUnder : ModuleCtx -> List Int
+filedUnder m = sort (IdMap.keys m.mcCells.determinedRowsRef.value)
+
+-- The id of the variable [t] is, read through any link.
+idOf : Mono -> Int
+idOf t = match normalize t
+  TVar cell => tyvarId cell
+  _ => 0 - 1
+
+-- [a] and [b] fresh variables, one commit filed under [a] with the goal argument [a].
+filedUnderA : Unit -> (ModuleCtx, Mono, Mono)
+filedUnderA _ =
+  let m = fresh ()
+  let a = freshVar m ()
+  let b = freshVar m ()
+  m.mcCells.determinedRowsRef := IdMap.set (idOf a) [(commitRow, [a])] IdMap.Tip
+  (m, a, b)
+
+test "a commit filed under a variable stays under it while that variable still heads its goal" =
+  let (m, a, _) = filedUnderA ()
+  refileDeterminedRows m ()
+  expectEqual [idOf a] (filedUnder m)
+
+-- The commit of `filedUnderA` after [joinVars] unified the goal variable with another, refiled:
+-- it is under the representative.
+refiledAfter : (ModuleCtx -> Mono -> Mono -> Unit) -> Expectation
+refiledAfter joinVars =
+  let (m, a, b) = filedUnderA ()
+  joinVars m a b
+  refileDeterminedRows m ()
+  expectEqual [idOf a] (filedUnder m)
+
+-- One of the two orders of unification moves the representative of the goal's variable off the
+-- variable the commit was filed under, so each is read.
+test "a commit is filed again under the variable its goal now has as representative, whichever way they were unified" = expectEach
+  [
+    ("goal variable first", refiledAfter (m a b => unify m a b)),
+    ("goal variable second", refiledAfter (m a b => unify m b a)),
+  ]
+
+test "a commit whose goal variable was bound to a head is dropped" =
+  let (m, a, _) = filedUnderA ()
+  unify m a intM
+  refileDeterminedRows m ()
+  expectEqual [] (filedUnder m)
+
+test "two commits under two variables unified into one are both filed under it" =
+  let m = fresh ()
+  let a = freshVar m ()
+  let b = freshVar m ()
+  m.mcCells.determinedRowsRef :=
+    IdMap.set
+      (idOf b)
+      [(commitRow, [b])]
+      (IdMap.set (idOf a) [(commitRow, [a])] IdMap.Tip)
+  unify m a b
+  refileDeterminedRows m ()
+  expectEqual
+    (1, 2)
+    (
+      listLen (filedUnder m),
+      sum (map listLen (IdMap.values m.mcCells.determinedRowsRef.value)),
+    )
+
+test "a graph with no determined row is left with none" =
+  let m = fresh ()
+  refileDeterminedRows m ()
+  expectEqual [] (filedUnder m)
