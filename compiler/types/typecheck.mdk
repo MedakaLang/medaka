@@ -79,7 +79,6 @@ import frontend.ast.{
   UsePath(..),
   UseMember(..),
   useMemberOrigin,
-  useMemberLocal,
   useMemberAlias,
   qualifiedLocal,
   TabKey(..),
@@ -132,7 +131,6 @@ import types.tc_types.{
   siteFor,
   DeclEnvModule(..),
   DeclEnvs(..),
-  AliasDecl(..),
   ImplRow(..),
   ImplEnv(..),
   ClassEnv(..),
@@ -333,7 +331,9 @@ import types.tc_state.{
   wMark,
 }
 import types.tc_env.{
+  aliasOwnAt,
   aliasUniverseAt,
+  boundNames,
   ceLookupAt,
   ceRowMethodNames,
   ceRowRequired,
@@ -351,7 +351,6 @@ import types.tc_env.{
   importedBindings,
   instRefMid,
   instRefSeq,
-  lastComponent,
   methodExportsIndex,
   namesToSet,
   ordOfIndex,
@@ -435,6 +434,7 @@ import types.tc_global.{
 import types.tc_module.{
   captureTypeErrors,
   checkBodyImpl,
+  checkGraphFinish,
   checkModuleFull,
   checkModuleFullDiags,
   drainStampQueue,
@@ -1684,16 +1684,6 @@ checkedFfiExternTypeNamesModule catalog o (mid, decls) =
     aliasOwnAt cur o.doFfiAliases ++ aliasUniverseAt cur o.doFfiAliases
   ffiExternTypeRowsWith catalog aliases decls
 
--- The current module's aliases arrive in front of its imported alias universe in
--- `checkBodyImpl`.  `DataEnv.deAliases` is already reverse declaration order, so
--- this filter preserves the exact first-match lookup order without rebuilding a
--- second registry.
-aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
-aliasOwnAt _ [] = []
-aliasOwnAt cur ((key, ad) :: rest)
-  | ad.adOrd == cur = (key, (ad.adParams, ad.adRhs)) :: aliasOwnAt cur rest
-  | otherwise = aliasOwnAt cur rest
-
 -- DRIVER-COLLAPSE Phase 2: skip when [mname] is ALREADY registered in THIS pass.
 -- The ids must be the SAME quantified ids the call-site instantiation maps through
 -- its subst (see the method carrier doc).  The module path's checkModuleFullImpl
@@ -2453,17 +2443,6 @@ containsPair : (String, String) -> List (String, String) -> Bool
 containsPair _ [] = False
 containsPair (a, b) ((x, y) :: rest) =
   a == x && b == y || containsPair (a, b) rest
-
--- The names an import form binds, as the resolver counts them
--- (`importedNamesMM`): a member list binds its locals, a single dotted name its
--- last component, an alias nothing bare, and a wildcard (`None`) every name it
--- reaches.
-boundNames : UsePath -> Option (OrdMap Unit)
-boundNames (UseGroup _ ms) = Some (omFromNames (map useMemberLocal ms) omEmpty)
-boundNames (UseName ns) =
-  Some (omFromNames (if listLen ns > 1 then [lastComponent ns] else []) omEmpty)
-boundNames (UseWild _) = None
-boundNames (UseAlias _ _) = Some omEmpty
 
 bindsName : Option (OrdMap Unit) -> String -> Bool
 bindsName None _ = True
@@ -4794,25 +4773,6 @@ elaborateModulesReport inputs runtimeDecls coreDecls0 modulesIn =
 -- The per-module context is REPLAYED, not re-derived (see `StampCtx`), and restored
 -- afterwards so `dictPassModulesIfEnabled` — which runs next — sees the state the
 -- last module left, exactly as it does today.
--- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
--- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is
--- published: a check driver has no reader of the evidence table.
---
--- The sticky type-error cells are saved before the drain and restored after it, so
--- a recorded interface never carries a drain's diagnostics.  An unkeyed drive
--- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
--- an accepted program.  The drain's evidence holes are returned, not recorded: a
--- per-module diagnostics list is closed before any drain, so the caller attaches
--- them to it (`attachEvidenceHoles`).
-checkGraphFinish : ModuleCtx -> List DrainFinding
-checkGraphFinish mctx =
-  let savedSticky = mctx.mcGraph.typeErrorsSticky.value
-  let savedStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value
-  let holes = drainStampQueue mctx
-  mctx.mcGraph.typeErrorsSticky := savedSticky
-  mctx.mcGraph.typeErrorsStickyDiags := savedStickyDiags
-  holes
-
 -- Each drain verdict joins the errors of the module it belongs to, and each hole
 -- does unless that module then has errors: a hole beside a type error is usually its
 -- consequence.  A live finding is dropped when any module of [perMod] has errors,

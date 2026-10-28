@@ -1,4 +1,5 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
+aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
 allIfaceMethodNames : List Decl -> List String
@@ -8,6 +9,7 @@ anySlotIsRow : Int -> List (List Ty, List String) -> Bool
 attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
 bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
+boundNames : UsePath -> Option (Map String Unit)
 buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
 buildFlatImplEnv : List Decl -> ImplEnv

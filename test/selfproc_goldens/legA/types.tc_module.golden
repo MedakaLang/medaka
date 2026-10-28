@@ -13,6 +13,7 @@ captureTypeErrors : ModuleCtx -> (Unit -> Unit) -> List TcDiag
 cellHeadKey : String -> TyConOrigin -> String
 cellTypeHeads : List Decl -> Map String Unit
 checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
+checkGraphFinish : ModuleCtx -> List DrainFinding
 checkInterfaceCycles : ModuleCtx -> List Decl -> ClassEnv -> Int -> Unit
 checkModuleFull : ModuleCtx -> List (String, Scheme) -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 checkModuleFullDiags : GraphCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, List TcDiag, List TcDiag, ModuleCtx)

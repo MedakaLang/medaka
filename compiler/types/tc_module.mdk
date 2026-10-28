@@ -1,14 +1,15 @@
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
 -- bodies, final checks, the stamp queue and its drain (`enqueueStampCtx`, `stampCtxOf`,
--- `stampNoting`, `stampEach`), the binding-id stamping of a module's clauses and tail declarations
--- (`stampGroupClauses`, `stampTailDecls`), the plural site resolution (`resolveSites`,
--- `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the evidence-observation writer
--- (`noteEvidenceObservation` and its entry builders), binder-type materialization, and the
--- registration of imported declarations (the import-overlay rows: `registerImportOverlay`,
--- `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`,
--- `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`,
--- `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band (2,874 of 3,000), and
--- a `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val).
+-- `stampNoting`, `stampEach`, `checkGraphFinish`), the binding-id stamping of a module's clauses
+-- and tail declarations (`stampGroupClauses`, `stampTailDecls`), the plural site resolution
+-- (`resolveSites`, `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the
+-- evidence-observation writer (`noteEvidenceObservation` and its entry builders), binder-type
+-- materialization, and the registration of imported declarations (the import-overlay rows:
+-- `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`,
+-- `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows
+-- (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8
+-- band (2,874 of 3,000), and a `tc_mark` module would hold them with `methodMarkCtx` and
+-- `moduleMarkCtx` (owed, Val).
 --
 -- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
 -- section 5 (owed, #2555).
@@ -4129,6 +4130,26 @@ drainStampQueue saved =
   materializeBinderTypes saved.mcGraph ()
   saved.mcGraph.graphRun.stampCtxs := []
   held ++ verdicts ++ holes
+
+-- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
+-- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is
+-- published: a check driver has no reader of the evidence table.
+--
+-- The sticky type-error cells are saved before the drain and restored after it, so
+-- a recorded interface never carries a drain's diagnostics.  An unkeyed drive
+-- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
+-- an accepted program.  The drain's evidence holes are returned, not recorded: a
+-- per-module diagnostics list is closed before any drain, so the caller attaches
+-- them to it (`attachDrainFindings`).
+export
+checkGraphFinish : ModuleCtx -> List DrainFinding
+checkGraphFinish mctx =
+  let savedSticky = mctx.mcGraph.typeErrorsSticky.value
+  let savedStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value
+  let holes = drainStampQueue mctx
+  mctx.mcGraph.typeErrorsSticky := savedSticky
+  mctx.mcGraph.typeErrorsStickyDiags := savedStickyDiags
+  holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
 -- drain finished: every method cell minted since the last drain, and the goals of
