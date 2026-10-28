@@ -22,13 +22,13 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
+import ir.core_ir_lower.{leadingDictParams}
 import support.util.{
   lenKey,
   contains,
   listLen,
   filterList,
   reverseL,
-  startsWith,
   anyList,
   isNonEmptyL,
   dedup,
@@ -868,11 +868,7 @@ dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x _ _) :: _) _) = dispIsDictParamName x
-dispClauseHasLeadingDict _ = False
-
-dispIsDictParamName : String -> Bool
-dispIsDictParamName x = startsWith "$dict" x
+dispClauseHasLeadingDict (CClause pats _) = leadingDictParams pats > 0
 
 -- ── Stage-1 / impl-path dict gate (F2(b), shape (a)) ─────────────────────────
 -- A dict-CARRYING self-recursive bind IS TMC-admissible: the self-call is a
@@ -889,24 +885,17 @@ export
 dictCountUniform : List (List Pat) -> Bool
 dictCountUniform [] = True
 dictCountUniform (pats :: rest) =
-  dictCountUniformGo (leadingDictCount pats) rest
+  dictCountUniformGo (leadingDictParams pats) rest
 
 dictCountUniformGo : Int -> List (List Pat) -> Bool
 dictCountUniformGo _ [] = True
 dictCountUniformGo n (pats :: rest) =
-  leadingDictCount pats == n && dictCountUniformGo n rest
+  leadingDictParams pats == n && dictCountUniformGo n rest
 
 -- the self-reference of a dispatched impl group, whose first clause binds [pats]
 export
 methodSelf : String -> String -> List Pat -> SelfRef
-methodSelf method key pats = SelfByMethod method key (leadingDictCount pats)
-
--- count of leading `$dict…` params in one clause's param list.
-export
-leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x _ _) :: rest) =
-  if dispIsDictParamName x then 1 + leadingDictCount rest else 0
-leadingDictCount _ = 0
+methodSelf method key pats = SelfByMethod method key (leadingDictParams pats)
 
 -- CClause-shaped wrapper (the wasm emitter's clause representation).
 export

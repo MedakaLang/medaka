@@ -87,6 +87,9 @@ import backend.wasm_emit.{
   inputRuntimeExternsW,
 }
 import entries.entry_support.{driveRuntime}
+import driver.diagnostics.{refuseSymbolDefects, renderSymbolDefects}
+import backend.wasm_symbols.{SymbolDefect}
+import support.util.{joinNl}
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
 import ir.extern_lower.{externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
@@ -94,14 +97,26 @@ import types.extern_source.{runtimeExternSymbol}
 import support.ordmap.{OrdMap, omFromPairs, omEmpty, omLookup}
 
 -- Every emission here builds its own plan from the program it emits.
-emitProgram : WasmEmitInput -> CProgram -> String
-emitProgram input cp =
+emitChecked : WasmEmitInput -> CProgram -> Result (List SymbolDefect) String
+emitChecked input cp =
   let (plan, prepared) =
     prepareWasmPlan
       (inputRuntimeExternsW input)
       (inputCtorFloatFieldsW input)
       cp
   emitWithPlan input plan prepared
+
+-- The re-emission probes below emit fixed programs that have no physical
+-- defect, so a defect there is the probe's own failure, not a verdict to report.
+probeEmission : Result (List SymbolDefect) a -> a
+probeEmission (Ok v) = v
+probeEmission (Err defects) =
+  panic
+    ("internal error: a re-emission probe's program has physical defects:\n"
+      ++ joinNl (renderSymbolDefects "" defects))
+
+emitProgram : WasmEmitInput -> CProgram -> String
+emitProgram input cp = probeEmission (emitChecked input cp)
 
 emitProgramUnchecked : WasmEmitInput -> CProgram -> String
 emitProgramUnchecked input cp =
@@ -110,7 +125,7 @@ emitProgramUnchecked input cp =
       (inputRuntimeExternsW input)
       (inputCtorFloatFieldsW input)
       cp
-  emitUncheckedWithPlan input plan prepared
+  probeEmission (emitUncheckedWithPlan input plan prepared)
 
 emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp =
@@ -119,7 +134,7 @@ emitProgramRecord input cp =
       (inputRuntimeExternsW input)
       (inputCtorFloatFieldsW input)
       cp
-  emitRecordWithPlan input plan prepared
+  probeEmission (emitRecordWithPlan input plan prepared)
 
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input cp =
@@ -128,7 +143,7 @@ emitProgramGaps input cp =
       (inputRuntimeExternsW input)
       (inputCtorFloatFieldsW input)
       cp
-  emitGapsWithPlan input plan prepared
+  probeEmission (emitGapsWithPlan input plan prepared)
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()
@@ -155,11 +170,16 @@ main = match args ()
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
-  putStr (runEmit runtimeDecls preludeDecls userDecls)
+  match runEmit runtimeDecls preludeDecls userDecls
+    Ok wat => putStr wat
+    Err defects => refuseSymbolDefects "" defects
 
-runEmit : List Decl -> List Decl -> List Decl -> String
+runEmit : List Decl ->
+  List Decl ->
+  List Decl ->
+  Result (List SymbolDefect) String
 runEmit runtimeDecls preludeDecls userDecls =
-  emitProgram
+  emitChecked
     (typedInput runtimeDecls preludeDecls userDecls)
     (typedProgram runtimeDecls preludeDecls userDecls)
 
@@ -308,13 +328,14 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           }
           None => mainPlan
         let mainWat =
-          emitUncheckedWithPlan
-            (makeWasmEmitInput
-              RawUnchecked
-              (runtimeDomain (externDecls runtimeDecls))
-              (ctorFieldTypeNames mainMangled))
-            floatPlan
-            mainProgram
+          probeEmission
+            (emitUncheckedWithPlan
+              (makeWasmEmitInput
+                RawUnchecked
+                (runtimeDomain (externDecls runtimeDecls))
+                (ctorFieldTypeNames mainMangled))
+              floatPlan
+              mainProgram)
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
         let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")

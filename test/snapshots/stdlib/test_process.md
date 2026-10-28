@@ -1,5 +1,5 @@
 # META
-source_lines=655
+source_lines=661
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -108,7 +108,13 @@ boundedVerbSeconds : Int ->
 boundedVerbSeconds secs cmd args =
   runVerb
     "perl"
-    (["-e", "alarm \{intToString secs}; exec @ARGV", "env", cmd] ++ args)
+    ([
+        "-e",
+        "alarm \{intToString secs}; exec @ARGV or die qq(exec: $!)",
+        "env",
+        cmd,
+      ]
+      ++ args)
 
 {- | A fresh, empty directory for a test that has to write files.
 
@@ -674,7 +680,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
+(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV or die qq(exec: $!)"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
@@ -764,7 +770,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
+(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV or die qq(exec: $!)"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))

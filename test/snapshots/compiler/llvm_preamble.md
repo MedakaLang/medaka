@@ -1,253 +1,376 @@
 # META
-source_lines=243
+source_lines=322
 stages=DESUGAR,MARK
 # SOURCE
--- LLVM runtime-declaration PREAMBLE — the fixed `declare i64 @mdk_…` lines that
--- head every emitted module (the C runtime ABI surface in runtime/medaka_rt.c).
+-- The runtime functions every LLVM module declares ahead of its own code: the C
+-- runtime ABI surface (runtime/medaka_rt.c) and the `llvm.*` intrinsics the
+-- emitter calls.  Each row holds a declaration's parts; `declareLine` renders
+-- the row's text and `declareRuntime` registers the row's prototype, so the
+-- prototype a call is checked against is the one the module text declares.
 --
--- Extracted out of llvm_emit.mdk (ARCH-REVIEW pass 3, finding #2) as PURE DATA:
--- these strings are CONSTANT — identical for every program — so they carry no
--- dependency on the `Emit` record or the `emit` function.  Keeping them here as a
--- plain `List String` means this module imports NOTHING from llvm_emit (no
--- circular import); llvm_emit's `emitPreamble` iterates this list and `emit`s each
--- line, so the `Emit`/`emit` machinery stays put and only the literal strings move.
---
--- Order is load-bearing: emitted output is diffed byte-for-byte against the
--- tree-walker oracle, so these lines must stay in EXACTLY this order with EXACTLY
--- these strings.  The trailing "" is the blank separator line after the decls.
+-- Order is load-bearing: the rendered lines head every module, and the
+-- differential gates compare emitted modules byte for byte.
+
+import backend.llvm_symbols.{
+  LlvmParam(..),
+  LlvmSymbol(..),
+  Prototype(..),
+  SymbolDefect,
+  SymbolRegistry,
+  declareOnce,
+  prototypeText,
+}
+import support.symbol_origin.{SymbolOrigin}
+
+-- One runtime declaration: the attributes written before its return type (""
+-- or `noalias align 8 `), its return type, its name without the `@`, its
+-- parameter types, and the attributes written after its parameter list (""
+-- or text with a leading space).  Attribute text is opaque here.
+public export data RuntimeDecl =
+  RuntimeDecl String String String (List String) String
+  deriving (Eq, Debug)
+
+-- a runtime function with no attributes
+fn : String -> String -> List String -> RuntimeDecl
+fn ret name params = RuntimeDecl "" ret name params ""
+
+-- a runtime abort: it returns no value and never returns
+noReturn : String -> List String -> RuntimeDecl
+noReturn name params = RuntimeDecl "" "void" name params " noreturn"
 
 export
+runtimeName : RuntimeDecl -> String
+runtimeName (RuntimeDecl _ _ name _ _) = name
+
+-- The prototype a call of the row's function is checked against.  The
+-- attributes before the return type are the declaration's, not the type's.
+export
+runtimePrototype : RuntimeDecl -> Prototype
+runtimePrototype (RuntimeDecl _ ret _ params attrs) =
+  FuncProto ret (map (t => LlvmParam t "") params) attrs
+
+-- the row's `declare` line
+export
+declareLine : RuntimeDecl -> String
+declareLine (d@(RuntimeDecl retAttrs _ name _ _)) =
+  "declare \{retAttrs}\{prototypeText name (runtimePrototype d)}"
+
+-- Register each row as written once, attributed to [origin].
+export
+declareRuntime : SymbolOrigin ->
+  List RuntimeDecl ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+declareRuntime _ [] reg = Ok reg
+declareRuntime origin (d :: rest) reg =
+  match declareOnce (Foreign (runtimeName d)) (runtimePrototype d) origin reg
+    Ok reg2 => declareRuntime origin rest reg2
+    Err defect => Err defect
+
+-- The preamble: two comment lines, one `declare` per row, then a blank line.
+export
 preambleLines : List String
-preambleLines = [
-  "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.",
-  "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.",
-  "declare noalias align 8 ptr @mdk_alloc(i64) allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
-  "declare noalias align 8 ptr @mdk_alloc_atomic(i64) allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
-  "declare i64 @__mdk_apply(i64, i64, ptr)",
-  "declare void @mdk_oob() noreturn",
+preambleLines =
+  [
+      "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.",
+      "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.",
+    ]
+    ++ map declareLine runtimeDecls
+    ++ [""]
+
+-- The runtime functions that marshal foreign-call operands, declared only by a
+-- module with a user extern.
+export
+ffiRuntimeDecls : List RuntimeDecl
+ffiRuntimeDecls = [
+  fn "ptr" "mdk_ffi_array_int_out" ["i64"],
+  fn "void" "mdk_ffi_array_int_in" ["i64", "ptr"],
+  fn "i64" "mdk_ffi_str_in" ["ptr"],
+]
+
+export
+runtimeDecls : List RuntimeDecl
+runtimeDecls = [
+  RuntimeDecl
+    "noalias align 8 "
+    "ptr"
+    "mdk_alloc"
+    ["i64"]
+    " allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
+  RuntimeDecl
+    "noalias align 8 "
+    "ptr"
+    "mdk_alloc_atomic"
+    ["i64"]
+    " allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
+  fn "i64" "__mdk_apply" ["i64", "i64", "ptr"],
+  noReturn "mdk_oob" [],
   -- #1787: the same coded E-INDEX-OOB abort, carrying the offending index (raw
   -- i64, as in @mdk_slice_oob) so the message matches what `run` prints.
-  "declare void @mdk_oob_at(i64) noreturn",
+  noReturn "mdk_oob_at" ["i64"],
   -- the same coded E-INDEX-OOB abort carrying a prose message (a tagged $str
   -- pointer, as @mdk_panic takes) for a container with no index to interpolate.
-  "declare void @mdk_oob_msg(i64) noreturn",
-  "declare void @mdk_slice_oob(i64, i64) noreturn",
-  "declare void @mdk_cyclic_value(ptr) noreturn",
-  "declare void @mdk_div_zero() noreturn",
-  "declare void @mdk_mod_zero() noreturn",
+  noReturn "mdk_oob_msg" ["i64"],
+  noReturn "mdk_slice_oob" ["i64", "i64"],
+  noReturn "mdk_cyclic_value" ["ptr"],
+  noReturn "mdk_div_zero" [],
+  noReturn "mdk_mod_zero" [],
   -- the E-INT-OVERFLOW abort: an operator code and the two untagged operands.
-  "declare void @mdk_int_overflow(i64, i64, i64) noreturn",
-  "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)",
-  "declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)",
-  "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)",
-  "declare void @mdk_nonexhaustive_match() noreturn",
-  "declare void @mdk_dispatch_no_impl() noreturn",
-  "declare void @mdk_dispatch_ambiguous() noreturn",
-  "declare void @mdk_let_refute() noreturn",
-  "declare void @mdk_print_int(i64)",
-  "declare void @mdk_print_bool(i64)",
-  "declare void @mdk_print_float(double)",
-  "declare i64 @mdk_num_add(i64, i64)",
-  "declare i64 @mdk_num_sub(i64, i64)",
-  "declare i64 @mdk_num_mul(i64, i64)",
-  "declare i64 @mdk_num_div(i64, i64)",
-  "declare i64 @mdk_num_mod(i64, i64)",
-  "declare void @mdk_print_num(i64)",
-  "declare void @mdk_print_u64(i64)",
-  "declare i64 @mdk_str_lit(ptr, i64)",
-  "declare void @mdk_print_str(i64)",
-  "declare i64 @mdk_int_to_string(i64)",
-  "declare i64 @mdk_float_to_string(double)",
-  "declare i64 @llvm.fptosi.sat.i64.f64(double)",
+  noReturn "mdk_int_overflow" ["i64", "i64", "i64"],
+  fn "{ i64, i1 }" "llvm.sadd.with.overflow.i64" ["i64", "i64"],
+  fn "{ i64, i1 }" "llvm.ssub.with.overflow.i64" ["i64", "i64"],
+  fn "{ i64, i1 }" "llvm.smul.with.overflow.i64" ["i64", "i64"],
+  noReturn "mdk_nonexhaustive_match" [],
+  noReturn "mdk_dispatch_no_impl" [],
+  noReturn "mdk_dispatch_ambiguous" [],
+  noReturn "mdk_let_refute" [],
+  fn "void" "mdk_print_int" ["i64"],
+  fn "void" "mdk_print_bool" ["i64"],
+  fn "void" "mdk_print_float" ["double"],
+  fn "i64" "mdk_num_add" ["i64", "i64"],
+  fn "i64" "mdk_num_sub" ["i64", "i64"],
+  fn "i64" "mdk_num_mul" ["i64", "i64"],
+  fn "i64" "mdk_num_div" ["i64", "i64"],
+  fn "i64" "mdk_num_mod" ["i64", "i64"],
+  fn "void" "mdk_print_num" ["i64"],
+  fn "void" "mdk_print_u64" ["i64"],
+  fn "i64" "mdk_str_lit" ["ptr", "i64"],
+  fn "void" "mdk_print_str" ["i64"],
+  fn "i64" "mdk_int_to_string" ["i64"],
+  fn "i64" "mdk_float_to_string" ["double"],
+  fn "i64" "llvm.fptosi.sat.i64.f64" ["double"],
   -- #762: NaN-sign fold barrier.  See fenceFloatOperand in llvm_emit.mdk.
-  "declare double @llvm.arithmetic.fence.f64(double)",
-  "declare i64 @mdk_string_concat(i64)",
-  "declare i64 @mdk_string_append(i64, i64)",
-  "declare i64 @mdk_string_append_n(i64, ptr)",
-  "declare i64 @mdk_string_eq(i64, i64)",
-  "declare i64 @mdk_value_eq(i64, i64)",
-  "declare i64 @mdk_list_append(i64, i64)",
-  "declare i64 @mdk_list_index(i64, i64)",
-  "declare i64 @mdk_list_slice(i64, i64, i64)",
-  "declare i64 @mdk_append(i64, i64)",
-  "declare void @mdk_putstr(i64)",
-  "declare void @mdk_putstrln(i64)",
-  "declare void @mdk_eputstr(i64)",
-  "declare void @mdk_eputstrln(i64)",
-  "declare void @mdk_flushstdout(i64)",
-  "declare void @mdk_print_unit()",
-  "declare void @mdk_panic(i64)",
-  "declare void @mdk_exit(i64)",
-  "declare i64 @mdk_array_make(i64, i64)",
-  "declare i64 @mdk_array_copy(i64)",
-  "declare void @mdk_array_blit(i64, i64, i64, i64, i64)",
-  "declare void @mdk_array_fill(i64, i64)",
-  "declare i64 @mdk_array_from_list(i64)",
-  "declare i64 @mdk_byteblock_make(i64)",
-  "declare i64 @mdk_byteblock_length(i64)",
-  "declare i64 @mdk_byteblock_get(i64, i64)",
-  "declare void @mdk_byteblock_set(i64, i64, i64)",
-  "declare i64 @mdk_byteblock_copy(i64, i64)",
-  "declare void @mdk_byteblock_blit(i64, i64, i64, i64, i64)",
-  "declare i64 @mdk_byteblock_from_int_array(i64)",
-  "declare i64 @mdk_byteblock_to_int_array(i64)",
-  "declare i64 @mdk_byteblock_from_string(i64)",
-  "declare i64 @mdk_byteblock_to_string(i64)",
-  "declare i64 @mdk_sha256(i64)",
-  "declare void @mdk_byteblock_write_stdout(i64)",
-  "declare void @mdk_print_char(i64)",
-  "declare i64 @mdk_char_to_str(i64)",
-  "declare i64 @mdk_string_to_chars(i64)",
-  "declare i64 @mdk_string_from_chars(i64)",
-  "declare i64 @mdk_string_to_utf8_bytes(i64)",
-  "declare i64 @mdk_string_from_utf8_bytes(i64)",
-  "declare double @mdk_float_rem(double, double)",
-  "declare double @mdk_sqrt(double)",
-  "declare double @mdk_cbrt(double)",
-  "declare double @mdk_exp(double)",
-  "declare double @mdk_log(double)",
-  "declare double @mdk_log2(double)",
-  "declare double @mdk_log10(double)",
-  "declare double @mdk_sin(double)",
-  "declare double @mdk_cos(double)",
-  "declare double @mdk_tan(double)",
-  "declare double @mdk_asin(double)",
-  "declare double @mdk_acos(double)",
-  "declare double @mdk_atan(double)",
-  "declare double @mdk_sinh(double)",
-  "declare double @mdk_cosh(double)",
-  "declare double @mdk_tanh(double)",
-  "declare double @mdk_floor(double)",
-  "declare double @mdk_ceil(double)",
-  "declare double @mdk_round(double)",
-  "declare double @mdk_trunc(double)",
-  "declare double @mdk_pow(double, double)",
-  "declare double @mdk_atan2(double, double)",
-  "declare double @mdk_hypot(double, double)",
-  "declare i64 @mdk_string_slice(i64, i64, i64)",
-  "declare i64 @mdk_string_codepoint_at_byte(i64, i64)",
-  "declare i64 @mdk_string_slice_bytes(i64, i64, i64)",
-  "declare i64 @mdk_char_is_alpha(i64)",
-  "declare i64 @mdk_char_is_space(i64)",
-  "declare i64 @mdk_char_is_upper(i64)",
-  "declare i64 @mdk_char_is_lower(i64)",
-  "declare i64 @mdk_char_is_punct(i64)",
-  "declare i64 @mdk_char_to_upper(i64)",
-  "declare i64 @mdk_char_to_lower(i64)",
-  "declare i64 @mdk_string_to_upper(i64)",
-  "declare i64 @mdk_string_to_lower(i64)",
-  "declare i64 @mdk_char_from_code(i64)",
-  "declare i64 @mdk_string_to_float(i64)",
-  "declare i64 @mdk_string_index_of(i64, i64)",
-  "declare i64 @mdk_string_starts_with(i64, i64)",
-  "declare i64 @mdk_string_ends_with(i64, i64)",
-  "declare i64 @mdk_string_count_occurrences(i64, i64)",
-  "declare i64 @mdk_string_last_index_of(i64, i64)",
-  "declare i64 @mdk_string_to_int(i64)",
-  "declare i64 @mdk_string_reverse(i64)",
-  "declare i64 @mdk_string_join(i64, i64)",
-  "declare i64 @mdk_string_compare(i64, i64)",
-  "declare i64 @mdk_string_compare_raw(i64, i64)",
-  "declare i64 @mdk_value_cmp_raw(i64, i64)",
+  fn "double" "llvm.arithmetic.fence.f64" ["double"],
+  fn "i64" "mdk_string_concat" ["i64"],
+  fn "i64" "mdk_string_append" ["i64", "i64"],
+  fn "i64" "mdk_string_append_n" ["i64", "ptr"],
+  fn "i64" "mdk_string_eq" ["i64", "i64"],
+  fn "i64" "mdk_value_eq" ["i64", "i64"],
+  fn "i64" "mdk_list_append" ["i64", "i64"],
+  fn "i64" "mdk_list_index" ["i64", "i64"],
+  fn "i64" "mdk_list_slice" ["i64", "i64", "i64"],
+  fn "i64" "mdk_append" ["i64", "i64"],
+  fn "void" "mdk_putstr" ["i64"],
+  fn "void" "mdk_putstrln" ["i64"],
+  fn "void" "mdk_eputstr" ["i64"],
+  fn "void" "mdk_eputstrln" ["i64"],
+  fn "void" "mdk_flushstdout" ["i64"],
+  fn "void" "mdk_print_unit" [],
+  fn "void" "mdk_panic" ["i64"],
+  fn "void" "mdk_exit" ["i64"],
+  fn "i64" "mdk_array_make" ["i64", "i64"],
+  fn "i64" "mdk_array_copy" ["i64"],
+  fn "void" "mdk_array_blit" ["i64", "i64", "i64", "i64", "i64"],
+  fn "void" "mdk_array_fill" ["i64", "i64"],
+  fn "i64" "mdk_array_from_list" ["i64"],
+  fn "i64" "mdk_byteblock_make" ["i64"],
+  fn "i64" "mdk_byteblock_length" ["i64"],
+  fn "i64" "mdk_byteblock_get" ["i64", "i64"],
+  fn "void" "mdk_byteblock_set" ["i64", "i64", "i64"],
+  fn "i64" "mdk_byteblock_copy" ["i64", "i64"],
+  fn "void" "mdk_byteblock_blit" ["i64", "i64", "i64", "i64", "i64"],
+  fn "i64" "mdk_byteblock_from_int_array" ["i64"],
+  fn "i64" "mdk_byteblock_to_int_array" ["i64"],
+  fn "i64" "mdk_byteblock_from_string" ["i64"],
+  fn "i64" "mdk_byteblock_to_string" ["i64"],
+  fn "i64" "mdk_sha256" ["i64"],
+  fn "void" "mdk_byteblock_write_stdout" ["i64"],
+  fn "void" "mdk_print_char" ["i64"],
+  fn "i64" "mdk_char_to_str" ["i64"],
+  fn "i64" "mdk_string_to_chars" ["i64"],
+  fn "i64" "mdk_string_from_chars" ["i64"],
+  fn "i64" "mdk_string_to_utf8_bytes" ["i64"],
+  fn "i64" "mdk_string_from_utf8_bytes" ["i64"],
+  fn "double" "mdk_float_rem" ["double", "double"],
+  fn "double" "mdk_sqrt" ["double"],
+  fn "double" "mdk_cbrt" ["double"],
+  fn "double" "mdk_exp" ["double"],
+  fn "double" "mdk_log" ["double"],
+  fn "double" "mdk_log2" ["double"],
+  fn "double" "mdk_log10" ["double"],
+  fn "double" "mdk_sin" ["double"],
+  fn "double" "mdk_cos" ["double"],
+  fn "double" "mdk_tan" ["double"],
+  fn "double" "mdk_asin" ["double"],
+  fn "double" "mdk_acos" ["double"],
+  fn "double" "mdk_atan" ["double"],
+  fn "double" "mdk_sinh" ["double"],
+  fn "double" "mdk_cosh" ["double"],
+  fn "double" "mdk_tanh" ["double"],
+  fn "double" "mdk_floor" ["double"],
+  fn "double" "mdk_ceil" ["double"],
+  fn "double" "mdk_round" ["double"],
+  fn "double" "mdk_trunc" ["double"],
+  fn "double" "mdk_pow" ["double", "double"],
+  fn "double" "mdk_atan2" ["double", "double"],
+  fn "double" "mdk_hypot" ["double", "double"],
+  fn "i64" "mdk_string_slice" ["i64", "i64", "i64"],
+  fn "i64" "mdk_string_codepoint_at_byte" ["i64", "i64"],
+  fn "i64" "mdk_string_slice_bytes" ["i64", "i64", "i64"],
+  fn "i64" "mdk_char_is_alpha" ["i64"],
+  fn "i64" "mdk_char_is_space" ["i64"],
+  fn "i64" "mdk_char_is_upper" ["i64"],
+  fn "i64" "mdk_char_is_lower" ["i64"],
+  fn "i64" "mdk_char_is_punct" ["i64"],
+  fn "i64" "mdk_char_to_upper" ["i64"],
+  fn "i64" "mdk_char_to_lower" ["i64"],
+  fn "i64" "mdk_string_to_upper" ["i64"],
+  fn "i64" "mdk_string_to_lower" ["i64"],
+  fn "i64" "mdk_char_from_code" ["i64"],
+  fn "i64" "mdk_string_to_float" ["i64"],
+  fn "i64" "mdk_string_index_of" ["i64", "i64"],
+  fn "i64" "mdk_string_starts_with" ["i64", "i64"],
+  fn "i64" "mdk_string_ends_with" ["i64", "i64"],
+  fn "i64" "mdk_string_count_occurrences" ["i64", "i64"],
+  fn "i64" "mdk_string_last_index_of" ["i64", "i64"],
+  fn "i64" "mdk_string_to_int" ["i64"],
+  fn "i64" "mdk_string_reverse" ["i64"],
+  fn "i64" "mdk_string_join" ["i64", "i64"],
+  fn "i64" "mdk_string_compare" ["i64", "i64"],
+  fn "i64" "mdk_string_compare_raw" ["i64", "i64"],
+  fn "i64" "mdk_value_cmp_raw" ["i64", "i64"],
   -- #305: per-op IEEE relational predicates for the type-lost ordering path.
   -- The 3-way @mdk_value_cmp_raw cannot express NaN's unorderedness (its Float
   -- arm collapses to 0/EQ), so `<`/`<=`/`>`/`>=` call these instead — they take
   -- the Float arm as a direct f64 predicate (FALSE at NaN, matching inline
   -- `fcmp`) and delegate String/immediate shapes to the 3-way.  Tagged Bool.
-  "declare i64 @mdk_value_lt(i64, i64)",
-  "declare i64 @mdk_value_le(i64, i64)",
-  "declare i64 @mdk_value_gt(i64, i64)",
-  "declare i64 @mdk_value_ge(i64, i64)",
-  "declare void @mdk_set_args(i32, ptr)",
-  "declare i64 @mdk_args(i64)",
-  "declare i64 @mdk_get_env(i64)",
+  fn "i64" "mdk_value_lt" ["i64", "i64"],
+  fn "i64" "mdk_value_le" ["i64", "i64"],
+  fn "i64" "mdk_value_gt" ["i64", "i64"],
+  fn "i64" "mdk_value_ge" ["i64", "i64"],
+  fn "void" "mdk_set_args" ["i32", "ptr"],
+  fn "i64" "mdk_args" ["i64"],
+  fn "i64" "mdk_get_env" ["i64"],
   -- A file extern whose path is an authority takes the grant for each path last.
-  "declare i64 @mdk_with_file_bound(i64, i64, i64)",
-  "declare i64 @mdk_read_file(i64, i64)",
-  "declare i64 @mdk_read_file_bytes(i64, i64)",
-  "declare i64 @mdk_write_file(i64, i64, i64)",
-  "declare i64 @mdk_write_file_bytes(i64, i64, i64)",
-  "declare i64 @mdk_write_file_mode(i64, i64, i64, i64)",
-  "declare i64 @mdk_append_file(i64, i64, i64)",
-  "declare i64 @mdk_file_exists(i64, i64)",
-  "declare i64 @mdk_canonicalize_path(i64, i64)",
-  "declare i64 @mdk_list_dir(i64, i64)",
-  "declare i64 @mdk_read_line(i64)",
-  "declare i64 @mdk_read_line_opt(i64)",
-  "declare i64 @mdk_read_all(i64)",
-  "declare i64 @mdk_read_exactly(i64)",
-  "declare i64 @mdk_make_dir(i64, i64)",
-  "declare i64 @mdk_remove_file(i64, i64)",
-  "declare i64 @mdk_rename(i64, i64, i64, i64)",
-  "declare i64 @mdk_remove_dir(i64, i64)",
-  "declare i64 @mdk_fsync(i64, i64)",
-  "declare i64 @mdk_stat_file(i64, i64)",
-  "declare i64 @mdk_file_mode(i64, i64)",
-  "declare i64 @mdk_run_command(i64, i64)",
-  "declare i64 @mdk_run_command_batch(i64, i64, i64)",
-  "declare i64 @mdk_executable_path(i64)",
-  "declare i64 @mdk_build_fingerprint(i64)",
-  "declare i64 @mdk_build_commit(i64)",
-  "declare i64 @mdk_build_date(i64)",
-  "declare i64 @mdk_net_resolve(i64)",
-  "declare i64 @mdk_net_tcp_connect(i64, i64)",
-  "declare i64 @mdk_net_tcp_listen(i64, i64)",
-  "declare i64 @mdk_net_listen_port(i64)",
-  "declare i64 @mdk_net_tcp_accept(i64)",
-  "declare i64 @mdk_net_send(i64, i64)",
-  "declare i64 @mdk_net_send_from(i64, i64, i64)",
-  "declare i64 @mdk_net_recv(i64, i64)",
-  "declare i64 @mdk_net_shutdown(i64, i64)",
-  "declare i64 @mdk_net_close(i64)",
-  "declare i64 @mdk_net_set_timeout(i64, i64)",
-  "declare i64 @mdk_pds_signal_start(i64)",
-  "declare i64 @mdk_pds_signal_requested(i64)",
-  "declare i64 @mdk_io_poll(i64, i64, i64)",
-  "declare i64 @mdk_net_set_nonblock(i64, i64)",
-  "declare i64 @mdk_net_connect_start(i64, i64)",
-  "declare i64 @mdk_net_connect_check(i64)",
-  "declare i64 @mdk_net_try_accept(i64)",
-  "declare i64 @mdk_net_try_recv(i64, i64)",
-  "declare i64 @mdk_net_try_recv_bytes(i64, i64)",
-  "declare i64 @mdk_net_try_send(i64, i64)",
-  "declare i64 @mdk_net_try_send_from(i64, i64, i64)",
-  "declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)",
-  "declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)",
-  "declare void @mdk_set_seed(i64)",
-  "declare i64 @mdk_random_state(i64)",
-  "declare void @mdk_restore_random_state(i64)",
-  "declare i64 @mdk_random_int(i64, i64)",
-  "declare i64 @mdk_random_bool(i64)",
-  "declare i64 @mdk_random_float(i64)",
-  "declare i64 @mdk_random_char(i64)",
-  "declare i64 @mdk_os_entropy_bytes(i64)",
-  "declare i64 @mdk_hash_int(i64)",
-  "declare i64 @mdk_bit_and(i64, i64)",
-  "declare i64 @mdk_bit_or(i64, i64)",
-  "declare i64 @mdk_bit_xor(i64, i64)",
-  "declare i64 @mdk_shift_left(i64, i64)",
-  "declare i64 @mdk_shift_right(i64, i64)",
-  "declare i64 @mdk_bit_not(i64)",
-  "declare i64 @mdk_hash_char(i64)",
-  "declare i64 @mdk_hash_bool(i64)",
-  "declare i64 @mdk_hash_float(double)",
-  "declare i64 @mdk_hash_string(i64)",
-  "declare i64 @mdk_int_bits_to_float(i64)",
-  "declare i64 @mdk_bytes_to_float64(i64, i64)",
-  "declare i64 @mdk_float_to_bytes64(double)",
-  "declare i64 @mdk_debug_string_lit(i64)",
-  "declare i64 @mdk_debug_char_lit(i64)",
-  "declare i64 @mdk_wall_time_sec(i64)",
-  "declare i64 @mdk_monotonic_sec(i64)",
-  "declare void @mdk_sleep_ms(i64)",
-  "declare i64 @mdk_alloc_bytes(i64)",
-  "declare void @mdk_stash_run_stdout(i64)",
-  "declare void @mdk_enable_run_stdout_flush(i64)",
-  "",
+  fn "i64" "mdk_with_file_bound" ["i64", "i64", "i64"],
+  fn "i64" "mdk_read_file" ["i64", "i64"],
+  fn "i64" "mdk_read_file_bytes" ["i64", "i64"],
+  fn "i64" "mdk_write_file" ["i64", "i64", "i64"],
+  fn "i64" "mdk_write_file_bytes" ["i64", "i64", "i64"],
+  fn "i64" "mdk_write_file_mode" ["i64", "i64", "i64", "i64"],
+  fn "i64" "mdk_append_file" ["i64", "i64", "i64"],
+  fn "i64" "mdk_file_exists" ["i64", "i64"],
+  fn "i64" "mdk_canonicalize_path" ["i64", "i64"],
+  fn "i64" "mdk_list_dir" ["i64", "i64"],
+  fn "i64" "mdk_read_line" ["i64"],
+  fn "i64" "mdk_read_line_opt" ["i64"],
+  fn "i64" "mdk_read_all" ["i64"],
+  fn "i64" "mdk_read_exactly" ["i64"],
+  fn "i64" "mdk_make_dir" ["i64", "i64"],
+  fn "i64" "mdk_remove_file" ["i64", "i64"],
+  fn "i64" "mdk_rename" ["i64", "i64", "i64", "i64"],
+  fn "i64" "mdk_remove_dir" ["i64", "i64"],
+  fn "i64" "mdk_fsync" ["i64", "i64"],
+  fn "i64" "mdk_stat_file" ["i64", "i64"],
+  fn "i64" "mdk_file_mode" ["i64", "i64"],
+  fn "i64" "mdk_run_command" ["i64", "i64"],
+  fn "i64" "mdk_run_command_batch" ["i64", "i64", "i64"],
+  fn "i64" "mdk_executable_path" ["i64"],
+  fn "i64" "mdk_build_fingerprint" ["i64"],
+  fn "i64" "mdk_build_commit" ["i64"],
+  fn "i64" "mdk_build_date" ["i64"],
+  fn "i64" "mdk_net_resolve" ["i64"],
+  fn "i64" "mdk_net_tcp_connect" ["i64", "i64"],
+  fn "i64" "mdk_net_tcp_listen" ["i64", "i64"],
+  fn "i64" "mdk_net_listen_port" ["i64"],
+  fn "i64" "mdk_net_tcp_accept" ["i64"],
+  fn "i64" "mdk_net_send" ["i64", "i64"],
+  fn "i64" "mdk_net_send_from" ["i64", "i64", "i64"],
+  fn "i64" "mdk_net_recv" ["i64", "i64"],
+  fn "i64" "mdk_net_shutdown" ["i64", "i64"],
+  fn "i64" "mdk_net_close" ["i64"],
+  fn "i64" "mdk_net_set_timeout" ["i64", "i64"],
+  fn "i64" "mdk_pds_signal_start" ["i64"],
+  fn "i64" "mdk_pds_signal_requested" ["i64"],
+  fn "i64" "mdk_io_poll" ["i64", "i64", "i64"],
+  fn "i64" "mdk_net_set_nonblock" ["i64", "i64"],
+  fn "i64" "mdk_net_connect_start" ["i64", "i64"],
+  fn "i64" "mdk_net_connect_check" ["i64"],
+  fn "i64" "mdk_net_try_accept" ["i64"],
+  fn "i64" "mdk_net_try_recv" ["i64", "i64"],
+  fn "i64" "mdk_net_try_recv_bytes" ["i64", "i64"],
+  fn "i64" "mdk_net_try_send" ["i64", "i64"],
+  fn "i64" "mdk_net_try_send_from" ["i64", "i64", "i64"],
+  fn "i64" "mdk_net_send_bytes_from" ["i64", "i64", "i64", "i64"],
+  fn "i64" "mdk_net_try_send_bytes_from" ["i64", "i64", "i64", "i64"],
+  fn "void" "mdk_set_seed" ["i64"],
+  fn "i64" "mdk_random_state" ["i64"],
+  fn "void" "mdk_restore_random_state" ["i64"],
+  fn "i64" "mdk_random_int" ["i64", "i64"],
+  fn "i64" "mdk_random_bool" ["i64"],
+  fn "i64" "mdk_random_float" ["i64"],
+  fn "i64" "mdk_random_char" ["i64"],
+  fn "i64" "mdk_os_entropy_bytes" ["i64"],
+  fn "i64" "mdk_hash_int" ["i64"],
+  fn "i64" "mdk_bit_and" ["i64", "i64"],
+  fn "i64" "mdk_bit_or" ["i64", "i64"],
+  fn "i64" "mdk_bit_xor" ["i64", "i64"],
+  fn "i64" "mdk_shift_left" ["i64", "i64"],
+  fn "i64" "mdk_shift_right" ["i64", "i64"],
+  fn "i64" "mdk_bit_not" ["i64"],
+  fn "i64" "mdk_hash_char" ["i64"],
+  fn "i64" "mdk_hash_bool" ["i64"],
+  fn "i64" "mdk_hash_float" ["double"],
+  fn "i64" "mdk_hash_string" ["i64"],
+  fn "i64" "mdk_int_bits_to_float" ["i64"],
+  fn "i64" "mdk_bytes_to_float64" ["i64", "i64"],
+  fn "i64" "mdk_float_to_bytes64" ["double"],
+  fn "i64" "mdk_debug_string_lit" ["i64"],
+  fn "i64" "mdk_debug_char_lit" ["i64"],
+  fn "i64" "mdk_wall_time_sec" ["i64"],
+  fn "i64" "mdk_monotonic_sec" ["i64"],
+  fn "void" "mdk_sleep_ms" ["i64"],
+  fn "i64" "mdk_alloc_bytes" ["i64"],
+  fn "void" "mdk_stash_run_stdout" ["i64"],
+  fn "void" "mdk_enable_run_stdout_flush" ["i64"],
 ]
 # DESUGAR
+(DUse false (UseGroup ("backend" "llvm_symbols") ((mem "LlvmParam" true) (mem "LlvmSymbol" true) (mem "Prototype" true) (mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "declareOnce" false) (mem "prototypeText" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false))))
+(DData Public "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "RuntimeDecl")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "RuntimeDecl" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "RuntimeDecl")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RuntimeDecl ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a4")))))))))
+(DTypeSig false "fn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl")))))
+(DFunDef false "fn" ((PVar "ret") (PVar "name") (PVar "params")) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString ""))) (EVar "ret")) (EVar "name")) (EVar "params")) (ELit (LString ""))))
+(DTypeSig false "noReturn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl"))))
+(DFunDef false "noReturn" ((PVar "name") (PVar "params")) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString ""))) (ELit (LString "void"))) (EVar "name")) (EVar "params")) (ELit (LString " noreturn"))))
+(DTypeSig true "runtimeName" (TyFun (TyCon "RuntimeDecl") (TyCon "String")))
+(DFunDef false "runtimeName" ((PCon "RuntimeDecl" PWild PWild (PVar "name") PWild PWild)) (EVar "name"))
+(DTypeSig true "runtimePrototype" (TyFun (TyCon "RuntimeDecl") (TyCon "Prototype")))
+(DFunDef false "runtimePrototype" ((PCon "RuntimeDecl" PWild (PVar "ret") PWild (PVar "params") (PVar "attrs"))) (EApp (EApp (EApp (EVar "FuncProto") (EVar "ret")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "LlvmParam") (EVar "t")) (ELit (LString ""))))) (EVar "params"))) (EVar "attrs")))
+(DTypeSig true "declareLine" (TyFun (TyCon "RuntimeDecl") (TyCon "String")))
+(DFunDef false "declareLine" ((PAs "d" (PCon "RuntimeDecl" (PVar "retAttrs") PWild (PVar "name") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "declare ")) (EApp (EVar "display") (EVar "retAttrs"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "prototypeText") (EVar "name")) (EApp (EVar "runtimePrototype") (EVar "d"))))) (ELit (LString ""))))
+(DTypeSig true "declareRuntime" (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "RuntimeDecl")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "declareRuntime" (PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
+(DFunDef false "declareRuntime" ((PVar "origin") (PCons (PVar "d") (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "declareOnce") (EApp (EVar "Foreign") (EApp (EVar "runtimeName") (EVar "d")))) (EApp (EVar "runtimePrototype") (EVar "d"))) (EVar "origin")) (EVar "reg")) (arm (PCon "Ok" (PVar "reg2")) () (EApp (EApp (EApp (EVar "declareRuntime") (EVar "origin")) (EVar "rest")) (EVar "reg2"))) (arm (PCon "Err" (PVar "defect")) () (EApp (EVar "Err") (EVar "defect")))))
 (DTypeSig true "preambleLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "preambleLines" () (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.")) (ELit (LString "declare noalias align 8 ptr @mdk_alloc(i64) allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"")) (ELit (LString "declare noalias align 8 ptr @mdk_alloc_atomic(i64) allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\"")) (ELit (LString "declare i64 @__mdk_apply(i64, i64, ptr)")) (ELit (LString "declare void @mdk_oob() noreturn")) (ELit (LString "declare void @mdk_oob_at(i64) noreturn")) (ELit (LString "declare void @mdk_oob_msg(i64) noreturn")) (ELit (LString "declare void @mdk_slice_oob(i64, i64) noreturn")) (ELit (LString "declare void @mdk_cyclic_value(ptr) noreturn")) (ELit (LString "declare void @mdk_div_zero() noreturn")) (ELit (LString "declare void @mdk_mod_zero() noreturn")) (ELit (LString "declare void @mdk_int_overflow(i64, i64, i64) noreturn")) (ELit (LString "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)")) (ELit (LString "declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)")) (ELit (LString "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)")) (ELit (LString "declare void @mdk_nonexhaustive_match() noreturn")) (ELit (LString "declare void @mdk_dispatch_no_impl() noreturn")) (ELit (LString "declare void @mdk_dispatch_ambiguous() noreturn")) (ELit (LString "declare void @mdk_let_refute() noreturn")) (ELit (LString "declare void @mdk_print_int(i64)")) (ELit (LString "declare void @mdk_print_bool(i64)")) (ELit (LString "declare void @mdk_print_float(double)")) (ELit (LString "declare i64 @mdk_num_add(i64, i64)")) (ELit (LString "declare i64 @mdk_num_sub(i64, i64)")) (ELit (LString "declare i64 @mdk_num_mul(i64, i64)")) (ELit (LString "declare i64 @mdk_num_div(i64, i64)")) (ELit (LString "declare i64 @mdk_num_mod(i64, i64)")) (ELit (LString "declare void @mdk_print_num(i64)")) (ELit (LString "declare void @mdk_print_u64(i64)")) (ELit (LString "declare i64 @mdk_str_lit(ptr, i64)")) (ELit (LString "declare void @mdk_print_str(i64)")) (ELit (LString "declare i64 @mdk_int_to_string(i64)")) (ELit (LString "declare i64 @mdk_float_to_string(double)")) (ELit (LString "declare i64 @llvm.fptosi.sat.i64.f64(double)")) (ELit (LString "declare double @llvm.arithmetic.fence.f64(double)")) (ELit (LString "declare i64 @mdk_string_concat(i64)")) (ELit (LString "declare i64 @mdk_string_append(i64, i64)")) (ELit (LString "declare i64 @mdk_string_append_n(i64, ptr)")) (ELit (LString "declare i64 @mdk_string_eq(i64, i64)")) (ELit (LString "declare i64 @mdk_value_eq(i64, i64)")) (ELit (LString "declare i64 @mdk_list_append(i64, i64)")) (ELit (LString "declare i64 @mdk_list_index(i64, i64)")) (ELit (LString "declare i64 @mdk_list_slice(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_append(i64, i64)")) (ELit (LString "declare void @mdk_putstr(i64)")) (ELit (LString "declare void @mdk_putstrln(i64)")) (ELit (LString "declare void @mdk_eputstr(i64)")) (ELit (LString "declare void @mdk_eputstrln(i64)")) (ELit (LString "declare void @mdk_flushstdout(i64)")) (ELit (LString "declare void @mdk_print_unit()")) (ELit (LString "declare void @mdk_panic(i64)")) (ELit (LString "declare void @mdk_exit(i64)")) (ELit (LString "declare i64 @mdk_array_make(i64, i64)")) (ELit (LString "declare i64 @mdk_array_copy(i64)")) (ELit (LString "declare void @mdk_array_blit(i64, i64, i64, i64, i64)")) (ELit (LString "declare void @mdk_array_fill(i64, i64)")) (ELit (LString "declare i64 @mdk_array_from_list(i64)")) (ELit (LString "declare i64 @mdk_byteblock_make(i64)")) (ELit (LString "declare i64 @mdk_byteblock_length(i64)")) (ELit (LString "declare i64 @mdk_byteblock_get(i64, i64)")) (ELit (LString "declare void @mdk_byteblock_set(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_byteblock_copy(i64, i64)")) (ELit (LString "declare void @mdk_byteblock_blit(i64, i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_byteblock_from_int_array(i64)")) (ELit (LString "declare i64 @mdk_byteblock_to_int_array(i64)")) (ELit (LString "declare i64 @mdk_byteblock_from_string(i64)")) (ELit (LString "declare i64 @mdk_byteblock_to_string(i64)")) (ELit (LString "declare i64 @mdk_sha256(i64)")) (ELit (LString "declare void @mdk_byteblock_write_stdout(i64)")) (ELit (LString "declare void @mdk_print_char(i64)")) (ELit (LString "declare i64 @mdk_char_to_str(i64)")) (ELit (LString "declare i64 @mdk_string_to_chars(i64)")) (ELit (LString "declare i64 @mdk_string_from_chars(i64)")) (ELit (LString "declare i64 @mdk_string_to_utf8_bytes(i64)")) (ELit (LString "declare i64 @mdk_string_from_utf8_bytes(i64)")) (ELit (LString "declare double @mdk_float_rem(double, double)")) (ELit (LString "declare double @mdk_sqrt(double)")) (ELit (LString "declare double @mdk_cbrt(double)")) (ELit (LString "declare double @mdk_exp(double)")) (ELit (LString "declare double @mdk_log(double)")) (ELit (LString "declare double @mdk_log2(double)")) (ELit (LString "declare double @mdk_log10(double)")) (ELit (LString "declare double @mdk_sin(double)")) (ELit (LString "declare double @mdk_cos(double)")) (ELit (LString "declare double @mdk_tan(double)")) (ELit (LString "declare double @mdk_asin(double)")) (ELit (LString "declare double @mdk_acos(double)")) (ELit (LString "declare double @mdk_atan(double)")) (ELit (LString "declare double @mdk_sinh(double)")) (ELit (LString "declare double @mdk_cosh(double)")) (ELit (LString "declare double @mdk_tanh(double)")) (ELit (LString "declare double @mdk_floor(double)")) (ELit (LString "declare double @mdk_ceil(double)")) (ELit (LString "declare double @mdk_round(double)")) (ELit (LString "declare double @mdk_trunc(double)")) (ELit (LString "declare double @mdk_pow(double, double)")) (ELit (LString "declare double @mdk_atan2(double, double)")) (ELit (LString "declare double @mdk_hypot(double, double)")) (ELit (LString "declare i64 @mdk_string_slice(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_string_codepoint_at_byte(i64, i64)")) (ELit (LString "declare i64 @mdk_string_slice_bytes(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_char_is_alpha(i64)")) (ELit (LString "declare i64 @mdk_char_is_space(i64)")) (ELit (LString "declare i64 @mdk_char_is_upper(i64)")) (ELit (LString "declare i64 @mdk_char_is_lower(i64)")) (ELit (LString "declare i64 @mdk_char_is_punct(i64)")) (ELit (LString "declare i64 @mdk_char_to_upper(i64)")) (ELit (LString "declare i64 @mdk_char_to_lower(i64)")) (ELit (LString "declare i64 @mdk_string_to_upper(i64)")) (ELit (LString "declare i64 @mdk_string_to_lower(i64)")) (ELit (LString "declare i64 @mdk_char_from_code(i64)")) (ELit (LString "declare i64 @mdk_string_to_float(i64)")) (ELit (LString "declare i64 @mdk_string_index_of(i64, i64)")) (ELit (LString "declare i64 @mdk_string_starts_with(i64, i64)")) (ELit (LString "declare i64 @mdk_string_ends_with(i64, i64)")) (ELit (LString "declare i64 @mdk_string_count_occurrences(i64, i64)")) (ELit (LString "declare i64 @mdk_string_last_index_of(i64, i64)")) (ELit (LString "declare i64 @mdk_string_to_int(i64)")) (ELit (LString "declare i64 @mdk_string_reverse(i64)")) (ELit (LString "declare i64 @mdk_string_join(i64, i64)")) (ELit (LString "declare i64 @mdk_string_compare(i64, i64)")) (ELit (LString "declare i64 @mdk_string_compare_raw(i64, i64)")) (ELit (LString "declare i64 @mdk_value_cmp_raw(i64, i64)")) (ELit (LString "declare i64 @mdk_value_lt(i64, i64)")) (ELit (LString "declare i64 @mdk_value_le(i64, i64)")) (ELit (LString "declare i64 @mdk_value_gt(i64, i64)")) (ELit (LString "declare i64 @mdk_value_ge(i64, i64)")) (ELit (LString "declare void @mdk_set_args(i32, ptr)")) (ELit (LString "declare i64 @mdk_args(i64)")) (ELit (LString "declare i64 @mdk_get_env(i64)")) (ELit (LString "declare i64 @mdk_with_file_bound(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_read_file(i64, i64)")) (ELit (LString "declare i64 @mdk_read_file_bytes(i64, i64)")) (ELit (LString "declare i64 @mdk_write_file(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_write_file_bytes(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_write_file_mode(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_append_file(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_file_exists(i64, i64)")) (ELit (LString "declare i64 @mdk_canonicalize_path(i64, i64)")) (ELit (LString "declare i64 @mdk_list_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_read_line(i64)")) (ELit (LString "declare i64 @mdk_read_line_opt(i64)")) (ELit (LString "declare i64 @mdk_read_all(i64)")) (ELit (LString "declare i64 @mdk_read_exactly(i64)")) (ELit (LString "declare i64 @mdk_make_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_remove_file(i64, i64)")) (ELit (LString "declare i64 @mdk_rename(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_remove_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_fsync(i64, i64)")) (ELit (LString "declare i64 @mdk_stat_file(i64, i64)")) (ELit (LString "declare i64 @mdk_file_mode(i64, i64)")) (ELit (LString "declare i64 @mdk_run_command(i64, i64)")) (ELit (LString "declare i64 @mdk_run_command_batch(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_executable_path(i64)")) (ELit (LString "declare i64 @mdk_build_fingerprint(i64)")) (ELit (LString "declare i64 @mdk_build_commit(i64)")) (ELit (LString "declare i64 @mdk_build_date(i64)")) (ELit (LString "declare i64 @mdk_net_resolve(i64)")) (ELit (LString "declare i64 @mdk_net_tcp_connect(i64, i64)")) (ELit (LString "declare i64 @mdk_net_tcp_listen(i64, i64)")) (ELit (LString "declare i64 @mdk_net_listen_port(i64)")) (ELit (LString "declare i64 @mdk_net_tcp_accept(i64)")) (ELit (LString "declare i64 @mdk_net_send(i64, i64)")) (ELit (LString "declare i64 @mdk_net_send_from(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_recv(i64, i64)")) (ELit (LString "declare i64 @mdk_net_shutdown(i64, i64)")) (ELit (LString "declare i64 @mdk_net_close(i64)")) (ELit (LString "declare i64 @mdk_net_set_timeout(i64, i64)")) (ELit (LString "declare i64 @mdk_pds_signal_start(i64)")) (ELit (LString "declare i64 @mdk_pds_signal_requested(i64)")) (ELit (LString "declare i64 @mdk_io_poll(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_set_nonblock(i64, i64)")) (ELit (LString "declare i64 @mdk_net_connect_start(i64, i64)")) (ELit (LString "declare i64 @mdk_net_connect_check(i64)")) (ELit (LString "declare i64 @mdk_net_try_accept(i64)")) (ELit (LString "declare i64 @mdk_net_try_recv(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_recv_bytes(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send_from(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)")) (ELit (LString "declare void @mdk_set_seed(i64)")) (ELit (LString "declare i64 @mdk_random_state(i64)")) (ELit (LString "declare void @mdk_restore_random_state(i64)")) (ELit (LString "declare i64 @mdk_random_int(i64, i64)")) (ELit (LString "declare i64 @mdk_random_bool(i64)")) (ELit (LString "declare i64 @mdk_random_float(i64)")) (ELit (LString "declare i64 @mdk_random_char(i64)")) (ELit (LString "declare i64 @mdk_os_entropy_bytes(i64)")) (ELit (LString "declare i64 @mdk_hash_int(i64)")) (ELit (LString "declare i64 @mdk_bit_and(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_or(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_xor(i64, i64)")) (ELit (LString "declare i64 @mdk_shift_left(i64, i64)")) (ELit (LString "declare i64 @mdk_shift_right(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_not(i64)")) (ELit (LString "declare i64 @mdk_hash_char(i64)")) (ELit (LString "declare i64 @mdk_hash_bool(i64)")) (ELit (LString "declare i64 @mdk_hash_float(double)")) (ELit (LString "declare i64 @mdk_hash_string(i64)")) (ELit (LString "declare i64 @mdk_int_bits_to_float(i64)")) (ELit (LString "declare i64 @mdk_bytes_to_float64(i64, i64)")) (ELit (LString "declare i64 @mdk_float_to_bytes64(double)")) (ELit (LString "declare i64 @mdk_debug_string_lit(i64)")) (ELit (LString "declare i64 @mdk_debug_char_lit(i64)")) (ELit (LString "declare i64 @mdk_wall_time_sec(i64)")) (ELit (LString "declare i64 @mdk_monotonic_sec(i64)")) (ELit (LString "declare void @mdk_sleep_ms(i64)")) (ELit (LString "declare i64 @mdk_alloc_bytes(i64)")) (ELit (LString "declare void @mdk_stash_run_stdout(i64)")) (ELit (LString "declare void @mdk_enable_run_stdout_flush(i64)")) (ELit (LString ""))))
+(DFunDef false "preambleLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md."))) (EApp (EApp (EVar "map") (EVar "declareLine")) (EVar "runtimeDecls"))) (EListLit (ELit (LString "")))))
+(DTypeSig true "ffiRuntimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
+(DFunDef false "ffiRuntimeDecls" () (EListLit (EApp (EApp (EApp (EVar "fn") (ELit (LString "ptr"))) (ELit (LString "mdk_ffi_array_int_out"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_ffi_array_int_in"))) (EListLit (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_ffi_str_in"))) (EListLit (ELit (LString "ptr"))))))
+(DTypeSig true "runtimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
+(DFunDef false "runtimeDecls" () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString "noalias align 8 "))) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EListLit (ELit (LString "i64")))) (ELit (LString " allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\""))) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString "noalias align 8 "))) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc_atomic"))) (EListLit (ELit (LString "i64")))) (ELit (LString " allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\""))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "__mdk_apply"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_msg"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_slice_oob"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_cyclic_value"))) (EListLit (ELit (LString "ptr")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_div_zero"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_mod_zero"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_int_overflow"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.sadd.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.ssub.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.smul.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_nonexhaustive_match"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_dispatch_ambiguous"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_let_refute"))) (EListLit)) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_float"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_add"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_sub"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_mul"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_div"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_mod"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_num"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_u64"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_str_lit"))) (EListLit (ELit (LString "ptr")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_str"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_int_to_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_float_to_string"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "llvm.fptosi.sat.i64.f64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "llvm.arithmetic.fence.f64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_concat"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_append_n"))) (EListLit (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_eq"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_index"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_slice"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_putstr"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_putstrln"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_eputstr"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_eputstrln"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_flushstdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_unit"))) (EListLit)) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_panic"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_exit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_make"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_copy"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_array_blit"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_array_fill"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_from_list"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_make"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_length"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_get"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_set"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_copy"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_blit"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_from_int_array"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_to_int_array"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_from_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_to_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_sha256"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_write_stdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_str"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_chars"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_from_chars"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_utf8_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_from_utf8_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_float_rem"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sqrt"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cbrt"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_exp"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log2"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log10"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sin"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cos"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_tan"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_asin"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_acos"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_atan"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sinh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cosh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_tanh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_floor"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_ceil"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_round"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_trunc"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_pow"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_atan2"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_hypot"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_slice"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_codepoint_at_byte"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_slice_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_alpha"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_space"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_punct"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_from_code"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_index_of"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_starts_with"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_ends_with"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_count_occurrences"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_last_index_of"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_reverse"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_join"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_compare"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_compare_raw"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_cmp_raw"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_lt"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_le"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_gt"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_ge"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_set_args"))) (EListLit (ELit (LString "i32")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_args"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_get_env"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_with_file_bound"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_file_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file_mode"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_append_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_file_exists"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_canonicalize_path"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_line"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_line_opt"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_all"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_exactly"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_make_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_remove_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_rename"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_remove_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_fsync"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_stat_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_file_mode"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_run_command"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_run_command_batch"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_executable_path"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_fingerprint"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_commit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_date"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_resolve"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_connect"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_listen"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_listen_port"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_accept"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_recv"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_shutdown"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_close"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_set_timeout"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_pds_signal_start"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_pds_signal_requested"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_io_poll"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_set_nonblock"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_connect_start"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_connect_check"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_accept"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_recv"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_recv_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send_bytes_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send_bytes_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_set_seed"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_state"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_restore_random_state"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_int"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_os_entropy_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_and"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_or"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_xor"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_shift_left"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_shift_right"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_float"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_int_bits_to_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bytes_to_float64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_float_to_bytes64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_debug_string_lit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_debug_char_lit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_wall_time_sec"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_monotonic_sec"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_sleep_ms"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_alloc_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_stash_run_stdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_enable_run_stdout_flush"))) (EListLit (ELit (LString "i64"))))))
 # MARK
+(DUse false (UseGroup ("backend" "llvm_symbols") ((mem "LlvmParam" true) (mem "LlvmSymbol" true) (mem "Prototype" true) (mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "declareOnce" false) (mem "prototypeText" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false))))
+(DData Public "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "RuntimeDecl")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "RuntimeDecl" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "RuntimeDecl")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RuntimeDecl ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a4")))))))))
+(DTypeSig false "fn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl")))))
+(DFunDef false "fn" ((PVar "ret") (PVar "name") (PVar "params")) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString ""))) (EVar "ret")) (EVar "name")) (EVar "params")) (ELit (LString ""))))
+(DTypeSig false "noReturn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl"))))
+(DFunDef false "noReturn" ((PVar "name") (PVar "params")) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString ""))) (ELit (LString "void"))) (EVar "name")) (EVar "params")) (ELit (LString " noreturn"))))
+(DTypeSig true "runtimeName" (TyFun (TyCon "RuntimeDecl") (TyCon "String")))
+(DFunDef false "runtimeName" ((PCon "RuntimeDecl" PWild PWild (PVar "name") PWild PWild)) (EVar "name"))
+(DTypeSig true "runtimePrototype" (TyFun (TyCon "RuntimeDecl") (TyCon "Prototype")))
+(DFunDef false "runtimePrototype" ((PCon "RuntimeDecl" PWild (PVar "ret") PWild (PVar "params") (PVar "attrs"))) (EApp (EApp (EApp (EVar "FuncProto") (EVar "ret")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "LlvmParam") (EVar "t")) (ELit (LString ""))))) (EVar "params"))) (EVar "attrs")))
+(DTypeSig true "declareLine" (TyFun (TyCon "RuntimeDecl") (TyCon "String")))
+(DFunDef false "declareLine" ((PAs "d" (PCon "RuntimeDecl" (PVar "retAttrs") PWild (PVar "name") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "declare ")) (EApp (EMethodRef "display") (EVar "retAttrs"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "prototypeText") (EVar "name")) (EApp (EVar "runtimePrototype") (EVar "d"))))) (ELit (LString ""))))
+(DTypeSig true "declareRuntime" (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "RuntimeDecl")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "declareRuntime" (PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
+(DFunDef false "declareRuntime" ((PVar "origin") (PCons (PVar "d") (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "declareOnce") (EApp (EVar "Foreign") (EApp (EVar "runtimeName") (EVar "d")))) (EApp (EVar "runtimePrototype") (EVar "d"))) (EVar "origin")) (EVar "reg")) (arm (PCon "Ok" (PVar "reg2")) () (EApp (EApp (EApp (EVar "declareRuntime") (EVar "origin")) (EVar "rest")) (EVar "reg2"))) (arm (PCon "Err" (PVar "defect")) () (EApp (EVar "Err") (EVar "defect")))))
 (DTypeSig true "preambleLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "preambleLines" () (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.")) (ELit (LString "declare noalias align 8 ptr @mdk_alloc(i64) allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"")) (ELit (LString "declare noalias align 8 ptr @mdk_alloc_atomic(i64) allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\"")) (ELit (LString "declare i64 @__mdk_apply(i64, i64, ptr)")) (ELit (LString "declare void @mdk_oob() noreturn")) (ELit (LString "declare void @mdk_oob_at(i64) noreturn")) (ELit (LString "declare void @mdk_oob_msg(i64) noreturn")) (ELit (LString "declare void @mdk_slice_oob(i64, i64) noreturn")) (ELit (LString "declare void @mdk_cyclic_value(ptr) noreturn")) (ELit (LString "declare void @mdk_div_zero() noreturn")) (ELit (LString "declare void @mdk_mod_zero() noreturn")) (ELit (LString "declare void @mdk_int_overflow(i64, i64, i64) noreturn")) (ELit (LString "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)")) (ELit (LString "declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)")) (ELit (LString "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)")) (ELit (LString "declare void @mdk_nonexhaustive_match() noreturn")) (ELit (LString "declare void @mdk_dispatch_no_impl() noreturn")) (ELit (LString "declare void @mdk_dispatch_ambiguous() noreturn")) (ELit (LString "declare void @mdk_let_refute() noreturn")) (ELit (LString "declare void @mdk_print_int(i64)")) (ELit (LString "declare void @mdk_print_bool(i64)")) (ELit (LString "declare void @mdk_print_float(double)")) (ELit (LString "declare i64 @mdk_num_add(i64, i64)")) (ELit (LString "declare i64 @mdk_num_sub(i64, i64)")) (ELit (LString "declare i64 @mdk_num_mul(i64, i64)")) (ELit (LString "declare i64 @mdk_num_div(i64, i64)")) (ELit (LString "declare i64 @mdk_num_mod(i64, i64)")) (ELit (LString "declare void @mdk_print_num(i64)")) (ELit (LString "declare void @mdk_print_u64(i64)")) (ELit (LString "declare i64 @mdk_str_lit(ptr, i64)")) (ELit (LString "declare void @mdk_print_str(i64)")) (ELit (LString "declare i64 @mdk_int_to_string(i64)")) (ELit (LString "declare i64 @mdk_float_to_string(double)")) (ELit (LString "declare i64 @llvm.fptosi.sat.i64.f64(double)")) (ELit (LString "declare double @llvm.arithmetic.fence.f64(double)")) (ELit (LString "declare i64 @mdk_string_concat(i64)")) (ELit (LString "declare i64 @mdk_string_append(i64, i64)")) (ELit (LString "declare i64 @mdk_string_append_n(i64, ptr)")) (ELit (LString "declare i64 @mdk_string_eq(i64, i64)")) (ELit (LString "declare i64 @mdk_value_eq(i64, i64)")) (ELit (LString "declare i64 @mdk_list_append(i64, i64)")) (ELit (LString "declare i64 @mdk_list_index(i64, i64)")) (ELit (LString "declare i64 @mdk_list_slice(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_append(i64, i64)")) (ELit (LString "declare void @mdk_putstr(i64)")) (ELit (LString "declare void @mdk_putstrln(i64)")) (ELit (LString "declare void @mdk_eputstr(i64)")) (ELit (LString "declare void @mdk_eputstrln(i64)")) (ELit (LString "declare void @mdk_flushstdout(i64)")) (ELit (LString "declare void @mdk_print_unit()")) (ELit (LString "declare void @mdk_panic(i64)")) (ELit (LString "declare void @mdk_exit(i64)")) (ELit (LString "declare i64 @mdk_array_make(i64, i64)")) (ELit (LString "declare i64 @mdk_array_copy(i64)")) (ELit (LString "declare void @mdk_array_blit(i64, i64, i64, i64, i64)")) (ELit (LString "declare void @mdk_array_fill(i64, i64)")) (ELit (LString "declare i64 @mdk_array_from_list(i64)")) (ELit (LString "declare i64 @mdk_byteblock_make(i64)")) (ELit (LString "declare i64 @mdk_byteblock_length(i64)")) (ELit (LString "declare i64 @mdk_byteblock_get(i64, i64)")) (ELit (LString "declare void @mdk_byteblock_set(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_byteblock_copy(i64, i64)")) (ELit (LString "declare void @mdk_byteblock_blit(i64, i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_byteblock_from_int_array(i64)")) (ELit (LString "declare i64 @mdk_byteblock_to_int_array(i64)")) (ELit (LString "declare i64 @mdk_byteblock_from_string(i64)")) (ELit (LString "declare i64 @mdk_byteblock_to_string(i64)")) (ELit (LString "declare i64 @mdk_sha256(i64)")) (ELit (LString "declare void @mdk_byteblock_write_stdout(i64)")) (ELit (LString "declare void @mdk_print_char(i64)")) (ELit (LString "declare i64 @mdk_char_to_str(i64)")) (ELit (LString "declare i64 @mdk_string_to_chars(i64)")) (ELit (LString "declare i64 @mdk_string_from_chars(i64)")) (ELit (LString "declare i64 @mdk_string_to_utf8_bytes(i64)")) (ELit (LString "declare i64 @mdk_string_from_utf8_bytes(i64)")) (ELit (LString "declare double @mdk_float_rem(double, double)")) (ELit (LString "declare double @mdk_sqrt(double)")) (ELit (LString "declare double @mdk_cbrt(double)")) (ELit (LString "declare double @mdk_exp(double)")) (ELit (LString "declare double @mdk_log(double)")) (ELit (LString "declare double @mdk_log2(double)")) (ELit (LString "declare double @mdk_log10(double)")) (ELit (LString "declare double @mdk_sin(double)")) (ELit (LString "declare double @mdk_cos(double)")) (ELit (LString "declare double @mdk_tan(double)")) (ELit (LString "declare double @mdk_asin(double)")) (ELit (LString "declare double @mdk_acos(double)")) (ELit (LString "declare double @mdk_atan(double)")) (ELit (LString "declare double @mdk_sinh(double)")) (ELit (LString "declare double @mdk_cosh(double)")) (ELit (LString "declare double @mdk_tanh(double)")) (ELit (LString "declare double @mdk_floor(double)")) (ELit (LString "declare double @mdk_ceil(double)")) (ELit (LString "declare double @mdk_round(double)")) (ELit (LString "declare double @mdk_trunc(double)")) (ELit (LString "declare double @mdk_pow(double, double)")) (ELit (LString "declare double @mdk_atan2(double, double)")) (ELit (LString "declare double @mdk_hypot(double, double)")) (ELit (LString "declare i64 @mdk_string_slice(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_string_codepoint_at_byte(i64, i64)")) (ELit (LString "declare i64 @mdk_string_slice_bytes(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_char_is_alpha(i64)")) (ELit (LString "declare i64 @mdk_char_is_space(i64)")) (ELit (LString "declare i64 @mdk_char_is_upper(i64)")) (ELit (LString "declare i64 @mdk_char_is_lower(i64)")) (ELit (LString "declare i64 @mdk_char_is_punct(i64)")) (ELit (LString "declare i64 @mdk_char_to_upper(i64)")) (ELit (LString "declare i64 @mdk_char_to_lower(i64)")) (ELit (LString "declare i64 @mdk_string_to_upper(i64)")) (ELit (LString "declare i64 @mdk_string_to_lower(i64)")) (ELit (LString "declare i64 @mdk_char_from_code(i64)")) (ELit (LString "declare i64 @mdk_string_to_float(i64)")) (ELit (LString "declare i64 @mdk_string_index_of(i64, i64)")) (ELit (LString "declare i64 @mdk_string_starts_with(i64, i64)")) (ELit (LString "declare i64 @mdk_string_ends_with(i64, i64)")) (ELit (LString "declare i64 @mdk_string_count_occurrences(i64, i64)")) (ELit (LString "declare i64 @mdk_string_last_index_of(i64, i64)")) (ELit (LString "declare i64 @mdk_string_to_int(i64)")) (ELit (LString "declare i64 @mdk_string_reverse(i64)")) (ELit (LString "declare i64 @mdk_string_join(i64, i64)")) (ELit (LString "declare i64 @mdk_string_compare(i64, i64)")) (ELit (LString "declare i64 @mdk_string_compare_raw(i64, i64)")) (ELit (LString "declare i64 @mdk_value_cmp_raw(i64, i64)")) (ELit (LString "declare i64 @mdk_value_lt(i64, i64)")) (ELit (LString "declare i64 @mdk_value_le(i64, i64)")) (ELit (LString "declare i64 @mdk_value_gt(i64, i64)")) (ELit (LString "declare i64 @mdk_value_ge(i64, i64)")) (ELit (LString "declare void @mdk_set_args(i32, ptr)")) (ELit (LString "declare i64 @mdk_args(i64)")) (ELit (LString "declare i64 @mdk_get_env(i64)")) (ELit (LString "declare i64 @mdk_with_file_bound(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_read_file(i64, i64)")) (ELit (LString "declare i64 @mdk_read_file_bytes(i64, i64)")) (ELit (LString "declare i64 @mdk_write_file(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_write_file_bytes(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_write_file_mode(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_append_file(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_file_exists(i64, i64)")) (ELit (LString "declare i64 @mdk_canonicalize_path(i64, i64)")) (ELit (LString "declare i64 @mdk_list_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_read_line(i64)")) (ELit (LString "declare i64 @mdk_read_line_opt(i64)")) (ELit (LString "declare i64 @mdk_read_all(i64)")) (ELit (LString "declare i64 @mdk_read_exactly(i64)")) (ELit (LString "declare i64 @mdk_make_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_remove_file(i64, i64)")) (ELit (LString "declare i64 @mdk_rename(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_remove_dir(i64, i64)")) (ELit (LString "declare i64 @mdk_fsync(i64, i64)")) (ELit (LString "declare i64 @mdk_stat_file(i64, i64)")) (ELit (LString "declare i64 @mdk_file_mode(i64, i64)")) (ELit (LString "declare i64 @mdk_run_command(i64, i64)")) (ELit (LString "declare i64 @mdk_run_command_batch(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_executable_path(i64)")) (ELit (LString "declare i64 @mdk_build_fingerprint(i64)")) (ELit (LString "declare i64 @mdk_build_commit(i64)")) (ELit (LString "declare i64 @mdk_build_date(i64)")) (ELit (LString "declare i64 @mdk_net_resolve(i64)")) (ELit (LString "declare i64 @mdk_net_tcp_connect(i64, i64)")) (ELit (LString "declare i64 @mdk_net_tcp_listen(i64, i64)")) (ELit (LString "declare i64 @mdk_net_listen_port(i64)")) (ELit (LString "declare i64 @mdk_net_tcp_accept(i64)")) (ELit (LString "declare i64 @mdk_net_send(i64, i64)")) (ELit (LString "declare i64 @mdk_net_send_from(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_recv(i64, i64)")) (ELit (LString "declare i64 @mdk_net_shutdown(i64, i64)")) (ELit (LString "declare i64 @mdk_net_close(i64)")) (ELit (LString "declare i64 @mdk_net_set_timeout(i64, i64)")) (ELit (LString "declare i64 @mdk_pds_signal_start(i64)")) (ELit (LString "declare i64 @mdk_pds_signal_requested(i64)")) (ELit (LString "declare i64 @mdk_io_poll(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_set_nonblock(i64, i64)")) (ELit (LString "declare i64 @mdk_net_connect_start(i64, i64)")) (ELit (LString "declare i64 @mdk_net_connect_check(i64)")) (ELit (LString "declare i64 @mdk_net_try_accept(i64)")) (ELit (LString "declare i64 @mdk_net_try_recv(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_recv_bytes(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send(i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send_from(i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)")) (ELit (LString "declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)")) (ELit (LString "declare void @mdk_set_seed(i64)")) (ELit (LString "declare i64 @mdk_random_state(i64)")) (ELit (LString "declare void @mdk_restore_random_state(i64)")) (ELit (LString "declare i64 @mdk_random_int(i64, i64)")) (ELit (LString "declare i64 @mdk_random_bool(i64)")) (ELit (LString "declare i64 @mdk_random_float(i64)")) (ELit (LString "declare i64 @mdk_random_char(i64)")) (ELit (LString "declare i64 @mdk_os_entropy_bytes(i64)")) (ELit (LString "declare i64 @mdk_hash_int(i64)")) (ELit (LString "declare i64 @mdk_bit_and(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_or(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_xor(i64, i64)")) (ELit (LString "declare i64 @mdk_shift_left(i64, i64)")) (ELit (LString "declare i64 @mdk_shift_right(i64, i64)")) (ELit (LString "declare i64 @mdk_bit_not(i64)")) (ELit (LString "declare i64 @mdk_hash_char(i64)")) (ELit (LString "declare i64 @mdk_hash_bool(i64)")) (ELit (LString "declare i64 @mdk_hash_float(double)")) (ELit (LString "declare i64 @mdk_hash_string(i64)")) (ELit (LString "declare i64 @mdk_int_bits_to_float(i64)")) (ELit (LString "declare i64 @mdk_bytes_to_float64(i64, i64)")) (ELit (LString "declare i64 @mdk_float_to_bytes64(double)")) (ELit (LString "declare i64 @mdk_debug_string_lit(i64)")) (ELit (LString "declare i64 @mdk_debug_char_lit(i64)")) (ELit (LString "declare i64 @mdk_wall_time_sec(i64)")) (ELit (LString "declare i64 @mdk_monotonic_sec(i64)")) (ELit (LString "declare void @mdk_sleep_ms(i64)")) (ELit (LString "declare i64 @mdk_alloc_bytes(i64)")) (ELit (LString "declare void @mdk_stash_run_stdout(i64)")) (ELit (LString "declare void @mdk_enable_run_stdout_flush(i64)")) (ELit (LString ""))))
+(DFunDef false "preambleLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md."))) (EApp (EApp (EMethodRef "map") (EVar "declareLine")) (EVar "runtimeDecls"))) (EListLit (ELit (LString "")))))
+(DTypeSig true "ffiRuntimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
+(DFunDef false "ffiRuntimeDecls" () (EListLit (EApp (EApp (EApp (EVar "fn") (ELit (LString "ptr"))) (ELit (LString "mdk_ffi_array_int_out"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_ffi_array_int_in"))) (EListLit (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_ffi_str_in"))) (EListLit (ELit (LString "ptr"))))))
+(DTypeSig true "runtimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
+(DFunDef false "runtimeDecls" () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString "noalias align 8 "))) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EListLit (ELit (LString "i64")))) (ELit (LString " allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\""))) (EApp (EApp (EApp (EApp (EApp (EVar "RuntimeDecl") (ELit (LString "noalias align 8 "))) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc_atomic"))) (EListLit (ELit (LString "i64")))) (ELit (LString " allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\""))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "__mdk_apply"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_msg"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_slice_oob"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_cyclic_value"))) (EListLit (ELit (LString "ptr")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_div_zero"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_mod_zero"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_int_overflow"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.sadd.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.ssub.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "{ i64, i1 }"))) (ELit (LString "llvm.smul.with.overflow.i64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_nonexhaustive_match"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_dispatch_ambiguous"))) (EListLit)) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_let_refute"))) (EListLit)) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_float"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_add"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_sub"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_mul"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_div"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_num_mod"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_num"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_u64"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_str_lit"))) (EListLit (ELit (LString "ptr")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_str"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_int_to_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_float_to_string"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "llvm.fptosi.sat.i64.f64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "llvm.arithmetic.fence.f64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_concat"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_append_n"))) (EListLit (ELit (LString "i64")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_eq"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_index"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_slice"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_putstr"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_putstrln"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_eputstr"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_eputstrln"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_flushstdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_unit"))) (EListLit)) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_panic"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_exit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_make"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_copy"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_array_blit"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_array_fill"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_array_from_list"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_make"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_length"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_get"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_set"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_copy"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_blit"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_from_int_array"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_to_int_array"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_from_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_byteblock_to_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_sha256"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_byteblock_write_stdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_print_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_str"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_chars"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_from_chars"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_utf8_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_from_utf8_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_float_rem"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sqrt"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cbrt"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_exp"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log2"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_log10"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sin"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cos"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_tan"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_asin"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_acos"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_atan"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_sinh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_cosh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_tanh"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_floor"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_ceil"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_round"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_trunc"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_pow"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_atan2"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "double"))) (ELit (LString "mdk_hypot"))) (EListLit (ELit (LString "double")) (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_slice"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_codepoint_at_byte"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_slice_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_alpha"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_space"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_is_punct"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_to_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_upper"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_lower"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_char_from_code"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_index_of"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_starts_with"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_ends_with"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_count_occurrences"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_last_index_of"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_to_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_reverse"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_join"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_compare"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_string_compare_raw"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_cmp_raw"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_lt"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_le"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_gt"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_value_ge"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_set_args"))) (EListLit (ELit (LString "i32")) (ELit (LString "ptr")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_args"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_get_env"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_with_file_bound"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_file_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_write_file_mode"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_append_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_file_exists"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_canonicalize_path"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_list_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_line"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_line_opt"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_all"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_read_exactly"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_make_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_remove_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_rename"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_remove_dir"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_fsync"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_stat_file"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_file_mode"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_run_command"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_run_command_batch"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_executable_path"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_fingerprint"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_commit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_build_date"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_resolve"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_connect"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_listen"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_listen_port"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_tcp_accept"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_recv"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_shutdown"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_close"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_set_timeout"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_pds_signal_start"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_pds_signal_requested"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_io_poll"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_set_nonblock"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_connect_start"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_connect_check"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_accept"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_recv"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_recv_bytes"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_send_bytes_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_net_try_send_bytes_from"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_set_seed"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_state"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_restore_random_state"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_int"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_random_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_os_entropy_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_int"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_and"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_or"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_xor"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_shift_left"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_shift_right"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_char"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_bool"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_float"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_hash_string"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_int_bits_to_float"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_bytes_to_float64"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_float_to_bytes64"))) (EListLit (ELit (LString "double")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_debug_string_lit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_debug_char_lit"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_wall_time_sec"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_monotonic_sec"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_sleep_ms"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "i64"))) (ELit (LString "mdk_alloc_bytes"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_stash_run_stdout"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EApp (EVar "fn") (ELit (LString "void"))) (ELit (LString "mdk_enable_run_stdout_flush"))) (EListLit (ELit (LString "i64"))))))

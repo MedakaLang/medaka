@@ -35,6 +35,7 @@ import ir.core_ir_lower.{
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import driver.diagnostics.{refuseSymbolDefects}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -60,5 +61,7 @@ withTarget targetPath = match readFile targetPath
       stampDeclaredSignatures decls (lowerProgramEmitWith emptyFacts annotated)
     let (plan, prepared) =
       prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-    putStr (emitProgram input plan prepared)
+    match emitProgram input plan prepared
+      Ok wat => putStr wat
+      Err defects => refuseSymbolDefects targetPath defects
   Err msg => ePutStrLn msg

@@ -360,11 +360,7 @@ measured 25s wall on the dev box at the corpus it landed with. Case count derive
 `--engines eval,native`, placed here by cost — measured 2026-08-05, merge_group run 31043828993,
 `eval` 215s was cheapest after excluding `tools`/`engines`; `types` 472s was the pole. It reads no
 oracle, only `./medaka` + clang, and lands beside `diff_compiler_origin_agreement`, which also
-probes `test_cmd.mdk`'s elaboration path; measured ~6s. `diff_compiler_draft_semantic` (#1399
-X-0D) and `diff_compiler_anf_identity` (#1400 X-A) are lightweight compiled-probe gates parked
-here for the same reason — this shard already builds the adjacent Core/elaboration probes, so
-their marginal build joins the existing parallel oracle batch rather than becoming a serial
-oracle.
+probes `test_cmd.mdk`'s elaboration path; measured ~6s.
 
 `diff_compiler_flat_vs_onemodule` (ARCH B-2.1-a, Stage B sprint) is a typecheck gate here for cost,
 fifth time over. Its thematic home, `types`, was the second-heaviest shard. Derived 2026-08-13

@@ -185,6 +185,9 @@ inlang-support-sexp-value-test:
 	./medaka test compiler/tools/lsp_positions_test.mdk
 	./medaka test compiler/tools/lsp_diagnostics_test.mdk
 
+inlang-support-symbol-origin-test:
+	./medaka test compiler/support/symbol_origin_test.mdk
+
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
@@ -255,6 +258,27 @@ inlang-backend-wasm-emit-trapmsg-test:
 ## `__wparg` copy; multi-clause and wildcard params stay positional.
 inlang-backend-wasm-emit-paramname-test:
 	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
+
+## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
+## beside a valid same-name control, plus whole programs through the emitter.
+inlang-backend-wasm-symbols-test:
+	./medaka test compiler/backend/wasm_symbols_test.mdk
+
+## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
+## defines and calls what its manifest row states, and the registry seeded from
+## the rows refuses each defect beside a valid control.
+inlang-backend-wasm-preamble-test:
+	./medaka test compiler/backend/wasm_preamble_test.mdk
+
+## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
+## beside a valid same-name control, plus whole programs through the emitter.
+inlang-backend-llvm-symbols-test:
+	./medaka test compiler/backend/llvm_symbols_test.mdk
+
+## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as
+## the declaration its parts describe, and the registry checks calls against it.
+inlang-backend-llvm-preamble-test:
+	./medaka test compiler/backend/llvm_preamble_test.mdk
 
 ## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
 ## payload, shared by every site that spells the same bytes.

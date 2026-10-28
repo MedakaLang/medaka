@@ -43,7 +43,7 @@ WASMBIN="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 MANIFEST="$ROOT/test/rejection_parity_fixtures.txt"
 TIMEOUT="${TIMEOUT:-60}"
 
-run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }   # portable timeout (no coreutils on mac)
+run_t() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }   # portable timeout (no coreutils on mac)
 
 # key → fixture path.  Mirror of diff_compiler_engines.sh's keyfor() inverse; only the
 # two prelude-free emitter corpora hold rejection-parity fixtures, but wasm/ + wasmT/ are

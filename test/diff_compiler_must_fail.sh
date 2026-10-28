@@ -203,7 +203,7 @@ trap 'rm -rf "$TMP"' EXIT
 #      are untouched, and repair 1 makes the fuse strictly LOUDER than it was.
 MUST_FAIL_ALARM="${MUST_FAIL_ALARM:-300}"
 MUST_FAIL_TIMEOUT_RC=142
-bound() { perl -e 'alarm shift; exec @ARGV' "$MUST_FAIL_ALARM" "$@"; }
+bound() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$MUST_FAIL_ALARM" "$@"; }
 
 # Render `check --json` to one stable line per diagnostic: CODE sl:sc-el:ec message
 render_diags() {

@@ -43,6 +43,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import driver.diagnostics.{refuseLlvmSymbolDefects}
 
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
@@ -87,12 +88,14 @@ runEmit inputs runtimeDecls coreDecls modules =
 
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
-  let (text, _) =
+  let emitted =
     emitProgramRecord
       input
       (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
       cp
-  putStr text
+  match emitted
+    Ok (text, _) => putStr text
+    Err defects => refuseLlvmSymbolDefects "" defects
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, on the trees `elaborateModules` has already produced (#2809 put the
 -- rename after the elaboration, not before it).  Without this, two modules'

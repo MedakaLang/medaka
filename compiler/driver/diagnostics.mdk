@@ -134,6 +134,15 @@ import support.util.{
   reverseL,
 }
 import support.timer.{takePerfSink}
+import support.stage_count.{stageExit}
+import backend.wasm_symbols.{
+  SymbolDefect,
+  defectCode,
+  defectMessage,
+  defectOrigin,
+}
+import backend.llvm_symbols as LlvmSymbols
+import support.symbol_origin.{SymbolOrigin, originPosition}
 import json.{Json(..), jObject, stringify}
 import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
@@ -2931,6 +2940,66 @@ isCoherenceWarn _ = False
 export
 emitDiagExitCode : Int
 emitDiagExitCode = 3
+
+-- The Wasm emitter's physical-symbol defects (backend/wasm_symbols.mdk) as
+-- diagnostics, each at the binding whose emission found it.  The code leads the
+-- message because the text renderers print none.  [file] names the program for
+-- an origin parsed without a file name.
+export
+renderSymbolDefects : String -> List SymbolDefect -> List String
+renderSymbolDefects file ds =
+  map
+    (d =>
+      let (at, diag) = symbolDefectDiag file d
+      ppDiagCliLines (arrayFromList []) at diag)
+    ds
+
+-- the file a defect is reported in, and its diagnostic
+symbolDefectDiag : String -> SymbolDefect -> (String, Diag)
+symbolDefectDiag file d =
+  physicalDiag file (defectOrigin d) (defectCode d) (defectMessage d)
+
+-- [code] and [message] at [origin], in [file] when the origin names no file:
+-- the file reported in, and the diagnostic
+physicalDiag : String -> SymbolOrigin -> String -> String -> (String, Diag)
+physicalDiag file origin code message =
+  let (f, line, col) = originPosition origin
+  let at = if f == "" then file else f
+  let loc =
+    if line > 0 && at /= "" then Some (Loc at line col line col) else None
+  (at, mkDiag SevError code "[\{code}] \{message}" loc)
+
+-- The emit driver's refusal of a module with physical-symbol defects: their
+-- diagnostics on stderr, each with its source line, under the code that tells
+-- `medaka build` they are diagnostics rather than a backend crash.  No module
+-- text is written.
+export
+refuseSymbolDefects : String -> List SymbolDefect -> <IO> Unit
+refuseSymbolDefects file ds = refusePhysical (map (symbolDefectDiag file) ds)
+
+refusePhysical : List (String, Diag) -> <IO> Unit
+refusePhysical diags =
+  let _ =
+    map
+      ((at, diag) =>
+        ePutStrLn (ppDiagCliLines (srcLinesArr (readFileSafe at)) at diag))
+      diags
+  stageExit emitDiagExitCode
+
+-- The LLVM emitter's physical-symbol defects (backend/llvm_symbols.mdk), refused
+-- as the Wasm emitter's are above.
+export
+refuseLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> <IO> Unit
+refuseLlvmSymbolDefects file ds =
+  refusePhysical (map (llvmSymbolDefectDiag file) ds)
+
+llvmSymbolDefectDiag : String -> LlvmSymbols.SymbolDefect -> (String, Diag)
+llvmSymbolDefectDiag file d =
+  physicalDiag
+    file
+    (LlvmSymbols.defectOrigin d)
+    (LlvmSymbols.defectCode d)
+    (LlvmSymbols.defectMessage d)
 
 -- The emit driver's whole diagnostic face (ARCH §E), over the per-file buckets
 -- `frontEnd` folded from ONE elaboration: the located per-file error lines and

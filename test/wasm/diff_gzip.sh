@@ -40,7 +40,7 @@ DEMO="$ROOT/gzip/inflate_demo.mdk"
 # Portable timeout (no coreutils `timeout` on macOS) — same shim as
 # test/lib_engines_differential.sh and gzip/test/inflate_oracle.sh. Exit 142
 # (128+SIGALRM) signals "hung"; real exit codes pass through unchanged.
-run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+run_t() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }
 
 # ── Per-case worker (parallel fan-out target) ──────────────────────────────
 # Re-invoked as `bash "$0" --one <success|error> <name> <gz-path> [expected-path]`

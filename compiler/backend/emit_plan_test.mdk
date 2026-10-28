@@ -33,7 +33,8 @@ import test.{
   expectTextContainsAll,
   fail,
 }
-import string.{contains, endsWith, lines, trimLeft, startsWith}
+import string.{contains, endsWith, lines, split, trimLeft, startsWith, words}
+import list.{drop, sort, take}
 import frontend.ast.{
   Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
 }
@@ -291,6 +292,146 @@ test "no entry runs reach itself" =
       expectAll
         (labelFail "compiler/entries holds entries" (expectNotEqual [] entries)
           :: map noEntryReach entries)
+
+-- ── physical-identity ratchets ──────────────────────────────────────────────
+-- Each one reads emitter source and fails when a retired mechanism returns:
+-- an unchecked direct call, a declare derived from emitted text, or a leading
+-- dictionary count taken from parameter spelling.
+
+-- Lines that are not `--` comments.
+codeLinesOf : String -> List String
+codeLinesOf text = filter (l => not (startsWith "--" (trimLeft l))) (lines text)
+
+-- [check] over the code lines of compiler/backend/[file]; a file that cannot be
+-- read fails rather than passing as one with nothing in it.
+withBackendCode : String ->
+  (List String -> Expectation) ->
+  <IO, FileRead> Expectation
+withBackendCode file check =
+  match readFile "\{medakaRoot}/compiler/backend/\{file}"
+    Err e => fail "cannot read compiler/backend/\{file}: \{e}"
+    Ok text => check (codeLinesOf text)
+
+-- A line that writes `call <type> @<name>`, a direct call of a named function.
+-- An indirect call (`call i64 %fp`) names no symbol and is not one.
+writesNamedCall : String -> Bool
+writesNamedCall l =
+  any
+    (piece => match words piece
+      [] => False
+      w :: _ => startsWith "\{w} @" piece)
+    (drop 1 (split "call " l))
+
+-- The one spelling `directCall` renders a checked call with.
+llvmCheckedCallLine : String
+llvmCheckedCallLine =
+  "\"call \\{ret} @\\{symbolName sym}(\\{rawArgDecls ops})\""
+
+-- Lines writing a named call that neither are the checked renderer nor sit
+-- within three lines after any `checkWordCall`. A spelling check: a call
+-- assembled by concatenation is not seen.
+uncheckedLlvmCalls : List String -> List String -> List String
+uncheckedLlvmCalls _ [] = []
+uncheckedLlvmCalls recent (l :: rest) =
+  let bare =
+    writesNamedCall l
+      && trimLeft l /= llvmCheckedCallLine
+      && not (any (contains "checkWordCall") recent)
+  (if bare then [trimLeft l] else [])
+    ++ uncheckedLlvmCalls (take 3 (l :: recent)) rest
+
+test "llvm_emit writes a named call only through directCall or after checkWordCall" = withBackendCode
+  "llvm_emit.mdk"
+  (code => expectEqual [] (uncheckedLlvmCalls [] code))
+
+-- Lines naming a direct Wasm call (`call $f`, `return_call $f`) outside
+-- `callInstrW` and the closure check's own needle.
+uncheckedWasmCalls : List String -> List String
+uncheckedWasmCalls ls =
+  filter
+    (l =>
+      contains "call $" l
+        && not (startsWith "callInstrW " (trimLeft l))
+        && not (contains "identsAfterAllRevW" l))
+    ls
+
+test "wasm_emit writes a direct call only through callInstrW" = withBackendCode
+  "wasm_emit.mdk"
+  (code => expectEqual [] (uncheckedWasmCalls code))
+
+test "no emitter derives declares from emitted text" =
+  expectAll
+    (map
+      (file =>
+        labelFail
+          "\{file} derives declares from text"
+          (withBackendCode file (code =>
+            expectFalse
+              (any
+                (l =>
+                  contains "declareOfDefine" l || contains "emitDeclaresFor" l)
+                code))))
+      ["llvm_emit.mdk", "wasm_emit.mdk", "llvm_preamble.mdk"])
+
+test "no emitter counts leading dictionary parameters from their spelling" =
+  expectAll
+    (map
+      (file =>
+        labelFail
+          "\{file} counts dictionary parameters itself"
+          (withBackendCode file (code =>
+            expectFalse
+              (any
+                (l =>
+                  contains "leadingDictPats" l
+                    || contains "wLeadingDictPats" l
+                    || contains "isDictParamName" l
+                    || contains "startsWith \"$dict\"" l)
+                code))))
+      ["llvm_emit.mdk", "wasm_emit.mdk", "trmc_analysis.mdk", "emit_plan.mdk"])
+
+-- Every entry that imports an emitter is a route a program reaches an artifact
+-- through; each builds its plan with `buildEmitPlan*`, never by hand.
+emitRoutes : List String
+emitRoutes = [
+  "llvm_bootstrap_lex_main.mdk", "llvm_emit_main.mdk",
+  "llvm_emit_modules_main.mdk", "llvm_emit_typed_main.mdk",
+  "playground_main.mdk", "profile_main.mdk", "wasm_emit_gaps_main.mdk",
+  "wasm_emit_main.mdk", "wasm_emit_modules_main.mdk", "wasm_emit_typed_main.mdk"
+]
+
+importsEmitter : String -> Bool
+importsEmitter text =
+  any
+    (l =>
+      startsWith "import backend.llvm_emit" l
+        || startsWith "import backend.wasm_emit" l)
+    (lines text)
+
+test "the emit-route entries are exactly the pinned roster and each builds its plan" =
+  match listDir "\{medakaRoot}/compiler/entries"
+    Err e => expectEqual "listable" "cannot list compiler/entries: \{e}"
+    Ok names =>
+      let entries = filter (n => endsWith ".mdk" n) names
+      let routes =
+        filter
+          (n => match readFile "\{medakaRoot}/compiler/entries/\{n}"
+            Ok text => importsEmitter text
+            Err _ => False)
+          entries
+      expectAll [
+        labelFail "emit routes found" (expectNotEqual [] routes),
+        expectEqual (sort emitRoutes) (sort routes),
+        expectAll
+          (map
+            (n => match readFile "\{medakaRoot}/compiler/entries/\{n}"
+              Ok text =>
+                labelFail
+                  "\{n} builds no emission plan"
+                  (expectTrue (contains "buildEmitPlan" text))
+              Err e => expectEqual "readable" "cannot read \{n}: \{e}")
+            routes),
+      ]
 
 -- ── wasm-only reach ─────────────────────────────────────────────────────────
 

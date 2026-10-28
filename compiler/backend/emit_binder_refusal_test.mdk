@@ -1,4 +1,4 @@
-import string.{replaceAll, contains}
+import string.{replaceAll, contains, unlines}
 import test.{expectEach, expectTextContainsAll, expectFalse, fail}
 import test_process.{withScratchDir, boundedVerbSeconds, medakaRoot}
 import driver.build_cmd.{
@@ -40,6 +40,8 @@ import backend.emit_plan.{buildEmitPlan}
 
 import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
 import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInput}
+import backend.llvm_symbols.{defectMessage as llvmDefectMessage}
+import backend.wasm_symbols.{defectMessage as wasmDefectMessage}
 
 probeVar : String
 probeVar = "MEDAKA_BINDER_REFUSAL_PROBE"
@@ -95,10 +97,15 @@ llvmText cp = llvmFor RawUnchecked cp
 
 llvmFor : ManifestRequirement -> CProgram -> String
 llvmFor requirement cp =
-  llvmEmit
-    (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
-    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
-    cp
+  let emitted =
+    llvmEmit
+      (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
+      (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
+      cp
+  match emitted
+    Ok text => text
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map llvmDefectMessage defects))
 
 wasmText : CProgram -> String
 wasmText cp = wasmFor RawUnchecked cp
@@ -106,7 +113,13 @@ wasmText cp = wasmFor RawUnchecked cp
 wasmFor : ManifestRequirement -> CProgram -> String
 wasmFor requirement cp =
   let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
-  wasmEmit (makeWasmEmitInput requirement PreludeFreeRuntime []) plan prepared
+  match (wasmEmit
+    (makeWasmEmitInput requirement PreludeFreeRuntime [])
+    plan
+    prepared)
+    Ok wat => wat
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map wasmDefectMessage defects))
 
 -- What the refusal says about `x`.
 refusal : String
