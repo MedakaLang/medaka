@@ -1,5 +1,5 @@
 # META
-source_lines=5003
+source_lines=4987
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -20,26 +20,10 @@ import frontend.parse_result.{
   ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
   parsedPositions
 }
--- Self-hosted Medaka parser.  A monadic
--- *combinator* parser over `List Token` from the lexer: a `ParserE` monad
--- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
--- `defer`-notation, and
--- combinators (`many`/`sepBy1`/`parseOrElse`).  Precedence is the stratified
--- ladder from parser.mly.  Validated by the
--- `parse_fixtures` family (test/diff_compiler_snapshot_frontend_test.mdk).
---
--- The combinators are not free: each `defer` step allocates a continuation
--- closure and a `ParserE` cell, and each `PR` result is a fresh cell.  The
--- binary-operator ladder, which every expression operand descends, is written
--- over the raw `ParserE` representation instead (`binLevel`): every expression
--- operand descends all nine levels, so the per-level closure and result cells
--- of combinator style would dominate the parser's allocation.
---
--- COVERAGE: the arithmetic+boolean+comparison+cons+append operator ladder, `=>`
--- lambdas, single-line `if`/`let … in`, `match` with indented arms, postfix
--- field access, the full pattern hierarchy, the type grammar, and top-level
--- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
--- forms, and the rest of the operator ladder come in later slices.
+-- Parse the lexer token array into declarations and expressions.
+-- ParserE combinators handle grammar productions; binLevel uses the raw
+-- representation to avoid per-level allocation in the operator ladder.
+-- Syntax precedence and associativity are specified in docs/spec/SYNTAX.md.
 
 export import frontend.parse_result.{
   ParseError(..), parseErrorDiagnostic, parseErrorLine, parseErrorCol,
