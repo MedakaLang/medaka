@@ -1,5 +1,5 @@
 # META
-source_lines=4674
+source_lines=4696
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, impl and test
@@ -1214,6 +1214,9 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- preamble (checkModulesPreambleK / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
   checkEffectParams mctx prog
+  -- D2: reject non-function members of a top-level `let rec` group (the LetRecNonFunction
+  -- guard, which fires for the is_letrec=true groups that come from DLetGroup) before the
+  -- DFunDef groups are typechecked.
   checkLetRecDecls mctx prog
   -- #154 PR1: on the Module path, grow the persistent universe accumulators by THIS
   -- module's decls BEFORE the shadow/key reads below consult them — so they see the
@@ -1345,6 +1348,25 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- #1425 site 2: `mid` is BOUND here now — the three lockstep re-keys at the end of this
   -- arm need this module's identity, and the arm can no longer discard it.
 
+  -- C5: compute this module's standalone-shadow set BEFORE inference, so the inferMethodAt
+  -- arg-position record can gate on it (`freshModuleCtx` cleared it via pendingRLocalSites, but
+  -- standaloneValuesRef is set fresh here per module).
+  --
+  -- Two flavours of standalone-shadow, BOTH needing RLocal recording so a method call on a
+  -- no-impl receiver routes to the standalone instead of mis-dispatching:
+  --   * IMPORTER shadow (`importerShadows`): a name imported from a sibling that is also an
+  --     interface method (box importing map's `toList`).  Its scheme must be REBOUND to the
+  --     interface-method scheme (`shadowMethodSchemes`) so the call site types polymorphically;
+  --     RLocal then redirects the no-impl receiver back.
+  --   * DEFINER shadow (`definerShadows`): a name THIS module defines as a top-level funDef that
+  --     ALSO names an interface method (map-as-root's own `toList` / `isEmpty`).  The MARK pass
+  --     (`buildStandaloneShadowsGraph`) rewrites these to `EMethodAt`, so without a matching
+  --     RLocal record the route falls back to the result-type `RKey` (e.g. `toList`'s `List`
+  --     result), dispatching the method on the WRONG impl (List's `toList = identity`) and
+  --     `debug`/`display` recurse on the unchanged receiver forever (Map Debug/Eq/Ord impl
+  --     bodies call standalone `toList`).  These must be RECORDED for RLocal but must NOT be
+  --     rebound to the method scheme: their local standalone scheme (`Map k v -> ...`) is what
+  --     the impl body types against.
   mctx.mcCells.standaloneValuesRef :=
     namesToSet (importerShadows ++ definerShadows) omEmpty
   -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
@@ -2235,7 +2257,7 @@ derivingTypeLoc _ = None
 
 -- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
 --
--- The eight `externSchemes … runtimeDecls` call sites above build the STDLIB EXTERN
+-- The `externSchemes … runtimeDecls` call sites (`types/typecheck.mdk`) build the STDLIB EXTERN
 -- CATALOG's schemes: `stdlib/runtime.mdk`'s 138 `extern` lines (derived: `grep -c
 -- '^extern ' stdlib/runtime.mdk`), whose written rows ARE the effect vocabulary.
 -- They must stay byte-identical.
@@ -3926,7 +3948,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   let (schemes, marked, mctx) =
     checkModuleFullImpl gctx runSeed mid seedVars accData accAll prog
   -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
-  -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
+  -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool (`types/tc_state.mdk`) and `moduleImplUniv`
   -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
   -- which population they take from it (`ceRowsOwnedBy` vs `ceRowsVisibleAt`).
   let ceHere = declEnvsHere.deIfaces
@@ -4027,7 +4049,7 @@ attributeModuleEntries mid prog entries =
 --
 -- A module's contribution is what it declares *plus what it re-exports*, and the second
 -- half is not optional — it is the recurrence `.claude/workstreams/TYPECHECK.md` records for
--- #1283 and `renameAliasedMethods` (below) already learned for the METHOD tables: "the
+-- #1283 and `renameAliasedMethods` (`types/typecheck.mdk`) already learned for the METHOD tables: "the
 -- decl's origin names the DECLARING module and the import path names the RE-EXPORTER, so
 -- the identity test misses."  Attributing only `declTopFnNames prog` means a pure
 -- re-exporter (`export import lib.def.{f}`, whose `prog` has no function definitions at

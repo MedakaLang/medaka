@@ -1,25 +1,21 @@
-import types.invocation_basis.{
-  readInvocationView,
-  requestedWrapperViewModules,
-  invocationResolver,
-  slotVariances,
-  ctorsByHead,
-  paramPolaritiesIn,
-  frozenInvocationOps,
-  completionInvocationViews,
-}
--- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
--- and dict-passing elaboration.  Architecture doc, including the component model this
--- file is being decomposed towards: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
+-- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
+-- interface continuation, serving, import seeding, publication, value-main judgment,
+-- configuration and the verb-facing API; the pre-inference alias rewrite, a driver step
+-- (`aliasSchemes`, `aliasSchemeEntry`, `coreAliasSchemes`, `renameAliasedMethods*`,
+-- `deAliasMethod*`, `resolveAliasMethodSpellings`); and the `export import types.publish` facade.
+-- Everything else the typechecker does is a `tc_*` module's: the per-module check is
+-- `types/tc_module.mdk`'s, interfaces, impls and coherence are `types/tc_global.mdk`'s, the
+-- dict-passing elaboration the backends consume is `types/tc_elab.mdk`'s, the expression
+-- recursion and exhaustiveness are `types/tc_infer.mdk`'s and `types/tc_infer_records.mdk`'s,
+-- and the solver lives in the `tc_solve*` modules. `checkMatchExhaustive`
+-- (`compiler/frontend/exhaust.mdk`) is called once per `EMatch` from `tc_infer`
+-- ([P-EXHAUST-IN-TYPECHECK]). Architecture doc: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
 --
--- The HM core is monotypes over Ref-based union-find tyvars, level-based
--- generalization, unification (occurs-check + level adjust), and instantiation.  This
--- file is the driver over the `tc_*` modules: it carries the graph drivers below and
--- the per-module check; interfaces, impls and coherence are `types/tc_global.mdk`'s
--- and the dict-passing elaboration the backends consume is `types/tc_elab.mdk`'s.  The expression recursion, records, operator inference and
--- exhaustiveness live in `types/tc_infer.mdk` and `types/tc_infer_records.mdk`;
--- `checkMatchExhaustive` (`compiler/frontend/exhaust.mdk`) is called once per
--- `EMatch` from `tc_infer` ([P-EXHAUST-IN-TYPECHECK]).
+-- Spec: TYPECHECK-CONTRACTS section 4, section 5; DICT section 7.1, section 8.
+--
+-- Placement: this is the entry module (P4-D4); declarations are placed by R1-R6 of the Phase 4
+-- module table, compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module imports the `tc_*` modules and no `tc_*` module imports it.
 --
 -- ONE GRAPH DRIVER, TWO OUTPUT SELECTIONS.  `driveGraphK` is the single whole-graph
 -- driver: `GOutDiags` (per-module diagnostics and schemes) is what `medaka check`,
@@ -53,6 +49,17 @@ import types.invocation_basis.{
 -- OCaml reference compiler.  Both that reference and its `dev/tc_probe.exe` harness are
 -- gone; native is the sole compiler.  The remaining probe is
 -- `compiler/entries/selfproc_tc_probe.mdk`.
+
+import types.invocation_basis.{
+  readInvocationView,
+  requestedWrapperViewModules,
+  invocationResolver,
+  slotVariances,
+  ctorsByHead,
+  paramPolaritiesIn,
+  frozenInvocationOps,
+  completionInvocationViews,
+}
 
 import frontend.ast.{
   Ns(..),
@@ -1181,9 +1188,6 @@ bindingGrantArity o _ sch =
 -- pre-bind `go` with a monomorphic placeholder so the RHS can reference
 -- itself, then generalize (a function is a value — oracle `:1668-1681`).
 
--- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
--- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
-
 -- instantiate a record's quantified params with fresh vars.  Rebuilds ALL fields —
 -- used by the record-CREATE and record-PATTERN paths, which must see every declared
 -- field (missing-field check / binding each pattern field).  The single-field access
@@ -1435,11 +1439,6 @@ declBodyVarsOf _ _ = []
 -- `requires` measure (`reqWalkEnter`): a mono pinned to a concrete head routes RKey,
 -- an in-scope constraint var routes RDict, per DICT-SEMANTICS §3 `assum`.
 
--- D2: check top-level `let rec` bindings for non-function members before
--- type-checking the DFunDef groups (the LetRecNonFunction guard,
--- which fires for
--- is_letrec=true groups — i.e. those coming from DLetGroup).
-
 -- Phase 83/84 single-level: AFTER top-level inference (so the scheme output is
 -- unchanged), and ONLY on the elaborate/dict path, infer each parametric impl's
 -- return-position method bodies, registering the requires' element dict so the
@@ -1503,7 +1502,7 @@ declBodyVarsOf _ _ = []
 -- are genuine soundness bugs that must reject symmetrically with top-level functions — so those
 -- are now KEPT — and since issue 1146 they are kept because nothing removes them: the
 -- window that used to rebuild this list is retired (see the retirement note at the end
--- of inferUserImplBodies below).  Per-axis history follows.
+-- of `inferUserImplBodies` in `types/tc_module.mdk`).  Per-axis history follows.
 -- #777 (S0, silent wrongness): a GENUINE type mismatch inside a ground impl-method
 -- body (`sig _ = idInt "str"` where `idInt : Int -> Int` but `sig`'s declared return
 -- is `String`) is a `unify`/`typeMismatch` error pushed DURING body inference, not an
@@ -1607,7 +1606,7 @@ externSchemes : ModuleCtx ->
 externSchemes mctx scope decls =
   let ds = externDecls decls
   -- #2074: THIS function is the stdlib extern CATALOG builder — its eight call
-  -- sites all pass `runtimeDecls`, and `userExternSchemes` (below) is the
+  -- sites all pass `runtimeDecls`, and `userExternSchemes` (`types/tc_module.mdk`) is the
   -- declaration-site sibling that handles the program under check.  So this is
   -- the one seam where the set of names the emitter's `isAnyExtern` ladder will
   -- answer for is known, and it is recorded here rather than re-derived.  See
@@ -1773,27 +1772,6 @@ typeErrorLines (e :: rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 -- helpers stay module-local, so same-named helpers across modules never collide
 -- (the per-module-frame property, without a frame) — plus its public ctors.
 -- Returns each module's OWN value schemes, in load order.
-
--- C5: compute this module's standalone-shadow set BEFORE inference, so the
--- inferMethodAt arg-position record can gate on it (`freshModuleCtx` cleared it via
--- pendingRLocalSites, but standaloneValuesRef is set fresh here per module).
---
--- Two flavours of standalone-shadow, BOTH needing RLocal recording so a method
--- call on a no-impl receiver routes to the standalone instead of mis-dispatching:
---   • IMPORTER shadow (`importerShadows`): a name imported from a sibling that is
---     also an interface method (box importing map's `toList`).  Its scheme must be
---     REBOUND to the interface-method scheme (`shadowMethodSchemes`) so the call
---     site types polymorphically; RLocal then redirects the no-impl receiver back.
---   • DEFINER shadow (`definerShadows`): a name THIS module defines as a top-level
---     funDef that ALSO names an interface method (map-as-root's own `toList` /
---     `isEmpty`).  The MARK pass (`buildStandaloneShadowsGraph`) rewrites these to
---     `EMethodAt`, so without a matching RLocal record the route falls back to the
---     result-type `RKey` (e.g. `toList`'s `List` result), dispatching the method on
---     the WRONG impl (List's `toList = identity`) → `debug`/`display` recurse on the
---     unchanged receiver forever (Map Debug/Eq/Ord impl bodies call standalone
---     `toList`).  These must be RECORDED for RLocal but must NOT be rebound to the
---     method scheme — their local standalone scheme (`Map k v -> …`) is what the
---     impl body types against.
 
 -- E6: re-install the cross-module constraint accumulator that `freshModuleCtx` just
 -- wiped, so this module's `=>`-constrained call sites into EARLIER modules resolve.
@@ -3155,22 +3133,6 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
       modules
   (map (m => (fst m, freezeRows (snd m))) rows, lastCtx)
 
--- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
--- module via accData, plus this module's own prog), NOT just `prog`.  The
--- one-module path sees the same module-scoped dump, so
--- its `buildOracle prog` already includes Option/Result; the multi-module path
--- keeps modules separate, so prelude ADTs live in accData.  Seeding with only
--- `prog` left the oracle missing Some/None|Ok/Err → exhaustive matches on
--- Option/Result false-warned "non-exhaustive".  buildOracle reads only DData
--- and is duplicate-tolerant, so accData ++ prog is safe.
-
--- checkModuleFull → checkModuleFullImpl runs `freshModuleCtx` first (clears
--- typeErrors + currentLevel), so the snapshot below is this module's own errors.
-
--- coherence over this module's own impls runs in `runFinalChecks` above: its
--- `checkCoherence` sweeps this module's rows of the whole-graph `IE` (`cohRowsOwnedBy`),
--- and a hard conflict is pushed into typeErrors AFTER the `freshModuleCtx` above.
-
 -- multi-module diagnostics driver: threads the runtime+core seed and per-module
 -- PUBLIC accumulators exactly as foldModules threads, but at each module harvests its
 -- ISOLATED diagnostics via checkModuleFullDiags.  Returns one
@@ -3180,8 +3142,7 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- foldModules — NOT a flat union of every earlier module's publics, which let
 -- a same-named function from a non-imported module win by load order (e.g.
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
--- worker: ISOLATED per-module diagnostics harvest (checkModuleFullDiags — see its
--- doc above).  Surfaces this module's own `schemes` (for pubV) plus the
+-- worker: ISOLATED per-module diagnostics harvest (`checkModuleFullDiags` in `types/tc_module.mdk`).  Surfaces this module's own `schemes` (for pubV) plus the
 -- (marked tree, schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like
 -- cmCheckWorker; NOT a flat union.  ONE worker serves EVERY graph consumer — the
 -- per-module diagnostics fold behind `analyzeProject` and the LSP, the entry report (`checkModulesEntryFullSplitK`), and the elaboration behind
