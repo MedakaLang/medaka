@@ -21,9 +21,8 @@ appToPatH : Expr -> List Expr -> Pat
 applyAll : Expr -> List Expr -> Expr
 armGuardFor : Token -> ParserE <> (List Guard)
 armGuardOpt : ParserE <> (List Guard)
-armsCons : ParserE <> (List Arm)
-armsLineAhead : ParseContext -> Int -> Int -> Bool
-armsLoop : ParserE <> (List Arm)
+armsCons : Int -> ParserE <> (List Arm)
+armsLoop : Int -> ParserE <> (List Arm)
 arrayAfterComma : Expr -> Token -> ParserE <> Expr
 arrayFor : Token -> ParserE <> Expr
 arrayRangeAfter : Expr -> Bool -> ParserE <> Expr
@@ -69,11 +68,12 @@ coalesceClauses : List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceGo : String -> Loc -> List FunClause -> List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceStep : String -> Loc -> List FunClause -> String -> List Pat -> Expr -> Loc -> List (String, List Pat, Expr, Loc) -> List LetBind
 combineDerives : List DeriveRef -> List DeriveRef -> List DeriveRef
+committedErrorPos : ParseContext -> Int -> Int
+committedExpr : String -> ParserE <> Expr -> ParserE <> Expr
 concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
 consLevel : Int
 constraintTail : Ty -> ParserE <> Ty
-continuationBlockShape : ParseContext -> Int -> Int -> Int -> Bool
 ctorBinderColon : Token -> ParserE <> (String, KindAnn)
 ctorBinderFor : Token -> Token -> ParserE <> (String, KindAnn)
 ctorBinderKind : String -> KindAnn -> ParserE <> (String, KindAnn)
@@ -245,9 +245,6 @@ letRecInlineClause : ParserE <> (String, List Pat, Expr, Loc)
 letRecStmt : ParserE <> DoStmt
 letStmtAt : Loc -> DoStmt -> DoStmt
 letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
-lineHasFatArrow : Array Token -> Int -> Bool
-lineIndentCol : ParseContext -> Int -> Int
-lineIndentGo : ParseContext -> Int -> Int -> Int -> Int
 listAfterComma : Expr -> Token -> ParserE <> Expr
 listFor : Token -> ParserE <> Expr
 listRest : Expr -> Token -> ParserE <> Expr
@@ -256,9 +253,8 @@ locatedUpperNameP : ParserE <> (String, Loc)
 lowerNameFor : Token -> ParserE <> String
 lowerNameP : ParserE <> String
 matchArmBarGuardMsg : ParseDiagnosticKind
-matchArmsGuard : Int -> List Arm -> ParserE <> Unit
-matchContinuationAhead : Int -> ParserE <> Bool
-matchScrutContinuationMsg : String
+matchArrow : ParserE <> Unit
+matchBody : ParserE <> Expr
 maxNestDepth : Int
 memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
 memberAliasName : ParserE <> String
@@ -303,8 +299,9 @@ parenResult : List Expr -> Expr
 parenSectionOr : Token -> ParserE <> Expr
 parse : String -> List Decl
 parseApp : ParserE <> Expr
-parseArm : ParserE <> Arm
-parseArms : ParserE <> (List Arm)
+parseArm : Int -> ParserE <> Arm
+parseArmRest : Int -> Pat -> ParserE <> Arm
+parseArms : Int -> ParserE <> (List Arm)
 parseArray : ParserE <> Expr
 parseAsPat : ParserE <> Pat
 parseAspat : ParserE <> Expr
@@ -473,7 +470,6 @@ spanDeclThenNoise : ParserE <> (Decl, Int, Int)
 spineHead : Expr -> Expr
 spineList : Expr -> List Expr
 spineOnto : Expr -> List Expr -> List Expr
-startsExprAt : ParseContext -> Int -> Bool
 stmtFor : Token -> ParserE <> (List DoStmt)
 stmtsCons : ParserE <> (List DoStmt)
 stmtsLoop : ParserE <> (List DoStmt)
@@ -481,8 +477,6 @@ stringLitFor : Token -> ParserE <> String
 stringLitP : ParserE <> String
 stripLoc : Expr -> Expr
 stripLoc1 : Expr -> Expr
-tokCol : ParseContext -> Int -> Int
-tokLine : ParseContext -> Int -> Int
 trailingArrowLeftoverMsg : Token -> String -> String
 tupleCtorTailFor : Int -> Token -> ParserE <> Ty
 tupleCtorTyName : Int -> String

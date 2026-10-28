@@ -92,7 +92,7 @@ test "expect failure text: identifier and punctuation tokens" =
 test "expect failure text survives to the diagnostic" =
   expectEqual
     [
-      "unexpected line break; expected `)`",
+      "unexpected end of input; expected `)`",
       "unexpected `=`; expected the end of the block",
     ]
     [
@@ -271,16 +271,14 @@ test "an application stops at a token that cannot start an argument" =
     ["unexpected `)`", "unexpected `,`", "unexpected `]`"]
     [parseMsg "x = f a )\n", parseMsg "x = f a , b\n", parseMsg "x = f a ]\n"]
 
--- An operator whose right operand does not parse is not consumed, so the
--- leftover-token diagnostic names that operator, at every level.
-test "an operator with no right operand is left for the diagnostic" =
+test "an operator with no right operand reports the missing expression" =
   expectEqual
     [
-      "unexpected `+`",
-      "unexpected `::`",
-      "unexpected `++`",
-      "unexpected `|>`",
-      "unexpected `>`",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
+      "expected an expression after the binary operator",
     ]
     [
       parseMsg "x = a * b +\n",
@@ -288,6 +286,32 @@ test "an operator with no right operand is left for the diagnostic" =
       parseMsg "x = a :: b ++\n",
       parseMsg "x = a || b |>\n",
       parseMsg "x = (a > b) >\n",
+    ]
+
+test "match advice requires a parenthesized arrow island and a following arm" =
+  expectEqual
+    [
+      "expected `=>` after the match pattern or guard",
+      "expected a match arm (`pattern => body`); if this line continues the scrutinee, wrap the whole scrutinee in parentheses",
+      "expected a match arm (`pattern => body`)",
+    ]
+    [
+      parseMsg "main =\n  match f x\n      Some y\n    _ => 0\n",
+      parseMsg "main =\n  match f x\n      (a => a)\n    _ => 0\n",
+      parseMsg "main =\n  match f x\n      (a => a)\n    k = a => a\n",
+    ]
+
+test "malformed operands retain their enclosing context" =
+  expectEqual
+    [
+      "expected an expression after the binary operator",
+      "expected a record field value after `=`",
+      "expected a complete parenthesized expression",
+    ]
+    [
+      parseMsg "main = f (1 + )\n",
+      parseMsg "main = R { field = }\n",
+      parseMsg "main = f (\n",
     ]
 
 -- ── fmt's parse check: prescanError vs parseResult ────────────────────────
@@ -307,6 +331,11 @@ parseVerdict : String -> Option (Int, Int, String)
 parseVerdict src = match parseResult src
   Err e => Some (parseErrorLine e, parseErrorCol e, parseErrorMessage e)
   Ok _ => None
+
+test "missing operand after an astral character is located at EOF" =
+  expectEqual
+    (Some (2, 0, "expected an expression after the binary operator"))
+    (parseVerdict "main = (\"🐟\" +\n")
 
 prescanTriggers : List (String, String)
 prescanTriggers = [
@@ -575,10 +604,12 @@ test "raw operator RHS fallback discards cues from its failed operand" =
   let (outcome, cues) = boundedCues "main = a + Box { [1, 2,]\n"
   expectAll [expectEqual "ok" (fst outcome), expectEqual ([], []) cues]
 
-test "a failed match with expression lookahead restores its entry cues" =
+test "a failed match arm restores its entry cues" =
   let (outcome, cues) = boundedCues "main = match x\n  [1, 2,]\n"
   expectAll [
-    expectEqual "unexpected `[`; expected the end of the block" (fst outcome),
+    expectEqual
+      "fatal: expected `=>` after the match pattern or guard"
+      (fst outcome),
     expectEqual ([], []) cues,
   ]
 

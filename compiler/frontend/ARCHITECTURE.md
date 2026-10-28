@@ -27,6 +27,15 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `visibility.mdk` | A module's export surface, built from its declarations and the surfaces of the modules it re-exports; imports no resolver state | `ModuleExports`, `buildExportsWith`, `coreExports` |
 | `marker.mdk` | Rewrites interface-method and constrained-function occurrences to marked nodes; not on `check`/`run`/`build` (typecheck marks per binding group) | `markWithPrelude` |
 | `exhaust.mdk` | Guard-fall-through check on the raw pre-desugar AST via the pattern-matrix `useful` recursion; match exhaustiveness is in `types/` | `checkGuardExhaustiveness` |
+
+Match-arm commitment belongs to the parser. Optional continuation advice belongs
+to `parse_hints`: `matchContinuationHint` receives tokens, offset pairs, line
+starts and the match and arm token positions, and returns a diagnostic kind.
+It recognizes only balanced parenthesized arrow islands with a supported header
+anchor and an immediately following plausible arm. Shared pattern/expression
+forms and uncertain shapes suppress advice. Each attempt visits at most 4096
+tokens and bounds delimiter depth; it retains no parse context or source index.
+The advice is conditional and cannot decide acceptance.
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |
 | `desugar_cache.mdk` | Source-keyed memo of the desugared prelude, a sibling tier above `parse_cache`, bounded at four entries. An entry is either a tree minted under a fresh generation, or a pending decoder for the text's shipped tree (`registerPreludeDecls`) that runs on the text's first demand and falls back to parse and desugar when it yields nothing. `preludeGeneration` returns the generation pair of the two prelude texts, the key the prelude caches are keyed by | `desugaredPrelude`, `desugaredPreludeKey`, `preludeGeneration`, `registerPreludeDecls` |
 

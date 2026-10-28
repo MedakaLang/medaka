@@ -1,7 +1,7 @@
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
 import frontend.parse_hints.{
-  prescanDiagnostic, letMutRemovedMsg, isLineEndTok, isBracketOpenTok,
-  isBracketCloseTok
+  prescanDiagnostic, matchContinuationHint, letMutRemovedMsg, isLineEndTok,
+  isBracketOpenTok, isBracketCloseTok
 }
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
@@ -9,9 +9,8 @@ import frontend.parse_engine.{
   contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
   peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
   fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepBy1,
-  mark, rewind, locOfSpan, spanLoc, tokLineCol, depthOf, withDepth,
-  recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
-  unexpectedTokenMsg
+  mark, rewind, locOfSpan, spanLoc, depthOf, withDepth, recordTrailingComma,
+  recordUnitStart, forgetLatestUnitStart, contextCues, unexpectedTokenMsg
 }
 import frontend.parse_result.{
   ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
@@ -131,7 +130,7 @@ import frontend.lex_token.{
   isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
   isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
   isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
-  isStarTok, isLayoutTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
+  isStarTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.util.{reverseL, joinWith}
 import list.{last}
@@ -511,6 +510,15 @@ binRhs : ParseMark ->
   PR Expr
 binRhs _ lvl ctx x _ t (POk y q) =
   binNext lvl ctx (POk (EBinOp (binOpName t) x y unminted) q)
+binRhs saved _ ctx _ pos _ (PErr _ q)
+  | q == pos + 1
+    && (isLineEndTok (peekTok (contextTokens ctx) q)
+      || isCloseDelim (peekTok (contextTokens ctx) q)
+      || peekTok (contextTokens ctx) q == TComma) =
+    rewind saved
+    PFatal
+      (FailMsg "expected an expression after the binary operator")
+      (committedErrorPos ctx q)
 binRhs saved _ _ x pos _ (PErr _ _) =
   rewind saved
   POk x pos
@@ -958,7 +966,7 @@ parseKvField = defer
   p <- getPos
   name <- identNameP
   expectTok TEqual
-  e <- parseBracketElem
+  e <- committedExpr "expected a record field value after `=`" parseBracketElem
   recordUnitStart 4 p
   deferPure (KvField name e)
 
@@ -1036,7 +1044,7 @@ recordFieldExpr = defer
 recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
 recordFieldExprRest path TEqual = defer
   advance
-  e <- parseBracketElem
+  e <- committedExpr "expected a record field value after `=`" parseBracketElem
   deferPure (path, e)
 recordFieldExprRest [x] _ = deferPure ([x], EVar x)
 recordFieldExprRest _ _ =
@@ -1130,7 +1138,31 @@ parseParen : Parser Expr
 parseParen = defer
   expectTok TLParen
   t <- peekP
-  parenFor t
+  committedExpr "expected a complete parenthesized expression" (parenFor t)
+
+committedExpr : String -> Parser Expr -> Parser Expr
+committedExpr msg p = ParserE (ctx pos => match runPWith ctx p pos
+  PErr f q =>
+    let loc = committedErrorPos ctx q
+    let reason = match f
+      FailExpect TNewline TRParen =>
+        if loc > q then FailMsg "unexpected end of input; expected `)`" else f
+      _ => if q > pos then f else FailMsg msg
+    PFatal reason loc
+  r => r)
+
+committedErrorPos : ParseContext -> Int -> Int
+committedErrorPos ctx q =
+  let toks = contextTokens ctx
+  let offs = contextOffsets ctx
+  if q > 0
+    && q < arrayLength offs
+    && fst (arrayGetUnsafe q offs) == 0
+    && peekTok toks q == TNewline
+    && peekTok toks (q + 1) == TEof then
+    q + 1
+  else
+    q
 
 -- inside parens: `()` unit, an operator section `(op)`/`(op e)`/`(e op _)`,
 -- a tuple, or a plain parenthesised expression
@@ -1475,118 +1507,60 @@ parseMatch = defer
   expectTok TMatch
   scrut <- parseExpr
   expectTok TIndent
-  arms <- parseArms
-  matchArmsGuard matchPos arms
+  arms <- parseArms matchPos
   expectTok TDedent
   deferPure (EMatch scrut arms)
 
--- A match whose first arm failed to parse (`arms` is empty) while the indented
--- block it opened is a CONTINUATION of the scrutinee (`match f a⏎      b⏎    Arm => …`):
--- the layout algorithm treats the deeper line after a `match` header as an arms
--- block (LAYOUT-SEMANTICS §4 I.b, §7.3), so the wrapped scrutinee line is what the
--- parser trips on, not the `match`.  Reported at that line's first token.
--- Evidence that the scrutinee wrapped, all required: the block starts an
--- expression, holds no `=>` or `->` (so it is not a malformed arm), and the real
--- arms follow after the block, indented deeper than the line holding `match`
--- (a sibling arm or a later declaration at that indent or shallower means the
--- block was itself the arms).
-matchArmsGuard : Int -> List Arm -> Parser Unit
-matchArmsGuard _ (_ :: _) = deferPure ()
-matchArmsGuard matchPos [] = defer
-  here <- getPos
-  wrapped <- matchContinuationAhead matchPos
-  if wrapped then fatalAtP matchScrutContinuationMsg here else deferPure ()
-
-matchScrutContinuationMsg : String
-matchScrutContinuationMsg =
-  "a `match` scrutinee cannot continue onto an indented line; the first indented line after `match` opens the arms, so wrap the scrutinee in parentheses"
-
-matchContinuationAhead : Int -> Parser Bool
-matchContinuationAhead matchPos = ParserE (ctx pos =>
-  POk
-    (startsExprAt ctx pos
-      && continuationBlockShape ctx pos 0 (lineIndentCol ctx matchPos))
-    pos)
-
-startsExprAt : ParseContext -> Int -> Bool
-startsExprAt ctx pos =
-  let saved = mark ctx
-  let r = runPWith ctx parseAspat pos
-  rewind saved
-  match r
-    POk _ _ => True
-    _ => False
-
-lineIndentCol : ParseContext -> Int -> Int
-lineIndentCol ctx i = tokCol ctx i |> lineIndentGo ctx i (tokLine ctx i)
-
-lineIndentGo : ParseContext -> Int -> Int -> Int -> Int
-lineIndentGo ctx i line col
-  | i <= 0 = col
-  | isLayoutTok (peekTok (contextTokens ctx) (i - 1)) =
-    lineIndentGo ctx (i - 1) line col
-  | tokLine ctx (i - 1) == line =
-    lineIndentGo ctx (i - 1) line (tokCol ctx (i - 1))
-  | otherwise = col
-
-tokLine : ParseContext -> Int -> Int
-tokLine ctx i = fst (tokLineCol ctx i)
-
-tokCol : ParseContext -> Int -> Int
-tokCol ctx i = snd (tokLineCol ctx i)
-
-continuationBlockShape : ParseContext -> Int -> Int -> Int -> Bool
-continuationBlockShape ctx i depth matchCol =
-  match peekTok (contextTokens ctx) i
-    TEof => False
-    TFatArrow => False
-    TArrow => False
-    TIndent => continuationBlockShape ctx (i + 1) (depth + 1) matchCol
-    TDedent =>
-      if depth == 0 then
-        armsLineAhead ctx (i + 1) matchCol
-      else
-        continuationBlockShape ctx (i + 1) (depth - 1) matchCol
-    _ => continuationBlockShape ctx (i + 1) depth matchCol
-
-armsLineAhead : ParseContext -> Int -> Int -> Bool
-armsLineAhead ctx i matchCol = match peekTok (contextTokens ctx) i
-  TNewline => armsLineAhead ctx (i + 1) matchCol
-  _ => lineHasFatArrow (contextTokens ctx) i && tokCol ctx i > matchCol
-
-lineHasFatArrow : Array Token -> Int -> Bool
-lineHasFatArrow toks i = match peekTok toks i
-  TFatArrow => True
-  TNewline => False
-  TDedent => False
-  TIndent => False
-  TEof => False
-  _ => lineHasFatArrow toks (i + 1)
-
-parseArms : Parser (List Arm)
-parseArms = defer
+parseArms : Int -> Parser (List Arm)
+parseArms matchPos = defer
   skipNewlines
-  armsLoop
+  armsLoop matchPos
 
-armsLoop : Parser (List Arm)
-armsLoop = parseOrElse armsCons (deferPure [])
+armsLoop : Int -> Parser (List Arm)
+armsLoop matchPos = defer
+  t <- peekP
+  if t == TDedent then deferPure [] else armsCons matchPos
 
-armsCons : Parser (List Arm)
-armsCons = defer
-  a <- parseArm
+armsCons : Int -> Parser (List Arm)
+armsCons matchPos = defer
+  a <- parseArm matchPos
   skipNewlines
-  rest <- armsLoop
+  rest <- armsLoop matchPos
   deferPure (a :: rest)
 
-parseArm : Parser Arm
-parseArm = defer
-  p <- getPos
-  pat <- parsePat
+parseArm : Int -> Parser Arm
+parseArm matchPos = ParserE (ctx pos => match runPWith ctx parsePat pos
+  POk pat q => runPWith ctx (parseArmRest pos pat) q
+  PFatal f q => PFatal f q
+  PErr _ _ =>
+    let hint =
+      matchContinuationHint
+        (contextTokens ctx)
+        (contextOffsets ctx)
+        (contextLineStarts ctx)
+        matchPos
+        pos
+    let kind = optionOr ExpectedMatchArm hint
+    PFatal (FailProblem kind) pos)
+
+parseArmRest : Int -> Pat -> Parser Arm
+parseArmRest p pat = defer
   guards <- armGuardOpt
-  expectTok TFatArrow
-  body <- parseOrElse branchBlock parseBodyExpr
+  matchArrow
+  body <- matchBody
   recordUnitStart 0 p
   deferPure (Arm pat guards body)
+
+matchArrow : Parser Unit
+matchArrow = ParserE (ctx pos => match runPWith ctx (expectTok TFatArrow) pos
+  PErr _ q => PFatal (FailProblem ExpectedMatchArrow) q
+  r => r)
+
+matchBody : Parser Expr
+matchBody = ParserE
+  (ctx pos => match runPWith ctx (parseOrElse branchBlock parseBodyExpr) pos
+    PErr f q => PFatal f q
+    r => r)
 
 -- optional match-arm guard: `if g, g…` (NB: uses `if`, not `|`)
 armGuardOpt : Parser (List Guard)

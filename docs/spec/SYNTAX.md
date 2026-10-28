@@ -551,6 +551,15 @@ p3 = [|1..=100|]  -- Array Int, inclusive
 
 ## Match & patterns
 
+A match arm has a pattern, an optional `if` guard, `=>`, and a body. After
+the scrutinee, an indented block starts the arms; wrap the whole scrutinee in
+parentheses to continue it across such a line. In malformed input an expression
+can also be a pattern, so a diagnostic cannot infer which was intended. The
+compiler reports the missing arm or arrow and offers conditional continuation
+help only for narrowly recognizable parenthesized arrow expressions. Uncertain
+forms receive no continuation suggestion. This diagnostic policy does not
+change the grammar.
+
 ```medaka
 data Person = Person { name : String, age : Int }
 

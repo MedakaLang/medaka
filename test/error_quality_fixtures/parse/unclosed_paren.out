@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/parse/unclosed_paren.mdk:1:15: unexpected `(`
+error: test/error_quality_fixtures/parse/unclosed_paren.mdk:2:0: unexpected end of input; expected `)`
   |
-1 | main = println (1 + (2 * 3)
-  |                ^
+2 | 
+  | ^

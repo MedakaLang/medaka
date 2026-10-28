@@ -1,11 +1,11 @@
 # META
-source_lines=5029
+source_lines=5003
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
 import frontend.parse_hints.{
-  prescanDiagnostic, letMutRemovedMsg, isLineEndTok, isBracketOpenTok,
-  isBracketCloseTok
+  prescanDiagnostic, matchContinuationHint, letMutRemovedMsg, isLineEndTok,
+  isBracketOpenTok, isBracketCloseTok
 }
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
@@ -13,9 +13,8 @@ import frontend.parse_engine.{
   contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
   peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
   fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepBy1,
-  mark, rewind, locOfSpan, spanLoc, tokLineCol, depthOf, withDepth,
-  recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
-  unexpectedTokenMsg
+  mark, rewind, locOfSpan, spanLoc, depthOf, withDepth, recordTrailingComma,
+  recordUnitStart, forgetLatestUnitStart, contextCues, unexpectedTokenMsg
 }
 import frontend.parse_result.{
   ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
@@ -135,7 +134,7 @@ import frontend.lex_token.{
   isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
   isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
   isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
-  isStarTok, isLayoutTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
+  isStarTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.util.{reverseL, joinWith}
 import list.{last}
@@ -515,6 +514,15 @@ binRhs : ParseMark ->
   PR Expr
 binRhs _ lvl ctx x _ t (POk y q) =
   binNext lvl ctx (POk (EBinOp (binOpName t) x y unminted) q)
+binRhs saved _ ctx _ pos _ (PErr _ q)
+  | q == pos + 1
+    && (isLineEndTok (peekTok (contextTokens ctx) q)
+      || isCloseDelim (peekTok (contextTokens ctx) q)
+      || peekTok (contextTokens ctx) q == TComma) =
+    rewind saved
+    PFatal
+      (FailMsg "expected an expression after the binary operator")
+      (committedErrorPos ctx q)
 binRhs saved _ _ x pos _ (PErr _ _) =
   rewind saved
   POk x pos
@@ -962,7 +970,7 @@ parseKvField = defer
   p <- getPos
   name <- identNameP
   expectTok TEqual
-  e <- parseBracketElem
+  e <- committedExpr "expected a record field value after `=`" parseBracketElem
   recordUnitStart 4 p
   deferPure (KvField name e)
 
@@ -1040,7 +1048,7 @@ recordFieldExpr = defer
 recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
 recordFieldExprRest path TEqual = defer
   advance
-  e <- parseBracketElem
+  e <- committedExpr "expected a record field value after `=`" parseBracketElem
   deferPure (path, e)
 recordFieldExprRest [x] _ = deferPure ([x], EVar x)
 recordFieldExprRest _ _ =
@@ -1134,7 +1142,31 @@ parseParen : Parser Expr
 parseParen = defer
   expectTok TLParen
   t <- peekP
-  parenFor t
+  committedExpr "expected a complete parenthesized expression" (parenFor t)
+
+committedExpr : String -> Parser Expr -> Parser Expr
+committedExpr msg p = ParserE (ctx pos => match runPWith ctx p pos
+  PErr f q =>
+    let loc = committedErrorPos ctx q
+    let reason = match f
+      FailExpect TNewline TRParen =>
+        if loc > q then FailMsg "unexpected end of input; expected `)`" else f
+      _ => if q > pos then f else FailMsg msg
+    PFatal reason loc
+  r => r)
+
+committedErrorPos : ParseContext -> Int -> Int
+committedErrorPos ctx q =
+  let toks = contextTokens ctx
+  let offs = contextOffsets ctx
+  if q > 0
+    && q < arrayLength offs
+    && fst (arrayGetUnsafe q offs) == 0
+    && peekTok toks q == TNewline
+    && peekTok toks (q + 1) == TEof then
+    q + 1
+  else
+    q
 
 -- inside parens: `()` unit, an operator section `(op)`/`(op e)`/`(e op _)`,
 -- a tuple, or a plain parenthesised expression
@@ -1479,118 +1511,60 @@ parseMatch = defer
   expectTok TMatch
   scrut <- parseExpr
   expectTok TIndent
-  arms <- parseArms
-  matchArmsGuard matchPos arms
+  arms <- parseArms matchPos
   expectTok TDedent
   deferPure (EMatch scrut arms)
 
--- A match whose first arm failed to parse (`arms` is empty) while the indented
--- block it opened is a CONTINUATION of the scrutinee (`match f a⏎      b⏎    Arm => …`):
--- the layout algorithm treats the deeper line after a `match` header as an arms
--- block (LAYOUT-SEMANTICS §4 I.b, §7.3), so the wrapped scrutinee line is what the
--- parser trips on, not the `match`.  Reported at that line's first token.
--- Evidence that the scrutinee wrapped, all required: the block starts an
--- expression, holds no `=>` or `->` (so it is not a malformed arm), and the real
--- arms follow after the block, indented deeper than the line holding `match`
--- (a sibling arm or a later declaration at that indent or shallower means the
--- block was itself the arms).
-matchArmsGuard : Int -> List Arm -> Parser Unit
-matchArmsGuard _ (_ :: _) = deferPure ()
-matchArmsGuard matchPos [] = defer
-  here <- getPos
-  wrapped <- matchContinuationAhead matchPos
-  if wrapped then fatalAtP matchScrutContinuationMsg here else deferPure ()
-
-matchScrutContinuationMsg : String
-matchScrutContinuationMsg =
-  "a `match` scrutinee cannot continue onto an indented line; the first indented line after `match` opens the arms, so wrap the scrutinee in parentheses"
-
-matchContinuationAhead : Int -> Parser Bool
-matchContinuationAhead matchPos = ParserE (ctx pos =>
-  POk
-    (startsExprAt ctx pos
-      && continuationBlockShape ctx pos 0 (lineIndentCol ctx matchPos))
-    pos)
-
-startsExprAt : ParseContext -> Int -> Bool
-startsExprAt ctx pos =
-  let saved = mark ctx
-  let r = runPWith ctx parseAspat pos
-  rewind saved
-  match r
-    POk _ _ => True
-    _ => False
-
-lineIndentCol : ParseContext -> Int -> Int
-lineIndentCol ctx i = tokCol ctx i |> lineIndentGo ctx i (tokLine ctx i)
-
-lineIndentGo : ParseContext -> Int -> Int -> Int -> Int
-lineIndentGo ctx i line col
-  | i <= 0 = col
-  | isLayoutTok (peekTok (contextTokens ctx) (i - 1)) =
-    lineIndentGo ctx (i - 1) line col
-  | tokLine ctx (i - 1) == line =
-    lineIndentGo ctx (i - 1) line (tokCol ctx (i - 1))
-  | otherwise = col
-
-tokLine : ParseContext -> Int -> Int
-tokLine ctx i = fst (tokLineCol ctx i)
-
-tokCol : ParseContext -> Int -> Int
-tokCol ctx i = snd (tokLineCol ctx i)
-
-continuationBlockShape : ParseContext -> Int -> Int -> Int -> Bool
-continuationBlockShape ctx i depth matchCol =
-  match peekTok (contextTokens ctx) i
-    TEof => False
-    TFatArrow => False
-    TArrow => False
-    TIndent => continuationBlockShape ctx (i + 1) (depth + 1) matchCol
-    TDedent =>
-      if depth == 0 then
-        armsLineAhead ctx (i + 1) matchCol
-      else
-        continuationBlockShape ctx (i + 1) (depth - 1) matchCol
-    _ => continuationBlockShape ctx (i + 1) depth matchCol
-
-armsLineAhead : ParseContext -> Int -> Int -> Bool
-armsLineAhead ctx i matchCol = match peekTok (contextTokens ctx) i
-  TNewline => armsLineAhead ctx (i + 1) matchCol
-  _ => lineHasFatArrow (contextTokens ctx) i && tokCol ctx i > matchCol
-
-lineHasFatArrow : Array Token -> Int -> Bool
-lineHasFatArrow toks i = match peekTok toks i
-  TFatArrow => True
-  TNewline => False
-  TDedent => False
-  TIndent => False
-  TEof => False
-  _ => lineHasFatArrow toks (i + 1)
-
-parseArms : Parser (List Arm)
-parseArms = defer
+parseArms : Int -> Parser (List Arm)
+parseArms matchPos = defer
   skipNewlines
-  armsLoop
+  armsLoop matchPos
 
-armsLoop : Parser (List Arm)
-armsLoop = parseOrElse armsCons (deferPure [])
+armsLoop : Int -> Parser (List Arm)
+armsLoop matchPos = defer
+  t <- peekP
+  if t == TDedent then deferPure [] else armsCons matchPos
 
-armsCons : Parser (List Arm)
-armsCons = defer
-  a <- parseArm
+armsCons : Int -> Parser (List Arm)
+armsCons matchPos = defer
+  a <- parseArm matchPos
   skipNewlines
-  rest <- armsLoop
+  rest <- armsLoop matchPos
   deferPure (a :: rest)
 
-parseArm : Parser Arm
-parseArm = defer
-  p <- getPos
-  pat <- parsePat
+parseArm : Int -> Parser Arm
+parseArm matchPos = ParserE (ctx pos => match runPWith ctx parsePat pos
+  POk pat q => runPWith ctx (parseArmRest pos pat) q
+  PFatal f q => PFatal f q
+  PErr _ _ =>
+    let hint =
+      matchContinuationHint
+        (contextTokens ctx)
+        (contextOffsets ctx)
+        (contextLineStarts ctx)
+        matchPos
+        pos
+    let kind = optionOr ExpectedMatchArm hint
+    PFatal (FailProblem kind) pos)
+
+parseArmRest : Int -> Pat -> Parser Arm
+parseArmRest p pat = defer
   guards <- armGuardOpt
-  expectTok TFatArrow
-  body <- parseOrElse branchBlock parseBodyExpr
+  matchArrow
+  body <- matchBody
   recordUnitStart 0 p
   deferPure (Arm pat guards body)
+
+matchArrow : Parser Unit
+matchArrow = ParserE (ctx pos => match runPWith ctx (expectTok TFatArrow) pos
+  PErr _ q => PFatal (FailProblem ExpectedMatchArrow) q
+  r => r)
+
+matchBody : Parser Expr
+matchBody = ParserE
+  (ctx pos => match runPWith ctx (parseOrElse branchBlock parseBodyExpr) pos
+    PErr f q => PFatal f q
+    r => r)
 
 -- optional match-arm guard: `if g, g…` (NB: uses `if`, not `|`)
 armGuardOpt : Parser (List Guard)
@@ -5033,8 +5007,8 @@ parseResultWith mode src tokList offList =
         (runPWith ctx parseProgram 0)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateOffset" false) (mem "locateTokenDiagnostic" false))))
-(DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
-(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "tokLineCol" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
+(DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "matchContinuationHint" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
+(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "makeParseMetadata" false) (mem "parsedDecls" false) (mem "parsedPositions" false))))
 (DUse true (UseGroup ("frontend" "parse_result") ((mem "ParseError" true) (mem "parseErrorDiagnostic" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
@@ -5044,7 +5018,7 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isLayoutTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -5212,6 +5186,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binRhs" (TyFun (TyCon "ParseMark") (TyFun (TyCon "Int") (TyFun (TyCon "ParseContext") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))))))
 (DFunDef false "binRhs" (PWild (PVar "lvl") (PVar "ctx") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "ctx")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EVar "unminted"))) (EVar "q"))))
+(DFunDef false "binRhs" ((PVar "saved") PWild (PVar "ctx") PWild (PVar "pos") PWild (PCon "PErr" PWild (PVar "q"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "q") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q"))) (EApp (EVar "isCloseDelim") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q")))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q")) (EVar "TComma")))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailMsg") (ELit (LString "expected an expression after the binary operator")))) (EApp (EApp (EVar "committedErrorPos") (EVar "ctx")) (EVar "q"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "binRhs" ((PVar "saved") PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))))
 (DFunDef false "binRhs" ((PVar "saved") PWild PWild PWild PWild PWild (PVar "ry")) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EVar "ry"))))
 (DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyCon "ParseContext") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
@@ -5349,7 +5324,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseKvBlockElem" (TyApp (TyCon "Parser") (TyCon "KvItem")))
 (DFunDef false "parseKvBlockElem" () (EApp (EApp (EVar "deferThen") (EVar "parseBracketBlock")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EVar "KvElem") (EVar "e"))))))
 (DTypeSig false "parseKvField" (TyApp (TyCon "Parser") (TyCon "KvItem")))
-(DFunDef false "parseKvField" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBracketElem")) (ELam ((PVar "e")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 4))) (EVar "p"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "KvField") (EVar "name")) (EVar "e"))))))))))))))
+(DFunDef false "parseKvField" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a record field value after `=`"))) (EVar "parseBracketElem"))) (ELam ((PVar "e")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 4))) (EVar "p"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "KvField") (EVar "name")) (EVar "e"))))))))))))))
 (DTypeSig false "parseKvKVorElem" (TyApp (TyCon "Parser") (TyCon "KvItem")))
 (DFunDef false "parseKvKVorElem" () (EApp (EApp (EVar "deferThen") (EVar "parsePipe")) (ELam ((PVar "e")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "kvKVorElemFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "kvKVorElemFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "KvItem")))))
@@ -5385,7 +5360,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "recordFieldExpr" (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))
 (DFunDef false "recordFieldExpr" () (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "identNameP")) (EApp (EVar "expectTok") (EVar "TDot")))) (ELam ((PVar "path")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "recordFieldExprRest") (EVar "path")) (EVar "t")))))))
 (DTypeSig false "recordFieldExprRest" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))))
-(DFunDef false "recordFieldExprRest" ((PVar "path") (PCon "TEqual")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBracketElem")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (ETuple (EVar "path") (EVar "e"))))))))
+(DFunDef false "recordFieldExprRest" ((PVar "path") (PCon "TEqual")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a record field value after `=`"))) (EVar "parseBracketElem"))) (ELam ((PVar "e")) (EApp (EVar "deferPure") (ETuple (EVar "path") (EVar "e"))))))))
 (DFunDef false "recordFieldExprRest" ((PList (PVar "x")) PWild) (EApp (EVar "deferPure") (ETuple (EListLit (EVar "x")) (EApp (EVar "EVar") (EVar "x")))))
 (DFunDef false "recordFieldExprRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `=` after the field name in a record update"))))
 (DTypeSig false "desugarDottedField" (TyFun (TyCon "Expr") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr")) (TyCon "FieldAssign"))))
@@ -5415,7 +5390,11 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseBracketElem" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBracketElem" () (EApp (EApp (EVar "parseOrElse") (EVar "parseBracketBlock")) (EVar "parseExpr")))
 (DTypeSig false "parseParen" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseParen" () (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "parenFor") (EVar "t")))))))
+(DFunDef false "parseParen" () (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a complete parenthesized expression"))) (EApp (EVar "parenFor") (EVar "t"))))))))
+(DTypeSig false "committedExpr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Parser") (TyCon "Expr")) (TyApp (TyCon "Parser") (TyCon "Expr")))))
+(DFunDef false "committedExpr" ((PVar "msg") (PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" (PVar "f") (PVar "q")) () (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "committedErrorPos") (EVar "ctx")) (EVar "q"))) (DoLet false false (PVar "reason") (EMatch (EVar "f") (arm (PCon "FailExpect" (PCon "TNewline") (PCon "TRParen")) () (EIf (EBinOp ">" (EVar "loc") (EVar "q")) (EApp (EVar "FailMsg") (ELit (LString "unexpected end of input; expected `)`"))) (EVar "f"))) (arm PWild () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EVar "f") (EApp (EVar "FailMsg") (EVar "msg")))))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "reason")) (EVar "loc"))))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "committedErrorPos" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "committedErrorPos" ((PVar "ctx") (PVar "q")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "contextTokens") (EVar "ctx"))) (DoLet false false (PVar "offs") (EApp (EVar "contextOffsets") (EVar "ctx"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "q") (ELit (LInt 0))) (EBinOp "<" (EVar "q") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "q")) (EVar "offs"))) (ELit (LInt 0)))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "q")) (EVar "TNewline"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "q") (ELit (LInt 1)))) (EVar "TEof"))) (EBinOp "+" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig false "parenFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "parenFor" ((PCon "TRParen")) (EApp (EVar "emit") (EApp (EVar "ELit") (EVar "LUnit"))))
 (DFunDef false "parenFor" ((PCon "TMinus")) (EApp (EApp (EVar "parseOrElse") (EVar "bareMinusSection")) (EVar "parseParenExpr")))
@@ -5541,38 +5520,21 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "letRecInlineClause" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))
 (DFunDef false "letRecInlineClause" () (EApp (EApp (EVar "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "body")) (EApp (EVar "deferPure") (ETuple (EVar "name") (EVar "pats") (EVar "body") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1)))))))))))))))))))
 (DTypeSig false "parseMatch" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseMatch" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TMatch"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "scrut")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseArms")) (ELam ((PVar "arms")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "matchArmsGuard") (EVar "matchPos")) (EVar "arms"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "EMatch") (EVar "scrut")) (EVar "arms"))))))))))))))))))
-(DTypeSig false "matchArmsGuard" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Parser") (TyCon "Unit")))))
-(DFunDef false "matchArmsGuard" (PWild (PCons PWild PWild)) (EApp (EVar "deferPure") (ELit LUnit)))
-(DFunDef false "matchArmsGuard" ((PVar "matchPos") (PList)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "here")) (EApp (EApp (EVar "deferThen") (EApp (EVar "matchContinuationAhead") (EVar "matchPos"))) (ELam ((PVar "wrapped")) (EIf (EVar "wrapped") (EApp (EApp (EVar "fatalAtP") (EVar "matchScrutContinuationMsg")) (EVar "here")) (EApp (EVar "deferPure") (ELit LUnit))))))))
-(DTypeSig false "matchScrutContinuationMsg" (TyCon "String"))
-(DFunDef false "matchScrutContinuationMsg" () (ELit (LString "a `match` scrutinee cannot continue onto an indented line; the first indented line after `match` opens the arms, so wrap the scrutinee in parentheses")))
-(DTypeSig false "matchContinuationAhead" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Bool"))))
-(DFunDef false "matchContinuationAhead" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EBinOp "&&" (EApp (EApp (EVar "startsExprAt") (EVar "ctx")) (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EVar "pos")) (ELit (LInt 0))) (EApp (EApp (EVar "lineIndentCol") (EVar "ctx")) (EVar "matchPos"))))) (EVar "pos")))))
-(DTypeSig false "startsExprAt" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "startsExprAt" ((PVar "ctx") (PVar "pos")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parseAspat")) (EVar "pos"))) (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EMatch (EVar "r") (arm (PCon "POk" PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))))
-(DTypeSig false "lineIndentCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lineIndentCol" ((PVar "ctx") (PVar "i")) (EBinOp "|>" (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EVar "i")) (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EVar "i")) (EApp (EApp (EVar "tokLine") (EVar "ctx")) (EVar "i")))))
-(DTypeSig false "lineIndentGo" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lineIndentGo" ((PVar "ctx") (PVar "i") (PVar "line") (PVar "col")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "col") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EVar "col")) (EIf (EBinOp "==" (EApp (EApp (EVar "tokLine") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EApp (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EVar "col") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "tokLine" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "tokLine" ((PVar "ctx") (PVar "i")) (EApp (EVar "fst") (EApp (EApp (EVar "tokLineCol") (EVar "ctx")) (EVar "i"))))
-(DTypeSig false "tokCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "tokCol" ((PVar "ctx") (PVar "i")) (EApp (EVar "snd") (EApp (EApp (EVar "tokLineCol") (EVar "ctx")) (EVar "i"))))
-(DTypeSig false "continuationBlockShape" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "continuationBlockShape" ((PVar "ctx") (PVar "i") (PVar "depth") (PVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (arm (PCon "TEof") () (EVar "False")) (arm (PCon "TFatArrow") () (EVar "False")) (arm (PCon "TArrow") () (EVar "False")) (arm (PCon "TIndent") () (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "matchCol"))) (arm (PCon "TDedent") () (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "armsLineAhead") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "matchCol")) (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "matchCol")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "matchCol")))))
-(DTypeSig false "armsLineAhead" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "armsLineAhead" ((PVar "ctx") (PVar "i") (PVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (arm (PCon "TNewline") () (EApp (EApp (EApp (EVar "armsLineAhead") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "matchCol"))) (arm PWild () (EBinOp "&&" (EApp (EApp (EVar "lineHasFatArrow") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (EBinOp ">" (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EVar "i")) (EVar "matchCol"))))))
-(DTypeSig false "lineHasFatArrow" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "lineHasFatArrow" ((PVar "toks") (PVar "i")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (arm (PCon "TFatArrow") () (EVar "True")) (arm (PCon "TNewline") () (EVar "False")) (arm (PCon "TDedent") () (EVar "False")) (arm (PCon "TIndent") () (EVar "False")) (arm (PCon "TEof") () (EVar "False")) (arm PWild () (EApp (EApp (EVar "lineHasFatArrow") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
-(DTypeSig false "parseArms" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "parseArms" () (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EVar "armsLoop"))))
-(DTypeSig false "armsLoop" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "armsLoop" () (EApp (EApp (EVar "parseOrElse") (EVar "armsCons")) (EApp (EVar "deferPure") (EListLit))))
-(DTypeSig false "armsCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "armsCons" () (EApp (EApp (EVar "deferThen") (EVar "parseArm")) (ELam ((PVar "a")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "armsLoop")) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
-(DTypeSig false "parseArm" (TyApp (TyCon "Parser") (TyCon "Arm")))
-(DFunDef false "parseArm" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "parsePat")) (ELam ((PVar "pat")) (EApp (EApp (EVar "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "parseOrElse") (EVar "branchBlock")) (EVar "parseBodyExpr"))) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))))))
+(DFunDef false "parseMatch" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TMatch"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "scrut")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "parseArms") (EVar "matchPos"))) (ELam ((PVar "arms")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "EMatch") (EVar "scrut")) (EVar "arms"))))))))))))))))
+(DTypeSig false "parseArms" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "parseArms" ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "armsLoop") (EVar "matchPos")))))
+(DTypeSig false "armsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "armsLoop" ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (EVar "TDedent")) (EApp (EVar "deferPure") (EListLit)) (EApp (EVar "armsCons") (EVar "matchPos"))))))
+(DTypeSig false "armsCons" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "armsCons" ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "parseArm") (EVar "matchPos"))) (ELam ((PVar "a")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "armsLoop") (EVar "matchPos"))) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
+(DTypeSig false "parseArm" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Arm"))))
+(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos"))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
+(DTypeSig false "parseArmRest" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyApp (TyCon "Parser") (TyCon "Arm")))))
+(DFunDef false "parseArmRest" ((PVar "p") (PVar "pat")) (EApp (EApp (EVar "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EVar "deferThen") (EVar "matchArrow")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "matchBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))
+(DTypeSig false "matchArrow" (TyApp (TyCon "Parser") (TyCon "Unit")))
+(DFunDef false "matchArrow" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EVar "expectTok") (EVar "TFatArrow"))) (EVar "pos")) (arm (PCon "PErr" PWild (PVar "q")) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "ExpectedMatchArrow"))) (EVar "q"))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "matchBody" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "matchBody" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseOrElse") (EVar "branchBlock")) (EVar "parseBodyExpr"))) (EVar "pos")) (arm (PCon "PErr" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PVar "r") () (EVar "r"))))))
 (DTypeSig false "armGuardOpt" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Guard"))))
 (DFunDef false "armGuardOpt" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "armGuardFor") (EVar "t")))))
 (DTypeSig false "armGuardFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Guard")))))
@@ -6501,8 +6463,8 @@ parseResultWith mode src tokList offList =
 (DFunDef false "parseResultWith" ((PVar "mode") (PVar "src") (PVar "tokList") (PVar "offList")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EVar "tokList"))) (DoLet false false (PVar "offs") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "offList")))) (DoLet false false (PVar "ends") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "offList")))) (DoLet false true (PVar "index") (ELam ((PLit LUnit)) (EApp (EVar "indexSource") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "prescanError") (EVar "src")) (EVar "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EVar "newParseContextWith") (EVar "mode")) (EVar "src")) (EVar "toks")) (EApp (EVar "arrayFromList") (EVar "offList")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resultDeclsResult") (EVar "ctx")) (EVar "src")) (EVar "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (EApp (EVar "stringLength") (EVar "src"))) (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parseProgram")) (ELit (LInt 0)))))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateOffset" false) (mem "locateTokenDiagnostic" false))))
-(DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
-(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "tokLineCol" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
+(DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "matchContinuationHint" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
+(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "makeParseMetadata" false) (mem "parsedDecls" false) (mem "parsedPositions" false))))
 (DUse true (UseGroup ("frontend" "parse_result") ((mem "ParseError" true) (mem "parseErrorDiagnostic" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
@@ -6512,7 +6474,7 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isLayoutTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -6680,6 +6642,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binRhs" (TyFun (TyCon "ParseMark") (TyFun (TyCon "Int") (TyFun (TyCon "ParseContext") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))))))
 (DFunDef false "binRhs" (PWild (PVar "lvl") (PVar "ctx") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "ctx")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EVar "unminted"))) (EVar "q"))))
+(DFunDef false "binRhs" ((PVar "saved") PWild (PVar "ctx") PWild (PVar "pos") PWild (PCon "PErr" PWild (PVar "q"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "q") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q"))) (EApp (EVar "isCloseDelim") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q")))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "q")) (EVar "TComma")))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailMsg") (ELit (LString "expected an expression after the binary operator")))) (EApp (EApp (EVar "committedErrorPos") (EVar "ctx")) (EVar "q"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "binRhs" ((PVar "saved") PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))))
 (DFunDef false "binRhs" ((PVar "saved") PWild PWild PWild PWild PWild (PVar "ry")) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EVar "ry"))))
 (DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyCon "ParseContext") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
@@ -6817,7 +6780,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseKvBlockElem" (TyApp (TyCon "Parser") (TyCon "KvItem")))
 (DFunDef false "parseKvBlockElem" () (EApp (EApp (EMethodRef "deferThen") (EVar "parseBracketBlock")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EVar "KvElem") (EVar "e"))))))
 (DTypeSig false "parseKvField" (TyApp (TyCon "Parser") (TyCon "KvItem")))
-(DFunDef false "parseKvField" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBracketElem")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 4))) (EVar "p"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "KvField") (EVar "name")) (EVar "e"))))))))))))))
+(DFunDef false "parseKvField" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a record field value after `=`"))) (EVar "parseBracketElem"))) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 4))) (EVar "p"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "KvField") (EVar "name")) (EVar "e"))))))))))))))
 (DTypeSig false "parseKvKVorElem" (TyApp (TyCon "Parser") (TyCon "KvItem")))
 (DFunDef false "parseKvKVorElem" () (EApp (EApp (EMethodRef "deferThen") (EVar "parsePipe")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "kvKVorElemFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "kvKVorElemFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "KvItem")))))
@@ -6853,7 +6816,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "recordFieldExpr" (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))
 (DFunDef false "recordFieldExpr" () (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "identNameP")) (EApp (EVar "expectTok") (EVar "TDot")))) (ELam ((PVar "path")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "recordFieldExprRest") (EVar "path")) (EVar "t")))))))
 (DTypeSig false "recordFieldExprRest" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))))
-(DFunDef false "recordFieldExprRest" ((PVar "path") (PCon "TEqual")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBracketElem")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (ETuple (EVar "path") (EVar "e"))))))))
+(DFunDef false "recordFieldExprRest" ((PVar "path") (PCon "TEqual")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a record field value after `=`"))) (EVar "parseBracketElem"))) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (ETuple (EVar "path") (EVar "e"))))))))
 (DFunDef false "recordFieldExprRest" ((PList (PVar "x")) PWild) (EApp (EMethodRef "deferPure") (ETuple (EListLit (EVar "x")) (EApp (EVar "EVar") (EVar "x")))))
 (DFunDef false "recordFieldExprRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `=` after the field name in a record update"))))
 (DTypeSig false "desugarDottedField" (TyFun (TyCon "Expr") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr")) (TyCon "FieldAssign"))))
@@ -6883,7 +6846,11 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseBracketElem" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBracketElem" () (EApp (EApp (EVar "parseOrElse") (EVar "parseBracketBlock")) (EVar "parseExpr")))
 (DTypeSig false "parseParen" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseParen" () (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "parenFor") (EVar "t")))))))
+(DFunDef false "parseParen" () (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "committedExpr") (ELit (LString "expected a complete parenthesized expression"))) (EApp (EVar "parenFor") (EVar "t"))))))))
+(DTypeSig false "committedExpr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Parser") (TyCon "Expr")) (TyApp (TyCon "Parser") (TyCon "Expr")))))
+(DFunDef false "committedExpr" ((PVar "msg") (PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" (PVar "f") (PVar "q")) () (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "committedErrorPos") (EVar "ctx")) (EVar "q"))) (DoLet false false (PVar "reason") (EMatch (EVar "f") (arm (PCon "FailExpect" (PCon "TNewline") (PCon "TRParen")) () (EIf (EBinOp ">" (EVar "loc") (EVar "q")) (EApp (EVar "FailMsg") (ELit (LString "unexpected end of input; expected `)`"))) (EVar "f"))) (arm PWild () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EVar "f") (EApp (EVar "FailMsg") (EVar "msg")))))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "reason")) (EVar "loc"))))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "committedErrorPos" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "committedErrorPos" ((PVar "ctx") (PVar "q")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "contextTokens") (EVar "ctx"))) (DoLet false false (PVar "offs") (EApp (EVar "contextOffsets") (EVar "ctx"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "q") (ELit (LInt 0))) (EBinOp "<" (EVar "q") (EApp (EVar "arrayLength") (EVar "offs")))) (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "q")) (EVar "offs"))) (ELit (LInt 0)))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "q")) (EVar "TNewline"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "q") (ELit (LInt 1)))) (EVar "TEof"))) (EBinOp "+" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig false "parenFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "parenFor" ((PCon "TRParen")) (EApp (EVar "emit") (EApp (EVar "ELit") (EVar "LUnit"))))
 (DFunDef false "parenFor" ((PCon "TMinus")) (EApp (EApp (EVar "parseOrElse") (EVar "bareMinusSection")) (EVar "parseParenExpr")))
@@ -7009,38 +6976,21 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "letRecInlineClause" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))
 (DFunDef false "letRecInlineClause" () (EApp (EApp (EMethodRef "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "body")) (EApp (EMethodRef "deferPure") (ETuple (EVar "name") (EVar "pats") (EVar "body") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1)))))))))))))))))))
 (DTypeSig false "parseMatch" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseMatch" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TMatch"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "scrut")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseArms")) (ELam ((PVar "arms")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "matchArmsGuard") (EVar "matchPos")) (EVar "arms"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "EMatch") (EVar "scrut")) (EVar "arms"))))))))))))))))))
-(DTypeSig false "matchArmsGuard" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Parser") (TyCon "Unit")))))
-(DFunDef false "matchArmsGuard" (PWild (PCons PWild PWild)) (EApp (EMethodRef "deferPure") (ELit LUnit)))
-(DFunDef false "matchArmsGuard" ((PVar "matchPos") (PList)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "here")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "matchContinuationAhead") (EVar "matchPos"))) (ELam ((PVar "wrapped")) (EIf (EVar "wrapped") (EApp (EApp (EVar "fatalAtP") (EVar "matchScrutContinuationMsg")) (EVar "here")) (EApp (EMethodRef "deferPure") (ELit LUnit))))))))
-(DTypeSig false "matchScrutContinuationMsg" (TyCon "String"))
-(DFunDef false "matchScrutContinuationMsg" () (ELit (LString "a `match` scrutinee cannot continue onto an indented line; the first indented line after `match` opens the arms, so wrap the scrutinee in parentheses")))
-(DTypeSig false "matchContinuationAhead" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Bool"))))
-(DFunDef false "matchContinuationAhead" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EBinOp "&&" (EApp (EApp (EVar "startsExprAt") (EVar "ctx")) (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EVar "pos")) (ELit (LInt 0))) (EApp (EApp (EVar "lineIndentCol") (EVar "ctx")) (EVar "matchPos"))))) (EVar "pos")))))
-(DTypeSig false "startsExprAt" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "startsExprAt" ((PVar "ctx") (PVar "pos")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parseAspat")) (EVar "pos"))) (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EMatch (EVar "r") (arm (PCon "POk" PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))))
-(DTypeSig false "lineIndentCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lineIndentCol" ((PVar "ctx") (PVar "i")) (EBinOp "|>" (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EVar "i")) (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EVar "i")) (EApp (EApp (EVar "tokLine") (EVar "ctx")) (EVar "i")))))
-(DTypeSig false "lineIndentGo" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lineIndentGo" ((PVar "ctx") (PVar "i") (PVar "line") (PVar "col")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "col") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EVar "col")) (EIf (EBinOp "==" (EApp (EApp (EVar "tokLine") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EApp (EApp (EApp (EApp (EVar "lineIndentGo") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EVar "col") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "tokLine" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "tokLine" ((PVar "ctx") (PVar "i")) (EApp (EVar "fst") (EApp (EApp (EVar "tokLineCol") (EVar "ctx")) (EVar "i"))))
-(DTypeSig false "tokCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "tokCol" ((PVar "ctx") (PVar "i")) (EApp (EVar "snd") (EApp (EApp (EVar "tokLineCol") (EVar "ctx")) (EVar "i"))))
-(DTypeSig false "continuationBlockShape" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "continuationBlockShape" ((PVar "ctx") (PVar "i") (PVar "depth") (PVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (arm (PCon "TEof") () (EVar "False")) (arm (PCon "TFatArrow") () (EVar "False")) (arm (PCon "TArrow") () (EVar "False")) (arm (PCon "TIndent") () (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "matchCol"))) (arm (PCon "TDedent") () (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "armsLineAhead") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "matchCol")) (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "matchCol")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "continuationBlockShape") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "matchCol")))))
-(DTypeSig false "armsLineAhead" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "armsLineAhead" ((PVar "ctx") (PVar "i") (PVar "matchCol")) (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (arm (PCon "TNewline") () (EApp (EApp (EApp (EVar "armsLineAhead") (EVar "ctx")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "matchCol"))) (arm PWild () (EBinOp "&&" (EApp (EApp (EVar "lineHasFatArrow") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "i")) (EBinOp ">" (EApp (EApp (EVar "tokCol") (EVar "ctx")) (EVar "i")) (EVar "matchCol"))))))
-(DTypeSig false "lineHasFatArrow" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "lineHasFatArrow" ((PVar "toks") (PVar "i")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (arm (PCon "TFatArrow") () (EVar "True")) (arm (PCon "TNewline") () (EVar "False")) (arm (PCon "TDedent") () (EVar "False")) (arm (PCon "TIndent") () (EVar "False")) (arm (PCon "TEof") () (EVar "False")) (arm PWild () (EApp (EApp (EVar "lineHasFatArrow") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
-(DTypeSig false "parseArms" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "parseArms" () (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EVar "armsLoop"))))
-(DTypeSig false "armsLoop" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "armsLoop" () (EApp (EApp (EVar "parseOrElse") (EVar "armsCons")) (EApp (EMethodRef "deferPure") (EListLit))))
-(DTypeSig false "armsCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm"))))
-(DFunDef false "armsCons" () (EApp (EApp (EMethodRef "deferThen") (EVar "parseArm")) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "armsLoop")) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
-(DTypeSig false "parseArm" (TyApp (TyCon "Parser") (TyCon "Arm")))
-(DFunDef false "parseArm" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "parsePat")) (ELam ((PVar "pat")) (EApp (EApp (EMethodRef "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "parseOrElse") (EVar "branchBlock")) (EVar "parseBodyExpr"))) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))))))
+(DFunDef false "parseMatch" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TMatch"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "scrut")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "parseArms") (EVar "matchPos"))) (ELam ((PVar "arms")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "EMatch") (EVar "scrut")) (EVar "arms"))))))))))))))))
+(DTypeSig false "parseArms" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "parseArms" ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "armsLoop") (EVar "matchPos")))))
+(DTypeSig false "armsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "armsLoop" ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (EVar "TDedent")) (EApp (EMethodRef "deferPure") (EListLit)) (EApp (EVar "armsCons") (EVar "matchPos"))))))
+(DTypeSig false "armsCons" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
+(DFunDef false "armsCons" ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "parseArm") (EVar "matchPos"))) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "armsLoop") (EVar "matchPos"))) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
+(DTypeSig false "parseArm" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Arm"))))
+(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos"))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
+(DTypeSig false "parseArmRest" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyApp (TyCon "Parser") (TyCon "Arm")))))
+(DFunDef false "parseArmRest" ((PVar "p") (PVar "pat")) (EApp (EApp (EMethodRef "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EMethodRef "deferThen") (EVar "matchArrow")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "matchBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))
+(DTypeSig false "matchArrow" (TyApp (TyCon "Parser") (TyCon "Unit")))
+(DFunDef false "matchArrow" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EVar "expectTok") (EVar "TFatArrow"))) (EVar "pos")) (arm (PCon "PErr" PWild (PVar "q")) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "ExpectedMatchArrow"))) (EVar "q"))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "matchBody" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "matchBody" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseOrElse") (EVar "branchBlock")) (EVar "parseBodyExpr"))) (EVar "pos")) (arm (PCon "PErr" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PVar "r") () (EVar "r"))))))
 (DTypeSig false "armGuardOpt" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Guard"))))
 (DFunDef false "armGuardOpt" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "armGuardFor") (EVar "t")))))
 (DTypeSig false "armGuardFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Guard")))))

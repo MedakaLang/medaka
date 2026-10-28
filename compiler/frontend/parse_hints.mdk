@@ -2,11 +2,355 @@ import frontend.lex_token.{
   Token(..), peekTok, isColonTok, isConsTok, isDedentTok, isEofTok, isEqualTok,
   isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
   isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isStarTok,
-  isTUpperTok
+  isTUpperTok, isLayoutTok
 }
 import frontend.parse_locate.{locateTokenDiagnostic}
 import frontend.parse_diagnostic.{ParseDiagnostic, ParseDiagnosticKind(..)}
-import support.source_index.{SourceIndex}
+import support.source_index.{SourceIndex, offsetToLineColFast}
+
+-- A bounded evidence scan for a conditional diagnostic, never a grammar.
+export
+matchContinuationHint : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Option ParseDiagnosticKind
+matchContinuationHint toks offs lines matchPos armPos =
+  if arrayLength lines == 0
+    || matchPos < 0
+    || armPos < 0
+    || matchPos >= arrayLength offs
+    || armPos >= arrayLength offs then
+    None
+  else
+    let (line, matchCol) =
+      offsetToLineColFast lines (fst (arrayGetUnsafe matchPos offs))
+    let lineStart = arrayGetUnsafe (line - 1) lines
+    let (header, left) = matchHeaderStart toks offs lineStart matchPos 4088
+    let anchor = matchHeaderAnchor toks offs lines header matchPos matchCol
+    match anchor
+      None => None
+      Some col => matchCandidate toks offs lines armPos col left
+
+matchHeaderStart : Array Token ->
+  Array (Int, Int) ->
+  Int ->
+  Int ->
+  Int ->
+  (Int, Int)
+matchHeaderStart toks offs start i left
+  | left <= 0 || i <= 0 = (i, left)
+  | i - 1 >= arrayLength offs = (i, 0)
+  | fst (arrayGetUnsafe (i - 1) offs) < start = (i, left)
+  | isLayoutTok (peekTok toks (i - 1)) = (i, left - 1)
+  | otherwise = matchHeaderStart toks offs start (i - 1) (left - 1)
+
+matchHeaderAnchor : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Option Int
+matchHeaderAnchor toks offs lines header matchPos matchCol =
+  if header == matchPos then
+    Some matchCol
+  else match peekTok toks header
+    TLet => matchHeaderBinding toks offs lines (header + 1) matchPos
+    _ => None
+
+matchHeaderBinding : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Option Int
+matchHeaderBinding toks offs lines i matchPos =
+  let namePos = if peekTok toks i == TRec then i + 1 else i
+  match peekTok toks namePos
+    TIdent _ =>
+      if namePos + 2 == matchPos && peekTok toks (namePos + 1) == TEqual then
+        Some
+          (snd (offsetToLineColFast lines (fst (arrayGetUnsafe namePos offs))))
+      else
+        None
+    _ => None
+
+matchCandidate : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Option ParseDiagnosticKind
+matchCandidate toks offs lines i anchor left =
+  let (_, col) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
+  matchCandidateGo toks offs lines i anchor col left [] 0 False False
+
+matchCandidateGo : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List Token ->
+  Int ->
+  Bool ->
+  Bool ->
+  Option ParseDiagnosticKind
+matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArrow
+  | left <= 0 || i >= arrayLength toks = None
+  | otherwise =
+    let t = peekTok toks i
+    match (stack, t)
+      ([], TDedent) =>
+        if depth == 0 && sawIsland && sawArrow then
+          matchFollowing toks offs lines (i + 1) anchor col (left - 1) []
+        else
+          None
+      ([], TLParen) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          [TRParen]
+          depth
+          True
+          sawArrow
+      ([], TNewline) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          []
+          depth
+          sawIsland
+          sawArrow
+      ([], _) => None
+      (_, TEof) => None
+      (_, TLexError _) => None
+      (_, TLArray) => None
+      (_, TRArray) => None
+      (_, TDotLBrace) => None
+      (_, TIndent) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          stack
+          (depth + 1)
+          sawIsland
+          sawArrow
+      (_, TDedent) =>
+        if depth <= 0 then
+          None
+        else
+          matchCandidateGo
+            toks
+            offs
+            lines
+            (i + 1)
+            anchor
+            col
+            (left - 1)
+            stack
+            (depth - 1)
+            sawIsland
+            sawArrow
+      (_, TLParen) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          (TRParen :: stack)
+          depth
+          sawIsland
+          sawArrow
+      (_, TLBracket) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          (TRBracket :: stack)
+          depth
+          sawIsland
+          sawArrow
+      (_, TLBracketTight) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          (TRBracket :: stack)
+          depth
+          sawIsland
+          sawArrow
+      (_, TLBrace) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          (TRBrace :: stack)
+          depth
+          sawIsland
+          sawArrow
+      (top :: rest, TRParen) =>
+        if top == TRParen then
+          matchCandidateGo
+            toks
+            offs
+            lines
+            (i + 1)
+            anchor
+            col
+            (left - 1)
+            rest
+            depth
+            sawIsland
+            sawArrow
+        else
+          None
+      (top :: rest, TRBracket) =>
+        if top == TRBracket then
+          matchCandidateGo
+            toks
+            offs
+            lines
+            (i + 1)
+            anchor
+            col
+            (left - 1)
+            rest
+            depth
+            sawIsland
+            sawArrow
+        else
+          None
+      (top :: rest, TRBrace) =>
+        if top == TRBrace then
+          matchCandidateGo
+            toks
+            offs
+            lines
+            (i + 1)
+            anchor
+            col
+            (left - 1)
+            rest
+            depth
+            sawIsland
+            sawArrow
+        else
+          None
+      (_, _) =>
+        matchCandidateGo
+          toks
+          offs
+          lines
+          (i + 1)
+          anchor
+          col
+          (left - 1)
+          stack
+          depth
+          sawIsland
+          (sawArrow || t == TFatArrow || t == TArrow)
+
+matchFollowing : Array Token ->
+  Array (Int, Int) ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List Token ->
+  Option ParseDiagnosticKind
+matchFollowing toks offs lines i anchor col left _ =
+  if left <= 0 || i >= arrayLength toks || i >= arrayLength offs then
+    None
+  else if peekTok toks i == TNewline then
+    matchFollowing toks offs lines (i + 1) anchor col (left - 1) []
+  else
+    let (_, nextCol) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
+    if nextCol <= anchor || nextCol >= col || peekTok toks i == TFatArrow then
+      None
+    else
+      matchFollowingGo toks i left []
+
+matchFollowingGo : Array Token ->
+  Int ->
+  Int ->
+  List Token ->
+  Option ParseDiagnosticKind
+matchFollowingGo toks i left stack =
+  if left <= 0 || i >= arrayLength toks then
+    None
+  else match (stack, peekTok toks i)
+    ([], TFatArrow) => Some MatchContinuationHint
+    ([], TEqual) => None
+    ([], TLArrow) => None
+    ([], TNewline) => None
+    ([], TDedent) => None
+    ([], TIndent) => None
+    (_, TEof) => None
+    (_, TLexError _) => None
+    (_, TLArray) => None
+    (_, TRArray) => None
+    (_, TDotLBrace) => None
+    (_, TLParen) => matchFollowingGo toks (i + 1) (left - 1) (TRParen :: stack)
+    (_, TLBracket) =>
+      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
+    (_, TLBracketTight) =>
+      matchFollowingGo toks (i + 1) (left - 1) (TRBracket :: stack)
+    (_, TLBrace) => matchFollowingGo toks (i + 1) (left - 1) (TRBrace :: stack)
+    (top :: rest, TRParen) =>
+      if top == TRParen then
+        matchFollowingGo toks (i + 1) (left - 1) rest
+      else
+        None
+    (top :: rest, TRBracket) =>
+      if top == TRBracket then
+        matchFollowingGo toks (i + 1) (left - 1) rest
+      else
+        None
+    (top :: rest, TRBrace) =>
+      if top == TRBrace then
+        matchFollowingGo toks (i + 1) (left - 1) rest
+      else
+        None
+    ([], TRParen) => None
+    ([], TRBracket) => None
+    ([], TRBrace) => None
+    (_, _) => matchFollowingGo toks (i + 1) (left - 1) stack
 
 -- The single parser rejection message for `let mut` (used at both the
 -- expression-level and statement-level `let` productions). Points at `Ref`/`:=`.
