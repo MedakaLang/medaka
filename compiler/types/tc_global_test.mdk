@@ -175,7 +175,7 @@ test "a module's coherence is checked against its own impls, not another module'
   checkCoherence m ie (moduleOrdinal + 1)
   expectEqual [] (codesOf m)
 
--- The verdicts of the whole-graph sweep over the modules [mods], the first holding the
+-- The verdicts of the whole-graph sweep over the modules [sources], the first holding the
 -- interface: whether it found a hard and a soft conflict.
 sweepVerdicts : List String -> (Bool, Bool)
 sweepVerdicts sources =

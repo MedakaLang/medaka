@@ -1,15 +1,14 @@
 -- Tests of `types.tc_solve`'s own API: the goal-kind tags and names, the interface-reference
--- mints, the per-function site index, the arithmetic site stamp, the small id and name
+-- mints, the per-function site index, the small id and name
 -- projections, the enclosing-variable and return-position projections, the method-slot
--- projections, the dispatch-mono walk of a declared type against an occurrence, the
--- discharge memo's goal identity and the span keys of located goals.  Each test builds its
+-- projections, the dispatch-mono walk of a declared type against an occurrence
+-- (`walkGoalFollowed`), the numeric return route (`numericReturnRoute`) and the
+-- obligation arguments (`uOblArgs`).  Each test builds its
 -- inputs from the parsed signature, a fresh walk or a hand-built slot.  What a whole check
 -- resolves for a return-position method, the method-return trace and memo, the drain's live
 -- spans and the route stamps are observed through `types.typecheck` in `typecheck_test`.
 
-import test.{
-  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
-}
+import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Loc(..), Route(..)}
 import frontend.parser.{parse}
 import types.effect_rows.{pureRow}

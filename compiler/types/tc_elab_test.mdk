@@ -185,8 +185,8 @@ litBodyAt (f, route) body = bodyOver [EvEntry site0 (EvLit f route)] body
 methodAt : String -> Expr
 methodAt name = EMethodAt name "" (EvId "" 0)
 
--- [e] as text, a method occurrence by its method and interface word alone, so a minted cell
--- compares by what the pass rewrote the node to.
+-- [e] as text, a method occurrence by its method name alone, so a minted cell compares by
+-- what the pass rewrote the node to.
 shape : Expr -> String
 shape (EApp f x) = "(\{shape f} \{shape x})"
 shape (EMethodAt n _ _) = "method \{n}"
@@ -430,7 +430,7 @@ test "a dictionary use of a local name that abstracted over something stays a di
 
 -- ── selfDeclArities ───────────────────────────────────────────────────────
 
--- A one-element row of the arities the tests thread: the name and a distinguishing payload.
+-- The qualified arity rows the tests thread: a (module, name) key and a distinguishing payload.
 qualRows : List ((String, String), Int)
 qualRows = [(("m", "f"), 1), (("other", "f"), 2), (("other", "h"), 3)]
 
@@ -1006,7 +1006,7 @@ prop "a call is granted the whole domain of its extern and nothing else" (c : Gr
 grantsApply : GrantCase -> Bool
 grantsApply (GrantCase head _) = isSome (snd (grantHead head))
 
--- An operator, its route and its two operands.
+-- An operator index and a route index.
 data OpCase = OpCase Int Int
 
 impl Arbitrary OpCase where
@@ -1043,8 +1043,7 @@ opModel (OpCase op route) =
       let call = EApp (EApp (methodAt method) (EVar "a")) (EVar "b")
       shape (if name == "/=" then EApp (EVar "not") call else call)
 
--- Law: what the pass makes of a binary operator depends on its route alone.  Precondition
--- (`opRouted`): the site is routed, so there is something to rewrite.
+-- Law: what the pass makes of a binary operator depends on its route alone.
 prop "a binary operator is rewritten by its route alone" (c : OpCase) =
   let (OpCase op route) = c
   let (name, _) = opRow op

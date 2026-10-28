@@ -532,8 +532,8 @@ prop "the shadows of a program do not depend on the order its standalones are de
 
 -- ── methodMarkCtx ─────────────────────────────────────────────────────────
 
--- Mark sets over the method names [shared] (return-position and constrained), [shadows] and
--- [args], and the core shadow map [coreMap].
+-- Mark sets over the return-position method names [rp], the constrained names [shared], the
+-- argument names [args] and the core shadow map [coreMap].
 marksOf : List String ->
   List String ->
   List String ->

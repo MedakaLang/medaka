@@ -37,7 +37,7 @@ import frontend.ast.{
 import types.effect_rows.{pureRow}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
-import support.ordmap.{omEmpty, omInsert, omLookup}
+import support.ordmap.{omEmpty, omInsert}
 import types.publish.{tcCode, tcMsg}
 import types.tc_decls.{kindIsDeclared, registerData}
 import types.tc_scope.{insertRecordPop}
