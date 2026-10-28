@@ -160,7 +160,7 @@ convention."** Contradiction between code and the docs' intent is flagged in §2
 ```
 SOURCE STRING
   │
-  ▼  lexer.mdk — layout/scan
+  ▼  lex_scan.mdk → lex_layout.mdk → lexer.mdk facade
 RawTok Token startOff endOff            (RTok carries 0-based char offsets; lexer.mdk:359-367)
   │
   ├─► tokenizeWithLines   (lexer.mdk:2032)  → (tokens, per-token 1-based LINE)   [drops columns]

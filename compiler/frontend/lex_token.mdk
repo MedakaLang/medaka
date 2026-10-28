@@ -494,3 +494,13 @@ peekTok : Array Token -> Int -> Token
 peekTok toks pos
   | pos < arrayLength toks = arrayGetUnsafe pos toks
   | otherwise = TEof
+
+export
+isThenTok : Token -> Bool
+isThenTok TThen = True
+isThenTok _ = False
+
+export
+isElseTok : Token -> Bool
+isElseTok TElse = True
+isElseTok _ = False

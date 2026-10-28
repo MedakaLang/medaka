@@ -208,6 +208,7 @@ for pair in \
   'lex_token lexer' \
   'lex_scan lexer' \
   'lex_literal lexer' \
+  'lex_layout lexer' \
   'parse_engine parser' \
   'parse_positions parser' \
   'parse_result parser'

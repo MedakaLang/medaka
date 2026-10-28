@@ -1,0 +1,3011 @@
+NEWLINE
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_token"
+DOT_LBRACE
+UPPER "Token"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "RawTok"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+IDENT "isCommaTok"
+COMMA
+IDENT "isThenTok"
+COMMA
+IDENT "isElseTok"
+RBRACE
+NEWLINE
+IDENT "frameHasLive"
+COLON
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "frameHasLive"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+IDENT "f"
+GT
+INT 0
+NEWLINE
+IDENT "frameHasLive"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "bracketOpener"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TLParen"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TLBracket"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TLBracketTight"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TLArray"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TLBrace"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UPPER "TDotLBrace"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketOpener"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "bracketCloser"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "bracketCloser"
+UPPER "TRParen"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketCloser"
+UPPER "TRBracket"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketCloser"
+UPPER "TRArray"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketCloser"
+UPPER "TRBrace"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "bracketCloser"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isOpener"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isOpener"
+UPPER "TMatch"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isOpener"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "BracketFrame"
+EQUAL
+UPPER "BracketFrame"
+UPPER "Int"
+UPPER "Bool"
+NEWLINE
+IDENT "canEndExpr"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TIdent"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TUpper"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TInt"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TWideInt"
+UNDERSCORE
+UNDERSCORE
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TFloat"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TString"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TChar"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TBool"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+LPAREN
+UPPER "TInterpEnd"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UPPER "TRParen"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UPPER "TRBracket"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UPPER "TRBrace"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UPPER "TRArray"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UPPER "TUnderscore"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canEndExpr"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TPlus"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TMinus"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TStar"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TSlash"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TMod"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TPlusPlus"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TCons"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TEqEq"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TNeq"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TLt"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TGt"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TLeq"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TGeq"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TAnd"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TOr"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TPipeRight"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TRCompose"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TLCompose"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+LPAREN
+UPPER "TBacktickIdent"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UPPER "TIn"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "canStartAtom"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TInt"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TWideInt"
+UNDERSCORE
+UNDERSCORE
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TFloat"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TString"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TChar"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TBool"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TIdent"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TUpper"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TUnderscore"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TLParen"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TLBracket"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TLArray"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TLBrace"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TAt"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+LPAREN
+UPPER "TInterpOpen"
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UPPER "TBang"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "bumpFrame"
+COLON
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+UPPER "List"
+UPPER "BracketFrame"
+NEWLINE
+IDENT "bumpFrame"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "bumpFrame"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "s"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+EQUAL
+UPPER "BracketFrame"
+LPAREN
+IDENT "f"
+PLUS
+INT 1
+RPAREN
+IDENT "s"
+CONS
+IDENT "fs"
+NEWLINE
+IDENT "dropFrame"
+COLON
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+UPPER "List"
+UPPER "BracketFrame"
+NEWLINE
+IDENT "dropFrame"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "dropFrame"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "s"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+EQUAL
+UPPER "BracketFrame"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "s"
+CONS
+IDENT "fs"
+NEWLINE
+IDENT "armsHeraldTok"
+COLON
+UPPER "Bool"
+ARROW
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TDo"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TDefer"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TFatArrow"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+IDENT "opener"
+UNDERSCORE
+EQUAL
+IDENT "opener"
+NEWLINE
+IDENT "layoutWith"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LBRACKET
+RBRACKET
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+IDENT "closeAllPairs"
+IDENT "project"
+IDENT "stack"
+INT 0
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "bracketOpener"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+CONS
+IDENT "frames"
+RPAREN
+IDENT "t"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "bracketCloser"
+IDENT "t"
+EQUAL
+IDENT "flushClosePairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "isCommaTok"
+IDENT "t"
+AND
+IDENT "frameHasLive"
+IDENT "frames"
+EQUAL
+INDENT
+IDENT "flushSepPairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+LPAREN
+UPPER "RComment"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+LPAREN
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+LPAREN
+UPPER "RClauseNl"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+UNDERSCORE
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+LPAREN
+UPPER "RClauseOpen"
+IDENT "col"
+IDENT "off"
+IDENT "base"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+UNDERSCORE
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "clauseOpenPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "base"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseOpenPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseOpenPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "base"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+UPPER "TNewline"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseOpenPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "base"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "top"
+GT
+IDENT "base"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "project"
+UPPER "TDedent"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "clauseOpenPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "base"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "dropFrame"
+IDENT "frames"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+UPPER "TNewline"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "t"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "flushSepPairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LBRACKET
+RBRACKET
+UNDERSCORE
+IDENT "frames"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+IDENT "t"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "frames"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+IDENT "t"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "s"
+IDENT "s"
+CONS
+IDENT "project"
+UPPER "TDedent"
+IDENT "s"
+IDENT "s"
+CONS
+IDENT "flushSepPairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairs"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+UNDERSCORE
+EQUAL
+INDENT
+IDENT "flushClosePairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+IDENT "fs"
+IDENT "saved"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairsGo"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "f"
+IDENT "fs"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "fs"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "fs"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+INDENT
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "fs"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "s"
+IDENT "s"
+CONS
+IDENT "project"
+UPPER "TDedent"
+IDENT "s"
+IDENT "s"
+CONS
+IDENT "flushClosePairsGo"
+IDENT "project"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "fs"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlFramePairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFramePairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFramePairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlTopPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFramePairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+GT
+INT 0
+EQUAL
+INDENT
+IDENT "applyNlTopPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "col"
+GT
+IDENT "top"
+AND
+IDENT "not"
+LPAREN
+IDENT "isTrailingContinuationOp"
+IDENT "prev"
+RPAREN
+AND
+IDENT "armsHeraldTok"
+IDENT "opener"
+IDENT "prev"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TIndent"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+UPPER "BracketFrame"
+INT 1
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlTopPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlTopPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "col"
+GT
+IDENT "top"
+EQUAL
+IDENT "wouldIndentPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "col"
+EQ_EQ
+IDENT "top"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "popDedentsPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wouldIndentPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wouldIndentPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "isTrailingContinuationOp"
+IDENT "prev"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "opener"
+OR
+IDENT "not"
+LPAREN
+IDENT "canEndExpr"
+IDENT "prev"
+RPAREN
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TIndent"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+IDENT "bumpFrame"
+IDENT "frames"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "resolveContPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+RPAREN
+CONS
+IDENT "more"
+RPAREN
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "canStartAtom"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isThenTok"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isElseTok"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TIndent"
+IDENT "toff"
+IDENT "toff"
+CONS
+IDENT "layoutWith"
+IDENT "project"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+IDENT "bumpFrame"
+IDENT "frames"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "popDedentsPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "List"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "popDedentsPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+LBRACKET
+RBRACKET
+IDENT "rest"
+IDENT "frames"
+EQUAL
+INDENT
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "popDedentsPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "rest"
+IDENT "frames"
+INDENT
+PIPE
+IDENT "top"
+GT
+IDENT "col"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TDedent"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "popDedentsPairs"
+IDENT "project"
+IDENT "col"
+IDENT "off"
+IDENT "tl"
+IDENT "rest"
+LPAREN
+IDENT "dropFrame"
+IDENT "frames"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "layoutWith"
+IDENT "project"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closeAllPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "closeAllPairs"
+IDENT "project"
+IDENT "stack"
+IDENT "off"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "closeDedentsPairs"
+IDENT "project"
+IDENT "stack"
+IDENT "off"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closeDedentsPairs"
+COLON
+LPAREN
+UPPER "Token"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+RPAREN
+ARROW
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "closeDedentsPairs"
+IDENT "project"
+LBRACKET
+RBRACKET
+IDENT "off"
+EQUAL
+LBRACKET
+IDENT "project"
+UPPER "TEof"
+IDENT "off"
+IDENT "off"
+RBRACKET
+NEWLINE
+IDENT "closeDedentsPairs"
+IDENT "project"
+LBRACKET
+UNDERSCORE
+RBRACKET
+IDENT "off"
+EQUAL
+LBRACKET
+IDENT "project"
+UPPER "TEof"
+IDENT "off"
+IDENT "off"
+RBRACKET
+NEWLINE
+IDENT "closeDedentsPairs"
+IDENT "project"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "tl"
+RPAREN
+IDENT "off"
+EQUAL
+INDENT
+IDENT "project"
+UPPER "TDedent"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "project"
+UPPER "TNewline"
+IDENT "off"
+IDENT "off"
+CONS
+IDENT "closeDedentsPairs"
+IDENT "project"
+IDENT "tl"
+IDENT "off"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "filterWith"
+COLON
+LPAREN
+IDENT "a"
+ARROW
+UPPER "Token"
+RPAREN
+ARROW
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "filterWith"
+IDENT "tokenOf"
+LPAREN
+IDENT "x"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+MATCH
+IDENT "tokenOf"
+IDENT "x"
+INDENT
+UPPER "TNewline"
+FAT_ARROW
+IDENT "filterAfterNl"
+IDENT "tokenOf"
+IDENT "x"
+IDENT "rest"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+IDENT "x"
+CONS
+IDENT "filterWith"
+IDENT "tokenOf"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "filterWith"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "filterAfterNl"
+COLON
+LPAREN
+IDENT "a"
+ARROW
+UPPER "Token"
+RPAREN
+ARROW
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "filterAfterNl"
+IDENT "tokenOf"
+IDENT "x"
+IDENT "rest"
+EQUAL
+MATCH
+IDENT "rest"
+INDENT
+LBRACKET
+RBRACKET
+FAT_ARROW
+LBRACKET
+IDENT "x"
+RBRACKET
+NEWLINE
+IDENT "y"
+CONS
+IDENT "tail"
+FAT_ARROW
+MATCH
+IDENT "tokenOf"
+IDENT "y"
+INDENT
+UPPER "TElse"
+FAT_ARROW
+IDENT "y"
+CONS
+IDENT "filterWith"
+IDENT "tokenOf"
+IDENT "tail"
+NEWLINE
+UPPER "TThen"
+FAT_ARROW
+IDENT "y"
+CONS
+IDENT "filterWith"
+IDENT "tokenOf"
+IDENT "tail"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+IDENT "x"
+CONS
+IDENT "filterWith"
+IDENT "tokenOf"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "externClauseBreaks"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "externClauseBreaks"
+IDENT "toks"
+INDENT
+PIPE
+IDENT "hasBindLine"
+IDENT "toks"
+EQUAL
+IDENT "clauseBreaksGo"
+IDENT "toks"
+INT 0
+LPAREN
+MINUS
+INT 1
+RPAREN
+UPPER "False"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "toks"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "hasBindLine"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasBindLine"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "hasBindLine"
+LPAREN
+LPAREN
+UPPER "RNewline"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TIdent"
+STRING "bind"
+RPAREN
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "hasBindLine"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "hasBindLine"
+IDENT "rest"
+NEWLINE
+IDENT "clauseBreaksGo"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "clauseBreaksGo"
+LBRACKET
+RBRACKET
+UNDERSCORE
+UNDERSCORE
+UNDERSCORE
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+LPAREN
+UPPER "RTok"
+UPPER "TExtern"
+IDENT "s"
+IDENT "e"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "lineCol"
+UNDERSCORE
+UNDERSCORE
+EQUAL
+INDENT
+UPPER "RTok"
+UPPER "TExtern"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "lineCol"
+IDENT "lineCol"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+LPAREN
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+UNDERSCORE
+IDENT "externCol"
+IDENT "opened"
+INDENT
+PIPE
+IDENT "externCol"
+GEQ
+INT 0
+AND
+IDENT "col"
+GT
+IDENT "externCol"
+AND
+IDENT "startsWithBind"
+IDENT "rest"
+EQUAL
+INDENT
+IDENT "clauseBreak"
+IDENT "col"
+IDENT "off"
+IDENT "externCol"
+IDENT "opened"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+IDENT "externCol"
+UPPER "True"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "col"
+LEQ
+IDENT "externCol"
+EQUAL
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+LPAREN
+MINUS
+INT 1
+RPAREN
+UPPER "False"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+IDENT "externCol"
+IDENT "opened"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "lineCol"
+IDENT "externCol"
+IDENT "opened"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "lineCol"
+IDENT "externCol"
+IDENT "opened"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseBreak"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "clauseBreak"
+IDENT "col"
+IDENT "off"
+UNDERSCORE
+UPPER "True"
+EQUAL
+UPPER "RClauseNl"
+IDENT "col"
+IDENT "off"
+NEWLINE
+IDENT "clauseBreak"
+IDENT "col"
+IDENT "off"
+IDENT "externCol"
+UPPER "False"
+EQUAL
+UPPER "RClauseOpen"
+IDENT "col"
+IDENT "off"
+IDENT "externCol"
+NEWLINE
+IDENT "startsWithBind"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "startsWithBind"
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TIdent"
+STRING "bind"
+RPAREN
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "startsWithBind"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "applyLayoutTokens"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "Token"
+NEWLINE
+IDENT "applyLayoutTokens"
+IDENT "raw"
+EQUAL
+INDENT
+IDENT "filterWith"
+LPAREN
+IDENT "t"
+FAT_ARROW
+IDENT "t"
+RPAREN
+LPAREN
+IDENT "layoutWith"
+LPAREN
+IDENT "t"
+UNDERSCORE
+UNDERSCORE
+FAT_ARROW
+IDENT "t"
+RPAREN
+LPAREN
+IDENT "externClauseBreaks"
+IDENT "raw"
+RPAREN
+LBRACKET
+INT 0
+RBRACKET
+LBRACKET
+RBRACKET
+UPPER "TNewline"
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "applyLayoutStarts"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "applyLayoutStarts"
+IDENT "raw"
+EQUAL
+INDENT
+IDENT "filterWith"
+LPAREN
+LPAREN
+IDENT "t"
+COMMA
+UNDERSCORE
+RPAREN
+FAT_ARROW
+IDENT "t"
+RPAREN
+LPAREN
+IDENT "layoutWith"
+LPAREN
+IDENT "t"
+IDENT "s"
+UNDERSCORE
+FAT_ARROW
+LPAREN
+IDENT "t"
+COMMA
+IDENT "s"
+RPAREN
+RPAREN
+LPAREN
+IDENT "externClauseBreaks"
+IDENT "raw"
+RPAREN
+LBRACKET
+INT 0
+RBRACKET
+LBRACKET
+RBRACKET
+UPPER "TNewline"
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "applyLayoutRanges"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "applyLayoutRanges"
+IDENT "raw"
+EQUAL
+INDENT
+IDENT "filterWith"
+LPAREN
+LPAREN
+IDENT "t"
+COMMA
+UNDERSCORE
+COMMA
+UNDERSCORE
+RPAREN
+FAT_ARROW
+IDENT "t"
+RPAREN
+LPAREN
+IDENT "layoutWith"
+LPAREN
+IDENT "t"
+IDENT "s"
+IDENT "e"
+FAT_ARROW
+LPAREN
+IDENT "t"
+COMMA
+IDENT "s"
+COMMA
+IDENT "e"
+RPAREN
+RPAREN
+LPAREN
+IDENT "externClauseBreaks"
+IDENT "raw"
+RPAREN
+LBRACKET
+INT 0
+RBRACKET
+LBRACKET
+RBRACKET
+UPPER "TNewline"
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+NEWLINE
+EOF

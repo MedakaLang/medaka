@@ -4,16 +4,16 @@
 anchor, continuously maintained ground truth, not a "did this ship" tracker.
 **Scope:** the indentation-sensitive token-stream transformation that inserts
 `INDENT` / `DEDENT` / `NEWLINE` (Medaka's "offside rule").
-**Audience:** compiler maintainers. `compiler/frontend/lexer.mdk` (the sole
-lexer — `lib/lexer.mll`, the former OCaml frozen oracle, was removed
-2026-06-26) must conform to *this document*.
+**Audience:** compiler maintainers. `compiler/frontend/lex_layout.mdk` implements layout; `compiler/frontend/lex_scan.mdk`
+produces raw tokens. Both must conform to *this document*. The former OCaml
+lexer `lib/lexer.mll` was removed 2026-06-26.
 
 > **Why this file exists.** The layout rule is where the recurring lexer bugs
 > concentrate. This is the declarative ground truth: it states what layout
 > *should* do, so the implementation can be audited against one definition. At
 > design time this doc audited **two** lexers against each other; `lib/` was
 > removed 2026-06-26 (`06356a80`), so this file — not a second lexer — is now
-> the sole conformance anchor `compiler/frontend/lexer.mdk` is validated
+> the sole conformance anchor `compiler/frontend/lex_layout.mdk` is validated
 > against. §12 below still describes the old dual-lexer conformance contract in
 > places; treat those as historical (see the note at §12).
 >
@@ -69,8 +69,9 @@ is closed instead. This couples the lexer to the parser.
 ## 1. The pipeline: three idealized stages
 
 The transformation `source → cooked token stream` factors into three stages. The
-canonical lexer (`compiler/frontend/lexer.mdk`) implements them as three
-literal passes. (Historical: the former OCaml oracle, `lib/lexer.mll`, fused
+lexer uses scanning in `compiler/frontend/lex_scan.mdk` and a shared layout
+engine in `compiler/frontend/lex_layout.mdk` with three output projections.
+(Historical: the former OCaml oracle, `lib/lexer.mll`, fused
 all three into one stateful ocamllex pass with a pending-token queue, but
 computed the identical relation.) This document specifies the *relation*; any
 conforming factoring is valid.
@@ -126,7 +127,7 @@ initial: [0]              -- the top-level block at column 0; never empties
 Each entry is the **column** of an open implicit layout block. The stack is
 initialized `[0]` and the base `0` is never popped before `EOF`. `INDENT` pushes
 a column; `DEDENT` pops one. (The lexer stores exactly this: the `List Int`
-argument to `layout` in `compiler/frontend/lexer.mdk`. Historical: the former
+argument to `layoutWith` in `compiler/frontend/lex_layout.mdk`. Historical: the former
 OCaml oracle stored the same shape as `indent_stack` in `lib/lexer.mll`.)
 
 ---
@@ -317,7 +318,7 @@ extern fetch : (url : String) ->
 
 `bind` is not a keyword, so by rule I.c a deeper line led by it would continue
 the signature as a type application. `externClauseBreaks`
-(`compiler/frontend/lexer.mdk`) therefore rewrites the raw stream before
+(`compiler/frontend/lex_layout.mdk`) therefore rewrites the raw stream before
 Stage B, and only inside an `extern` declaration (from `extern` to the first
 line no deeper than the extern's own line). Every other `bind` is untouched.
 
@@ -368,9 +369,9 @@ in a comment throwing off brace counting).
 
 > **Status: LANDED (2026-06-23).** The model below is the *locked* design
 > (`LAYOUT-BRACKETS-DESIGN.md`, LOCKED SCOPE 2026-06-23), implemented in
-> `compiler/frontend/lexer.mdk` (Stage 3 — the lexer Gate A — complete): it
+> `compiler/frontend/lex_layout.mdk` (Stage 3 — the lexer Gate A — complete): it
 > threads a bracket-frame stack (`frames`) through the layout pass
-> (`flushClose`/`applyNlFrame`/`armsHerald`). (Historical: at the time, `lib/lexer.mll`
+> (`flushClosePairs`/`applyNlFramePairs`/`armsHeraldTok`). (Historical: at the time, `lib/lexer.mll`
 > mirrored it byte-identically via `bracket_frames` + `flush_close` + the
 > free-form branch in `handle_indent`; `lib/` was removed 2026-06-26.) The
 > grammar (Gate B) was landed earlier. A bracketed
@@ -434,7 +435,7 @@ no-parser→layout-feedback rule); the close is driven by the explicit
 bracket-aware frame, not by parser feedback.
 
 **Frame model.** Each open bracket carries a small **bracket frame**
-(`BracketFrame liveContexts savedOpener` in `compiler/frontend/lexer.mdk`):
+(`BracketFrame liveContexts savedOpener` in `compiler/frontend/lex_layout.mdk`):
 the count of nested layout contexts the bracket has opened, and the `match`
 opener flag as it stood when the bracket opened — saved at the opener and
 restored at the closer, so a `match` header's flag survives its scrutinee's own
@@ -601,7 +602,7 @@ left-shifted.
 
 > **Rewritten 2026-07-13 to drop the dual-lexer premise.** `lib/lexer.mll` (the
 > former OCaml oracle) was removed 2026-06-26 (`06356a80`). §4-8 of this file
-> are now the sole definition `compiler/frontend/lexer.mdk` is held to directly
+> are now the sole definition `compiler/frontend/lex_layout.mdk` is held to directly
 > — there is no second implementation to diff against. The old differential
 > gates (`diff_compiler_lexer.sh`/`diff_compiler_lex_files.sh`, item 1 below)
 > and the `dune build dev/lextok.exe` oracle probe (item 2) are historical: they
@@ -627,7 +628,7 @@ left-shifted.
    `Lexer.tokenize_string`, built via `dune build dev/lextok.exe`), no longer
    resolves — `dune`/`_build`/`dev/` are all gone.
 
-3. **§4–§8 of this file are the definition `compiler/frontend/lexer.mdk` is
+3. **§4–§8 of this file are the definition `compiler/frontend/lex_layout.mdk` is
    held to** (the "when `lib/` is removed" trigger condition in the old text
    fired 2026-06-26; this is now simply the standing state, not a future
    contingency).
@@ -639,7 +640,7 @@ left-shifted.
    the layout ground truth).
 
 5. **This contract is scoped to the TOKEN STREAM, not the grammar.** §4–§8
-   define what `compiler/frontend/lexer.mdk` must emit — which tokens herald a
+   define what `compiler/frontend/lex_layout.mdk` must emit — which tokens herald a
    block and where INDENT/DEDENT/NEWLINE land — nothing more. A herald firing
    exactly as specified does not imply the parser has a production to consume
    the resulting block; that is a separate obligation the grammar either does

@@ -1,84 +1,18 @@
 advanceLine : Array Char -> Int -> Int -> Int -> (Int, Int)
-applyNl : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-applyNlFrame : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-applyNlFramePairs : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-applyNlFrameToks : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
-applyNlPairs : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-applyNlToks : Int -> List RawTok -> List Int -> List BracketFrame -> Token -> Bool -> List Token
-applyNlTop : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-applyNlTopPairs : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-applyNlTopToks : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
-armsHerald : Bool -> Option Token -> Bool
-armsHeraldTok : Bool -> Token -> Bool
-bracketCloser : Token -> Bool
-bracketOpener : Token -> Bool
-bumpFrame : List BracketFrame -> List BracketFrame
-canEndExpr : Token -> Bool
-canStartAtom : Token -> Bool
-clauseBreak : Int -> Int -> Int -> Bool -> RawTok
-clauseBreaksGo : List RawTok -> Int -> Int -> Bool -> List RawTok
-clauseOpen : Int -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
-clauseOpenPairs : Int -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
-clauseOpenToks : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
-closeAll : List Int -> Int -> List (Token, Int)
-closeAllPairs : List Int -> Int -> List (Token, Int, Int)
-closeAllToks : List Int -> List Token
-closeDedents : List Int -> Int -> List (Token, Int)
-closeDedentsPairs : List Int -> Int -> List (Token, Int, Int)
-closeDedentsToks : List Int -> List Token
 collectComments : String -> List Comment
 commentCol : Comment -> Int
 commentLine : Comment -> Int
 commentText : Comment -> String
-dropFrame : List BracketFrame -> List BracketFrame
-elseFilter : List (Token, Int) -> List (Token, Int)
-elseFilterPairs : List (Token, Int, Int) -> List (Token, Int, Int)
-elseFilterToks : List Token -> List Token
-externClauseBreaks : List RawTok -> List RawTok
-flushClose : Token -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
-flushCloseGo : Token -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int)
-flushCloseGoToks : Token -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List Token
-flushClosePairs : Token -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
-flushClosePairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
-flushCloseToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
-flushSep : Token -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
-flushSepGo : Token -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int)
-flushSepGoToks : Token -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List Token
-flushSepPairs : Token -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
-flushSepPairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
-flushSepToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
-frameHasLive : List BracketFrame -> Bool
-hasBindLine : List RawTok -> Bool
-isElseTok : Token -> Bool
 isLineBreakAt : Array Char -> Int -> Bool
-isOpener : Token -> Bool
-isThenTok : Token -> Bool
-isTrailingContinuationOp : Token -> Bool
-layout : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-layoutPairs : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-layoutToks : List RawTok -> List Int -> List BracketFrame -> Token -> Bool -> List Token
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 offsetToLineCol : String -> Int -> (Int, Int)
 offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLinesGo : Array Char -> List Int -> Int -> Int -> List Int
-popDedents : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int)
-popDedentsPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int, Int)
-popDedentsToks : Int -> List Int -> List RawTok -> List BracketFrame -> List Token
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
-prevCanEnd : Option Token -> Bool
-prevIsTrailingOp : Option Token -> Bool
-rawStream : Array Char -> Int -> List RawTok
 rawToComments : Array Char -> List RawTok -> List Comment
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
-resolveCont : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-resolveContPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-resolveContToks : Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
-startsWithBind : List RawTok -> Bool
 tokenize : String -> List Token
 tokenizeWithLines : String -> (List Token, List Int)
 tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))
 tokenizeWithOffsets : String -> (List Token, List Int)
-wouldIndent : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
-wouldIndentPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
-wouldIndentToks : Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token

@@ -130,6 +130,7 @@ lexCorpus = [
   "compiler/frontend/lexer.mdk",
   "compiler/frontend/lex_scan.mdk",
   "compiler/frontend/lex_literal.mdk",
+  "compiler/frontend/lex_layout.mdk",
   "stdlib/core.mdk",
   "stdlib/list.mdk",
   "stdlib/array.mdk",
@@ -164,7 +165,7 @@ rows = [
     goldenSuffix = ".lextok.golden",
     sorted = False,
     stripUnit = True,
-    fixtures = 15,
+    fixtures = 16,
   },
   Row {
     gate = "diff_compiler_lint",

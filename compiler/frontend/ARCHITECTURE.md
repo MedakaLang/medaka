@@ -17,7 +17,8 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `lex_token.mdk` | Token and raw-token types, token descriptions, predicates and EOF-clamped token access | `Token`, `RawTok`, `describeToken`, `peekTok` |
 | `parse_locate.mdk` | Token offsets and typed diagnostic locations; imports only `lex_token`, `parse_diagnostic` and `support/source_index` | `locateOffset`, `locateTokenDiagnostic` |
 | `parse_hints.mdk` | Syntax-only removed-form and contextual recognition, using a lazy invocation-scoped source index | `prescanDiagnostic`, token-shape helpers |
-| `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize`, `tokenizeWithOffsetPairs` |
+| `lex_layout.mdk` | Indentation decisions and token/start/range projections | `applyLayoutTokens`, `applyLayoutStarts`, `applyLayoutRanges` |
+| `lexer.mdk` | Tokenization facade and position adapters | `tokenize`, `tokenizeWithOffsetPairs` |
 | `parse_positions.mdk` | Derives immutable declaration positions from tokens and spans | `Positions`, `DeclPos`, `positionsFromSpans` |
 | `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
 | `parse_result.mdk` | Immutable parsed declarations, positions, metadata and parse errors | `ParsedSource`, `ParseMetadata`, `ParseError`, `parsedDecls` |

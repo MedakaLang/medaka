@@ -2741,7 +2741,7 @@ parseExternFor pub _ = defer
     })
 
 -- The indented `bind` clause lines under an extern's signature, which the
--- lexer opens as a block of their own (`externClauseBreaks`).
+-- layout opens as a block of their own (`frontend/lex_layout.mdk`).
 externBindsFor : Token -> Token -> Parser (List ExternBind)
 externBindsFor TIndent (TIdent "bind") = defer
   advance

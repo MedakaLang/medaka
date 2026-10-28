@@ -39,7 +39,7 @@ preludeCacheRef = Ref []
 -- one parse -- the downstream `parsePrelude` calls hit rather than re-parse.
 --
 -- Sound because `parseResult`'s success payload is `parse`'s output: both run
--- `runP parseProgram toks 0` over the token array of the SAME `layoutWithOffsets`
+-- `runP parseProgram toks 0` over the token array of the same `layoutWithOffsets` facade
 -- pass (`tokenize` and `tokenizeWithOffsets` differ only in whether they keep the
 -- offsets), and their `POk` arms both hand back the same `ds`.  `parseResult`
 -- additionally runs the removed-construct/lex pre-scan AHEAD of that grammar, so

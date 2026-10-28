@@ -1,0 +1,44 @@
+import frontend.lex_layout.{
+  applyLayoutTokens, applyLayoutStarts, applyLayoutRanges
+}
+import frontend.lex_scan.{scanRaw}
+import frontend.lex_token.{Token(..), tokenToString}
+import test.{Expectation, expectEqual, expectEach, expectAll}
+
+projectionRow : (String, String) -> (String, Expectation)
+projectionRow (label, source) =
+  let raw = scanRaw source
+  let tokens = map tokenToString (applyLayoutTokens raw)
+  let starts = applyLayoutStarts raw
+  let ranges = applyLayoutRanges raw
+  (
+    label,
+    expectAll [
+      expectEqual tokens (map ((t, _) => tokenToString t) starts),
+      expectEqual tokens (map ((t, _, _) => tokenToString t) ranges),
+      expectEqual (map snd starts) (map ((_t, s, _e) => s) ranges),
+    ],
+  )
+
+test "layout projections agree on continuations and clauses" =
+  expectEach
+    (map projectionRow [
+      ("continuation", "main =\n  f\n    x\n"),
+      ("fallback", "main =\n  1\n    -2\n"),
+      ("herald", "main = (match x\n  A => 1, 2)\n"),
+      ("extern", "extern f : String -> String\n  bind c \"f\"\n"),
+      ("unicode", "main = \"😀\"\r\n"),
+    ])
+
+test "fallback indent and EOF use exact offsets" =
+  let ranges = applyLayoutRanges (scanRaw "main =\n  1\n    -2\n")
+  let relevant =
+    filter
+      ((t, _, _) => match t
+        TIndent => True
+        TEof => True
+        _ => False)
+      ranges
+  expectEqual
+    [("INDENT", 6, 6), ("INDENT", 15, 15), ("EOF", 0, 0)]
+    (map ((t, s, e) => (tokenToString t, s, e)) relevant)

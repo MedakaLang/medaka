@@ -271,7 +271,7 @@ if [ -n "$FROZEN_TAG" ]; then
       # the gate checks (#167).
       regen_frozen lex_main lextok.golden "" \
         "$ROOT/compiler/frontend/lexer.mdk" \
-        "$ROOT/compiler/frontend/lex_scan.mdk" "$ROOT/compiler/frontend/lex_literal.mdk" \
+        "$ROOT/compiler/frontend/lex_scan.mdk" "$ROOT/compiler/frontend/lex_literal.mdk" "$ROOT/compiler/frontend/lex_layout.mdk" \
         "$ROOT/stdlib/core.mdk" "$ROOT/stdlib/list.mdk" \
         "$ROOT/stdlib/array.mdk" "$ROOT/stdlib/string.mdk" \
         "$ROOT/stdlib/map.mdk" "$ROOT/stdlib/set.mdk" \
@@ -391,7 +391,7 @@ if [ -n "$FROZEN_TAG" ]; then
       ALL="$(mktemp)"
       trap 'rm -f "$ALL"' EXIT
       "$CHECK_ALL" "$RUNTIME" "$CORE" "$ENTRY" "$ROOT/compiler" "$ROOT/stdlib" 2>/dev/null > "$ALL"
-      MODULES="frontend.ast frontend.lexer frontend.lex_scan frontend.lex_literal frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.visibility frontend.exhaust driver.loader types.repr types.tc_types types.scopes types.typecheck types.tc_mono types.tc_state types.tc_env types.tc_diag_text types.tc_diag types.tc_scope types.tc_unify types.tc_decls_variance types.tc_decls_types types.tc_decls types.tc_foreign types.tc_solve_givens types.tc_solve_entail types.tc_solve types.tc_solve_check types.tc_shadow types.tc_effects types.tc_occurrence types.tc_groups types.tc_pat types.tc_infer_records types.tc_infer types.tc_elab types.tc_global types.tc_module types.program_facts eval.eval tools.check"
+      MODULES="frontend.ast frontend.lexer frontend.lex_scan frontend.lex_literal frontend.lex_layout frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.visibility frontend.exhaust driver.loader types.repr types.tc_types types.scopes types.typecheck types.tc_mono types.tc_state types.tc_env types.tc_diag_text types.tc_diag types.tc_scope types.tc_unify types.tc_decls_variance types.tc_decls_types types.tc_decls types.tc_foreign types.tc_solve_givens types.tc_solve_entail types.tc_solve types.tc_solve_check types.tc_shadow types.tc_effects types.tc_occurrence types.tc_groups types.tc_pat types.tc_infer_records types.tc_infer types.tc_elab types.tc_global types.tc_module types.program_facts eval.eval tools.check"
       for m in $MODULES; do
         only_match "$m" || continue
         lega_tmp="$(mktemp)"
