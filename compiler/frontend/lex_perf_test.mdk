@@ -1,0 +1,44 @@
+import frontend.lexer.{tokenize}
+import test.{
+  Expectation, expectEach, expectAll, expectGreaterThan, expectLessThan
+}
+
+source : String -> String -> String -> Int -> String
+source open piece close n =
+  open ++ stringConcat (map (_ => piece) [1..=n]) ++ close
+
+allocation : String -> <IO> Float
+allocation src =
+  let before = allocBytes ()
+  let count = length (tokenize src)
+  let after = allocBytes ()
+  if count > 0 then after - before else 0.0
+
+minimumAllocation : String -> <IO> Float
+minimumAllocation src =
+  min (allocation src) (min (allocation src) (allocation src))
+
+scaling : (String, String, String, String) -> <IO> (String, Expectation)
+scaling (label, open, piece, close) =
+  let small = minimumAllocation (source open piece close 2000)
+  let middle = minimumAllocation (source open piece close 4000)
+  let large = minimumAllocation (source open piece close 8000)
+  (
+    label,
+    expectAll [
+      expectGreaterThan 0.0 small,
+      expectLessThan (small * 2.3) middle,
+      expectLessThan (middle * 2.3) large,
+    ],
+  )
+
+test "literal scanner allocation scales" =
+  expectEach
+    (map scaling [
+      ("plain", "main = \"", "a", "\""),
+      ("escaped", "main = \"", "\\n", "\""),
+      ("triple long", "main = \"\"\"", "a", "\"\"\""),
+      ("triple lines", "main = \"\"\"\n", "  abcdefgh\n", "  \"\"\""),
+      ("segments", "main = \"\"\"\n", "  a\\{1}\n", "  \"\"\""),
+      ("mixed utf8", "main = \"", "😀é\\n", "\""),
+    ])

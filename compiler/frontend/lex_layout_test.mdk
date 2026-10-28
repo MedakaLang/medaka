@@ -42,3 +42,51 @@ test "fallback indent and EOF use exact offsets" =
   expectEqual
     [("INDENT", 6, 6), ("INDENT", 15, 15), ("EOF", 0, 0)]
     (map ((t, s, e) => (tokenToString t, s, e)) relevant)
+
+projectionDump : String -> List (String, Int, Int)
+projectionDump src =
+  map ((t, s, e) => (tokenToString t, s, e)) (applyLayoutRanges (scanRaw src))
+
+test "bracket herald exact ranges" =
+  expectEqual
+    [
+      ("IDENT \"main\"", 0, 4),
+      ("EQUAL", 5, 6),
+      ("LPAREN", 7, 8),
+      ("MATCH", 8, 13),
+      ("IDENT \"x\"", 14, 15),
+      ("INDENT", 15, 15),
+      ("UPPER \"A\"", 18, 19),
+      ("FAT_ARROW", 20, 22),
+      ("INT 1", 23, 24),
+      ("NEWLINE", 24, 24),
+      ("DEDENT", 24, 24),
+      ("COMMA", 24, 25),
+      ("INT 2", 26, 27),
+      ("RPAREN", 27, 28),
+      ("NEWLINE", 28, 28),
+      ("NEWLINE", 0, 0),
+      ("EOF", 0, 0),
+    ]
+    (projectionDump "main = (match x\n  A => 1, 2)\n")
+
+test "extern bind exact ranges" =
+  expectEqual
+    [
+      ("EXTERN", 0, 6),
+      ("IDENT \"f\"", 7, 8),
+      ("COLON", 9, 10),
+      ("UPPER \"String\"", 11, 17),
+      ("ARROW", 18, 20),
+      ("UPPER \"String\"", 21, 27),
+      ("INDENT", 27, 27),
+      ("IDENT \"bind\"", 30, 34),
+      ("IDENT \"c\"", 35, 36),
+      ("STRING \"f\"", 37, 40),
+      ("NEWLINE", 40, 40),
+      ("DEDENT", 40, 40),
+      ("NEWLINE", 40, 40),
+      ("NEWLINE", 0, 0),
+      ("EOF", 0, 0),
+    ]
+    (projectionDump "extern f : String -> String\n  bind c \"f\"\n")

@@ -1,6 +1,6 @@
 # frontend/ — source text to resolved, marked AST
 
-**Status:** CURRENT — re-derived from source at f804ff533441d3691c10e8dcee311e78e02ddaec on 2026-10-27. The planned lexer boundary below is a design, not a description of the current implementation.
+**Status:** CURRENT — the lexer boundary below describes the extracted owners.
 
 ## What this directory is
 The first four stages of the pipeline (`ARCHITECTURE.md` section 1): lexer, parser, desugar,
@@ -17,6 +17,8 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `lex_token.mdk` | Token and raw-token types, token descriptions, predicates and EOF-clamped token access | `Token`, `RawTok`, `describeToken`, `peekTok` |
 | `parse_locate.mdk` | Token offsets and typed diagnostic locations; imports only `lex_token`, `parse_diagnostic` and `support/source_index` | `locateOffset`, `locateTokenDiagnostic` |
 | `parse_hints.mdk` | Syntax-only removed-form and contextual recognition, using a lazy invocation-scoped source index | `prescanDiagnostic`, token-shape helpers |
+| `lex_literal.mdk` | Literal and character decoding, escapes, and triple dedent | `readLiteral`, `readCharacter`, `dedentSegments`, `dedentTripleInterp` |
+| `lex_scan.mdk` | Raw scanning and invocation-owned cursor | `scanRaw`, `scanRawChars`, `scanRawUndedentedChars` |
 | `lex_layout.mdk` | Indentation decisions and token/start/range projections | `applyLayoutTokens`, `applyLayoutStarts`, `applyLayoutRanges` |
 | `lexer.mdk` | Tokenization facade and position adapters | `tokenize`, `tokenizeWithOffsetPairs` |
 | `parse_positions.mdk` | Derives immutable declaration positions from tokens and spans | `Positions`, `DeclPos`, `positionsFromSpans` |
@@ -42,11 +44,10 @@ The advice is conditional and cannot decide acceptance.
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |
 | `desugar_cache.mdk` | Source-keyed memo of the desugared prelude, a sibling tier above `parse_cache`, bounded at four entries. An entry is either a tree minted under a fresh generation, or a pending decoder for the text's shipped tree (`registerPreludeDecls`) that runs on the text's first demand and falls back to parse and desugar when it yields nothing. `preludeGeneration` returns the generation pair of the two prelude texts, the key the prelude caches are keyed by | `desugaredPrelude`, `desugaredPreludeKey`, `preludeGeneration`, `registerPreludeDecls` |
 
-## Planned lexer boundary
+## Lexer boundary
 
-The lexer facade owns layout and delegates raw scanning and literals to
-`lex_scan` and `lex_literal`. The adopted extraction will move layout to a third
-frontend module. Their dependency graph is acyclic: lexer calls lex_scan and
+The lexer facade delegates raw scanning and literals to `lex_scan` and
+`lex_literal`, and layout to `lex_layout`. Their dependency graph is acyclic: lexer calls lex_scan and
 lex_layout; lex_scan calls lex_literal; both lex_literal and lex_layout use
 lex_token, which depends on parse_diagnostic and ast. The owners may use
 support char, util and stage_count and selected stdlib functions; they must not
@@ -85,7 +86,7 @@ and diagnostic/recovery callers retain their lazy index provider.
   in native and Wasm. The ready flag controls EOF; an ignored placeholder is not
   a token sentinel. The cursor never escapes into tokens or retained context.
 - **lex_layout** owns extern-clause breaks, layout and the final filter. Its
-  planned exports are `applyLayoutTokens : List RawTok -> List Token`,
+  exports are `applyLayoutTokens : List RawTok -> List Token`,
   `applyLayoutStarts : List RawTok -> List (Token, Int)`, and
   `applyLayoutRanges : List RawTok -> List (Token, Int, Int)`. One private
   engine emits only the requested projection, without allocating unused
@@ -109,13 +110,11 @@ isElseTok : Token -> Bool
 ```
 
 It also retains Comment, Token and BracketFrame re-exports, token renderers,
-lineStartsOf and offsetToLineColFast. BracketFrame moves to layout; isThenTok and isElseTok move
-to lex_token and are re-exported by the facade. First move literal and scanner
-bodies together, including the shared range copier and triple dedent, without
-live twins. Then move the range layout family and extern breaks, parameterize
-its projections and delete the old layout and filter twins. The facade will keep only delegation and comment/position adapters after the
-layout extraction. Existing consumers need no API rewrite. The dedicated
-nested-interpolation diagnostic is implemented; layout extraction remains planned.
+lineStartsOf and offsetToLineColFast. BracketFrame belongs to layout; isThenTok and isElseTok belong to lex_token and
+are re-exported by the facade. The former scanner and literal bodies and the
+parallel layout and filter twins were deleted from the facade. It retains
+delegation and comment/position adapters. The dedicated nested-interpolation
+diagnostic is implemented.
 
 The prototype's matched batches measured complete ordinary-source tokenization
 at 1.191x, 1.094x and 1.216x baseline: the accepted tradeoff permits up to
