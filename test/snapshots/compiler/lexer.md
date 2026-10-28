@@ -1,31 +1,10 @@
 # META
-source_lines=2865
+source_lines=2844
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted Medaka lexer.
---
--- STATUS: tokenizer — int/float/string/char literals (with escapes
--- `\n \t \r \0 \\ \"`, char-only `\'`, and the `\u{…}` unicode escape in *both*
--- string and char literals) + hex/bin/oct ints,
--- idents/keywords, operators/punctuation, line + `{- … -}` (nestable) block
--- comments, string interpolation (`\{expr}` → INTERP_OPEN/MID/END), triple-
--- quoted strings (`""" … """` with `stripIndent` dedent + their own
--- interpolation, marked by a negative interp depth), the `@`/`AS_AT` adjacency
--- rule, and an
--- INDENT/DEDENT/NEWLINE layout
--- algorithm + else-continuation filter + leading-operator continuation + Phase
--- 137 expression-RHS continuation lines (a would-be INDENT that just continues
--- an application is suppressed; resolved in the layout pass from the previous
--- significant token + a `match`-opener flag + the deeper line's first
--- token).  Validated byte-for-byte against the OCaml reference: 16/16 curated
--- fixtures + all 13 real .mdk files (stdlib + this lexer lexing itself).
---
--- Known serialization-only differences (token value matches; only debug text
--- differs): FLOAT (`floatToString` vs `%g`) and control bytes in STRING/CHAR
--- (`debugStringLit` vs `%S`).  The only unhandled surface is *nested* string
--- interpolation (a `"…"` string inside a `\{…}` expression) — but the OCaml
--- reference rejects that too ("Unterminated string literal"), so it isn't valid
--- Medaka; there is nothing to mirror.
+-- Tokenize Medaka source and apply indentation-sensitive layout.
+-- Handles literals, interpolation, comments, operators, and layout continuations.
+-- Nested interpolation inside an interpolated expression is not supported.
 
 import frontend.parse_diagnostic.{
   ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
@@ -197,7 +176,7 @@ wideBase src pos
 --     a MODULE `record` (`import record.*`, `test/native_fixtures/
 --     keyword_import_record/`), and reserving it bought nothing but a wall.  It
 --     is therefore an ordinary `TIdent`, and the removed DECLARATION is caught
---     positionally instead — `recordHeadIdx` in parser.mdk fires on the
+--     positionally instead — `recordHeadIdx` in parse_hints.mdk fires on the
 --     construct's shape (`record Upper … = {` with no `|`), not on the word.
 --   `mut`, `function` — kept reserved DELIBERATELY, not by omission.  Each is
 --     the first token of a removed construct that is otherwise indistinguishable
@@ -212,7 +191,7 @@ wideBase src pos
 --
 -- If a future change gives `mut`/`function` a positional discriminator as clean
 -- as `record`'s, freeing them is the same edit: drop the row here, move the
--- pre-scan in parser.mdk from the bare token to the construct shape, and prove
+-- pre-scan in parse_hints.mdk from the bare token to the construct shape, and prove
 -- the shape is never valid Medaka (see the safety proof above `recordHeadIdx`).
 keywordOrIdent : String -> Token
 keywordOrIdent "let" = TLet

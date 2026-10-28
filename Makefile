@@ -489,6 +489,7 @@ inlang-frontend-lexer-test:
 ## the furthest-failure choice would otherwise never run.
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
+	./medaka test compiler/frontend/parse_hints_test.mdk
 	./medaka test compiler/frontend/parse_engine_test.mdk
 	./medaka test compiler/frontend/parse_diagnostic_test.mdk
 	./medaka test compiler/frontend/parse_recovery_test.mdk

@@ -1,4 +1,4 @@
-import frontend.lex_token.{Token(..), describeToken}
+import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
@@ -21,6 +21,7 @@ export data ParseContext = {
   pcTokens : Array Token,
   pcOffsets : Array (Int, Int),
   pcLineStarts : Array Int,
+  pcHasTab : Bool,
   pcLocated : Bool,
   pcGuardPositions : Bool,
   pcDepth : Ref Int,
@@ -49,6 +50,7 @@ newParseContextWith mode src toks offs = ParseContext {
   pcTokens = toks,
   pcOffsets = offs,
   pcLineStarts = lineStartsOf src,
+  pcHasTab = isSome (stringIndexOf "\t" src),
   pcLocated = match mode
     LocatedSyntax => True
     LocatedChecked => True
@@ -73,6 +75,10 @@ contextOffsets ctx = ctx.pcOffsets
 export
 contextLineStarts : ParseContext -> Array Int
 contextLineStarts ctx = ctx.pcLineStarts
+
+export
+contextHasTab : ParseContext -> Bool
+contextHasTab ctx = ctx.pcHasTab
 
 export
 runPWith : ParseContext -> ParserE e a -> Int -> <e> PR a
@@ -127,9 +133,7 @@ getPos = ParserE (_ctx pos => POk pos pos)
 
 export
 peekTok : Array Token -> Int -> Token
-peekTok toks pos
-  | pos < arrayLength toks = arrayGetUnsafe pos toks
-  | otherwise = TEof
+peekTok toks pos = tokenPeekTok toks pos
 
 export
 peekP : ParserE e Token

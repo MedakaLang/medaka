@@ -42,6 +42,9 @@ public export data ParseDiagnosticKind =
   | BraceBlock
   | Semicolon
   | MatchGuardBar
+  | ExpectedMatchArm
+  | ExpectedMatchArrow
+  | MatchContinuationHint
   | EquationGuardIf
   | GenericParse String
   | InvalidEscape String Bool
@@ -85,6 +88,9 @@ problemCode BlockComment = "L-BLOCKCOMMENT"
 problemCode BraceBlock = "P-BRACE-BLOCK"
 problemCode Semicolon = "L-SEMICOLON"
 problemCode MatchGuardBar = "P-GUARD-BAR-IN-MATCH"
+problemCode ExpectedMatchArm = "P-PARSE"
+problemCode ExpectedMatchArrow = "P-PARSE"
+problemCode MatchContinuationHint = "P-PARSE"
 problemCode EquationGuardIf = "P-GUARD-IF-IN-EQUATION"
 problemCode (GenericParse _) = "P-PARSE"
 problemCode (InvalidEscape _ _) = "L-BAD-ESCAPE"
@@ -149,6 +155,11 @@ renderParseProblem Semicolon =
   "Medaka has no statement terminator `;`; write each statement on its own line"
 renderParseProblem MatchGuardBar =
   "a match-arm guard uses `if`, not `|`; write `pat if cond => body`"
+renderParseProblem ExpectedMatchArm = "expected a match arm (`pattern => body`)"
+renderParseProblem ExpectedMatchArrow =
+  "expected `=>` after the match pattern or guard"
+renderParseProblem MatchContinuationHint =
+  "expected a match arm (`pattern => body`); if this line continues the scrutinee, wrap the whole scrutinee in parentheses"
 renderParseProblem EquationGuardIf =
   "an equation guard uses `|`, not `if`; write `| cond = body`"
 renderParseProblem (UnexpectedEndExpected expected) =

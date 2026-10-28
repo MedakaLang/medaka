@@ -1,5 +1,5 @@
 # META
-source_lines=490
+source_lines=496
 stages=SOURCE,DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
@@ -492,6 +492,12 @@ export
 isCommaTok : Token -> Bool
 isCommaTok TComma = True
 isCommaTok _ = False
+
+export
+peekTok : Array Token -> Int -> Token
+peekTok toks pos
+  | pos < arrayLength toks = arrayGetUnsafe pos toks
+  | otherwise = TEof
 # DESUGAR
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false))))
@@ -781,6 +787,8 @@ isCommaTok _ = False
 (DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
 (DFunDef false "isCommaTok" (PWild) (EVar "False"))
+(DTypeSig true "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
+(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false))))
@@ -1070,3 +1078,5 @@ isCommaTok _ = False
 (DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
 (DFunDef false "isCommaTok" (PWild) (EVar "False"))
+(DTypeSig true "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
+(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
