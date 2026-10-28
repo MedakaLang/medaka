@@ -2193,3 +2193,92 @@ test "unfixable parse diagnostic has no snapshot identity" =
         d :: _ => expectEqual None (get "data" d)
         [] => fail "expected diagnostic"
       [] => fail "expected publication"
+
+test "document symbols follow broken and restored current source" =
+  let uri = "file:///current-symbols.mdk"
+  let valid = "before = 1\nafter = 2\n"
+  let broken = "before = 1\nbad = )\nafter = 2\n"
+  let (errors, out) = drive [
+    didOpenMsg uri valid,
+    rpc 21 "textDocument/documentSymbol" (docParams uri),
+    didChangeMsg uri broken,
+    rpc 22 "textDocument/documentSymbol" (docParams uri),
+    didChangeMsg uri valid,
+    rpc 23 "textDocument/documentSymbol" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "broken",
+        expectEqual
+          ["before:12@0()", "after:12@2()"]
+          (map symbolSkeleton (elems (resultTo 22 objs))),
+      ),
+      ("restored", expectEqual (resultTo 21 objs) (resultTo 23 objs)),
+    ]
+
+test "current outlines stop at untrusted and terminal source" =
+  let uri = "file:///damaged-symbols.mdk"
+  let (errors, out) = drive [
+    didOpenMsg
+      uri
+      "before = (\"😀\", 1)\r\nbad = )\r\nmiddle = 2\r\nworse = )\r\nafter = 3\r\n",
+    rpc 31 "textDocument/documentSymbol" (docParams uri),
+    didChangeMsg uri "before = 1\nbad = (\nhidden = 2\n",
+    rpc 32 "textDocument/documentSymbol" (docParams uri),
+    didChangeMsg uri "before = 1\nbad = \"unterminated\n",
+    rpc 33 "textDocument/documentSymbol" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      (
+        "two errors",
+        expectEqual
+          ["before:12@0()", "middle:12@2()", "after:12@4()"]
+          (map symbolSkeleton (elems (resultTo 31 objs))),
+      ),
+      (
+        "unclosed",
+        expectEqual
+          ["before:12@0()"]
+          (map symbolSkeleton (elems (resultTo 32 objs))),
+      ),
+      (
+        "lexical",
+        expectEqual
+          ["before:12@0()"]
+          (map symbolSkeleton (elems (resultTo 33 objs))),
+      ),
+    ]
+
+test "reopening with a reused version rejects old edits" =
+  let uri = "file:///reopened.mdk"
+  let source = "main = 1 != 2\n"
+  let diagnostic = jObject [
+    ("code", JString "P-BAD-NEQ"),
+    ("range", coordRange 0 9 11),
+    ("data", jObject [("uri", JString uri), ("generation", JInt 0)]),
+  ]
+  let (errors, out) = drive [
+    didOpenMsg uri source,
+    codeActionMsg 41 uri diagnostic,
+    notify "textDocument/didClose" (docParams uri),
+    didOpenMsg uri source,
+    codeActionMsg 42 uri diagnostic,
+    rpc 43 "textDocument/documentSymbol" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs => expectEach [
+      ("process", expectEqual [] errors),
+      ("initial action", expectEqual 1 (length (elems (resultTo 41 objs)))),
+      ("stale action", expectEqual [] (elems (resultTo 42 objs))),
+      ("current outline", expectEqual [] (elems (resultTo 43 objs))),
+    ]

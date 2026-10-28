@@ -4604,7 +4604,7 @@ parseProgram = defer
 -- Fourth field (#331, increment 2 — child-name spans, channel-first): the
 -- ORDERED list of the decl's document-outline CHILD name-token `Loc`s (variant
 -- ctors, record fields, interface/impl methods, the single let-bind), in the
--- EXACT order `lsp.mdk:symbolPartsOfDecl` emits them.  `Some l` per child whose
+-- EXACT order `syntax_queries.mdk:symbolPartsOfDecl` emits them.  `Some l` per child whose
 -- name token was located, `None` where the finder missed (the LSP falls back to
 -- the parent decl range for that child).  `[]` for decls with no outline
 -- children.  Also additive/accessor-only, so still snapshot-invisible.
@@ -4648,9 +4648,9 @@ export
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsLocated src = parseWithPositions src
 
--- Non-panicking positions parse for the LSP.  Returns `None` when the source
--- doesn't parse (instead of `panic "parse error"`), so documentSymbol / definition
--- / inlayHint degrade to empty results rather than crashing the whole server —
+-- Non-panicking positions parse for strict callers. Returns `None` when the source
+-- doesn't parse (instead of `panic "parse error"`), so definition
+-- / inlayHint use this strict path without crashing the whole server —
 -- files are unparseable constantly mid-edit.
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
@@ -4712,10 +4712,18 @@ parseSourcePairs : String ->
   List (Int, Int) ->
   Result ParseDiagnostic ParsedSource
 parseSourcePairs src tokList offPairs =
+  parseSourcePairsWithIndex src tokList offPairs (() => indexSource src)
+
+export
+parseSourcePairsWithIndex : String ->
+  List Token ->
+  List (Int, Int) ->
+  (Unit -> SourceIndex) ->
+  Result ParseDiagnostic ParsedSource
+parseSourcePairsWithIndex src tokList offPairs index =
   let toks = arrayFromList tokList
   let offs = arrayFromList (map fst offPairs)
   let ends = arrayFromList (map snd offPairs)
-  let index () = indexSource src
   match prescanError src index toks offs ends
     Some e => Err (parseErrorDiagnostic e)
     None =>
@@ -5712,9 +5720,18 @@ prescanError src index toks offs ends =
 export
 prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
 prescanErrorPairs src tokList offPairs =
+  prescanErrorPairsWithIndex src tokList offPairs (() => indexSource src)
+
+export
+prescanErrorPairsWithIndex : String ->
+  List Token ->
+  List (Int, Int) ->
+  (Unit -> SourceIndex) ->
+  Option ParseError
+prescanErrorPairsWithIndex src tokList offPairs index =
   prescanError
     src
-    (() => indexSource src)
+    index
     (arrayFromList tokList)
     (arrayFromList (map fst offPairs))
     (arrayFromList (map snd offPairs))

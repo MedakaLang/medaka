@@ -1,3 +1,5 @@
+import frontend.parse_recovery.{parseRecoveringWithIndex}
+import frontend.recovery_result.{RecoveredSource}
 import support.source_index.{SourceIndex, indexSource}
 
 public export data SourceSnapshot =
@@ -17,3 +19,35 @@ export
 matchesSnapshot : SnapshotId -> SourceSnapshot -> Bool
 matchesSnapshot (SnapshotId uri generation) (SourceSnapshot u _ g _ _) =
   uri == u && generation == g
+
+export data SnapshotSyntax =
+  SnapshotSyntax SnapshotId (Option Int) RecoveredSource
+public export data SnapshotMismatch = SnapshotMismatch SnapshotId SnapshotId
+
+export
+parseSnapshotSyntax : SourceSnapshot -> SnapshotSyntax
+parseSnapshotSyntax snapshot = match snapshot
+  SourceSnapshot _ version _ text index =>
+    SnapshotSyntax
+      (snapshotId snapshot)
+      version
+      (parseRecoveringWithIndex index text)
+
+export
+snapshotSyntaxId : SnapshotSyntax -> SnapshotId
+snapshotSyntaxId (SnapshotSyntax id _ _) = id
+
+export
+snapshotSyntaxVersion : SnapshotSyntax -> Option Int
+snapshotSyntaxVersion (SnapshotSyntax _ version _) = version
+
+export
+snapshotSyntaxResult : SnapshotSyntax -> RecoveredSource
+snapshotSyntaxResult (SnapshotSyntax _ _ result) = result
+
+export
+snapshotSyntaxMatches : SourceSnapshot -> SnapshotSyntax -> Bool
+snapshotSyntaxMatches snapshot syntax = match snapshot
+  SourceSnapshot _ version _ _ _ =>
+    matchesSnapshot (snapshotSyntaxId syntax) snapshot
+      && version == snapshotSyntaxVersion syntax

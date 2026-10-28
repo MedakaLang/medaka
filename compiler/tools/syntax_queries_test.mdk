@@ -1,0 +1,44 @@
+import json.{Json, get, asString}
+import tools.source_snapshot.{makeSnapshot, parseSnapshotSyntax}
+import tools.syntax_queries.{symbolsFromRecovered, strictDocumentSymbols}
+import test.{expectAll, expectEqual, expectTrue}
+
+symbolName : Json -> Option String
+symbolName symbol = match get "name" symbol
+  Some value => asString value
+  None => None
+
+namesOrEmpty : Result e (List Json) -> List (Option String)
+namesOrEmpty (Ok symbols) = map symbolName symbols
+namesOrEmpty (Err _) = []
+
+rejected : Result e a -> Bool
+rejected (Err _) = True
+rejected (Ok _) = False
+
+test "projection uses recovered current declarations" =
+  let source = "before = 1\nbroken = )\nafter = 2\n"
+  let snapshot = makeSnapshot "file:///a" (Some 2) 2 source
+  expectEqual
+    [Some "before", Some "after"]
+    (namesOrEmpty
+      (symbolsFromRecovered snapshot (parseSnapshotSyntax snapshot)))
+
+test "projection rejects stale identity or version" =
+  let snapshot = makeSnapshot "file:///a" (Some 1) 1 "before = 1\n"
+  let syntax = parseSnapshotSyntax snapshot
+  let stale =
+    symbolsFromRecovered
+      (makeSnapshot "file:///a" (Some 1) 2 "after = 1\n")
+      syntax
+  let wrongVersion =
+    symbolsFromRecovered
+      (makeSnapshot "file:///a" (Some 2) 1 "after = 1\n")
+      syntax
+  expectAll [
+    expectTrue (rejected stale),
+    expectTrue (rejected wrongVersion),
+    expectEqual
+      (map symbolName (strictDocumentSymbols "before = 1\n"))
+      (namesOrEmpty (symbolsFromRecovered snapshot syntax)),
+  ]

@@ -1,15 +1,20 @@
 import string.{repeat}
 import frontend.ast.{Decl(..), Loc(..)}
 import frontend.parse_recovery.{
-  parseRecovering, parseRecoveringWith, RecoveryLimits(..)
+  parseRecovering, parseRecoveringWith, parseRecoveringWithIndex,
+  RecoveryLimits(..)
 }
 import frontend.recovery_result.{
   recoveredDecls, recoveredDiagnostics, invalidRegions, invalidExtent,
   recoveredCompleteness, recoveredStats, RecoveryCompleteness(..),
   RecoveryStop(..), RecoveryStats(..), SourceExtent(..)
 }
-import frontend.parse_diagnostic.{diagnosticCode, diagnosticLoc}
-import test.{expectAll, expectEqual, expectEach}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, diagnosticCode, diagnosticLoc, diagnosticEdits,
+  ParseEdit(..), EditApplicability(..)
+}
+import support.source_index.{indexSource}
+import test.{Expectation, expectAll, expectEqual, expectEach}
 
 name : Decl -> String
 name (DFunDef _ n _ _ _ _) = n
@@ -417,3 +422,55 @@ test "prescan diagnostic remains typed on a rejected island" =
       map diagnosticCode (recoveredDiagnostics result),
       map (region => extent (invalidExtent region)) (invalidRegions result),
     )
+
+editRow : ParseEdit -> ((Int, Int, Int, Int), String, String, Bool)
+editRow (ParseEdit loc old replacement applicability) =
+  (span loc, old, replacement, applicability == MachineApplicable)
+
+diagnosticRow : ParseDiagnostic ->
+  (String, (Int, Int, Int, Int), List ((Int, Int, Int, Int), String, String, Bool))
+diagnosticRow diagnostic = (
+  diagnosticCode diagnostic,
+  span (diagnosticLoc diagnostic),
+  map editRow (diagnosticEdits diagnostic),
+)
+
+indexedCoordinateCase : String ->
+  Int ->
+  List (Int, Int, Int, Int) ->
+  (String, Expectation)
+indexedCoordinateCase newline count spans =
+  let src =
+    stringConcat ["-- 😀", newline, repeat count ("bad = 1 != 2" ++ newline)]
+  let expected =
+    map (loc => ("P-BAD-NEQ", loc, [(loc, "!=", "/=", True)])) spans
+  let raw = parseRecovering src
+  let indexed = parseRecoveringWithIndex (indexSource src) src
+  (
+    newline ++ intToString count,
+    expectAll [
+      expectEqual expected (map diagnosticRow (recoveredDiagnostics raw)),
+      expectEqual expected (map diagnosticRow (recoveredDiagnostics indexed)),
+    ],
+  )
+
+test "shared diagnostic index preserves coordinates and edits" = expectEach [
+  indexedCoordinateCase "\n" 1 [(2, 8, 2, 10)],
+  indexedCoordinateCase "\r\n" 2 [(2, 8, 2, 10), (3, 8, 3, 10)],
+  indexedCoordinateCase "\r" 4 [
+    (2, 8, 2, 10),
+    (3, 8, 3, 10),
+    (4, 8, 4, 10),
+    (5, 8, 5, 10),
+  ],
+  indexedCoordinateCase "\n" 8 [
+    (2, 8, 2, 10),
+    (3, 8, 3, 10),
+    (4, 8, 4, 10),
+    (5, 8, 5, 10),
+    (6, 8, 6, 10),
+    (7, 8, 7, 10),
+    (8, 8, 8, 10),
+    (9, 8, 9, 10),
+  ],
+]

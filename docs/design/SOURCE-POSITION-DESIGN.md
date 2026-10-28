@@ -71,6 +71,17 @@ The sprint contract records the exact interfaces, rollback cases, consumer
 migration and full-parser performance and retention checks before the code
 changes land.
 
+Recovery may encounter several diagnostics in one source. Its strict-first
+attempt and prescans share an invocation-owned `SourceIndex` provider instead
+of rebuilding the full UTF-16 index for every diagnostic. Raw recovery keeps
+that provider lazy and memoizes it only for the invocation; a snapshot query
+uses the snapshot's existing index. Published recovery results retain neither
+the provider nor the index. Existing coordinate validation, including CRLF
+interior handling, remains unchanged. In the recovery prototype, eight
+independent errors after a 1 MiB comment allocated about 772 MB because each
+error built another full-source index; sharing eliminates that repeated work.
+This is a component measurement, not a claim about total end-to-end cost.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;

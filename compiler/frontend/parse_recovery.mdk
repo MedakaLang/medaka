@@ -15,7 +15,7 @@ import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseDiagnosticKind(..), makeParseDiagnostic
 }
 import frontend.ast.{Decl, Loc(..)}
-import support.source_index.{offsetToLineColFast}
+import support.source_index.{SourceIndex, indexSource, offsetToLineColFast}
 
 import frontend.recovery_result.{
   RecoveredSource, SourceExtent(..), InvalidReason(..), RecoveryStop(..),
@@ -159,6 +159,7 @@ failureDiag ctx size p problem =
 
 recoverLoop : RecoveryLimits ->
   String ->
+  (Unit -> SourceIndex) ->
   ParseContext ->
   Array Bool ->
   Option InvalidReason ->
@@ -169,7 +170,7 @@ recoverLoop : RecoveryLimits ->
   List (Int, Int, InvalidReason) ->
   Int ->
   RecoveredSource
-recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs damage size p spans ds rs attempts
+recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src index ctx fs damage size p spans ds rs attempts
   | isEofTok (peekTok (contextTokens ctx) p) =
     publish ctx spans ds rs ReachedEnd attempts
   | attempts >= maxAttempts || length ds >= maxDiagnostics =
@@ -208,14 +209,16 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
           if q > p && boundary then
             let ts = sliceList (contextTokens ctx) p q
             let os = sliceList (contextOffsets ctx) p q
-            match (P.prescanErrorPairs
+            match (P.prescanErrorPairsWithIndex
               src
               (ts ++ [TEof])
-              (os ++ [(offAt ctx size q, offAt ctx size q)]))
+              (os ++ [(offAt ctx size q, offAt ctx size q)])
+              index)
               None =>
                 recoverLoop
                   limits
                   src
+                  index
                   ctx
                   fs
                   damage
@@ -230,6 +233,7 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
                 reject
                   limits
                   src
+                  index
                   ctx
                   fs
                   damage
@@ -245,6 +249,7 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
             reject
               limits
               src
+              index
               ctx
               fs
               damage
@@ -263,6 +268,7 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
           reject
             limits
             src
+            index
             ctx
             fs
             damage
@@ -277,6 +283,7 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
           reject
             limits
             src
+            index
             ctx
             fs
             damage
@@ -290,6 +297,7 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src ctx fs 
 
 reject : RecoveryLimits ->
   String ->
+  (Unit -> SourceIndex) ->
   ParseContext ->
   Array Bool ->
   Option InvalidReason ->
@@ -301,7 +309,7 @@ reject : RecoveryLimits ->
   Int ->
   ParseDiagnostic ->
   RecoveredSource
-reject limits src ctx fs damage size p spans ds rs attempts diagnostic =
+reject limits src index ctx fs damage size p spans ds rs attempts diagnostic =
   let next = nextFence ctx fs (p + 1)
   let terminal = findLex ctx p (min (arrayLength fs) (next + 1))
   if terminal >= 0 then
@@ -319,7 +327,11 @@ reject limits src ctx fs damage size p spans ds rs attempts diagnostic =
     let ts = sliceList (contextTokens ctx) p next
     let os = sliceList (contextOffsets ctx) p next
     let checked =
-      match P.prescanErrorPairs src (ts ++ [TEof]) (os ++ [(size, size)])
+      match (P.prescanErrorPairsWithIndex
+        src
+        (ts ++ [TEof])
+        (os ++ [(size, size)])
+        index)
         Some err => parseErrorDiagnostic err
         None => diagnostic
     if isEofTok (peekTok (contextTokens ctx) next) && isSome damage then
@@ -334,6 +346,7 @@ reject limits src ctx fs damage size p spans ds rs attempts diagnostic =
       recoverLoop
         limits
         src
+        index
         ctx
         fs
         damage
@@ -361,7 +374,24 @@ parseRecoveringWith (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxD
   | min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0 =
     budgetResult src 0
   | stringLength src > maxSource = budgetResult src 0
-  | otherwise = recoverTokens limits src
+  | otherwise =
+    let cell = Ref None
+    let index () = match !cell
+      Some value => value
+      None =>
+        let value = indexSource src
+        cell := Some value
+        value
+    recoverTokens limits src index
+
+export
+parseRecoveringWithIndex : SourceIndex -> String -> RecoveredSource
+parseRecoveringWithIndex index src =
+  let limits = defaultRecoveryLimits
+  if stringLength src > 8388608 then
+    budgetResult src 0
+  else
+    recoverTokens limits src (() => index)
 
 budgetResult : String -> Int -> RecoveredSource
 budgetResult src count =
@@ -373,13 +403,16 @@ budgetResult src count =
     (Partial ExhaustedBudget)
     (RecoveryStats count 0 0)
 
-recoverTokens : RecoveryLimits -> String -> RecoveredSource
-recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src =
+recoverTokens : RecoveryLimits ->
+  String ->
+  (Unit -> SourceIndex) ->
+  RecoveredSource
+recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src index =
   let (ts, os) = tokenizeWithOffsetPairs src
   let count = length ts
   if count > maxTokens then
     budgetResult src count
-  else match P.parseSourcePairs src ts os
+  else match P.parseSourcePairsWithIndex src ts os index
     Ok result =>
       makeRecoveredSource
         (parsedDecls result)
@@ -397,6 +430,7 @@ recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src =
         (recoverLoop
           limits
           src
+          index
           ctx
           fs
           damage

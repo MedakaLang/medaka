@@ -1,3 +1,8 @@
+import tools.syntax_queries.{
+  strictDocumentSymbols, symbolsFromRecovered, wholeLineRange, innerDecl,
+  jPosition, jRange
+}
+import tools.source_snapshot.{parseSnapshotSyntax}
 import tools.lsp_diagnostics.{
   diagnosticJsonOr, diagnosticWithRange, parseDiagnosticJson,
   parseDiagnosticActions, snapshotJson
@@ -200,15 +205,6 @@ docsSnapshot uri docs = match docs
 
 -- ── JSON helpers ────────────────────────────────────────────────────────────
 
--- 0-based LSP Position: { line, character }.
-jPosition : Int -> Int -> Json
-jPosition line ch = jObject [("line", JInt line), ("character", JInt ch)]
-
--- LSP Range: { start, end }.
-jRange : Int -> Int -> Int -> Int -> Json
-jRange sl sc el ec =
-  jObject [("start", jPosition sl sc), ("end", jPosition el ec)]
-
 -- Loc-less diagnostics retain their whole-line range.
 wholeDocRange : String -> Json
 wholeDocRange src =
@@ -356,235 +352,9 @@ occToHighlight index nlen off = match (
 -- Function=12, Variable=13, TypeParameter=26, Event=24).  Mirrors
 -- symbol_of_decl's kind mapping + child nesting.
 
--- Strip a DAttrib wrapper to the inner decl (mirror inner_decl).
-innerDecl : Decl -> Decl
-innerDecl (DAttrib _ d) = innerDecl d
-innerDecl d = d
-
--- `range` = the decl's whole line span; `selRange` = the LSP `selectionRange`
--- (#331: the decl's real NAME-token span when known, else the same as
--- `range` — see `renderSymbol`). Kept as separate params (rather than always
--- reusing `range`) so a real name span can differ from the enclosing range.
-jSymbol : String -> Int -> Json -> Json -> List Json -> Json
-jSymbol name kind range selRange children = jObject [
-  ("name", JString name),
-  ("kind", JInt kind),
-  ("range", range),
-  ("selectionRange", selRange),
-  ("children", jArray children),
-]
-
--- One outline child symbol carrying its OWN name-token range/selectionRange
--- (#331, increment 2): use the child's name `Loc` when the parser found one,
--- else fall back to the parent decl `range` (`fallback`).  Both `range` and
--- `selectionRange` are the name span (a leaf symbol has no distinct enclosing
--- range).
-jChildLoc : SourceIndex -> String -> Int -> Json -> Option Loc -> Json
-jChildLoc index name kind fallback loc =
-  let r = match loc
-    Some l => jRangeOfLoc index l
-    None => fallback
-  jSymbol name kind r r []
-
--- Outline children for the variant list of a data decl, consuming child-name
--- `Loc`s (#331, increment 2) from `locs` in outline order.  Mirrors the old
--- `flatMap variantSymChildren`: a nameOmitted record variant (`data X = { … }`)
--- exposes one Field symbol (kind 8) per field; any other variant shows its
--- single constructor name (kind 22).  ⚠️ The parser's `declChildSpansOf`
--- produces `locs` in exactly this order — keep the two in lockstep.
-variantKids : SourceIndex ->
-  Json ->
-  List (Option Loc) ->
-  List Variant ->
-  List Json
-variantKids index fb locs variants = go locs variants
-  where
-    go _ [] = []
-    go spans ((Variant _ (ConNamed fs True)) :: vs) =
-      let step = fieldKidsStep index fb spans (map fieldName fs)
-      fst step ++ go (snd step) vs
-    go [] ((Variant vn _) :: vs) = jChildLoc index vn 22 fb None :: go [] vs
-    go (l :: ls) ((Variant vn _) :: vs) = jChildLoc index vn 22 fb l :: go ls vs
-
--- One Field child (kind 8) per field name, consuming a `Loc` each; returns the
--- kids plus the leftover `Loc`s for the next variant.
-fieldKidsStep : SourceIndex ->
-  Json ->
-  List (Option Loc) ->
-  List String ->
-  (List Json, List (Option Loc))
-fieldKidsStep index fb locs names = go locs names
-  where
-    go spans [] = ([], spans)
-    go [] (fn :: fns) =
-      let rest = go [] fns
-      (jChildLoc index fn 8 fb None :: fst rest, snd rest)
-    go (l :: ls) (fn :: fns) =
-      let rest = go ls fns
-      (jChildLoc index fn 8 fb l :: fst rest, snd rest)
-
--- 1:1 child symbols for a fixed-shape child list (methods, let-binds),
--- consuming a `Loc` each in order.
-zipKids : SourceIndex ->
-  Json ->
-  Int ->
-  List (Option Loc) ->
-  List String ->
-  List Json
-zipKids _ _ _ _ [] = []
-zipKids index fb kind [] (nm :: nms) =
-  jChildLoc index nm kind fb None :: zipKids index fb kind [] nms
-zipKids index fb kind (l :: ls) (nm :: nms) =
-  jChildLoc index nm kind fb l :: zipKids index fb kind ls nms
-
--- The outline (name, kind, clauseLike, children) for a decl, given its
--- precomputed decl-level `range` (used for the child symbols' spans), or None for
--- decls that don't surface in the outline (DUse).  The decl's own range is
--- reattached by the caller (symbolParts), which also spans it across collapsed
--- clauses.  `clauseLike` is True ONLY for a signature or a value-binding clause
--- (DTypeSig/DFunDef/DLetGroup) — the decls that legitimately repeat under one name
--- (a sig + its clauses) and so may coalesce.  Everything else is False: crucially
--- DTest/DProp take a FREE string label (`test "double"`) that resolve.mdk
--- never enters into any namespace or duplicate check, so a test named after the
--- function it tests must NOT be swallowed into that function's outline entry.
--- `childLocs` (#331, increment 2) is the parser's ordered list of this decl's
--- child name-token `Loc`s (`declPosChildLocs`), consumed in the SAME order the
--- children are emitted below.  ⚠️ The order here IS the invariant the parser's
--- `declChildSpansOf` mirrors — change one, change both.
-symbolPartsOfDecl : SourceIndex ->
-  Decl ->
-  Json ->
-  List (Option Loc) ->
-  Option (String, Int, Bool, List Json)
-symbolPartsOfDecl index d range childLocs = match innerDecl d
-  DTypeSig _ name _ _ => Some (name, 13, True, [])
-  DExtern (ExternDecl { edName = name, ... }) => Some (name, 12, False, [])
-  DFunDef _ name _ _ _ _ => Some (name, 12, True, [])
-  DLetGroup _ binds => match binds
-    [] => None
-    (LetBind n0 _ _ _) :: _ =>
-      let kids = zipKids index range 12 childLocs (map letBindName binds)
-      Some (n0, 12, True, kids)
-  DData { dataName = name, dataCtors = variants } =>
-    -- records (the `data X = { … }` short form, nameOmitted) expose their
-    -- fields as child symbols (kind 8); ordinary variants show their ctor name.
-    let kids = variantKids index range childLocs variants
-    Some (name, 10, False, kids)
-  DInterface { name = n, methods = ms, ... } =>
-    let kids = zipKids index range 6 childLocs (map ifaceMethodName ms)
-    Some (n, 11, False, kids)
-  DImpl { iface = ifc, methods = ms, ... } =>
-    let label = implLabel ifc
-    let kids = zipKids index range 6 childLocs (map implMethodName ms)
-    Some (label, 5, False, kids)
-  DTypeAlias { tyAliasName = name } => Some (name, 26, False, [])
-  DNewtype { newtypeName = name } => Some (name, 23, False, [])
-  DUse _ _ _ => None
-  DProp _ name _ _ => Some (name, 12, False, [])
-  DTest _ name _ => Some (name, 12, False, [])
-  DEffect _ name _ _ _ _ => Some (name, 24, False, [])
-  DAttrib _ _ => None  -- unreachable post innerDecl
--- Variable
--- Function
--- Function
-
--- EnumMember
--- Enum
-
--- Field
--- Struct
-
--- Interface
-
--- Class
--- TypeParameter
--- Struct
-
--- Event
-
--- "impl Iface" / "Name of impl Iface" label (mirror handle_document_symbol's).
-implLabel : String -> String
-implLabel iface = stringConcat ["impl ", iface]
-
--- Parse → parts → collapse same-name clauses → render.  Exported for
--- `medaka_symbols` (#255) — parse-only, no typecheck, so it's a pure function of
--- `src` and safe for the stateless MCP disk-read harness (mirrors `typeAtPoint`'s
--- export shape).
 export
 documentSymbols : String -> List Json
-documentSymbols src = match parseWithPositionsOpt src
-  None => []
-  Some (decls, positions) =>
-    let index = indexSource src
-    let len = stringLength src
-    positionsDecls positions
-      |> symbolParts index len decls
-      |> collapseSymbols
-      |> map (renderSymbol index len)
-
-wholeLineRange : SourceIndex -> Int -> Int -> Int -> Json
-wholeLineRange index len sl el = match sourcePositionToOffset index (el + 1) 0
-  Some _ => jRange sl 0 el 0
-  None => match offsetToUtf16Position index len
-    Some (line, col) => jRange sl 0 line col
-    None => JNull
-
--- One outline row before collapse: name, LSP SymbolKind, 0-based start/end line,
--- whether it's a signature/clause row (only those coalesce — see
--- symbolPartsOfDecl), its child symbols, and its NAME-token `Loc` (#331,
--- `None` when the decl has no single name token or the finder missed — see
--- `declNameTokIdxAt`).  A dedicated type rather than a tuple because it
--- carries 7 fields (past the tuple ceiling) and reads better.
-data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
-
--- Zip decls with positions (1:1; defensive truncation to the shorter list) into
--- SymRow rows, dropping non-outline decls.
-symbolParts : SourceIndex -> Int -> List Decl -> List DeclPos -> List SymRow
-symbolParts index len decls positions = go decls positions
-  where
-    go (d :: ds) (p :: ps) =
-      let sl = declPosLine p - 1
-      let el = declPosEndLine p
-      match (symbolPartsOfDecl
-        index
-        d
-        (wholeLineRange index len sl el)
-        (declPosChildLocs p))
-        None => go ds ps
-        Some (name, kind, clauseLike, kids) =>
-          SymRow name kind sl el clauseLike kids (declPosNameLoc p) :: go ds ps
-    go _ _ = []
-
--- Collapse a signature+clauses run — consecutive rows that share the EXACT same
--- name AND are BOTH clause-like — into ONE outline symbol (#300 part 3): the
--- shared name, the LAST row's kind (so a `sig`(Variable)+`def`(Function) pair
--- reads as the Function, not the sig), the range spanning first-start..last-end,
--- and the concatenated children.  The clause-like gate is what stops a
--- `test "double"`/`prop` (free string label, never a duplicate) from being
--- fused into an adjacent same-named function; only sig/clause runs coalesce, and
--- only adjacent ones, so decls that merely share a prefix are never merged either.
--- The collapsed row keeps the FIRST clause's name `Loc` (`nl0`) — it pairs with
--- the kept start line `s0`, same as the OCaml/line-based fields already do.
-collapseSymbols : List SymRow -> List SymRow
-collapseSymbols [] = []
-collapseSymbols (x :: xs) = collapseGo x xs
-
-collapseGo : SymRow -> List SymRow -> List SymRow
-collapseGo cur [] = [cur]
-collapseGo (SymRow n0 k0 s0 e0 cl0 c0 nl0) ((SymRow n1 k1 s1 e1 cl1 c1 nl1) :: rest) =
-  if n0 == n1 && cl0 && cl1 then
-    collapseGo (SymRow n0 k1 s0 e1 True (c0 ++ c1) nl0) rest
-  else
-    SymRow n0 k0 s0 e0 cl0 c0 nl0
-      :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1 nl1) rest
-
-renderSymbol : SourceIndex -> Int -> SymRow -> Json
-renderSymbol index len (SymRow name kind sl el _ kids nameLoc) =
-  let range = wholeLineRange index len sl el
-  let selRange = match nameLoc
-    Some l => jRangeOfLoc index l
-    None => range
-  jSymbol name kind range selRange kids
+documentSymbols src = strictDocumentSymbols src
 
 -- ── textDocument/definition ─────────────────────────────────────────────────
 -- identifier-at-cursor → first decl that DEFINES that name → THAT NAME's own
@@ -2106,9 +1876,12 @@ handleDocumentSymbol : Json -> Json -> Docs -> <IO> Unit
 handleDocumentSymbol idJson params docs =
   let result = match requestUri params
     None => JNull
-    Some uri => match docsGet uri docs
+    Some uri => match docsSnapshot uri docs
       None => JNull
-      Some src => jArray (documentSymbols src)
+      Some snapshot =>
+        match symbolsFromRecovered snapshot (parseSnapshotSyntax snapshot)
+          Err _ => JNull
+          Ok symbols => jArray symbols
   writeMessage (responseMsg idJson result)
 
 cursorIdentifier : String -> Json -> Option (Int, Int, String)

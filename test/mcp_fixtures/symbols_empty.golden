@@ -1,3 +1,3 @@
 {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
-{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[]"}],"isError":false,"structuredContent":{"origin":{"uri":"file://test/mcp_fixtures/empty_symbols.mdk","version":null,"generation":0},"completeness":"complete","stop":null,"invalidRegions":[],"diagnostics":[]}}}
 {"jsonrpc":"2.0","id":3,"result":{}}

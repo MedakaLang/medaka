@@ -925,6 +925,7 @@ while IFS= read -r f; do
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*'; add 'diff_compiler_fmt' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
+    compiler/tools/source_snapshot*.mdk|compiler/tools/syntax_queries*.mdk) add 'diff_compiler_lsp*'; add 'diff_compiler_mcp*' ;;
     compiler/tools/snapshot.mdk)
                                    add 'diff_compiler_snapshot*' ;;
     compiler/tools/repl.mdk)       add 'diff_compiler_fmt' ;;

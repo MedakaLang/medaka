@@ -1,3 +1,14 @@
+import tools.source_snapshot.{
+  SourceSnapshot(..), makeSnapshot, parseSnapshotSyntax, snapshotSyntaxResult
+}
+import tools.syntax_queries.{symbolsFromRecovered}
+import tools.lsp_diagnostics.{diagnosticJsonOr}
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
+import frontend.recovery_result.{
+  SourceExtent(..), InvalidReason(..), RecoveryStop(..),
+  RecoveryCompleteness(..), invalidExtent, invalidReason, invalidRegions,
+  recoveredDiagnostics, recoveredCompleteness
+}
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
 --
 -- Foundation for the `medaka mcp` workstream (#246 / #247): a JSON-RPC 2.0
@@ -367,7 +378,7 @@ mcpTools = [
     runTypeAtTool,
   McpTool
     "medaka_symbols"
-    "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list."
+    "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. Incomplete source returns recoverable declarations; structuredContent reports completeness, invalid regions and diagnostics."
     medakaSymbolsSchema
     runSymbolsTool,
   McpTool
@@ -808,48 +819,79 @@ medakaSymbolsSchema = jObject [
   ("required", jArray [JString "file"]),
 ]
 
--- Turn resolved source into a symbols result.  Parse FIRST (via parseResult, the
--- same located-diagnostic path medaka_fmt uses) so a genuinely empty/no-decl file
--- (empty `[]`, isError:false) is DISTINGUISHABLE from one that failed to parse
--- (#300 part 1): a parse failure yields a distinct structured note
--- `{"parseError":true, line, col, message}` with isError:true, instead of the same
--- `[]` an empty file returns.  documentSymbols itself is parse-only and returns
--- `[]` on unparseable input, which is exactly the ambiguity we resolve here.
-symbolsResult : String -> Json
-symbolsResult src = match parseResult src
-  Err e =>
-    let index = indexSource src
-    let position =
-      offsetToUtf16Position
-        index
-        (clampSourcePositionToOffset index (parseErrorLine e) (parseErrorCol e))
-    toolTextResult
-      (stringify
-        (jObject [
-          ("parseError", JBool True),
-          (
-            "line",
-            match position
-              Some (line, _) => JInt line
-              None => JNull,
-          ),
-          (
-            "col",
-            match position
-              Some (_, col) => JInt col
-              None => JNull,
-          ),
-          ("message", JString (parseErrorMessage e)),
-        ]))
-      True
-  Ok _ => toolTextResult (stringify (jArray (documentSymbols src))) False
+reasonName : InvalidReason -> String
+reasonName InvalidDeclaration = "invalidDeclaration"
+reasonName TerminalLexError = "terminalLexError"
+reasonName UnclosedDelimiter = "unclosedDelimiter"
+reasonName MismatchedDelimiter = "mismatchedDelimiter"
+reasonName UntrustedBoundary = "untrustedBoundary"
+reasonName RecoveryBudget = "recoveryBudget"
 
--- medaka_symbols handler: read `file` from disk and return its top-level decl
--- symbols (tools.lsp.documentSymbols), serialized as a JSON array in a text
--- content block.  Parse-only (no typecheck) — never errors on an ill-typed
--- file, only on a missing/unreadable one.  A file that fails to PARSE returns a
--- distinct isError parseError note (symbolsResult), NOT the empty `[]` an empty
--- file returns — so a caller can tell 'no decls' from 'parser bailed' (#300 p1).
+stopName : RecoveryStop -> String
+stopName ReachedEnd = "reachedEnd"
+stopName StoppedLexically = "stoppedLexically"
+stopName StoppedDelimiter = "stoppedDelimiter"
+stopName StoppedBoundary = "stoppedBoundary"
+stopName ExhaustedBudget = "exhaustedBudget"
+
+regionPosition : SourceIndex -> Int -> Json
+regionPosition index off = match offsetToUtf16Position index off
+  Some (line, col) => jObject [("line", JInt line), ("character", JInt col)]
+  None => JNull
+
+symbolsResult : String -> String -> Json
+symbolsResult path src =
+  let snapshot = makeSnapshot (uriOfPath path) None 0 src
+  let syntax = parseSnapshotSyntax snapshot
+  let result = snapshotSyntaxResult syntax
+  let index = match snapshot
+    SourceSnapshot _ _ _ _ i => i
+  let (completeness, stop) = match recoveredCompleteness result
+    Complete => ("complete", JNull)
+    Partial why => ("partial", JString (stopName why))
+  let regions =
+    map
+      (region => match invalidExtent region
+        SourceExtent start end => jObject [
+          ("start", regionPosition index start),
+          ("end", regionPosition index end),
+          ("reason", JString (reasonName (invalidReason region))),
+        ])
+      (invalidRegions result)
+  let diagnostics =
+    map
+      (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
+      (recoveredDiagnostics result)
+  let metadata = jObject [
+    (
+      "origin",
+      jObject [
+        ("uri", JString (uriOfPath path)),
+        ("version", JNull),
+        ("generation", JInt 0),
+      ],
+    ),
+    ("completeness", JString completeness),
+    ("stop", stop),
+    ("invalidRegions", jArray regions),
+    ("diagnostics", jArray diagnostics),
+  ]
+  match symbolsFromRecovered snapshot syntax
+    Err _ => toolArgError "medaka_symbols: snapshot mismatch"
+    Ok symbols => jObject [
+      (
+        "content",
+        jArray [
+          jObject [
+            ("type", JString "text"),
+            ("text", JString (stringify (jArray symbols))),
+          ],
+        ],
+      ),
+      ("isError", JBool False),
+      ("structuredContent", metadata),
+    ]
+
 runSymbolsTool : String -> String -> String -> Json -> <IO> Json
 runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
   None =>
@@ -859,7 +901,7 @@ runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
     Err e =>
       toolArgError
         (stringConcat ["medaka_symbols: cannot read file '", path, "': ", e])
-    Ok src => symbolsResult src
+    Ok src => symbolsResult path src
 
 -- ── medaka_definition tool ───────────────────────────────────────────────────
 
