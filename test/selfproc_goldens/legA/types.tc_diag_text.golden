@@ -181,6 +181,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 unknownCtorMsg : String -> String
 unknownFieldMsg : String -> String -> String
 unknownRecordMsg : String -> String
+unreachableAltWarning : Int -> String
 unreachableArmWarning : String
 updateMultiCtorMsg : String -> String -> String -> List String -> List String -> String
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String

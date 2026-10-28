@@ -3,7 +3,8 @@ bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
 closeExistentialScope : ModuleCtx -> ExistentialScope -> Mono -> Option Loc -> Unit
 ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
-inferOrPatRefused : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
+inferOrPat : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
 inferPatAs : TcEnv -> String -> Loc -> BinderId -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
@@ -39,3 +40,4 @@ settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit
 substField : GraphCtx -> List (Int, Mono) -> List (Int, Authority) -> (String, Mono) -> (String, Mono)
 takeOpenedExistentials : ModuleCtx -> Unit -> List (Ref Authvar)
 takePatLits : ModuleCtx -> Unit -> List (Mono, Int, Option Loc)
+unifyOrBinder : TcEnv -> Int -> List (String, Scheme) -> (String, Scheme) -> Unit

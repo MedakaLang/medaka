@@ -90,7 +90,7 @@ test "diag_codes_doc: the live rows are exactly allDiagCodes" = match docLines
     let live = textsWith "live" rows
     let codes = sort (map codeText allDiagCodes)
     expectAll [
-      expectEqual 186 (length codes),
+      expectEqual 190 (length codes),
       expectEqual [] (missingFrom live codes),
       expectEqual [] (missingFrom codes live),
       expectEqual (length live) (length (nub live)),
@@ -124,7 +124,7 @@ test "diag_codes_doc: constructor names follow the naming rule" =
       let declared = sort (declaredCtors (lines text))
       let derived = sort (map (c => camel (codeText c)) allDiagCodes)
       expectAll [
-        expectEqual 186 (length derived),
+        expectEqual 190 (length derived),
         expectEqual [] (missingFrom declared derived),
         expectEqual [] (missingFrom derived declared),
         expectEqual (length declared) (length (nub declared)),

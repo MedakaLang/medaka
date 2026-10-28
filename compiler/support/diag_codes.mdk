@@ -186,7 +186,7 @@ public export data DiagCode =
   | TNoImpl
   | TNonrecValueLet
   | TNotAFunction
-  | TOrPatternUnsupported
+  | TOrPatternBinderTypes
   | TPhantomMethod
   | TRecursiveAlias
   | TRequiresCycle
@@ -214,6 +214,7 @@ public export data DiagCode =
   | WNonexhaustive
   | WNonexhaustiveClauses
   | WPreludeMethodShadow
+  | WUnreachableAlt
   | WUnreachableArm
   deriving (Eq, Debug)
 
@@ -380,7 +381,7 @@ codeText TMissingSuperImpl = "T-MISSING-SUPER-IMPL"
 codeText TNoImpl = "T-NO-IMPL"
 codeText TNonrecValueLet = "T-NONREC-VALUE-LET"
 codeText TNotAFunction = "T-NOT-A-FUNCTION"
-codeText TOrPatternUnsupported = "T-OR-PATTERN-UNSUPPORTED"
+codeText TOrPatternBinderTypes = "T-OR-PATTERN-BINDER-TYPES"
 codeText TPhantomMethod = "T-PHANTOM-METHOD"
 codeText TRecursiveAlias = "T-RECURSIVE-ALIAS"
 codeText TRequiresCycle = "T-REQUIRES-CYCLE"
@@ -408,6 +409,7 @@ codeText WMainShape = "W-MAIN-SHAPE"
 codeText WNonexhaustive = "W-NONEXHAUSTIVE"
 codeText WNonexhaustiveClauses = "W-NONEXHAUSTIVE-CLAUSES"
 codeText WPreludeMethodShadow = "W-PRELUDE-METHOD-SHADOW"
+codeText WUnreachableAlt = "W-UNREACHABLE-ALT"
 codeText WUnreachableArm = "W-UNREACHABLE-ARM"
 
 -- The JSON `kind` text of [k].
@@ -476,13 +478,13 @@ allDiagCodes = [
   TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
   TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
   TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
-  TOrPatternUnsupported, TPhantomMethod, TRecursiveAlias, TRequiresCycle,
+  TOrPatternBinderTypes, TPhantomMethod, TRecursiveAlias, TRequiresCycle,
   TRequiresDepth, TRequiresUnrouted, TResidual, TSigOverExpansive,
   TTargetCapability, TTargetNoBinding, TTargetNotProvided, TTypeMismatch,
   TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord,
   TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow,
   WIncomparableImpls, WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
-  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableArm
+  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableAlt, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.

@@ -1,4 +1,5 @@
 allCovered : List String -> Map String (List (List Pat)) -> Bool
+anyOrHead : List (List Pat) -> Bool
 anyWildHead : List (List Pat) -> Bool
 boolAlwaysTrue : Expr -> Bool
 bucketClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
@@ -38,6 +39,8 @@ digitVal : Char -> Int
 doStmtBinds : DoStmt -> List LetBind
 exhaustToLines : List Decl -> String
 exhaustToLinesWith : List Decl -> List Decl -> String
+expandOrHeads : List (List Pat) -> List (List Pat)
+expandOrRows : List (List Pat) -> List (List Pat)
 fieldAssignBinds : FieldAssign -> List LetBind
 findRecField : String -> List RecPatField -> Option (Option Pat)
 firstMissing : List String -> List String -> Option String

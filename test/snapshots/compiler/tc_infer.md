@@ -1,5 +1,5 @@
 # META
-source_lines=3542
+source_lines=3601
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -95,6 +95,7 @@ import types.tc_diag_text.{
   u64RangeText,
   unboundVarMsg,
   unknownFieldMsg,
+  unreachableAltWarning,
   unreachableArmWarning,
   wideAnnotateHelp,
   writtenDiag,
@@ -3067,6 +3068,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
           None
           None
         :: mctx.mcCells.matchWarnings.value
+  warnUnreachableAlts mctx col0 prec pat dp body
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range collapses to a wildcard that over-states coverage
   -- (patHasRange) — either would produce a false "redundant" on a later arm.
@@ -3075,6 +3077,61 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
   let heads2 = if contributes then noteHeadCtor dp heads else heads
   let offCol2 = offCol || contributes && not (isConPat dp)
   checkRedundantGo mctx col0 prec2 heads2 offCol2 rest
+
+-- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or the
+-- alternatives before it in the same arm, already cover.  The arm as a whole being
+-- unreachable is reported once, as the arm.  An arm with a range stays out: a range
+-- desugars to a wildcard that would make every later alternative look covered.
+warnUnreachableAlts : ModuleCtx ->
+  Option TabKey ->
+  List (List Pat) ->
+  Pat ->
+  Pat ->
+  Expr ->
+  Unit
+warnUnreachableAlts mctx col0 prec pat (POr alts) body
+  | patHasRange pat = ()
+  | otherwise =
+    each
+      (k =>
+        mctx.mcCells.matchWarnings :=
+          TcDiag
+              WUnreachableAlt
+              2
+              (orElseLoc (exprLoc body) mctx.mcLoc)
+              (unreachableAltWarning k)
+              None
+              None
+            :: mctx.mcCells.matchWarnings.value)
+      (unreachableAltIndexes mctx col0 prec [] 1 alts)
+warnUnreachableAlts _ _ _ _ _ _ = ()
+
+-- 1-based positions of the alternatives covered by [prec] and the alternatives
+-- before them ([seen], newest first).  Empty when every alternative is covered:
+-- that is an unreachable arm, which the caller reports as one.
+unreachableAltIndexes : ModuleCtx ->
+  Option TabKey ->
+  List (List Pat) ->
+  List (List Pat) ->
+  Int ->
+  List Pat ->
+  List Int
+unreachableAltIndexes mctx col0 prec seen k alts =
+  let ks = deadAltIndexes mctx col0 prec seen k alts
+  if listLen ks == listLen alts then [] else ks
+
+deadAltIndexes : ModuleCtx ->
+  Option TabKey ->
+  List (List Pat) ->
+  List (List Pat) ->
+  Int ->
+  List Pat ->
+  List Int
+deadAltIndexes _ _ _ _ _ [] = []
+deadAltIndexes mctx col0 prec seen k (a :: rest) =
+  let dead = patUnreachable mctx.mcCells.matchOracle.value col0 (seen ++ prec) a
+  let more = deadAltIndexes mctx col0 prec ([a] :: seen) (k + 1) rest
+  if dead then k :: more else more
 
 -- PERF fast path.  `patUnreachable` runs the full Maranget `useful` recursion, which
 -- re-scans EVERY preceding row — so the fold as a whole is O(arms²) on a wide match.
@@ -3106,10 +3163,12 @@ armUnreachable mctx col0 prec _ _ dp =
 
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
+noteHeadCtor (POr alts) heads = fold (h a => noteHeadCtor a h) heads alts
 noteHeadCtor _ heads = heads
 
 isConPat : Pat -> Bool
 isConPat (PCon _ _) = True
+isConPat (POr alts) = allList isConPat alts
 isConPat _ = False
 
 -- Only UNGUARDED arms contribute to the covered set (a guarded arm may not fire).
@@ -3548,7 +3607,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authRoots" false) (mem "authRowRoots" false) (mem "containerParamScalarArg" false) (mem "containsI" false) (mem "domainIsTupleOfArity" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "expectedParamTypes" false) (mem "funArity" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "joinCellOf" false) (mem "litType" false) (mem "matchCol0Type" false) (mem "monoHasArrowInSlot" false) (mem "monoIsBool" false) (mem "monoScheme" false) (mem "peelArrows" false) (mem "peelQual" false) (mem "resultAfterArrows" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tupleMono" false))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableAltWarning" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "emptyShadowDicts" false) (mem "envAt" false) (mem "envAtIfSome" false) (mem "mctxAt" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "extendLocalVars" false) (mem "funClausePair" false) (mem "lookupMethodRow" false) (mem "lookupRecordByName" false) (mem "lookupStandaloneValue" false) (mem "lookupVar" false) (mem "seedAlphaLets" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
@@ -3987,15 +4046,25 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DFunDef false "checkMatchRedundant" ((PVar "mctx") (PVar "scrutTy") (PVar "arms")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EListLit)) (EVar "omEmpty")) (EVar "False")) (EVar "arms")))
 (DTypeSig false "checkRedundantGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))))
 (DFunDef false "checkRedundantGo" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkRedundantGo" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "pat"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableArm")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))) (ELit LUnit))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
+(DFunDef false "checkRedundantGo" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "pat"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableArm")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "warnUnreachableAlts") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "pat")) (EVar "dp")) (EVar "body"))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
+(DTypeSig false "warnUnreachableAlts" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Pat") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
+(DFunDef false "warnUnreachableAlts" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "pat") (PCon "POr" (PVar "alts")) (PVar "body")) (EIf (EApp (EVar "patHasRange") (EVar "pat")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "each") (ELam ((PVar "k")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableAlt")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EApp (EVar "unreachableAltWarning") (EVar "k"))) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unreachableAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EListLit)) (ELit (LInt 1))) (EVar "alts"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "warnUnreachableAlts" (PWild PWild PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "unreachableAltIndexes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")))))))))
+(DFunDef false "unreachableAltIndexes" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "seen") (PVar "k") (PVar "alts")) (EBlock (DoLet false false (PVar "ks") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deadAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "seen")) (EVar "k")) (EVar "alts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "ks")) (EApp (EVar "listLen") (EVar "alts"))) (EListLit) (EVar "ks")))))
+(DTypeSig false "deadAltIndexes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")))))))))
+(DFunDef false "deadAltIndexes" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "deadAltIndexes" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "seen") (PVar "k") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "dead") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EBinOp "++" (EVar "seen") (EVar "prec"))) (EVar "a"))) (DoLet false false (PVar "more") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deadAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EBinOp "::" (EListLit (EVar "a")) (EVar "seen"))) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (EIf (EVar "dead") (EBinOp "::" (EVar "k") (EVar "more")) (EVar "more")))))
 (DTypeSig false "armUnreachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))))))
 (DFunDef false "armUnreachable" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCon "PCon" (PVar "c") (PVar "args"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "offCol")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "heads")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "args"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "armUnreachable" ((PVar "mctx") (PVar "col0") (PVar "prec") PWild PWild (PVar "dp")) (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EVar "dp")))
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "noteHeadCtor" ((PCon "PCon" (PVar "c") PWild) (PVar "heads")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ELit LUnit)) (EVar "heads")))
+(DFunDef false "noteHeadCtor" ((PCon "POr" (PVar "alts")) (PVar "heads")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "h") (PVar "a")) (EApp (EApp (EVar "noteHeadCtor") (EVar "a")) (EVar "h")))) (EVar "heads")) (EVar "alts")))
 (DFunDef false "noteHeadCtor" (PWild (PVar "heads")) (EVar "heads"))
 (DTypeSig false "isConPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isConPat" ((PCon "PCon" PWild PWild)) (EVar "True"))
+(DFunDef false "isConPat" ((PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "allList") (EVar "isConPat")) (EVar "alts")))
 (DFunDef false "isConPat" (PWild) (EVar "False"))
 (DTypeSig false "armIsUnguarded" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))
 (DFunDef false "armIsUnguarded" ((PList)) (EVar "True"))
@@ -4060,7 +4129,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authRoots" false) (mem "authRowRoots" false) (mem "containerParamScalarArg" false) (mem "containsI" false) (mem "domainIsTupleOfArity" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "expectedParamTypes" false) (mem "funArity" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "joinCellOf" false) (mem "litType" false) (mem "matchCol0Type" false) (mem "monoHasArrowInSlot" false) (mem "monoIsBool" false) (mem "monoScheme" false) (mem "peelArrows" false) (mem "peelQual" false) (mem "resultAfterArrows" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tupleMono" false))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableAltWarning" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "emptyShadowDicts" false) (mem "envAt" false) (mem "envAtIfSome" false) (mem "mctxAt" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "extendLocalVars" false) (mem "funClausePair" false) (mem "lookupMethodRow" false) (mem "lookupRecordByName" false) (mem "lookupStandaloneValue" false) (mem "lookupVar" false) (mem "seedAlphaLets" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
@@ -4499,15 +4568,25 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DFunDef false "checkMatchRedundant" ((PVar "mctx") (PVar "scrutTy") (PVar "arms")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EListLit)) (EVar "omEmpty")) (EVar "False")) (EVar "arms")))
 (DTypeSig false "checkRedundantGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))))
 (DFunDef false "checkRedundantGo" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkRedundantGo" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "pat"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableArm")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))) (ELit LUnit))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
+(DFunDef false "checkRedundantGo" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "pat"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableArm")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "warnUnreachableAlts") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "pat")) (EVar "dp")) (EVar "body"))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "mctx")) (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
+(DTypeSig false "warnUnreachableAlts" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Pat") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
+(DFunDef false "warnUnreachableAlts" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "pat") (PCon "POr" (PVar "alts")) (PVar "body")) (EIf (EApp (EVar "patHasRange") (EVar "pat")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "each") (ELam ((PVar "k")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "WUnreachableAlt")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "mctx") "mcLoc"))) (EApp (EVar "unreachableAltWarning") (EVar "k"))) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unreachableAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EListLit)) (ELit (LInt 1))) (EVar "alts"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "warnUnreachableAlts" (PWild PWild PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "unreachableAltIndexes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")))))))))
+(DFunDef false "unreachableAltIndexes" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "seen") (PVar "k") (PVar "alts")) (EBlock (DoLet false false (PVar "ks") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deadAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EVar "seen")) (EVar "k")) (EVar "alts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "ks")) (EApp (EVar "listLen") (EVar "alts"))) (EListLit) (EVar "ks")))))
+(DTypeSig false "deadAltIndexes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")))))))))
+(DFunDef false "deadAltIndexes" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "deadAltIndexes" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "seen") (PVar "k") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "dead") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EBinOp "++" (EVar "seen") (EVar "prec"))) (EVar "a"))) (DoLet false false (PVar "more") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deadAltIndexes") (EVar "mctx")) (EVar "col0")) (EVar "prec")) (EBinOp "::" (EListLit (EVar "a")) (EVar "seen"))) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (EIf (EVar "dead") (EBinOp "::" (EVar "k") (EVar "more")) (EVar "more")))))
 (DTypeSig false "armUnreachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))))))
 (DFunDef false "armUnreachable" ((PVar "mctx") (PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCon "PCon" (PVar "c") (PVar "args"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "offCol")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "heads")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "args"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "armUnreachable" ((PVar "mctx") (PVar "col0") (PVar "prec") PWild PWild (PVar "dp")) (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EVar "dp")))
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "noteHeadCtor" ((PCon "PCon" (PVar "c") PWild) (PVar "heads")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ELit LUnit)) (EVar "heads")))
+(DFunDef false "noteHeadCtor" ((PCon "POr" (PVar "alts")) (PVar "heads")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "h") (PVar "a")) (EApp (EApp (EVar "noteHeadCtor") (EVar "a")) (EVar "h")))) (EVar "heads")) (EVar "alts")))
 (DFunDef false "noteHeadCtor" (PWild (PVar "heads")) (EVar "heads"))
 (DTypeSig false "isConPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isConPat" ((PCon "PCon" PWild PWild)) (EVar "True"))
+(DFunDef false "isConPat" ((PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "allList") (EVar "isConPat")) (EVar "alts")))
 (DFunDef false "isConPat" (PWild) (EVar "False"))
 (DTypeSig false "armIsUnguarded" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))
 (DFunDef false "armIsUnguarded" ((PList)) (EVar "True"))

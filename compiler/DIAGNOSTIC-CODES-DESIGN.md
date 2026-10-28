@@ -245,7 +245,7 @@ module both ways. The tables below stay as narrative.
 | `T-NO-IMPL` | live | no impl (class) |
 | `T-NONREC-VALUE-LET` | live | non-recursive value let |
 | `T-NOT-A-FUNCTION` | live | not a function |
-| `T-OR-PATTERN-UNSUPPORTED` | live | an or-pattern reached typecheck, which does not yet infer them |
+| `T-OR-PATTERN-BINDER-TYPES` | live | the alternatives of an or-pattern bind a name at different types |
 | `T-PHANTOM-METHOD` | live | an interface method whose type never mentions the interface variable |
 | `T-RECURSIVE-ALIAS` | live | recursive alias |
 | `T-REQUIRES-CYCLE` | live | `requires` chain repeats a goal |
@@ -273,6 +273,7 @@ module both ways. The tables below stay as narrative.
 | `W-NONEXHAUSTIVE` | live | **non-exhaustive match** (warning) |
 | `W-NONEXHAUSTIVE-CLAUSES` | live | non-exhaustive clauses of a multi-clause function |
 | `W-PRELUDE-METHOD-SHADOW` | live | An interface method declared in module `M` whose name collides with an **implicit-prelude |
+| `W-UNREACHABLE-ALT` | live | an alternative of an or-pattern that earlier arms or alternatives already cover (warning) |
 | `W-UNREACHABLE-ARM` | live | **unreachable match arm** (warning) |
 | `T-NO-IMPL-NAMED` | retired | never minted; the doc listed it as live |
 | `T-ROW-KIND-MISMATCH` | retired | never minted; the doc listed it as live |
@@ -542,6 +543,7 @@ kebab-case; never renumber (append only).
 | `R-AS-PATTERN-MISPLACED` | `AsPatternMisplaced` |
 | `R-OR-PATTERN-BINDERS` | `OrPatternBinders` — every alternative of an or-pattern must bind the same names. When an alternative is a bare lowercase identifier (`n \| otherwise => ...`), the message adds the steer that a match-arm guard uses `if`, not `\|` |
 | `R-OR-PATTERN-MISPLACED` | `OrPatternMisplaced` |
+| `T-OR-PATTERN-BINDER-TYPES` | every alternative of an or-pattern must bind each name at one type; the message names both alternatives and their types |
 | `R-NONREC-VALUE-LET` | `NonRecursiveValueLet` |
 | `R-DUPLICATE-BINDING` | `DuplicateBinding` |
 | `R-DUP-BINDING` | `DuplicateValueBinding` |
@@ -571,6 +573,7 @@ kebab-case; never renumber (append only).
 | Code | Source |
 |---|---|
 | `W-NONEXHAUSTIVE` | non-exhaustive `match` (typecheck `matchWarnings`) |
+| `W-UNREACHABLE-ALT` | an alternative of an or-pattern arm already covered by an earlier unguarded arm or an earlier alternative of the same arm (typecheck `matchWarnings`; `checkMatchRedundant`). Reported only when the arm as a whole is reachable; top-level alternatives only |
 | `W-UNREACHABLE-ARM` | unreachable/redundant `match` arm — pattern already covered by an earlier unguarded arm (typecheck `matchWarnings`; `checkMatchRedundant`) |
 | `W-GUARD-INEXHAUSTIVE` | guards may not be exhaustive (exhaust) |
 | `W-NONEXHAUSTIVE-CLAUSES` | non-exhaustive clauses of a multi-clause function — a constructor is not covered by any clause (exhaust; the function-clause analog of `W-NONEXHAUSTIVE`) |
