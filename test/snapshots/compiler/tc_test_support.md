@@ -41,7 +41,7 @@ import frontend.ast.{
 import types.effect_rows.{pureRow}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
-import support.ordmap.{omEmpty, omInsert, omLookup}
+import support.ordmap.{omEmpty, omInsert}
 import types.publish.{tcCode, tcMsg}
 import types.tc_decls.{kindIsDeclared, registerData}
 import types.tc_scope.{insertRecordPop}
@@ -449,7 +449,7 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "effect_rows") ((mem "pureRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
@@ -572,7 +572,7 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "effect_rows") ((mem "pureRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
