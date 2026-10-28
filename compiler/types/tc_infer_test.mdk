@@ -432,6 +432,35 @@ test "an arm with a guard does not cover its constructor" = expectAll [
     [],
 ]
 
+test "an or-pattern arm covers its alternatives, a guarded one covers none, and a covered alternative warns" = expectAll
+  [
+    checksOf [Arm (POr [PCon "Ta" [], PCon "Tb" []]) [] (ELit LUnit)] [],
+    checksOf
+      [
+        Arm
+          (POr [PCon "Ta" [], PCon "Tb" []])
+          [GBool (ELit (LBool True))]
+          (ELit LUnit),
+      ]
+      ["W-NONEXHAUSTIVE"],
+    checksOf
+      [
+        Arm (POr [PCon "Ta" [], PCon "Ta" []]) [] (ELit LUnit),
+        armOf "Tb",
+      ]
+      ["W-UNREACHABLE-ALT"],
+    checksOf
+      [armOf "Ta", Arm (POr [PCon "Ta" [], PCon "Tb" []]) [] (ELit LUnit)]
+      ["W-UNREACHABLE-ALT"],
+    checksOf
+      [
+        armOf "Ta",
+        armOf "Tb",
+        Arm (POr [PCon "Ta" [], PCon "Tb" []]) [] (ELit LUnit),
+      ]
+      ["W-UNREACHABLE-ARM"],
+  ]
+
 test "a refutable binding pattern warns in the words of a binding, not of a match" =
   let m = scopedWith shapes
   let _ = envWithData m shapes

@@ -33,6 +33,7 @@ clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
 composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
 consOp : DynCtx -> Mono -> Mono -> Mono
+deadAltIndexes : ModuleCtx -> Option TabKey -> List (List Pat) -> List (List Pat) -> Int -> List Pat -> List Int
 declareQuantified : ModuleCtx -> Scheme -> Unit
 declareRigidVars : ModuleCtx -> List String -> Unit
 derefOp : DynCtx -> Mono -> Mono
@@ -154,6 +155,8 @@ unboundVarFresh : ModuleCtx -> String -> Mono
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
+unreachableAltIndexes : ModuleCtx -> Option TabKey -> List (List Pat) -> List (List Pat) -> Int -> List Pat -> List Int
 valueSpanLoc : Expr -> Option Loc
+warnUnreachableAlts : ModuleCtx -> Option TabKey -> List (List Pat) -> Pat -> Pat -> Expr -> Unit
 warnedAt : Option Loc -> TcDiag -> Bool
 wideFitsI64 : Int -> Int -> Bool -> Bool

@@ -363,3 +363,32 @@ test "a binder with a minted id is queued for the runtime-type table and one wit
       (p => match p
         PendingBinder _ name _ arity signed => (name, arity, signed))
       m.mcGraph.graphRun.binderPending.value)
+
+-- ── or-patterns ───────────────────────────────────────────────────────────
+
+test "an or-pattern whose alternatives bind a name at one type is accepted, binding it once" =
+  let (m, env) = setup ()
+  let alts = POr [PCon "Wrap" [pvar "x"], PCon "Wrap" [pvar "x"]]
+  let (t, binds) = inferPat env alts
+  expectEqual ("Wrap a", ["x"], []) (ppMono t, map fst binds, codesOf m)
+
+-- `Pair x _` and `Pair _ x` agree on the scrutinee, but bind `x` at Int and at Bool.
+test "an or-pattern whose alternatives bind a name at different types is rejected, naming both" =
+  let (m, env) = setup ()
+  let alts = POr [PCon "Pair" [pvar "x", PWild], PCon "Pair" [PWild, pvar "x"]]
+  let _ = inferPat env alts
+  expectEqual ["T-TYPE-MISMATCH", "T-OR-PATTERN-BINDER-TYPES"] (codesOf m)
+
+test "an or-pattern's alternatives must agree on the scrutinee type" =
+  let (m, env) = setup ()
+  let _ = inferPat env (POr [PLit (LChar "a"), PLit (LBool True)])
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "an or-pattern opens existentials when any alternative's constructor does" =
+  let (_, env) = setup ()
+  expectEqual
+    (True, False)
+    (
+      patOpensExistentials env (POr [PWild, PCon "Packed" []]),
+      patOpensExistentials env (POr [PWild, PCon "Pair" [PWild, PWild]]),
+    )

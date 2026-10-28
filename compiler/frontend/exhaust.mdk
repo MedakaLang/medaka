@@ -378,9 +378,7 @@ desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng _ _ _) = PWild
--- Typecheck refuses an or-pattern before exhaustiveness is meaningful; a wildcard
--- keeps this total and warning-free until exhaustiveness reads alternatives.
-desugarPat _ (POr _) = PWild
+desugarPat oracle (POr alts) = POr (map (desugarPat oracle) alts)
 
 desugarRecPat : Oracle -> String -> List RecPatField -> Pat
 desugarRecPat oracle name fields = match oGetCtorFields oracle name
@@ -532,7 +530,28 @@ export
 useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_ :: _) [] = False
-useful oracle col0 pmat (h :: restQ) = usefulHead oracle col0 pmat h restQ
+useful oracle col0 pmat (h :: restQ) =
+  usefulHead oracle col0 (expandOrHeads pmat) h restQ
+
+-- A row whose head is an or-pattern stands for one row per alternative.  Expanding
+-- at the head, where the column is being decided, keeps the matrix at its source
+-- size until a recursion step reaches the or-pattern.  An alternative may itself
+-- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
+expandOrHeads : List (List Pat) -> List (List Pat)
+expandOrHeads pmat
+  | anyOrHead pmat = expandOrRows pmat
+  | otherwise = pmat
+
+anyOrHead : List (List Pat) -> Bool
+anyOrHead [] = False
+anyOrHead (((POr _) :: _) :: _) = True
+anyOrHead (_ :: rest) = anyOrHead rest
+
+expandOrRows : List (List Pat) -> List (List Pat)
+expandOrRows [] = []
+expandOrRows (((POr alts) :: tl) :: rows) =
+  expandOrRows (map (:: tl) alts ++ rows)
+expandOrRows (row :: rows) = row :: expandOrRows rows
 
 usefulHead : Oracle ->
   Option TabKey ->
@@ -545,6 +564,8 @@ usefulHead oracle _ pmat (PCon c args) restQ =
 usefulHead oracle _ pmat (PLit l) restQ =
   useful oracle None (specializeLit l pmat) restQ
     || useful oracle None (defaultMatrix pmat) restQ
+usefulHead oracle col0 pmat (POr alts) restQ =
+  anyList (a => useful oracle col0 pmat (a :: restQ)) alts
 usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
 usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
@@ -673,6 +694,7 @@ patHasRange (PCons h t) = patHasRange h || patHasRange t
 patHasRange (PTuple ps) = anyList patHasRange ps
 patHasRange (PList ps) = anyList patHasRange ps
 patHasRange (PAs _ _ _ p) = patHasRange p
+patHasRange (POr ps) = anyList patHasRange ps
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
 patHasRange _ = False
 
@@ -698,7 +720,8 @@ usefulWitness : Oracle ->
   Option (List Pat)
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_ :: _) 0 = None
-usefulWitness oracle col0 pmat ncols =
+usefulWitness oracle col0 pmat0 ncols =
+  let pmat = expandOrHeads pmat0
   witnessWild oracle (columnCtors oracle col0 pmat) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by
@@ -807,6 +830,7 @@ isIrrefutablePat (PVar _ _ _) = True
 isIrrefutablePat PWild = True
 isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
 isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
+isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat _ = False
 

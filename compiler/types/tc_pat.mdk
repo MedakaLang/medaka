@@ -42,7 +42,9 @@ import types.tc_diag_text.{
 }
 import types.tc_state.{dynAtIfSome}
 import types.tc_env.{lookupCtor, lookupRecordByName}
-import types.tc_diag.{pushTypeError, pushTypeErrorAt, recordTypeError}
+import types.tc_diag.{
+  erredDuring, pushTypeError, pushTypeErrorAt, recordTypeError
+}
 import types.tc_unify.{
   bindFrom,
   enterLevel,
@@ -155,26 +157,47 @@ inferPat env (PList pats) = inferPatList env pats
 inferPat env (PAs x xloc bid p) = inferPatAs env x xloc bid p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
-inferPat env (POr alts) = inferOrPatRefused env alts
+inferPat env (POr alts) = inferOrPat env alts
 inferPat env _ = panic "typecheck: unsupported pattern"
 
--- Typecheck does not infer or-patterns yet: one located refusal per or-pattern.
--- The first alternative is still inferred, so its binders stay in scope and the
--- refusal does not cascade into unbound-variable errors.
-inferOrPatRefused : TcEnv -> List Pat -> (Mono, List (String, Scheme))
-inferOrPatRefused env alts =
-  recordTypeError
-    env.teDyn.dcModule
-    (TcDiag
-      TOrPatternUnsupported
-      1
-      env.teDyn.dcModule.mcLoc
-      "or-patterns are not supported by the typechecker yet"
-      (Some "write one match arm per alternative")
-      None)
-  match alts
-    [] => (freshVar env.teDyn.dcModule (), [])
-    first :: _ => inferPat env first
+-- An or-pattern matches the scrutinee through any alternative, so every alternative has
+-- the scrutinee's type and binds each name at one type.  The first alternative's binders
+-- are the or-pattern's; each later alternative's binder of the same name is unified with
+-- the first's.  A name binds one BinderId across alternatives (desugar.stampPat), so every
+-- alternative's site records under that id.
+inferOrPat : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferOrPat env [] = (freshVar env.teDyn.dcModule (), [])
+inferOrPat env (first :: rest) =
+  let fr = inferPat env first
+  inferOrAlts env fr 2 rest
+  fr
+
+inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
+inferOrAlts _ _ _ [] = ()
+inferOrAlts env fr k (alt :: rest) =
+  let ar = inferPat env alt
+  unifyIn env.teDyn (fst fr) (fst ar)
+  each (unifyOrBinder env k (snd ar)) (snd fr)
+  inferOrAlts env fr (k + 1) rest
+
+-- The mismatch is also reported by unification itself; this adds the diagnostic that
+-- names the two alternatives, which unification cannot.
+unifyOrBinder : TcEnv ->
+  Int ->
+  List (String, Scheme) ->
+  (String, Scheme) ->
+  Unit
+unifyOrBinder env k binds (name, Forall _ _ _ _ _ t1) =
+  match lookupAssoc name binds
+    None => ()
+    Some (Forall _ _ _ _ _ t2) =>
+      let (erred, _) =
+        erredDuring env.teDyn.dcModule (_ => unifyIn env.teDyn t1 t2)
+      if erred then
+        pushTypeError
+          env.teDyn.dcModule
+          TOrPatternBinderTypes
+          "the alternatives of an or-pattern must bind `\{name}` at one type, but alternative 1 binds it as \{ppMono (normalize t1)} and alternative \{intToString k} as \{ppMono (normalize t2)}"
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
 -- binds no variables
@@ -457,6 +480,7 @@ patOpensExistentials env (PList pats) = anyList (patOpensExistentials env) pats
 patOpensExistentials env (PCons h t) =
   patOpensExistentials env h || patOpensExistentials env t
 patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
+patOpensExistentials env (POr alts) = anyList (patOpensExistentials env) alts
 patOpensExistentials env _ = False
 
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
