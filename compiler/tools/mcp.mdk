@@ -2,7 +2,6 @@ import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
 import tools.snapshot_syntax.{
   parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
-import string.{StrCursor, startCursor, nextChar}
 import tools.syntax_queries.{symbolsFromRecovered}
 import tools.lsp_diagnostics.{diagnosticJsonOr}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
@@ -49,7 +48,7 @@ import json.{
 import string.{stripCR}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
-  clampSourcePositionToOffset
+  clampSourcePositionToOffset, sourceEndUtf16Position
 }
 import driver.diagnostics.{
   stdlibExportsReader,
@@ -841,17 +840,6 @@ regionPosition index off = match offsetToUtf16Position index off
   Some (line, col) => jObject [("line", JInt line), ("character", JInt col)]
   None => JNull
 
-sourceEnd : StrCursor -> Int -> Int -> Bool -> (Int, Int)
-sourceEnd cursor line col afterCR = match nextChar cursor
-  None => (line, col)
-  Some (c, next) =>
-    if c == '\r' then
-      sourceEnd next (line + 1) 0 True
-    else if c == '\n' then
-      sourceEnd next (if afterCR then line else line + 1) 0 False
-    else
-      sourceEnd next line (col + (if charCode c > 65535 then 2 else 1)) False
-
 symbolsResult : String -> String -> Json
 symbolsResult path src =
   let revision = SourceRevision (uriOfPath path) None 0 src
@@ -862,7 +850,7 @@ symbolsResult path src =
     Partial why => ("partial", JString (stopName why))
   let (regions, diagnostics) = match snapshotSyntaxSnapshot syntax
     None =>
-      let (line, col) = sourceEnd (startCursor src) 0 0 False
+      let (line, col) = sourceEndUtf16Position src
       (
         [
           jObject [

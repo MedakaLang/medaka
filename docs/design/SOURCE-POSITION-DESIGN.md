@@ -54,7 +54,9 @@ declarations, positions, and immutable cue lists without exposing the context
 or retaining its source. Syntax-only formatting entry points keep their
 existing acceptance rules; strict entry points continue to run prescans.
 
-The full `SourceIndex` remains the authority for UTF-16 protocol coordinates.
+The `support/source_index.mdk` module owns UTF-16 protocol coordinates. Its full
+`SourceIndex` serves indexed queries; `sourceEndUtf16Position` scans in constant
+auxiliary space for recovery admission rejection, before an index can be built.
 Parser position projection needs only codepoint line starts, so the existing
 line-start helpers move from the lexer into `support/source_index.mdk` and the
 lexer retains compatibility exports. The parser engine may use the shared

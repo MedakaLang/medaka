@@ -30,7 +30,7 @@ import test.{
 import fs.{fixtureFiles}
 import path.{stem}
 import json.{Json(..), jObject, jArray, stringify, parse, get, asString}
-import string.{split, endsWith, join, contains}
+import string.{split, endsWith, join, contains, repeat}
 import list.{reverse}
 
 corpus : <IO> String
@@ -934,3 +934,59 @@ barrierSymbolsWire dir =
 
 test "mcp symbols keep invalid regions as barriers" =
   withScratchDir barrierSymbolsWire
+
+budgetSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+budgetSymbolsWire dir =
+  let path = dir ++ "/budget.mdk"
+  let request = dir ++ "/budget.jsonl"
+  match (
+    writeOk path (repeat 8388608 "x" ++ "\r\n😀"),
+    writeOk
+      request
+      (coordinateCall 1 "medaka_symbols" (coordinateFile path) ++ "\n"),
+  )
+    (Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match parse out
+        Err _ => fail "invalid MCP response"
+        Ok obj => match get "result" obj
+          None => fail "missing MCP result"
+          Some result => match get "structuredContent" result
+            None => fail "missing metadata"
+            Some metadata => expectEach [
+              ("exit", expectEqual 0 code),
+              ("symbols", expectEqual (Some []) (outlineSymbols result)),
+              (
+                "completeness",
+                expectEqual
+                  (Some (JString "partial"))
+                  (get "completeness" metadata),
+              ),
+              (
+                "stop",
+                expectEqual
+                  (Some (JString "exhaustedBudget"))
+                  (get "stop" metadata),
+              ),
+              (
+                "region",
+                expectEqual
+                  (Some
+                    (jArray [
+                      jObject [
+                        ("start", symbolPos 0 0),
+                        ("end", symbolPos 1 2),
+                        ("reason", JString "recoveryBudget"),
+                      ],
+                    ]))
+                  (get "invalidRegions" metadata),
+              ),
+              (
+                "diagnostics",
+                expectEqual (Some (jArray [])) (get "diagnostics" metadata),
+              ),
+            ]
+    _ => fail "budget fixture write failed"
+
+test "mcp symbols budget endpoint uses UTF-16" =
+  withScratchDir budgetSymbolsWire

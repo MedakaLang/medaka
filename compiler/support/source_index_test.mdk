@@ -1,7 +1,7 @@
 import support.source_index.{
   lineStartsOf, lineStartIndex, offsetToLineColFast, indexSource,
   offsetToSourcePosition, sourcePositionToOffset, offsetToUtf16Position,
-  utf16PositionToOffset, clampSourcePositionToOffset
+  utf16PositionToOffset, clampSourcePositionToOffset, sourceEndUtf16Position
 }
 import test.{expectEach, expectEqual, expectNone, expectSome}
 
@@ -101,4 +101,13 @@ test "cheap line starts and scalar coordinates" = expectEach [
         offsetToLineColFast (lineStartsOf "😀x") 1,
       ),
   ),
+]
+
+test "constant-space UTF-16 source end" = expectEach [
+  ("empty EOF", expectEqual (0, 0) (sourceEndUtf16Position "")),
+  ("LF", expectEqual (1, 1) (sourceEndUtf16Position "a\nb")),
+  ("CRLF", expectEqual (1, 2) (sourceEndUtf16Position "a\r\n😀")),
+  ("lone CR", expectEqual (1, 1) (sourceEndUtf16Position "a\rb")),
+  ("newline EOF", expectEqual (1, 0) (sourceEndUtf16Position "a\n")),
+  ("astral EOF", expectEqual (0, 3) (sourceEndUtf16Position "a😀")),
 ]
