@@ -187,11 +187,13 @@ original prediction:
   `test/typecheck_compiler_source.sh`'s #1110 producer ratchet pins the set
   of tracked files carrying that mention by exact line text and filename —
   moving them would red the ratchet.
-- **`compiler/types/typecheck.mdk` → stayed in-file.** Every unit-test-shaped
-  site asserts a property of a private record type (`DeclEnvModule`/
-  `DataEnv`/`ClassEnv`/`CeRow`) built by a private constructor. A sibling
-  only sees exported names, and widening the compiler's central module's
-  surface for test access was out of scope for that slice.
+- **`compiler/types/typecheck.mdk` → split out.** When this corpus was first
+  disposed, its unit-test-shaped sites stayed in-file because they asserted
+  properties of private record types and widening the central module for test
+  access was out of scope. The Phase 4 split reversed that: each `tc_*` module
+  has a `tc_<name>_test.mdk` sibling, and `typecheck_test.mdk` holds only what
+  tests the entry. Put a new typechecker test in the sibling of the module that
+  owns the declaration (`compiler/types/ARCHITECTURE.md` names the owner).
 - **`compiler/types/route_key.mdk` → stayed in-file.** Its fixtures
   (`rkTyInt`/`rkTyBool`/`rkTyList`) are *also* pinned by the #1110 ratchet
   (by exact line text), and 9 of its 26 unit-test-shaped sites name
