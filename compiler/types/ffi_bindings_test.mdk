@@ -1,5 +1,6 @@
 -- The declaration rules over hand-built records, so each case states the
 -- binding list and the row the typechecker would pass in.
+import support.diag_codes.{codeText}
 import test.{expectAll, expectEqual}
 import frontend.ast.{
   EffAtomTy(..),
@@ -39,7 +40,7 @@ decl name binds = ExternDecl {
 
 codes : Bool -> ExternDecl -> Option (List EffAtomTy) -> List String
 codes catalog d row =
-  map ((FfiDiag code _ _) => code) (ffiDeclarationDiags catalog d row)
+  map ((FfiDiag code _ _) => codeText code) (ffiDeclarationDiags catalog d row)
 
 test "no clause binds c under the Medaka name, and never js" = expectAll [
   expectEqual

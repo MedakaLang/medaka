@@ -2,6 +2,7 @@ frontend.ast
 frontend.exhaust
 frontend.resolve
 frontend.visibility
+support.diag_codes
 support.opcount
 support.ordmap
 support.path

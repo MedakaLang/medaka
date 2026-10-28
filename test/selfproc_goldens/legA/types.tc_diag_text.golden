@@ -59,6 +59,7 @@ discardedValueMsg : String -> String
 doBindArgHint : String -> String
 doBindArgMsg : String -> String
 doRequiresMonadMsg : String
+dropAmbiguity : List TcDiag -> List TcDiag
 dropRenameSuffixes : List String -> String
 effVarLaunderMsg : String -> String -> List Atom -> String
 effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
@@ -134,7 +135,9 @@ patternDomainMsg : String -> String -> String
 patternIndexMsg : Authority -> String
 phantomExportMsg : String -> String -> String -> String
 pinsTyvarMsg : String -> Ty -> List String -> String
-prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
+prependConflict : Option String -> List TcDiag -> List TcDiag
+prependDiagOpt : DiagCode -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
+prependIncomparable : Option String -> List TcDiag -> List TcDiag
 qualifiedIfaceLabel : IfaceRef -> String
 qualifierBinderTypeMsg : String -> String -> String
 quotedNames : List String -> String

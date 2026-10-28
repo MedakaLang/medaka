@@ -23,6 +23,7 @@
 -- `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`,
 -- `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   Kind(..),
   SigVars(..),
@@ -236,7 +237,7 @@ checkDomainAxes : ModuleCtx ->
 checkDomainAxes mctx loc l (Some "Product") [] =
   pushTypeErrorAt
     mctx
-    "T-EFFECT-PARAM"
+    TEffectParam
     loc
     (effectParamMsg
       l
@@ -246,7 +247,7 @@ checkDomainAxes mctx loc l (Some "Product") axes =
     (_ name =>
       pushTypeErrorAt
         mctx
-        "T-EFFECT-PARAM"
+        TEffectParam
         loc
         (effectParamMsg l "axis `\{name}` of `\{l}` is declared twice"))
     ()
@@ -258,7 +259,7 @@ checkDomainAxes mctx loc l (Some "Product") axes =
       other =>
         pushTypeErrorAt
           mctx
-          "T-EFFECT-PARAM"
+          TEffectParam
           loc
           (effectParamMsg
             l
@@ -269,7 +270,7 @@ checkDomainAxes mctx _ _ _ [] = ()
 checkDomainAxes mctx loc l _ _ =
   pushTypeErrorAt
     mctx
-    "T-EFFECT-PARAM"
+    TEffectParam
     loc
     (effectParamMsg l "only a `Product` label declares axes")
 
@@ -551,7 +552,7 @@ checkAliasPatternSlots mctx params rhs =
         if contains p slots then
           pushTypeErrorOncePerSite
             mctx
-            "T-AUTHORITY-PATTERN"
+            TAuthorityPattern
             loc
             (ordinaryInPatternSlotMsg p l)
       _ => ())
@@ -577,14 +578,14 @@ checkAuthorityKindLabel mctx (KindAuthority l o pat loc) =
     PUnit =>
       pushTypeErrorOncePerSite
         mctx
-        "T-AUTHORITY-KIND"
+        TAuthorityKind
         loc
         (authorityAtomicLabelMsg l)
     top =>
       if pat && not (domainHasPatterns top) then
         pushTypeErrorOncePerSite
           mctx
-          "T-AUTHORITY-PATTERN"
+          TAuthorityPattern
           loc
           (patternDomainMsg ("Authority " ++ l ++ "*") l)
 checkAuthorityKindLabel mctx (KindArrow a b) =
@@ -616,7 +617,7 @@ checkPhantomAuthorityExport mctx VisPublic tyName (p :: ps) variants =
       else
         pushTypeErrorOnceAt
           mctx
-          "T-AUTHORITY-PHANTOM-EXPORT"
+          TAuthorityPhantomExport
           (firstTyLocList tys)
           (phantomExportMsg tyName (variantName v) p))
     ()
@@ -717,41 +718,41 @@ checkHeadKindsGo mctx name rowNames fieldTys (p :: ps) (a :: anns) =
       if contains p rowNames then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (unannotatedRowParamMsg name p)
     Some KindEffect =>
       if anyList (tyVarTypeOcc mctx p) fieldTys then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (effectParamAsTypeMsg name p)
     Some (k@(KindArrow _ _)) =>
       if kindAnnHasEffect k then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (effectArrowOnDataHeadMsg name p k)
     Some KindType =>
       if contains p rowNames then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (typeParamAsRowMsg name p)
     Some (KindAuthority _ _ _ _) =>
       if contains p rowNames then
         pushTypeErrorOnceAt
           mctx
-          "T-AUTHORITY-KIND"
+          TAuthorityKind
           loc
           (authorityParamAsRowMsg name p)
       else if anyList (tyVarTypeOcc mctx p) fieldTys then
         pushTypeErrorOnceAt
           mctx
-          "T-AUTHORITY-KIND"
+          TAuthorityKind
           loc
           (authorityParamAsTypeMsg name p)
   checkHeadKindsGo mctx name rowNames fieldTys ps anns
@@ -807,26 +808,26 @@ checkIfaceHeadKinds mctx name (p :: ps) (a :: anns) methods =
         && anyRowDeclaredType inferred want then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (ifaceSlotDeclaredTypeMsg name p k)
     Some KindEffect =>
       pushTypeErrorOnceAt
         mctx
-        "T-EFFECT-KIND-MISMATCH"
+        TEffectKindMismatch
         loc
         (ifaceParamEffectKindMsg name p)
     Some (KindAuthority _ _ _ _) =>
       pushTypeErrorOnceAt
         mctx
-        "T-AUTHORITY-KIND"
+        TAuthorityKind
         loc
         (ifaceParamAuthorityKindMsg name p)
     _ =>
       if anyKRow inferred then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           (unannotatedGradedParamMsg name p inferred)
   checkIfaceHeadKinds mctx name ps anns methods
@@ -868,7 +869,7 @@ checkSuperKinds mctx prog name typarams anns methods ((Super { superHead = sh, s
             (zipKinds subKinds superKinds)) then
         pushTypeErrorOnceAt
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           (firstIfaceMethodLoc methods)
           (requiresKindMsg name sh)
     None => ()
@@ -959,7 +960,7 @@ checkWrittenElementCap mctx (a :: rest) =
     Some why =>
       pushTypeError
         (mctxAtIfSome a.eatLoc mctx)
-        "T-EFFECT-PARAM"
+        TEffectParam
         (effectParamMsg a.eatLabel why)
     None => ()
   checkWrittenElementCap mctx others
@@ -982,7 +983,7 @@ writtenElement top a = match a.eatParam
 checkOneEffectParam : ModuleCtx -> String -> Param -> EffParamTy -> Unit
 checkOneEffectParam mctx l top p =
   fold
-    (_ m => pushTypeError mctx "T-EFFECT-PARAM" (effectParamMsg l m))
+    (_ m => pushTypeError mctx TEffectParam (effectParamMsg l m))
     ()
     (effectParamProblems l top p)
 
@@ -997,7 +998,7 @@ checkAuthorityBinder mctx n a rest =
       if isStringTy a then
         ()
       else
-        pushTypeError mctx "T-AUTHORITY-BINDER" (binderTypeMsg n (ppTy a))
+        pushTypeError mctx TAuthorityBinder (binderTypeMsg n (ppTy a))
 
 -- A written binder domain, `(n : String @L)`, names a label whose domain has
 -- elements, for a binder of a type the domain can abstract.
@@ -1010,16 +1011,16 @@ checkBinderDomain outer n a (Some l) =
     PUnit =>
       pushTypeError
         mctx
-        "T-EFFECT-PARAM"
+        TEffectParam
         (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
     top =>
       if l.eatPattern && not (domainHasPatterns top) then
         pushTypeError
           mctx
-          "T-AUTHORITY-PATTERN"
+          TAuthorityPattern
           (patternDomainMsg ("@" ++ l.eatLabel ++ "*") l.eatLabel)
   else
-    pushTypeError mctx "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
+    pushTypeError mctx TAuthorityBinder (binderDomainTypeMsg n (ppTy a))
 
 isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
@@ -1056,7 +1057,7 @@ reportBinderDomains mctx ty uses =
         uses then
         pushTypeErrorAt
           mctx
-          "T-AUTHORITY-DOMAIN"
+          TAuthorityDomain
           (firstTyLoc ty)
           (binderDomainMsg (fst u)))
     ()
@@ -1099,9 +1100,8 @@ reportUnboundAuthorityNames mctx ty sv =
       else match lookupAssoc n named
         Some a =>
           if isStringTy a then
-            pushTypeErrorAt mctx "T-AUTHORITY-DOMAIN" loc (binderNoDomainMsg n)
-        None =>
-          pushTypeErrorAt mctx "T-AUTHORITY-KIND" loc (nameNotAuthorityMsg n))
+            pushTypeErrorAt mctx TAuthorityDomain loc (binderNoDomainMsg n)
+        None => pushTypeErrorAt mctx TAuthorityKind loc (nameNotAuthorityMsg n))
     ()
     (dedupLocated (authorityNamesWritten mctx.mcGraph ty) [])
   fold
@@ -1114,7 +1114,7 @@ reportUnboundAuthorityNames mctx ty sv =
             else
               pushTypeErrorAt
                 mctx
-                "T-AUTHORITY-BINDER"
+                TAuthorityBinder
                 (orElseLoc (snd q) (firstTyLoc ty))
                 (qualifierBinderTypeMsg n (ppTy a))
           None => ())
@@ -1137,7 +1137,7 @@ reportUnboundAuthorityNames mctx ty sv =
           else
             pushTypeErrorAt
               mctx
-              "T-AUTHORITY-DOMAIN"
+              TAuthorityDomain
               (orElseLoc (snd q) (firstTyLoc ty))
               (joinDomainMsg (fst q))
         [] => ())
@@ -1371,10 +1371,7 @@ fromAstTypeE mctx etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) =
     -- first-class type constructor (DESIGN §3/§9 fork 2), so it must be saturated.
     -- Reject with an arity error and keep the bare TCon so inference continues.
     Some (params, _) =>
-      pushTypeErrorOnce
-        mctx
-        "T-ALIAS-ARITY"
-        (aliasArityMsg n (listLen params) 0)
+      pushTypeErrorOnce mctx TAliasArity (aliasArityMsg n (listLen params) 0)
       tconFrom o n
     _ => tconFrom o n
 -- RIGID PRODUCER 1 of 2 (#1110).  A `TyVar` bound by the enclosing scheme
@@ -1386,16 +1383,12 @@ fromAstTypeE mctx etbl tvs (TyVar n) = match lookupAssoc n tvs
     -- An authority binder written where a TYPE goes (`List p` for an
     -- `Authority` binder `p`): a kind error, recovered as a rigid.
     if isSome (lookupAssoc n etbl.svAuths) then
-      pushTypeErrorOnce mctx "T-AUTHORITY-KIND" (authorityAsTypeMsg n)
+      pushTypeErrorOnce mctx TAuthorityKind (authorityAsTypeMsg n)
     TRigid n
 -- A written authority term reached an ordinary (`Type`) slot: only an
 -- `Authority`-kinded argument slot consumes one (`kindArgMono`).
 fromAstTypeE mctx _ _ (TyAuth p loc) =
-  pushTypeErrorOncePerSite
-    mctx
-    "T-AUTHORITY-KIND"
-    loc
-    (authorityTermAsTypeMsg p)
+  pushTypeErrorOncePerSite mctx TAuthorityKind loc (authorityTermAsTypeMsg p)
   tconBuiltin "Unit"
 fromAstTypeE mctx etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
@@ -1431,7 +1424,7 @@ fromAstTypeE mctx etbl tvs (TyQual t ps loc) =
 fromAstTypeE mctx etbl tvs (TyRow labels tail loc) =
   pushTypeErrorOncePerSite
     mctx
-    "T-EFFECT-KIND-MISMATCH"
+    TEffectKindMismatch
     loc
     (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
@@ -1486,7 +1479,7 @@ qualifyByTerms mctx etbl ps loc t =
           (_ why =>
             pushTypeErrorOncePerSite
               mctx
-              "T-EFFECT-PARAM"
+              TEffectParam
               loc
               "invalid authority in the qualifier `\{src}`: \{why}")
           ()
@@ -1626,7 +1619,7 @@ fromAstTypeApp mctx etbl tvs o n args =
     Some (params, _) =>
       pushTypeErrorOnce
         mctx
-        "T-ALIAS-ARITY"
+        TAliasArity
         (aliasArityMsg n (listLen params) (listLen args))
       appFallback mctx etbl tvs o n args
     _ => match lookupTab key mctx.mcCells.dataParamKindsRef.value
@@ -1844,12 +1837,11 @@ authArgOf mctx etbl tvs l pat (TyVar n) = match lookupAssoc n etbl.svAuths
     if pat && not (authvarIsPattern cell) then
       pushTypeErrorOnce
         mctx
-        "T-AUTHORITY-PATTERN"
+        TAuthorityPattern
         (ordinaryInPatternSlotMsg n (effLabelName l))
     AVar cell
   None =>
-    pushTypeErrorOnce mctx "T-AUTHORITY-KIND" (if isSome
-      (lookupAssoc n tvs) then
+    pushTypeErrorOnce mctx TAuthorityKind (if isSome (lookupAssoc n tvs) then
       typeVarAsAuthorityMsg n (effLabelName l)
     else
       nameNotAuthorityMsg n)
@@ -1862,7 +1854,7 @@ authArgOf mctx etbl tvs l pat (TyAuth ps loc) =
     (_ why =>
       pushTypeErrorOncePerSite
         mctx
-        "T-EFFECT-PARAM"
+        TEffectParam
         loc
         (effectParamMsg (effLabelName l) why))
     ()
@@ -1876,7 +1868,7 @@ authArgOf mctx etbl tvs l pat (TyAuth ps loc) =
         else
           pushTypeErrorOncePerSite
             mctx
-            "T-AUTHORITY-PATTERN"
+            TAuthorityPattern
             loc
             (exactInPatternSlotMsg
               (effLabelName l)
@@ -1890,13 +1882,13 @@ authArgOf mctx etbl _ l pat ty =
     Some n =>
       pushTypeErrorOncePerSite
         mctx
-        "T-AUTHORITY-PATTERN"
+        TAuthorityPattern
         (firstTyLoc ty)
         (ordinaryInPatternSlotMsg n (effLabelName l))
     None =>
       pushTypeErrorOncePerSite
         mctx
-        "T-AUTHORITY-KIND"
+        TAuthorityKind
         (firstTyLoc ty)
         (typeAsAuthorityMsg (ppTy ty) (effLabelName l ++ patternMark pat))
   authTop (dtopFor mctx.mcGraph l)
@@ -1960,7 +1952,7 @@ rowArgOf mctx etbl (TyRow labels tail _) =
 rowArgOf mctx _ ty =
   pushTypeErrorOncePerSite
     mctx
-    "T-EFFECT-KIND-MISMATCH"
+    TEffectKindMismatch
     (firstTyLoc ty)
     (typeInRowSlotMsg ty)
   pureRow
@@ -2014,7 +2006,7 @@ qualifiedArgumentKinds mctx loc scope (kinds :: restKinds) ((TyVar name) :: rest
       else
         pushTypeErrorOncePerSite
           mctx
-          "T-EFFECT-KIND-MISMATCH"
+          TEffectKindMismatch
           loc
           "signature parameter `\{name}` has incompatible required kinds `\{renderKindArrow previous}` and `\{renderKindArrow kinds}`; use separate parameters, or constraints requiring one kind"
       scope
@@ -2160,7 +2152,7 @@ reqTyToMono mctx sub (TyConstrained _ t) = reqTyToMono mctx sub t
 reqTyToMono mctx _ (TyRow labels tail loc) =
   pushTypeErrorOncePerSite
     mctx
-    "T-EFFECT-KIND-MISMATCH"
+    TEffectKindMismatch
     loc
     (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"

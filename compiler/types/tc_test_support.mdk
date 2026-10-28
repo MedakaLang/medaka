@@ -18,6 +18,7 @@
 -- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
 -- own `kindIsDeclared`, so the registration test it serves cannot disagree with it.
 
+import support.diag_codes.{codeText}
 import list.{drop, range, reverse, zip}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
@@ -127,7 +128,7 @@ inRootScope m =
 -- The codes of the diagnostics pushed to [m] so far, oldest first.
 export
 codesOf : ModuleCtx -> List String
-codesOf m = reverse (map tcCode (wAll m.mcCells.typeErrors))
+codesOf m = reverse (map (d => codeText (tcCode d)) (wAll m.mcCells.typeErrors))
 
 -- The messages of the diagnostics pushed to [m] so far, oldest first.
 export

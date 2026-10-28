@@ -5,6 +5,7 @@
 -- last rows drive whole prelude-free programs through `emitProgram` and
 -- `emitProgramRecord`, as `compiler/entries/wasm_emit_main.mdk` does.
 
+import support.diag_codes.{codeText}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
@@ -302,10 +303,10 @@ strictDefects src = match withLowered emitProgram src
 
 defectFacts : SymbolDefect -> List String
 defectFacts (d@(DuplicateDefinition (WasmFunc f) (SymbolOrigin b2 _ _ _) (SymbolOrigin b1 _ _ _))) =
-  [defectCode d, f] ++ (if b1 <= b2 then [b1, b2] else [b2, b1])
+  [codeText (defectCode d), f] ++ (if b1 <= b2 then [b1, b2] else [b2, b1])
 defectFacts (d@(UndeclaredType t user (SymbolOrigin b _ _ _))) =
-  [defectCode d, t, user, b]
-defectFacts d = [defectCode d]
+  [codeText (defectCode d), t, user, b]
+defectFacts d = [codeText (defectCode d)]
 
 -- `gname` spells `self` as `u__self`, a name the program can also define.
 test "two bindings the emitter spells alike are refused as one duplicate function" = expectAll

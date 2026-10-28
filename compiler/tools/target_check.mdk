@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import types.capability_manifest.{
   CapabilityManifest(..), ManifestRequest(..), ManifestLookup(..),
   InvocationProtocol(..), FrozenAtom(..), lookupManifest
@@ -64,16 +65,16 @@ import string.{trim}
 import list.{lookup}
 
 export
-targetCapabilityCode : String
-targetCapabilityCode = "T-TARGET-CAPABILITY"
+targetCapabilityCode : DiagCode
+targetCapabilityCode = TTargetCapability
 
 export
-targetNoBindingCode : String
-targetNoBindingCode = "T-TARGET-NO-BINDING"
+targetNoBindingCode : DiagCode
+targetNoBindingCode = TTargetNoBinding
 
 export
-targetNotProvidedCode : String
-targetNotProvidedCode = "T-TARGET-NOT-PROVIDED"
+targetNotProvidedCode : DiagCode
+targetNotProvidedCode = TTargetNotProvided
 
 -- The refusals of the program whose entry file is `file`; `[]` admits it.
 -- `paths` maps each module to its file, where a refused extern is located.  A

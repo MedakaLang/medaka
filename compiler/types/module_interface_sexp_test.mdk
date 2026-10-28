@@ -3,6 +3,7 @@
 -- `keyedDrive` with source keys, as the keyed callers do;
 -- each test uses module ids of its own, because the module cache is keyed by
 -- module id and lives for the process.
+import support.diag_codes.{DiagCode(..)}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectGreaterThan,
   expectSatisfies, expectTrue, fail, labelFail
@@ -155,14 +156,14 @@ withExtras mi = { mi |
     (
       "lib",
       TcDiag
-        "E1"
+        TTypeMismatch
         1
         (Some (Loc "lib.mdk" 1 2 3 4))
         "a \"quoted\" message\nover two lines"
         (Some "help")
         (Some (Loc "lib.mdk" 5 6 7 8, "fix")),
     ),
-    ("lib", TcDiag "W1" 2 None "plain" None None),
+    ("lib", TcDiag WNonexhaustive 2 None "plain" None None),
   ],
   miPatternAuth = [7, 8],
   miSerial = 41,
@@ -421,5 +422,47 @@ test "a module basis is mandatory and uses the shared view grammar" =
           expectEqual
             "malformed file/0/section.2/module-interface.25/invocation-view: invocation-view: expected 3 field(s)"
             (verdict (decodeModuleInterface (alter [SAtom "invocation-view"]))),
+        ),
+      ]
+
+-- [mi] written with its recorded diagnostic's code text replaced by [text] and
+-- the digest recomputed, so only the code is wrong.
+withCodeText : ModuleInterface -> String -> String
+withCodeText mi text =
+  let good = encodeModuleInterface (withExtras mi)
+  withDigestOf
+    good
+    (S.replace
+      "T-TYPE-MISMATCH"
+      text
+      (S.drop (optionOr 0 (S.indexOf "\n" good) + 1) good))
+
+-- The class of a reader's answer: accepted, or refused as a malformed file.
+verdictClass : Result InterfaceFault a -> String
+verdictClass (Ok _) = "ok"
+verdictClass (Err (Malformed _)) = "malformed"
+verdictClass (Err _) = "other"
+
+test "a reader accepts a live diagnostic code and refuses any other text" =
+  match recorded ()
+    None => fail "no interface recorded"
+    Some (mi, _) =>
+      let classOf text =
+        verdictClass (decodeModuleInterface (withCodeText mi text))
+      expectEach [
+        ("a live code", expectEqual "ok" (classOf "T-TYPE-MISMATCH")),
+        ("an unknown code", expectEqual "malformed" (classOf "T-NO-SUCH-CODE")),
+        ("a retired code", expectEqual "malformed" (classOf "T-UNSUPPORTED")),
+        (
+          "a runtime code",
+          expectEqual "malformed" (classOf "E-DISPATCH-NO-IMPL"),
+        ),
+        (
+          "a lint rule id",
+          expectEqual "malformed" (classOf "rule-unused-import"),
+        ),
+        (
+          "a wrong-case code",
+          expectEqual "malformed" (classOf "t-type-mismatch"),
         ),
       ]

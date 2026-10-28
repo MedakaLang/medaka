@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import driver.main_autoprint.{executedMainInputs}
 import support.source_index.{
@@ -147,7 +148,10 @@ import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
-export import driver.diagnostic_value.{Severity(..), Fix(..), Diag(..), mkDiag}
+export import driver.diagnostic_value.{
+  Severity(..), Fix(..), Diag(..), DiagId(..), mkDiag, diagIdText, diagIdKind,
+  diagIdIsSyntax
+}
 
 -- The edit for a did-you-mean at [loc].  A PrivateNameAccess carries the
 -- statement's span when the dotted import form (`import m.name`) has no member
@@ -181,7 +185,7 @@ export
 diagOfResError : ResError -> Diag
 diagOfResError e =
   let (help, fix) = resErrorHelpFix e
-  Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e) help fix
+  Diag SevError (Coded (resErrorCode e)) (ppResError e) (resErrorLoc e) help fix
 
 -- ── the stdlib import hint ──────────────────────────────────────────────────
 --
@@ -281,7 +285,7 @@ moduleExportsAmong names (mid, src) = match parseResult src
 export
 diagOfTypeError : TcDiag -> Diag
 diagOfTypeError (TcDiag code _ loc msg help fix) =
-  Diag SevError code msg loc help (map fixOfLocRepl fix)
+  Diag SevError (Coded code) msg loc help (map fixOfLocRepl fix)
 
 fixOfLocRepl : (Loc, String) -> Fix
 fixOfLocRepl (l, r) = Fix l r
@@ -336,60 +340,27 @@ fixOfLocRepl (l, r) = Fix l r
 -- three verbs still surface it rather than assume this stays fixed.
 diagOfTypeWarning : TcDiag -> Diag
 diagOfTypeWarning (TcDiag code _ loc w help _) =
-  Diag SevWarning code (stripWarnPrefix w) loc help None
+  Diag SevWarning (Coded code) (stripWarnPrefix w) loc help None
 
--- THE JSON `kind`, derived from the code prefix AND the severity TOGETHER.  Use
--- this, not bare `codeKind`, wherever the severity is not already a literal.
+-- THE JSON `kind`, from the code AND the severity together.  Use this, not bare
+-- `diagIdKind`, wherever the severity is not already a literal.
 --
--- `codeKind` alone reads only the CODE, so it renders a per-stage kind whenever the
--- code carries a per-stage prefix — no matter what severity the diagnostic actually
--- has.  That is harmless only while every stage-prefixed code is an error, and it
--- lies silently the moment one is not.  Two shapes, both reachable the instant a
--- warning is authored on the `matchWarnings` channel (see `diagOfTypeWarning`):
+-- `diagIdKind` reads only the code, so a demoted error that kept its `T-*` code
+-- (a warning authored on the `matchWarnings` channel, see `diagOfTypeWarning`)
+-- would render `"kind":"type"` beside `"severity":2`, and a consumer filtering
+-- the per-stage taxonomy would read it as a type error.  So a `SevWarning`
+-- diagnostic never renders a per-stage kind: it is `warning`.
 --
---   {"code":"T-…","kind":"type",  "severity":2}   a demoted error that KEPT its
---       `T-*` code — a consumer filtering the documented per-stage taxonomy drops
---       it, because it reads as a type ERROR.
---   {"code":"",    "kind":"error","severity":2}   a push site that forgot its code
---       (`""` is what a copy-pasted one produces) — self-contradictory JSON, exit 0,
---       and nothing anywhere reports it.
---
--- So: a `SevWarning` diagnostic may never render a per-STAGE kind.
---
--- ⚠️ That is NOT the same rule as "severity 2 implies kind `warning`", and the
--- difference is load-bearing: `lint` is a real severity-2 kind — `medaka lint --json`
--- ships `{"code":"rule-…","kind":"lint","severity":2}` through this very envelope —
--- so collapsing every severity-2 diagnostic to `warning` would REGRESS every lint
--- finding's kind.  Only the four stage kinds, and `codeKind`'s `otherwise = "error"`
--- fallback (which is not even a stage), collapse to `warning`.
---
--- The CODE is passed through verbatim and is never rewritten.  Normalising `T-FOO`
--- to `W-FOO` would invent an identity from a spelling — the exact L2 violation this
--- change exists to remove, committed silently — so an off-taxonomy code stays
--- visible as itself, now rendered beside `"kind":"warning"`.  The mismatch is then
--- legible to its author on their first run, instead of being confidently mislabelled
--- as a type error.
+-- That is not "severity 2 implies kind `warning`": `lint` is a real severity-2
+-- kind (`medaka lint --json` ships `{"kind":"lint","severity":2}` through this
+-- envelope), so lint stays `lint`.  The code text itself is passed through
+-- unchanged.
 export
-diagKind : Severity -> String -> String
-diagKind SevError code = codeKind code
+diagKind : Severity -> DiagId -> String
+diagKind SevError code = diagIdKind code
 diagKind SevWarning code
-  | codeKind code == "lint" = "lint"
+  | diagIdKind code == "lint" = "lint"
   | otherwise = "warning"
-
--- Derive the JSON `kind` from a code's per-stage prefix (DIAGNOSTIC-CODES-DESIGN
--- §2): L→lex, P→parse, R→resolve, T→type, W→warning.  An unrecognized prefix
--- falls back to "error".  ⚠️ Severity-blind by construction — prefer `diagKind`
--- above unless the severity at your call site is a literal 1.
-export
-codeKind : String -> String
-codeKind code
-  | startsWith "L-" code = "lex"
-  | startsWith "P-" code = "parse"
-  | startsWith "R-" code = "resolve"
-  | startsWith "T-" code = "type"
-  | startsWith "W-" code = "warning"
-  | startsWith "rule-" code = "lint"
-  | otherwise = "error"
 
 export
 ppSeverity : Severity -> String
@@ -1183,11 +1154,11 @@ undrivenReport = TcReport {
 -- if that impl is only needed on a rare path.  Naming it where it is written is
 -- the whole point.
 deriveErrToDiag : (String, Option Loc) -> Diag
-deriveErrToDiag (msg, loc) = mkDiag SevError "R-CANNOT-DERIVE" msg loc
+deriveErrToDiag (msg, loc) = mkDiag SevError RCannotDerive msg loc
 
-guardWarnToDiag : (String, Option Loc) -> Diag
-guardWarnToDiag (msg, loc) =
-  mkDiag SevWarning (exhaustWarnCode msg) (stripWarnPrefix msg) loc
+guardWarnToDiag : (DiagCode, String, Option Loc) -> Diag
+guardWarnToDiag (code, msg, loc) =
+  mkDiag SevWarning code (stripWarnPrefix msg) loc
 
 -- #1375 clause (b) / #1499.  An interface method whose name equals a PRELUDE
 -- standalone shadows it: under the adopted clause (a) the bare name denotes the
@@ -1207,7 +1178,7 @@ preludeShadowWarnToDiag : String -> (String, String, Option Loc) -> Diag
 preludeShadowWarnToDiag modName (_, mname, loc) =
   Diag
     SevWarning
-    "W-PRELUDE-METHOD-SHADOW"
+    (Coded WPreludeMethodShadow)
     (stringConcat [
       "interface method `",
       mname,
@@ -1237,7 +1208,7 @@ importShadowWarnToDiag : String -> (String, String, Option Ty, Ty, Loc) -> Diag
 importShadowWarnToDiag modName (name, iface, sty, mty, loc) =
   Diag
     SevWarning
-    "W-IMPORT-METHOD-SHADOW"
+    (Coded WImportMethodShadow)
     (stringConcat [
       "imported `",
       name,
@@ -1275,11 +1246,6 @@ importedSchemeText None = "no declared signature"
 moduleScopeText : String -> String
 moduleScopeText "" = "this module"
 moduleScopeText m = stringConcat ["module `", m, "`"]
-
-exhaustWarnCode : String -> String
-exhaustWarnCode msg
-  | startsWith "Warning: non-exhaustive clauses" msg = "W-NONEXHAUSTIVE-CLAUSES"
-  | otherwise = "W-GUARD-INEXHAUSTIVE"
 
 stripWarnPrefix : String -> String
 stripWarnPrefix s =
@@ -1637,16 +1603,16 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
 projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadMsg e)) = (
   None,
-  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+  appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
 -- A located cycle belongs to the importing module that closes it.
 projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e cpath (Some (_, loc)))) = (
   None,
-  appendStale staleRef [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])],
+  appendStale staleRef [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])],
 )
 projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e _ None)) = (
   None,
-  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+  appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
 projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
   let chainKey = chainKeyOf entry roots
@@ -2258,7 +2224,7 @@ keptDesugared old ((_, path, _) :: rest) = match loadedSourceOf path
 moduleDesugarCacheRef : Ref (OrdMap (List Decl))
 moduleDesugarCacheRef = Ref omEmpty
 
-diagCode : Diag -> String
+diagCode : Diag -> DiagId
 diagCode (Diag _ code _ _ _ _) = code
 
 -- The multi-module twin of `SurfaceAnalysis.resolveClean`: a module whose own
@@ -2270,7 +2236,7 @@ diagCode (Diag _ code _ _ _ _) = code
 -- (`resolveBlockedMods`); a caller that already typechecked has its report gated.
 resolveRejected : List Diag -> Bool
 resolveRejected =
-  anyList (d => diagIsError d && codeKind (diagCode d) == "resolve")
+  anyList (d => diagIsError d && diagIdKind (diagCode d) == "resolve")
 
 -- The modules a resolve rejection withholds from typecheck: each module whose
 -- own bucket is `resolveRejected`, and each module importing a blocked one,
@@ -2685,7 +2651,7 @@ export
 cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
-    ([("code", JString code)]
+    ([("code", JString (diagIdText code))]
       ++ optField "fix" (map (cjFixJsonWithSource src) fix)
       ++ optField "help" (map JString help)
       ++ [
@@ -2903,8 +2869,8 @@ diagIsWarn d = not (diagIsError d)
 -- So: exactly the demoted code, nothing else.  Widening this predicate is a decision
 -- about which verb is the diagnostic one, not a cleanup.
 export
-coherenceWarnCode : String
-coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
+coherenceWarnCode : DiagCode
+coherenceWarnCode = WIncomparableImpls
 
 -- These three warning codes are on the allowlist because they satisfy three
 -- measurements: (1) oracle properties and false-positive rates are bounded,
@@ -2917,16 +2883,16 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- properties above are properties of the module graph and do not reach a
 -- single-file program.
 export
-runBuildWarnCodes : List String
+runBuildWarnCodes : List DiagCode
 runBuildWarnCodes = [
   coherenceWarnCode,
-  "W-PRELUDE-METHOD-SHADOW",
-  "W-IMPORT-METHOD-SHADOW",
+  WPreludeMethodShadow,
+  WImportMethodShadow,
 ]
 
 export
 isCoherenceWarn : Diag -> Bool
-isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes
+isCoherenceWarn (Diag SevWarning (Coded c) _ _ _ _) = elem c runBuildWarnCodes
 isCoherenceWarn _ = False
 
 -- The exit code the emit driver uses when what it wrote to stderr is a LOCATED
@@ -2960,7 +2926,7 @@ symbolDefectDiag file d =
 
 -- [code] and [message] at [origin], in [file] when the origin names no file:
 -- the file reported in, and the diagnostic
-physicalDiag : String -> SymbolOrigin -> String -> String -> (String, Diag)
+physicalDiag : String -> SymbolOrigin -> DiagCode -> String -> (String, Diag)
 physicalDiag file origin code message =
   let (f, line, col) = originPosition origin
   let at = if f == "" then file else f
@@ -3146,7 +3112,7 @@ export
 mainArityWarning : List Decl -> Option Diag
 mainArityWarning decls = match findMainFunDef decls
   Some (_ :: _, body) =>
-    Some (mkDiag SevWarning "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
+    Some (mkDiag SevWarning WMainShape mainArityMsg (mainBodyLoc body))
   _ => None
 
 -- `check`'s main-shape report for the entry module.  The three leading
@@ -3169,7 +3135,7 @@ export
 mainEntryError : List Decl -> Option Diag
 mainEntryError decls = match findMainFunDef decls
   Some (_ :: _, body) =>
-    Some (mkDiag SevError "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
+    Some (mkDiag SevError WMainShape mainArityMsg (mainBodyLoc body))
   Some ([], _) => None
   None => Some (missingMainDiag decls)
 
@@ -3184,10 +3150,10 @@ missingMainDiag decls = match importedMainMember decls
   Some (modName, m) =>
     mkDiag
       SevError
-      "W-MAIN-MISSING"
+      WMainMissing
       (mainImportedMsg modName m)
       (Some (useMemberLoc m))
-  None => mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None
+  None => mkDiag SevError WMainMissing mainMissingMsg None
 
 mainImportedMsg : String -> UseMember -> String
 mainImportedMsg modName (UseMember origin _ _ alias) =
@@ -3448,13 +3414,17 @@ checkJsonLoadErr _ _ _ (LoadParseFailed mpath msrc pe) =
 checkJsonLoadErr target src _ (LoadCycle cmsg cpath csite) = match csite
   Some (csrc, cloc) => (
     CjParts target [
-      (cpath, csrc, [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None]),
+      (
+        cpath,
+        csrc,
+        [Diag SevError (Coded RModuleLoad) cmsg (Some cloc) None None],
+      ),
     ],
     True,
   )
   None => (
     CjParts target [
-      (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
+      (target, src, [Diag SevError (Coded RModuleLoad) cmsg None None None]),
     ],
     True,
   )
@@ -3474,7 +3444,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
         Some _ => availableModulesHint stdlibDir)
   (
     CjParts target [
-      (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
+      (target, src, [Diag SevError (Coded RModuleLoad) jmsg mloc mhelp None]),
     ],
     True,
   )

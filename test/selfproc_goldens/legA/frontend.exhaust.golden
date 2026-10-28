@@ -9,13 +9,13 @@ builtinCtorType : List (String, TabKey)
 builtinTypeCtors : List (TabKey, List String)
 charsPrefixTuple : Array Char -> Bool
 charsSuffixUnder : Array Char -> Int -> Bool
-checkGroup : Oracle -> String -> List (List Pat, Expr) -> List (String, Option Loc)
-checkGroupClauses : Oracle -> String -> List (List Pat, Expr) -> List (String, Option Loc)
-checkGroupCovered : Oracle -> List (List Pat, Expr) -> List (String, Option Loc)
+checkGroup : Oracle -> String -> List (List Pat, Expr) -> List (DiagCode, String, Option Loc)
+checkGroupClauses : Oracle -> String -> List (List Pat, Expr) -> List (DiagCode, String, Option Loc)
+checkGroupCovered : Oracle -> List (List Pat, Expr) -> List (DiagCode, String, Option Loc)
 checkGuardExhaustiveness : List Decl -> List String
-checkGuardExhaustivenessWith : List Decl -> List Decl -> List (String, Option Loc)
-checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
-checkNamedGroup : Oracle -> (String, List (List Pat, Expr)) -> List (String, Option Loc)
+checkGuardExhaustivenessWith : List Decl -> List Decl -> List (DiagCode, String, Option Loc)
+checkLetBind : Oracle -> LetBind -> List (DiagCode, String, Option Loc)
+checkNamedGroup : Oracle -> (String, List (List Pat, Expr)) -> List (DiagCode, String, Option Loc)
 clauseBodyLoc : Expr -> Option Loc
 clauseGuardsTotal : (List Pat, Expr) -> Bool
 clauseIsGuardedPartial : (List Pat, Expr) -> Bool
@@ -29,7 +29,7 @@ dataCtorFields : Decl -> List (String, List String)
 dataCtorType : Decl -> List (String, TabKey)
 dataSiblings : Decl -> List (String, List String)
 dataTypeCtors : Decl -> List (TabKey, List String)
-declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
+declBodyWarnings : Oracle -> Decl -> List (DiagCode, String, Option Loc)
 defRow : List Pat -> Option (List Pat)
 defaultMatrix : List (List Pat) -> List (List Pat)
 desugarPat : Oracle -> Pat -> Pat
@@ -61,14 +61,14 @@ headBucketRow : List Pat -> Map String (List (List Pat)) -> Map String (List (Li
 headBuckets : List (List Pat) -> Map String (List (List Pat)) -> Map String (List (List Pat))
 headCtors : List (List Pat) -> List String
 ifaceDefaultClauses : List IfaceMethod -> List (String, (List Pat, Expr))
-ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
+ifaceMethodWarnings : Oracle -> IfaceMethod -> List (DiagCode, String, Option Loc)
 implClauses : List ImplMethod -> List (String, (List Pat, Expr))
-implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
+implMethodBodyWarnings : Oracle -> ImplMethod -> List (DiagCode, String, Option Loc)
 interpBinds : InterpPart -> List LetBind
 isDigitC : Char -> Bool
 isEmptyArgs : List Pat -> Bool
 isIrrefutablePat : Pat -> Bool
-letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
+letGroupWarnings : Oracle -> Expr -> List (DiagCode, String, Option Loc)
 listConsCtor : String
 listNilCtor : String
 litEq : Lit -> Lit -> Bool
@@ -123,6 +123,7 @@ usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (Lis
 variantArity : Variant -> (String, Int)
 variantCtorFields : Variant -> List (String, List String)
 variantCtorType : TabKey -> Variant -> (String, TabKey)
+warningMessage : (DiagCode, String, Option Loc) -> String
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessPrepend : Pat -> Option (List Pat) -> Option (List Pat)
 witnessSig : Oracle -> List String -> List (List Pat) -> Int -> Option (List Pat)

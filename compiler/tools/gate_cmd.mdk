@@ -2698,7 +2698,8 @@ blastHit (p :: ps) path = if globMatch p path then Some p else blastHit ps path
    `.github/workflows/ci.yml`'s `detect` job applies (its `nondoc` case), kept
    in the same order for the same reason its own comment gives: `test/**` is
    NEVER prose (it holds functional goldens), while `docs/spec/SYNTAX.md`,
-   `docs/guide/*.md` and `docs/advanced/*.md` are executable documentation.
+   `docs/guide/*.md`, `docs/advanced/*.md` and
+   `compiler/DIAGNOSTIC-CODES-DESIGN.md` are executable documentation.
 
    > isProsePath "docs/ops/CI-ARCHITECTURE.md"
    True
@@ -2719,6 +2720,7 @@ isProsePath : String -> Bool
 isProsePath p
   | startsWith "test/" p = False
   | p == "docs/spec/SYNTAX.md" = False
+  | p == "compiler/DIAGNOSTIC-CODES-DESIGN.md" = False
   | startsWith "docs/guide/" p && endsWith ".md" p = False
   | startsWith "docs/advanced/" p && endsWith ".md" p = False
   | startsWith "docs/" p = True

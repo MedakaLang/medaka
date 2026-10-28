@@ -1,5 +1,5 @@
 # META
-source_lines=1188
+source_lines=1206
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -15,6 +15,7 @@ stages=DESUGAR,MARK
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
+import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   variantName,
@@ -859,7 +860,7 @@ guardWarning = "Warning: guards may not be exhaustive"
 checkGroup : Oracle ->
   String ->
   List (List Pat, Expr) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGroup oracle name clauses
   -- A group with a *guarded partial* clause → the guard may fall through; keep
   -- the flat "guards may not be exhaustive" wording (guard gaps aren't named by a
@@ -869,7 +870,9 @@ checkGroup oracle name clauses
   -- cover every constructor, naming the missing case like the `match` path.
   | otherwise = checkGroupClauses oracle name clauses
 
-checkGroupCovered : Oracle -> List (List Pat, Expr) -> List (String, Option Loc)
+checkGroupCovered : Oracle ->
+  List (List Pat, Expr) ->
+  List (DiagCode, String, Option Loc)
 checkGroupCovered oracle clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
@@ -879,7 +882,7 @@ checkGroupCovered oracle clauses =
     (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
     rows
     query then
-    [(guardWarning, groupLoc clauses)]
+    [(WGuardInexhaustive, guardWarning, groupLoc clauses)]
   else
     []
 
@@ -890,7 +893,7 @@ checkGroupCovered oracle clauses =
 checkGroupClauses : Oracle ->
   String ->
   List (List Pat, Expr) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGroupClauses oracle name clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
@@ -900,7 +903,13 @@ checkGroupClauses oracle name clauses =
     (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
     rows
     query then
-    [(nonExhaustiveClausesMsg oracle name arity rows, groupLoc clauses)]
+    [
+      (
+        WNonexhaustiveClauses,
+        nonExhaustiveClausesMsg oracle name arity rows,
+        groupLoc clauses,
+      ),
+    ]
   else
     []
 
@@ -1019,11 +1028,11 @@ firstSeenNames ((n, _) :: rest) seen
   | otherwise = n :: firstSeenNames rest (omInsert n () seen)
 
 -- ── collect where-group (ELetGroup) clause groups from an expr tree ────────
-letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
+letGroupWarnings : Oracle -> Expr -> List (DiagCode, String, Option Loc)
 letGroupWarnings oracle body =
   flatMap (checkLetBind oracle) (collectLetBinds body)
 
-checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
+checkLetBind : Oracle -> LetBind -> List (DiagCode, String, Option Loc)
 checkLetBind oracle (LetBind name funclauses _ _) =
   checkGroup oracle name (map funClauseToClause funclauses)
 
@@ -1123,7 +1132,7 @@ interpBinds (InterpExpr e) = collectLetBinds e
 export
 checkGuardExhaustivenessWith : List Decl ->
   List Decl ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
   let _ = stageBump "exhaust.guards"
   let oracle = buildOracle (checkDecls ++ oracleDecls)
@@ -1132,14 +1141,18 @@ checkGuardExhaustivenessWith oracleDecls checkDecls =
 
 checkNamedGroup : Oracle ->
   (String, List (List Pat, Expr)) ->
-  List (String, Option Loc)
+  List (DiagCode, String, Option Loc)
 checkNamedGroup oracle (name, clauses) = checkGroup oracle name clauses
 
 -- Back-compat: build the oracle from the checked decls only (the historical
 -- entry-only oracle) and drop the loc channel to a plain message list.
 export
 checkGuardExhaustiveness : List Decl -> List String
-checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
+checkGuardExhaustiveness prog =
+  map warningMessage (checkGuardExhaustivenessWith prog prog)
+
+warningMessage : (DiagCode, String, Option Loc) -> String
+warningMessage (_, msg, _) = msg
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
@@ -1147,7 +1160,7 @@ topFunDefClauses ((DFunDef _ n pats body _ _) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
 topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
-declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
+declBodyWarnings : Oracle -> Decl -> List (DiagCode, String, Option Loc)
 declBodyWarnings oracle (DFunDef _ _ _ body _ _) = letGroupWarnings oracle body
 declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
@@ -1171,11 +1184,15 @@ ifaceDefaultClauses ((IfaceMethod n _ (Some (MethodDefault pats body)) _) :: res
   (n, (pats, body)) :: ifaceDefaultClauses rest
 ifaceDefaultClauses (_ :: rest) = ifaceDefaultClauses rest
 
-implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
+implMethodBodyWarnings : Oracle ->
+  ImplMethod ->
+  List (DiagCode, String, Option Loc)
 implMethodBodyWarnings oracle (ImplMethod _ _ body) =
   letGroupWarnings oracle body
 
-ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
+ifaceMethodWarnings : Oracle ->
+  IfaceMethod ->
+  List (DiagCode, String, Option Loc)
 ifaceMethodWarnings _ (IfaceMethod _ _ None _) = []
 ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body)) _) =
   letGroupWarnings oracle body
@@ -1184,13 +1201,15 @@ ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body)) _) =
 export
 exhaustToLinesWith : List Decl -> List Decl -> String
 exhaustToLinesWith oracleDecls checkDecls =
-  joinNl (map fst (checkGuardExhaustivenessWith oracleDecls checkDecls))
+  joinNl
+    (map warningMessage (checkGuardExhaustivenessWith oracleDecls checkDecls))
 
 -- entry-only oracle (self-contained single file: no imports available)
 export
 exhaustToLines : List Decl -> String
 exhaustToLines prog = exhaustToLinesWith prog prog
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
@@ -1467,12 +1486,12 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "clausePats" ((PTuple (PVar "pats") PWild)) (EVar "pats"))
 (DTypeSig false "guardWarning" (TyCon "String"))
 (DFunDef false "guardWarning" () (ELit (LString "Warning: guards may not be exhaustive")))
-(DTypeSig false "checkGroup" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DTypeSig false "checkGroup" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
 (DFunDef false "checkGroup" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EIf (EApp (EApp (EVar "anyList") (EVar "clauseIsGuardedPartial")) (EVar "clauses")) (EApp (EApp (EVar "checkGroupCovered") (EVar "oracle")) (EVar "clauses")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "checkGroupClauses") (EVar "oracle")) (EVar "name")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "checkGroupCovered" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkGroupCovered" ((PVar "oracle") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "guardWarning") (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
-(DTypeSig false "checkGroupClauses" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
-(DFunDef false "checkGroupClauses" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "nonExhaustiveClausesMsg") (EVar "oracle")) (EVar "name")) (EVar "arity")) (EVar "rows")) (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
+(DTypeSig false "checkGroupCovered" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "checkGroupCovered" ((PVar "oracle") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "WGuardInexhaustive") (EVar "guardWarning") (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
+(DTypeSig false "checkGroupClauses" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DFunDef false "checkGroupClauses" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "WNonexhaustiveClauses") (EApp (EApp (EApp (EApp (EVar "nonExhaustiveClausesMsg") (EVar "oracle")) (EVar "name")) (EVar "arity")) (EVar "rows")) (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
 (DTypeSig false "nonExhaustiveClausesMsg" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "String"))))))
 (DFunDef false "nonExhaustiveClausesMsg" ((PVar "oracle") (PVar "name") (PVar "arity") (PVar "rows")) (EMatch (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (ELit (LInt 1))) (arm (PCon "Some" (PCons (PVar "w") PWild)) () (EBlock (DoLet false false (PVar "witnessStr") (EApp (EApp (EVar "renderClauseWitness") (EVar "arity")) (EVar "w"))) (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "add a `")) (EApp (EVar "display") (EVar "witnessStr"))) (ELit (LString "` clause")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive clauses of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: missing `"))) (EApp (EVar "display") (EVar "witnessStr"))) (ELit (LString "`; "))) (EApp (EVar "display") (EVar "hint"))) (ELit (LString "")))))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive clauses of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: not all cases are covered"))))))
 (DTypeSig false "renderClauseWitness" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyCon "String"))))
@@ -1510,9 +1529,9 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "firstSeenNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "firstSeenNames" ((PList) PWild) (EListLit))
 (DFunDef false "firstSeenNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "firstSeenNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "firstSeenNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "letGroupWarnings" ((PVar "oracle") (PVar "body")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkLetBind") (EVar "oracle"))) (EApp (EVar "collectLetBinds") (EVar "body"))))
-(DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses") PWild PWild)) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EVar "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
 (DTypeSig false "funClauseToClause" (TyFun (TyCon "FunClause") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))
 (DFunDef false "funClauseToClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
@@ -1569,17 +1588,19 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "interpBinds" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "interpBinds" ((PCon "InterpStr" PWild)) (EListLit))
 (DFunDef false "interpBinds" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.guards")))) (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
-(DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkNamedGroup" ((PVar "oracle") (PTuple (PVar "name") (PVar "clauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EVar "clauses")))
 (DTypeSig true "checkGuardExhaustiveness" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
+(DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "warningMessage")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
+(DTypeSig false "warningMessage" (TyFun (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "String")))
+(DFunDef false "warningMessage" ((PTuple PWild (PVar "msg") PWild)) (EVar "msg"))
 (DTypeSig false "topFunDefClauses" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "topFunDefClauses" ((PList)) (EListLit))
 (DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
 (DFunDef false "topFunDefClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "topFunDefClauses") (EVar "rest")))
-(DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "ifaceDefaultClauses") (EVar "methods")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods"))))
@@ -1593,16 +1614,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "ifaceDefaultClauses" ((PList)) (EListLit))
 (DFunDef false "ifaceDefaultClauses" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest"))))
 (DFunDef false "ifaceDefaultClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest")))
-(DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "implMethodBodyWarnings" ((PVar "oracle") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
-(DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "ifaceMethodWarnings" (PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "ifaceMethodWarnings" ((PVar "oracle") (PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))) PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DTypeSig true "exhaustToLinesWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "exhaustToLinesWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "checkDecls")))))
+(DFunDef false "exhaustToLinesWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "warningMessage")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "checkDecls")))))
 (DTypeSig true "exhaustToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "exhaustToLines" ((PVar "prog")) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "prog")) (EVar "prog")))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
@@ -1879,12 +1901,12 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "clausePats" ((PTuple (PVar "pats") PWild)) (EVar "pats"))
 (DTypeSig false "guardWarning" (TyCon "String"))
 (DFunDef false "guardWarning" () (ELit (LString "Warning: guards may not be exhaustive")))
-(DTypeSig false "checkGroup" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DTypeSig false "checkGroup" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
 (DFunDef false "checkGroup" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EIf (EApp (EApp (EVar "anyList") (EVar "clauseIsGuardedPartial")) (EVar "clauses")) (EApp (EApp (EVar "checkGroupCovered") (EVar "oracle")) (EVar "clauses")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "checkGroupClauses") (EVar "oracle")) (EVar "name")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "checkGroupCovered" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkGroupCovered" ((PVar "oracle") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "guardWarning") (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
-(DTypeSig false "checkGroupClauses" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
-(DFunDef false "checkGroupClauses" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "nonExhaustiveClausesMsg") (EVar "oracle")) (EVar "name")) (EVar "arity")) (EVar "rows")) (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
+(DTypeSig false "checkGroupCovered" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "checkGroupCovered" ((PVar "oracle") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "WGuardInexhaustive") (EVar "guardWarning") (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
+(DTypeSig false "checkGroupClauses" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DFunDef false "checkGroupClauses" ((PVar "oracle") (PVar "name") (PVar "clauses")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "groupArity") (EVar "clauses"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "totalClauseRows") (EVar "oracle")) (EVar "clauses"))) (DoLet false false (PVar "query") (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PTuple") (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (EVar "query")) (EListLit (ETuple (EVar "WNonexhaustiveClauses") (EApp (EApp (EApp (EApp (EVar "nonExhaustiveClausesMsg") (EVar "oracle")) (EVar "name")) (EVar "arity")) (EVar "rows")) (EApp (EVar "groupLoc") (EVar "clauses")))) (EListLit)))))
 (DTypeSig false "nonExhaustiveClausesMsg" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "String"))))))
 (DFunDef false "nonExhaustiveClausesMsg" ((PVar "oracle") (PVar "name") (PVar "arity") (PVar "rows")) (EMatch (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EApp (EVar "tupleCtorName") (EVar "arity"))))) (EVar "rows")) (ELit (LInt 1))) (arm (PCon "Some" (PCons (PVar "w") PWild)) () (EBlock (DoLet false false (PVar "witnessStr") (EApp (EApp (EVar "renderClauseWitness") (EVar "arity")) (EVar "w"))) (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "add a `")) (EApp (EMethodRef "display") (EVar "witnessStr"))) (ELit (LString "` clause")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive clauses of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: missing `"))) (EApp (EMethodRef "display") (EVar "witnessStr"))) (ELit (LString "`; "))) (EApp (EMethodRef "display") (EVar "hint"))) (ELit (LString "")))))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive clauses of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: not all cases are covered"))))))
 (DTypeSig false "renderClauseWitness" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyCon "String"))))
@@ -1922,9 +1944,9 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "firstSeenNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "firstSeenNames" ((PList) PWild) (EListLit))
 (DFunDef false "firstSeenNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "firstSeenNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "firstSeenNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "letGroupWarnings" ((PVar "oracle") (PVar "body")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkLetBind") (EVar "oracle"))) (EApp (EVar "collectLetBinds") (EVar "body"))))
-(DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses") PWild PWild)) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
 (DTypeSig false "funClauseToClause" (TyFun (TyCon "FunClause") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))
 (DFunDef false "funClauseToClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
@@ -1981,17 +2003,19 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "interpBinds" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "interpBinds" ((PCon "InterpStr" PWild)) (EListLit))
 (DFunDef false "interpBinds" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.guards")))) (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
-(DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkNamedGroup" ((PVar "oracle") (PTuple (PVar "name") (PVar "clauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EVar "clauses")))
 (DTypeSig true "checkGuardExhaustiveness" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
+(DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "warningMessage")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
+(DTypeSig false "warningMessage" (TyFun (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "String")))
+(DFunDef false "warningMessage" ((PTuple PWild (PVar "msg") PWild)) (EVar "msg"))
 (DTypeSig false "topFunDefClauses" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "topFunDefClauses" ((PList)) (EListLit))
 (DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
 (DFunDef false "topFunDefClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "topFunDefClauses") (EVar "rest")))
-(DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "ifaceDefaultClauses") (EVar "methods")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods"))))
@@ -2005,12 +2029,12 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "ifaceDefaultClauses" ((PList)) (EListLit))
 (DFunDef false "ifaceDefaultClauses" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest"))))
 (DFunDef false "ifaceDefaultClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceDefaultClauses") (EVar "rest")))
-(DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "implMethodBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "implMethodBodyWarnings" ((PVar "oracle") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
-(DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DTypeSig false "ifaceMethodWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "DiagCode") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "ifaceMethodWarnings" (PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "ifaceMethodWarnings" ((PVar "oracle") (PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))) PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DTypeSig true "exhaustToLinesWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "exhaustToLinesWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "checkDecls")))))
+(DFunDef false "exhaustToLinesWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "warningMessage")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "checkDecls")))))
 (DTypeSig true "exhaustToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "exhaustToLines" ((PVar "prog")) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "prog")) (EVar "prog")))

@@ -24,6 +24,7 @@
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
+import support.diag_codes.{DiagCode(..)}
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
@@ -1192,8 +1193,8 @@ effectiveKeepIr cliFlag = cliFlag || envOr "MEDAKA_KEEP_IR" "" /= ""
 -- The diagnostic code a failed keep-IR copy reports under.  Registered in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md alongside R-BUILD-FAILED.
 export
-keepIrFailedCode : String
-keepIrFailedCode = "W-KEEP-IR-FAILED"
+keepIrFailedCode : DiagCode
+keepIrFailedCode = WKeepIrFailed
 
 -- Best-effort: a kept-IR write failure must never fail an otherwise-good
 -- build, so its outcome becomes report DATA either way — the destination path

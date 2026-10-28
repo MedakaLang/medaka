@@ -1,7 +1,8 @@
 # META
-source_lines=119
+source_lines=120
 stages=DESUGAR,MARK
 # SOURCE
+import support.diag_codes.{DiagCode(..)}
 import types.invocation_basis.{frozenInvocationView}
 import types.value_main.{mainUseSite, mainUsedMsg}
 -- The checked main-shape facts published at the end of a typecheck drive.
@@ -119,9 +120,10 @@ export
 mainUseDiags : Option Loc -> List Decl -> List TcDiag
 mainUseDiags None _ = []
 mainUseDiags (Some site) entry = match mainUseSite site entry
-  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
+  Some at => [TcDiag TMainUsed 1 (Some at) mainUsedMsg None None]
   None => []
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "frozenInvocationView" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "mainUseSite" false) (mem "mainUsedMsg" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Ty" true) (mem "Loc" false))))
@@ -154,8 +156,9 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 (DFunDef false "mainBodySpan" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainBodySpan") (EVar "rest")))
 (DTypeSig true "mainUseDiags" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DFunDef false "mainUseDiags" ((PCon "None") PWild) (EListLit))
-(DFunDef false "mainUseDiags" ((PCon "Some" (PVar "site")) (PVar "entry")) (EMatch (EApp (EApp (EVar "mainUseSite") (EVar "site")) (EVar "entry")) (arm (PCon "Some" (PVar "at")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MAIN-USED"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "at"))) (EVar "mainUsedMsg")) (EVar "None")) (EVar "None")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "mainUseDiags" ((PCon "Some" (PVar "site")) (PVar "entry")) (EMatch (EApp (EApp (EVar "mainUseSite") (EVar "site")) (EVar "entry")) (arm (PCon "Some" (PVar "at")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "TMainUsed")) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "at"))) (EVar "mainUsedMsg")) (EVar "None")) (EVar "None")))) (arm (PCon "None") () (EListLit))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "frozenInvocationView" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "mainUseSite" false) (mem "mainUsedMsg" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Ty" true) (mem "Loc" false))))
@@ -188,4 +191,4 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 (DFunDef false "mainBodySpan" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainBodySpan") (EVar "rest")))
 (DTypeSig true "mainUseDiags" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DFunDef false "mainUseDiags" ((PCon "None") PWild) (EListLit))
-(DFunDef false "mainUseDiags" ((PCon "Some" (PVar "site")) (PVar "entry")) (EMatch (EApp (EApp (EVar "mainUseSite") (EVar "site")) (EVar "entry")) (arm (PCon "Some" (PVar "at")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MAIN-USED"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "at"))) (EVar "mainUsedMsg")) (EVar "None")) (EVar "None")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "mainUseDiags" ((PCon "Some" (PVar "site")) (PVar "entry")) (EMatch (EApp (EApp (EVar "mainUseSite") (EVar "site")) (EVar "entry")) (arm (PCon "Some" (PVar "at")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "TMainUsed")) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "at"))) (EVar "mainUsedMsg")) (EVar "None")) (EVar "None")))) (arm (PCon "None") () (EListLit))))

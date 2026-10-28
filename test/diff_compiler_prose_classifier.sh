@@ -80,6 +80,7 @@ printf '%s\n' \
   'testfile.md' \
   'docs/spec/SYNTAX.md' \
   'docs/spec/SYNTAX.md.bak' \
+  'compiler/DIAGNOSTIC-CODES-DESIGN.md' \
   'docs/spec/LAYOUT-SEMANTICS.md' \
   'docs/README.md' \
   'docs/ops/CI-ARCHITECTURE.md' \

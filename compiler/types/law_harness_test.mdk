@@ -3,6 +3,7 @@
 -- the exported checker entry points only, and compares the verdict with its
 -- own model of the spec clause. Nothing here decides an expected verdict.
 
+import support.diag_codes.{codeText}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, filter, indexed, reverse, take}
@@ -52,7 +53,7 @@ flatDiagnosticsWith extra source =
   let prelude = desugar (parseLocated (lawPrelude ++ extra))
   let program = ("law", desugar (parseLocated source))
   let (errors, _) = checkOneDiags defaultDriveInputs [] prelude program
-  map (e => (tcCode e, tcMsg e)) errors
+  map (e => (codeText (tcCode e), tcMsg e)) errors
 
 -- `flatDiagnostics` through the module-graph route: `source` is the single
 -- module of a one-module graph under the same prelude, so it must be
@@ -88,7 +89,7 @@ export
 graphDiagnostics : List (String, String) -> List (String, String)
 graphDiagnostics modules =
   flatMap
-    ((_, (_, errors, _)) => map (e => (tcCode e, tcMsg e)) errors)
+    ((_, (_, errors, _)) => map (e => (codeText (tcCode e), tcMsg e)) errors)
     (graphResults modules)
 
 -- Verdict plus rendered diagnostics of a module graph whose modules are
@@ -106,7 +107,10 @@ graphCodesAndSchemes : List (String, String) ->
   (List String, List (String, String))
 graphCodesAndSchemes modules =
   let results = graphResults modules
-  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  let codes =
+    flatMap
+      ((_, (_, errors, _)) => map (d => codeText (tcCode d)) errors)
+      results
   let schemes = match reverse results
     (_, (own, _, _)) :: _ =>
       map ((n, p) => (n, ppSchemeCon p.psContext p.psScheme)) own

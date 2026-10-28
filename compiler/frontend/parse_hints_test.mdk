@@ -4,6 +4,7 @@ import frontend.parse_hints.{prescanDiagnostic, matchContinuationHint}
 import frontend.parse_diagnostic.{
   ParseDiagnosticKind(..), diagnosticCode, renderParseDiagnostic
 }
+import support.diag_codes.{codeText}
 import support.source_index.{indexSource}
 import test.{expectEqual, expectEach, expectNone}
 
@@ -17,7 +18,7 @@ hintSummary src =
       (arrayFromList (map fst pairs))
       (arrayFromList (map snd pairs))
       (stringLength src)
-  map (d => (diagnosticCode d, renderParseDiagnostic d)) result
+  map (d => (codeText (diagnosticCode d), renderParseDiagnostic d)) result
 
 test "prescan reports removed inequality" =
   expectEqual

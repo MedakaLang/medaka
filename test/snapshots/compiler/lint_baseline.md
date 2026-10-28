@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- matching and the run fails closed with the key it looked for — the loud half
 -- of the invariant above, not a wrong answer.
 
-import driver.diagnostics.{Diag(..), Severity(..)}
+import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
   contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome
@@ -221,7 +221,7 @@ findingRuleOf f = f.rule
 
 export
 diagCodeOf : Diag -> String
-diagCodeOf (Diag _ code _ _ _ _) = code
+diagCodeOf (Diag _ code _ _ _ _) = diagIdText code
 
 promoteDiags : List String -> List Diag -> List Diag
 promoteDiags [] diags = diags
@@ -229,7 +229,7 @@ promoteDiags names diags = map (d => promoteDiag names d) diags
 
 promoteDiag : List String -> Diag -> Diag
 promoteDiag names (Diag sev code msg loc help fix)
-  | contains code names = Diag SevError code msg loc help fix
+  | contains (diagIdText code) names = Diag SevError code msg loc help fix
   | otherwise = Diag sev code msg loc help fix
 
 -- ── writing ─────────────────────────────────────────────────────────────────
@@ -287,7 +287,7 @@ baselineFileHeader = stringConcat [
   "\n",
 ]
 # DESUGAR
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
@@ -340,12 +340,12 @@ baselineFileHeader = stringConcat [
 (DTypeSig true "findingRuleOf" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "findingRuleOf" ((PVar "f")) (EFieldAccess (EVar "f") "rule"))
 (DTypeSig true "diagCodeOf" (TyFun (TyCon "Diag") (TyCon "String")))
-(DFunDef false "diagCodeOf" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EVar "code"))
+(DFunDef false "diagCodeOf" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EApp (EVar "diagIdText") (EVar "code")))
 (DTypeSig false "promoteDiags" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "promoteDiags" ((PList) (PVar "diags")) (EVar "diags"))
 (DFunDef false "promoteDiags" ((PVar "names") (PVar "diags")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EVar "promoteDiag") (EVar "names")) (EVar "d")))) (EVar "diags")))
 (DTypeSig false "promoteDiag" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Diag") (TyCon "Diag"))))
-(DFunDef false "promoteDiag" ((PVar "names") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EIf (EApp (EApp (EVar "contains") (EVar "code")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "promoteDiag" ((PVar "names") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "diagIdText") (EVar "code"))) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "renderLintBaseline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
 (DFunDef false "renderLintBaseline" ((PVar "perFile")) (EApp (EVar "stringConcat") (EListLit (EVar "baselineFileHeader") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "renderBaselineRow")) (EApp (EApp (EVar "sortOn") (EVar "baselineRowKey")) (EApp (EVar "baselineRowsOf") (EVar "perFile"))))) (ELit (LString "\n")))))
 (DTypeSig true "baselineRowsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "BaselineRow"))))
@@ -360,7 +360,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineFileHeader" (TyCon "String"))
 (DFunDef false "baselineFileHeader" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "# lint finding-count baseline — GENERATED, never hand-edited (#2619).\n")) (ELit (LString "#\n")) (ELit (LString "# One [[entry]] per (file, rule) with at least one finding: the number of\n")) (ELit (LString "# findings that file is currently ALLOWED for that rule.  A file may drop\n")) (ELit (LString "# below its count freely; exceeding it is an error, and so is having\n")) (ELit (LString "# findings for a rule with no row here at all.\n")) (ELit (LString "#\n")) (ELit (LString "# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)\n")) (ELit (LString "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n")) (ELit (LString "# cannot smuggle an increase past the hook).\n")) (ELit (LString "#\n")) (ELit (LString "# Regenerate from the repo root, never by hand:\n")) (ELit (LString "#\n")) (ELit (LString "#   sh test/diff_compiler_lint_baseline.sh --write\n")) (ELit (LString "#\n")) (ELit (LString "# Paths are relative to the directory `medaka lint` runs in (the repo root\n")) (ELit (LString "# for both consumers above).\n")) (ELit (LString "\n")))))
 # MARK
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
@@ -413,12 +413,12 @@ baselineFileHeader = stringConcat [
 (DTypeSig true "findingRuleOf" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "findingRuleOf" ((PVar "f")) (EFieldAccess (EVar "f") "rule"))
 (DTypeSig true "diagCodeOf" (TyFun (TyCon "Diag") (TyCon "String")))
-(DFunDef false "diagCodeOf" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EVar "code"))
+(DFunDef false "diagCodeOf" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EApp (EVar "diagIdText") (EVar "code")))
 (DTypeSig false "promoteDiags" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "promoteDiags" ((PList) (PVar "diags")) (EVar "diags"))
 (DFunDef false "promoteDiags" ((PVar "names") (PVar "diags")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EVar "promoteDiag") (EVar "names")) (EVar "d")))) (EVar "diags")))
 (DTypeSig false "promoteDiag" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Diag") (TyCon "Diag"))))
-(DFunDef false "promoteDiag" ((PVar "names") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EIf (EApp (EApp (EVar "contains") (EVar "code")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "promoteDiag" ((PVar "names") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "diagIdText") (EVar "code"))) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EVar "fix")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "renderLintBaseline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
 (DFunDef false "renderLintBaseline" ((PVar "perFile")) (EApp (EVar "stringConcat") (EListLit (EVar "baselineFileHeader") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "renderBaselineRow")) (EApp (EApp (EVar "sortOn") (EVar "baselineRowKey")) (EApp (EVar "baselineRowsOf") (EVar "perFile"))))) (ELit (LString "\n")))))
 (DTypeSig true "baselineRowsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "BaselineRow"))))

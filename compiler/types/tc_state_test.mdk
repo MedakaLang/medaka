@@ -4,6 +4,7 @@
 -- water a serving drive carries to the next (`noteHighWater`, `raiseToHighWater`).
 -- A minted `ModuleCtx` or `GraphCtx` is needed throughout, so none of these is a doctest.
 
+import support.diag_codes.{DiagCode(..)}
 import list.{reverse, sort}
 import test.{
   expectAll,
@@ -75,7 +76,7 @@ otherLoc : Option Loc
 otherLoc = Some (Loc "probe.mdk" 7 1 7 4)
 
 errorAt : String -> TcDiag
-errorAt msg = TcDiag "T-PROBE" 1 None msg None None
+errorAt msg = TcDiag TTypeMismatch 1 None msg None None
 
 errorMessages : ModuleCtx -> List String
 errorMessages m =

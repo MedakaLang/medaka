@@ -13,6 +13,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_pat`,
 -- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import list.{reverse}
 import types.tc_types.{
   OblProjection(..),
@@ -393,7 +394,7 @@ checkAnnotTooGeneral : ModuleCtx -> Ty -> List Mono -> Unit
 checkAnnotTooGeneral mctx ty resolved =
   let ids = sigTvarIds resolved
   if listLen ids < listLen resolved || hasDupI ids then
-    pushTypeError mctx "T-TYPE-TOO-GENERAL" (annotTooGeneralMsg ty)
+    pushTypeError mctx TTypeTooGeneral (annotTooGeneralMsg ty)
 
 -- A `where` block is checked one dependency component at a time, a
 -- component's dependencies first, as a module's top level is: a binding that
@@ -455,7 +456,7 @@ checkLetBind mctx name clauses
   | allList clauseIsNonFunction clauses =
     pushTypeError
       (mctxAtIfSome (clausesSpanLoc clauses) mctx)
-      "T-NONREC-VALUE-LET"
+      TNonrecValueLet
       (letRecNonFunctionMsg name)
   | otherwise = ()
 
@@ -485,11 +486,7 @@ checkRecBindNonFunction : ModuleCtx -> String -> Expr -> Unit
 checkRecBindNonFunction mctx name e
   | isSyntacticLambda e = ()
   | otherwise =
-    pushTypeErrorAt
-      mctx
-      "T-NONREC-VALUE-LET"
-      (exprLoc e)
-      (letRecNonFunctionMsg name)
+    pushTypeErrorAt mctx TNonrecValueLet (exprLoc e) (letRecNonFunctionMsg name)
 
 -- inferLetGroup's ELetGroup is DIFFERENT: it is the SAME node `where` clauses
 -- desugar to (parser.mdk whereEol/whereTail/guard-arm-where — verified: no
@@ -539,7 +536,7 @@ checkClausesNonFunctionLocated mctx names name clauses
     && anyClauseEagerlyRefsGroup names clauses =
     pushTypeErrorAt
       mctx
-      "T-NONREC-VALUE-LET"
+      TNonrecValueLet
       (clausesLoc clauses)
       (letRecNonFunctionMsg name)
   | otherwise = ()
@@ -1531,7 +1528,7 @@ checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
     && not (allList (memberClauseIsValue env) (clausesOf m grouped)) then
     pushTypeError
       env.teDyn.dcModule
-      "T-SIG-OVER-EXPANSIVE"
+      TSigOverExpansive
       (sigOverExpansiveMsg m ty)
   checkSigsOverExpansive env grouped rest
 
@@ -1557,12 +1554,12 @@ checkSigTooGeneral mctx name ty tvs =
     Some (vname, actual) =>
       pushTypeErrorOnceAt
         mctx
-        "T-TYPE-TOO-GENERAL"
+        TTypeTooGeneral
         (firstTyLoc ty)
         (groundedSigVarMsg vname name actual)
     None =>
       if hasDupI tvarIds then
-        pushTypeError mctx "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+        pushTypeError mctx TTypeTooGeneral (sigTooGeneralMsg name ty)
 
 groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
 groundedSignatureVariable [] = None
@@ -1611,7 +1608,7 @@ checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
     Some (vname, sibling) =>
       pushTypeErrorOnceAt
         mctx
-        "T-TYPE-TOO-GENERAL"
+        TTypeTooGeneral
         (firstTyLoc ty)
         (siblingSharedSigVarMsg vname name sibling)
     None => ()
@@ -2165,7 +2162,7 @@ reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs (o :: rest) =
   else
     pushTypeError
       mctx
-      "T-MISSING-CONSTRAINT"
+      TMissingConstraint
       (missingConstraintVecMsg
         m
         o.voIface.irName
@@ -2190,7 +2187,7 @@ reportUncovered mctx m sigTvMaps declared ((iface, id) :: rest) =
   else
     pushTypeError
       mctx
-      "T-MISSING-CONSTRAINT"
+      TMissingConstraint
       (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
   reportUncovered mctx m sigTvMaps declared rest
 

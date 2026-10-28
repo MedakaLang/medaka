@@ -1,7 +1,8 @@
 # META
-source_lines=299
+source_lines=300
 stages=DESUGAR,MARK
 # SOURCE
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{Loc(..)}
 import support.source_index.{SourceIndex, offsetToSourcePosition}
 
@@ -68,52 +69,52 @@ public export data ParseDiagnosticKind =
   deriving (Eq)
 
 export
-diagnosticCode : ParseDiagnostic -> String
+diagnosticCode : ParseDiagnostic -> DiagCode
 diagnosticCode (ParseDiagnostic kind _ _) = problemCode kind
 
-problemCode : ParseDiagnosticKind -> String
-problemCode UnterminatedString = "L-UNTERMINATED-STRING"
-problemCode UnterminatedComment = "L-UNTERMINATED-COMMENT"
-problemCode UnterminatedChar = "L-BAD-CHAR-LITERAL"
-problemCode EmptyChar = "L-BAD-CHAR-LITERAL"
-problemCode IntegerOverflow = "L-INT-OVERFLOW"
-problemCode PositiveIntOverflow = "L-INT-OVERFLOW"
-problemCode FloatOverflow = "L-FLOAT-OVERFLOW"
-problemCode HsLambda = "L-HS-LAMBDA"
-problemCode HsDollar = "L-HS-DOLLAR"
-problemCode UnexpectedEnd = "P-UNEXPECTED-EOF"
-problemCode (UnexpectedEndExpected _) = "P-UNEXPECTED-EOF"
-problemCode BadNeq = "P-BAD-NEQ"
-problemCode HsCase = "P-HS-CASE"
-problemCode MatchWith = "P-OCAML-MATCH-WITH"
-problemCode NoPow = "P-NO-POW-OPERATOR"
-problemCode HsSignature = "P-HS-SIG"
-problemCode BlockComment = "L-BLOCKCOMMENT"
-problemCode BraceBlock = "P-BRACE-BLOCK"
-problemCode Semicolon = "L-SEMICOLON"
-problemCode MatchGuardBar = "P-GUARD-BAR-IN-MATCH"
-problemCode ExpectedMatchArm = "P-PARSE"
-problemCode ExpectedMatchArrow = "P-PARSE"
-problemCode MatchContinuationHint = "P-PARSE"
-problemCode EquationGuardIf = "P-GUARD-IF-IN-EQUATION"
-problemCode (GenericParse _) = "P-PARSE"
-problemCode (InvalidEscape _ _) = "L-BAD-ESCAPE"
-problemCode (BadUnicodeEscape _) = "L-BAD-UNICODE-ESCAPE"
-problemCode (BareUnicodeEscape _ _) = "L-BARE-UNICODE-ESCAPE"
-problemCode (LongChar _) = "L-BAD-CHAR-LITERAL"
-problemCode (UnexpectedCharacter _) = "L-BAD-CHAR"
-problemCode (WidePattern _) = "L-INT-OVERFLOW"
-problemCode (MalformedRadix _ _ _) = "L-MALFORMED-RADIX"
-problemCode (MalformedFloat _ _ _) = "L-MALFORMED-FLOAT"
-problemCode (MissingWhere _) = "P-MISSING-WHERE"
-problemCode (WhereSameLine _) = "P-WHERE-BODY-SAME-LINE"
-problemCode (BlockEndsBinding _) = "P-DO-ENDS-IN-BINDING"
-problemCode (ReservedKeyword _) = "P-RESERVED-KEYWORD"
-problemCode (PublicDataOnly _) = "P-PARSE"
+problemCode : ParseDiagnosticKind -> DiagCode
+problemCode UnterminatedString = LUnterminatedString
+problemCode UnterminatedComment = LUnterminatedComment
+problemCode UnterminatedChar = LBadCharLiteral
+problemCode EmptyChar = LBadCharLiteral
+problemCode IntegerOverflow = LIntOverflow
+problemCode PositiveIntOverflow = LIntOverflow
+problemCode FloatOverflow = LFloatOverflow
+problemCode HsLambda = LHsLambda
+problemCode HsDollar = LHsDollar
+problemCode UnexpectedEnd = PUnexpectedEof
+problemCode (UnexpectedEndExpected _) = PUnexpectedEof
+problemCode BadNeq = PBadNeq
+problemCode HsCase = PHsCase
+problemCode MatchWith = POcamlMatchWith
+problemCode NoPow = PNoPowOperator
+problemCode HsSignature = PHsSig
+problemCode BlockComment = LBlockcomment
+problemCode BraceBlock = PBraceBlock
+problemCode Semicolon = LSemicolon
+problemCode MatchGuardBar = PGuardBarInMatch
+problemCode ExpectedMatchArm = PParse
+problemCode ExpectedMatchArrow = PParse
+problemCode MatchContinuationHint = PParse
+problemCode EquationGuardIf = PGuardIfInEquation
+problemCode (GenericParse _) = PParse
+problemCode (InvalidEscape _ _) = LBadEscape
+problemCode (BadUnicodeEscape _) = LBadUnicodeEscape
+problemCode (BareUnicodeEscape _ _) = LBareUnicodeEscape
+problemCode (LongChar _) = LBadCharLiteral
+problemCode (UnexpectedCharacter _) = LBadChar
+problemCode (WidePattern _) = LIntOverflow
+problemCode (MalformedRadix _ _ _) = LMalformedRadix
+problemCode (MalformedFloat _ _ _) = LMalformedFloat
+problemCode (MissingWhere _) = PMissingWhere
+problemCode (WhereSameLine _) = PWhereBodySameLine
+problemCode (BlockEndsBinding _) = PDoEndsInBinding
+problemCode (ReservedKeyword _) = PReservedKeyword
+problemCode (PublicDataOnly _) = PParse
 problemCode (ForeignKeyword word)
-  | word == "def" = "P-DEF-KEYWORD"
-  | word == "for" || word == "while" = "P-FOR-WHILE"
-  | otherwise = "P-PARSE"
+  | word == "def" = PDefKeyword
+  | word == "for" || word == "while" = PForWhile
+  | otherwise = PParse
 
 export
 diagnosticLoc : ParseDiagnostic -> Loc
@@ -302,6 +303,7 @@ export
 makeParseDiagnostic : ParseDiagnosticKind -> Loc -> ParseDiagnostic
 makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToSourcePosition" false))))
 (DData Public "EditApplicability" () ((variant "MachineApplicable" (ConPos)) (variant "HumanOnly" (ConPos))) ())
@@ -312,48 +314,48 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DImpl true "Eq" ((TyCon "UnicodeProblem")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UnicodeUnterminated") (PCon "UnicodeUnterminated")) () (EVar "True")) (arm (PTuple (PCon "UnicodeSeparator") (PCon "UnicodeSeparator")) () (EVar "True")) (arm (PTuple (PCon "UnicodeEmpty") (PCon "UnicodeEmpty")) () (EVar "True")) (arm (PTuple (PCon "UnicodeExpectedDigit" (PVar "__a0")) (PCon "UnicodeExpectedDigit" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeExpectedClose" (PVar "__a0")) (PCon "UnicodeExpectedClose" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeSurrogate" (PVar "__a0")) (PCon "UnicodeSurrogate" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeOutOfRange" (PVar "__a0")) (PCon "UnicodeOutOfRange" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "ParseDiagnosticKind" () ((variant "UnterminatedString" (ConPos)) (variant "UnterminatedComment" (ConPos)) (variant "UnterminatedChar" (ConPos)) (variant "EmptyChar" (ConPos)) (variant "IntegerOverflow" (ConPos)) (variant "PositiveIntOverflow" (ConPos)) (variant "FloatOverflow" (ConPos)) (variant "HsLambda" (ConPos)) (variant "HsDollar" (ConPos)) (variant "UnexpectedEnd" (ConPos)) (variant "UnexpectedEndExpected" (ConPos (TyCon "String"))) (variant "BadNeq" (ConPos)) (variant "HsCase" (ConPos)) (variant "MatchWith" (ConPos)) (variant "NoPow" (ConPos)) (variant "HsSignature" (ConPos)) (variant "BlockComment" (ConPos)) (variant "BraceBlock" (ConPos)) (variant "Semicolon" (ConPos)) (variant "MatchGuardBar" (ConPos)) (variant "ExpectedMatchArm" (ConPos)) (variant "ExpectedMatchArrow" (ConPos)) (variant "MatchContinuationHint" (ConPos)) (variant "EquationGuardIf" (ConPos)) (variant "GenericParse" (ConPos (TyCon "String"))) (variant "InvalidEscape" (ConPos (TyCon "String") (TyCon "Bool"))) (variant "BadUnicodeEscape" (ConPos (TyCon "UnicodeProblem"))) (variant "BareUnicodeEscape" (ConPos (TyCon "String") (TyCon "String"))) (variant "LongChar" (ConPos (TyCon "String"))) (variant "UnexpectedCharacter" (ConPos (TyCon "String"))) (variant "WidePattern" (ConPos (TyCon "String"))) (variant "MalformedRadix" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "MalformedFloat" (ConPos (TyCon "String") (TyCon "String") (TyCon "Bool"))) (variant "ForeignKeyword" (ConPos (TyCon "String"))) (variant "MissingWhere" (ConPos (TyCon "String"))) (variant "WhereSameLine" (ConPos (TyCon "String"))) (variant "BlockEndsBinding" (ConPos (TyCon "String"))) (variant "ReservedKeyword" (ConPos (TyCon "String"))) (variant "PublicDataOnly" (ConPos (TyCon "Bool")))) ())
 (DImpl true "Eq" ((TyCon "ParseDiagnosticKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UnterminatedString") (PCon "UnterminatedString")) () (EVar "True")) (arm (PTuple (PCon "UnterminatedComment") (PCon "UnterminatedComment")) () (EVar "True")) (arm (PTuple (PCon "UnterminatedChar") (PCon "UnterminatedChar")) () (EVar "True")) (arm (PTuple (PCon "EmptyChar") (PCon "EmptyChar")) () (EVar "True")) (arm (PTuple (PCon "IntegerOverflow") (PCon "IntegerOverflow")) () (EVar "True")) (arm (PTuple (PCon "PositiveIntOverflow") (PCon "PositiveIntOverflow")) () (EVar "True")) (arm (PTuple (PCon "FloatOverflow") (PCon "FloatOverflow")) () (EVar "True")) (arm (PTuple (PCon "HsLambda") (PCon "HsLambda")) () (EVar "True")) (arm (PTuple (PCon "HsDollar") (PCon "HsDollar")) () (EVar "True")) (arm (PTuple (PCon "UnexpectedEnd") (PCon "UnexpectedEnd")) () (EVar "True")) (arm (PTuple (PCon "UnexpectedEndExpected" (PVar "__a0")) (PCon "UnexpectedEndExpected" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BadNeq") (PCon "BadNeq")) () (EVar "True")) (arm (PTuple (PCon "HsCase") (PCon "HsCase")) () (EVar "True")) (arm (PTuple (PCon "MatchWith") (PCon "MatchWith")) () (EVar "True")) (arm (PTuple (PCon "NoPow") (PCon "NoPow")) () (EVar "True")) (arm (PTuple (PCon "HsSignature") (PCon "HsSignature")) () (EVar "True")) (arm (PTuple (PCon "BlockComment") (PCon "BlockComment")) () (EVar "True")) (arm (PTuple (PCon "BraceBlock") (PCon "BraceBlock")) () (EVar "True")) (arm (PTuple (PCon "Semicolon") (PCon "Semicolon")) () (EVar "True")) (arm (PTuple (PCon "MatchGuardBar") (PCon "MatchGuardBar")) () (EVar "True")) (arm (PTuple (PCon "ExpectedMatchArm") (PCon "ExpectedMatchArm")) () (EVar "True")) (arm (PTuple (PCon "ExpectedMatchArrow") (PCon "ExpectedMatchArrow")) () (EVar "True")) (arm (PTuple (PCon "MatchContinuationHint") (PCon "MatchContinuationHint")) () (EVar "True")) (arm (PTuple (PCon "EquationGuardIf") (PCon "EquationGuardIf")) () (EVar "True")) (arm (PTuple (PCon "GenericParse" (PVar "__a0")) (PCon "GenericParse" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "InvalidEscape" (PVar "__a0") (PVar "__a1")) (PCon "InvalidEscape" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "BadUnicodeEscape" (PVar "__a0")) (PCon "BadUnicodeEscape" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BareUnicodeEscape" (PVar "__a0") (PVar "__a1")) (PCon "BareUnicodeEscape" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LongChar" (PVar "__a0")) (PCon "LongChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnexpectedCharacter" (PVar "__a0")) (PCon "UnexpectedCharacter" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WidePattern" (PVar "__a0")) (PCon "WidePattern" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MalformedRadix" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "MalformedRadix" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "MalformedFloat" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "MalformedFloat" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "ForeignKeyword" (PVar "__a0")) (PCon "ForeignKeyword" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MissingWhere" (PVar "__a0")) (PCon "MissingWhere" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WhereSameLine" (PVar "__a0")) (PCon "WhereSameLine" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BlockEndsBinding" (PVar "__a0")) (PCon "BlockEndsBinding" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ReservedKeyword" (PVar "__a0")) (PCon "ReservedKeyword" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "PublicDataOnly" (PVar "__a0")) (PCon "PublicDataOnly" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DTypeSig true "diagnosticCode" (TyFun (TyCon "ParseDiagnostic") (TyCon "String")))
+(DTypeSig true "diagnosticCode" (TyFun (TyCon "ParseDiagnostic") (TyCon "DiagCode")))
 (DFunDef false "diagnosticCode" ((PCon "ParseDiagnostic" (PVar "kind") PWild PWild)) (EApp (EVar "problemCode") (EVar "kind")))
-(DTypeSig false "problemCode" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "String")))
-(DFunDef false "problemCode" ((PCon "UnterminatedString")) (ELit (LString "L-UNTERMINATED-STRING")))
-(DFunDef false "problemCode" ((PCon "UnterminatedComment")) (ELit (LString "L-UNTERMINATED-COMMENT")))
-(DFunDef false "problemCode" ((PCon "UnterminatedChar")) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "EmptyChar")) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "IntegerOverflow")) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "PositiveIntOverflow")) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "FloatOverflow")) (ELit (LString "L-FLOAT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "HsLambda")) (ELit (LString "L-HS-LAMBDA")))
-(DFunDef false "problemCode" ((PCon "HsDollar")) (ELit (LString "L-HS-DOLLAR")))
-(DFunDef false "problemCode" ((PCon "UnexpectedEnd")) (ELit (LString "P-UNEXPECTED-EOF")))
-(DFunDef false "problemCode" ((PCon "UnexpectedEndExpected" PWild)) (ELit (LString "P-UNEXPECTED-EOF")))
-(DFunDef false "problemCode" ((PCon "BadNeq")) (ELit (LString "P-BAD-NEQ")))
-(DFunDef false "problemCode" ((PCon "HsCase")) (ELit (LString "P-HS-CASE")))
-(DFunDef false "problemCode" ((PCon "MatchWith")) (ELit (LString "P-OCAML-MATCH-WITH")))
-(DFunDef false "problemCode" ((PCon "NoPow")) (ELit (LString "P-NO-POW-OPERATOR")))
-(DFunDef false "problemCode" ((PCon "HsSignature")) (ELit (LString "P-HS-SIG")))
-(DFunDef false "problemCode" ((PCon "BlockComment")) (ELit (LString "L-BLOCKCOMMENT")))
-(DFunDef false "problemCode" ((PCon "BraceBlock")) (ELit (LString "P-BRACE-BLOCK")))
-(DFunDef false "problemCode" ((PCon "Semicolon")) (ELit (LString "L-SEMICOLON")))
-(DFunDef false "problemCode" ((PCon "MatchGuardBar")) (ELit (LString "P-GUARD-BAR-IN-MATCH")))
-(DFunDef false "problemCode" ((PCon "ExpectedMatchArm")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "ExpectedMatchArrow")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "MatchContinuationHint")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "EquationGuardIf")) (ELit (LString "P-GUARD-IF-IN-EQUATION")))
-(DFunDef false "problemCode" ((PCon "GenericParse" PWild)) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "InvalidEscape" PWild PWild)) (ELit (LString "L-BAD-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "BadUnicodeEscape" PWild)) (ELit (LString "L-BAD-UNICODE-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "BareUnicodeEscape" PWild PWild)) (ELit (LString "L-BARE-UNICODE-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "LongChar" PWild)) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "UnexpectedCharacter" PWild)) (ELit (LString "L-BAD-CHAR")))
-(DFunDef false "problemCode" ((PCon "WidePattern" PWild)) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "MalformedRadix" PWild PWild PWild)) (ELit (LString "L-MALFORMED-RADIX")))
-(DFunDef false "problemCode" ((PCon "MalformedFloat" PWild PWild PWild)) (ELit (LString "L-MALFORMED-FLOAT")))
-(DFunDef false "problemCode" ((PCon "MissingWhere" PWild)) (ELit (LString "P-MISSING-WHERE")))
-(DFunDef false "problemCode" ((PCon "WhereSameLine" PWild)) (ELit (LString "P-WHERE-BODY-SAME-LINE")))
-(DFunDef false "problemCode" ((PCon "BlockEndsBinding" PWild)) (ELit (LString "P-DO-ENDS-IN-BINDING")))
-(DFunDef false "problemCode" ((PCon "ReservedKeyword" PWild)) (ELit (LString "P-RESERVED-KEYWORD")))
-(DFunDef false "problemCode" ((PCon "PublicDataOnly" PWild)) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "ForeignKeyword" (PVar "word"))) (EIf (EBinOp "==" (EVar "word") (ELit (LString "def"))) (ELit (LString "P-DEF-KEYWORD")) (EIf (EBinOp "||" (EBinOp "==" (EVar "word") (ELit (LString "for"))) (EBinOp "==" (EVar "word") (ELit (LString "while")))) (ELit (LString "P-FOR-WHILE")) (EIf (EVar "otherwise") (ELit (LString "P-PARSE")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "problemCode" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "DiagCode")))
+(DFunDef false "problemCode" ((PCon "UnterminatedString")) (EVar "LUnterminatedString"))
+(DFunDef false "problemCode" ((PCon "UnterminatedComment")) (EVar "LUnterminatedComment"))
+(DFunDef false "problemCode" ((PCon "UnterminatedChar")) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "EmptyChar")) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "IntegerOverflow")) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "PositiveIntOverflow")) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "FloatOverflow")) (EVar "LFloatOverflow"))
+(DFunDef false "problemCode" ((PCon "HsLambda")) (EVar "LHsLambda"))
+(DFunDef false "problemCode" ((PCon "HsDollar")) (EVar "LHsDollar"))
+(DFunDef false "problemCode" ((PCon "UnexpectedEnd")) (EVar "PUnexpectedEof"))
+(DFunDef false "problemCode" ((PCon "UnexpectedEndExpected" PWild)) (EVar "PUnexpectedEof"))
+(DFunDef false "problemCode" ((PCon "BadNeq")) (EVar "PBadNeq"))
+(DFunDef false "problemCode" ((PCon "HsCase")) (EVar "PHsCase"))
+(DFunDef false "problemCode" ((PCon "MatchWith")) (EVar "POcamlMatchWith"))
+(DFunDef false "problemCode" ((PCon "NoPow")) (EVar "PNoPowOperator"))
+(DFunDef false "problemCode" ((PCon "HsSignature")) (EVar "PHsSig"))
+(DFunDef false "problemCode" ((PCon "BlockComment")) (EVar "LBlockcomment"))
+(DFunDef false "problemCode" ((PCon "BraceBlock")) (EVar "PBraceBlock"))
+(DFunDef false "problemCode" ((PCon "Semicolon")) (EVar "LSemicolon"))
+(DFunDef false "problemCode" ((PCon "MatchGuardBar")) (EVar "PGuardBarInMatch"))
+(DFunDef false "problemCode" ((PCon "ExpectedMatchArm")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "ExpectedMatchArrow")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "MatchContinuationHint")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "EquationGuardIf")) (EVar "PGuardIfInEquation"))
+(DFunDef false "problemCode" ((PCon "GenericParse" PWild)) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "InvalidEscape" PWild PWild)) (EVar "LBadEscape"))
+(DFunDef false "problemCode" ((PCon "BadUnicodeEscape" PWild)) (EVar "LBadUnicodeEscape"))
+(DFunDef false "problemCode" ((PCon "BareUnicodeEscape" PWild PWild)) (EVar "LBareUnicodeEscape"))
+(DFunDef false "problemCode" ((PCon "LongChar" PWild)) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "UnexpectedCharacter" PWild)) (EVar "LBadChar"))
+(DFunDef false "problemCode" ((PCon "WidePattern" PWild)) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "MalformedRadix" PWild PWild PWild)) (EVar "LMalformedRadix"))
+(DFunDef false "problemCode" ((PCon "MalformedFloat" PWild PWild PWild)) (EVar "LMalformedFloat"))
+(DFunDef false "problemCode" ((PCon "MissingWhere" PWild)) (EVar "PMissingWhere"))
+(DFunDef false "problemCode" ((PCon "WhereSameLine" PWild)) (EVar "PWhereBodySameLine"))
+(DFunDef false "problemCode" ((PCon "BlockEndsBinding" PWild)) (EVar "PDoEndsInBinding"))
+(DFunDef false "problemCode" ((PCon "ReservedKeyword" PWild)) (EVar "PReservedKeyword"))
+(DFunDef false "problemCode" ((PCon "PublicDataOnly" PWild)) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "ForeignKeyword" (PVar "word"))) (EIf (EBinOp "==" (EVar "word") (ELit (LString "def"))) (EVar "PDefKeyword") (EIf (EBinOp "||" (EBinOp "==" (EVar "word") (ELit (LString "for"))) (EBinOp "==" (EVar "word") (ELit (LString "while")))) (EVar "PForWhile") (EIf (EVar "otherwise") (EVar "PParse") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "diagnosticLoc" (TyFun (TyCon "ParseDiagnostic") (TyCon "Loc")))
 (DFunDef false "diagnosticLoc" ((PCon "ParseDiagnostic" PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig true "diagnosticEdits" (TyFun (TyCon "ParseDiagnostic") (TyApp (TyCon "List") (TyCon "ParseEdit"))))
@@ -453,6 +455,7 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DTypeSig true "makeParseDiagnostic" (TyFun (TyCon "ParseDiagnosticKind") (TyFun (TyCon "Loc") (TyCon "ParseDiagnostic"))))
 (DFunDef false "makeParseDiagnostic" ((PVar "kind") (PVar "loc")) (EApp (EApp (EApp (EVar "ParseDiagnostic") (EVar "kind")) (EVar "loc")) (EApp (EApp (EVar "problemEdits") (EVar "kind")) (EVar "loc"))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToSourcePosition" false))))
 (DData Public "EditApplicability" () ((variant "MachineApplicable" (ConPos)) (variant "HumanOnly" (ConPos))) ())
@@ -463,48 +466,48 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DImpl true "Eq" ((TyCon "UnicodeProblem")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UnicodeUnterminated") (PCon "UnicodeUnterminated")) () (EVar "True")) (arm (PTuple (PCon "UnicodeSeparator") (PCon "UnicodeSeparator")) () (EVar "True")) (arm (PTuple (PCon "UnicodeEmpty") (PCon "UnicodeEmpty")) () (EVar "True")) (arm (PTuple (PCon "UnicodeExpectedDigit" (PVar "__a0")) (PCon "UnicodeExpectedDigit" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeExpectedClose" (PVar "__a0")) (PCon "UnicodeExpectedClose" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeSurrogate" (PVar "__a0")) (PCon "UnicodeSurrogate" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnicodeOutOfRange" (PVar "__a0")) (PCon "UnicodeOutOfRange" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "ParseDiagnosticKind" () ((variant "UnterminatedString" (ConPos)) (variant "UnterminatedComment" (ConPos)) (variant "UnterminatedChar" (ConPos)) (variant "EmptyChar" (ConPos)) (variant "IntegerOverflow" (ConPos)) (variant "PositiveIntOverflow" (ConPos)) (variant "FloatOverflow" (ConPos)) (variant "HsLambda" (ConPos)) (variant "HsDollar" (ConPos)) (variant "UnexpectedEnd" (ConPos)) (variant "UnexpectedEndExpected" (ConPos (TyCon "String"))) (variant "BadNeq" (ConPos)) (variant "HsCase" (ConPos)) (variant "MatchWith" (ConPos)) (variant "NoPow" (ConPos)) (variant "HsSignature" (ConPos)) (variant "BlockComment" (ConPos)) (variant "BraceBlock" (ConPos)) (variant "Semicolon" (ConPos)) (variant "MatchGuardBar" (ConPos)) (variant "ExpectedMatchArm" (ConPos)) (variant "ExpectedMatchArrow" (ConPos)) (variant "MatchContinuationHint" (ConPos)) (variant "EquationGuardIf" (ConPos)) (variant "GenericParse" (ConPos (TyCon "String"))) (variant "InvalidEscape" (ConPos (TyCon "String") (TyCon "Bool"))) (variant "BadUnicodeEscape" (ConPos (TyCon "UnicodeProblem"))) (variant "BareUnicodeEscape" (ConPos (TyCon "String") (TyCon "String"))) (variant "LongChar" (ConPos (TyCon "String"))) (variant "UnexpectedCharacter" (ConPos (TyCon "String"))) (variant "WidePattern" (ConPos (TyCon "String"))) (variant "MalformedRadix" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "MalformedFloat" (ConPos (TyCon "String") (TyCon "String") (TyCon "Bool"))) (variant "ForeignKeyword" (ConPos (TyCon "String"))) (variant "MissingWhere" (ConPos (TyCon "String"))) (variant "WhereSameLine" (ConPos (TyCon "String"))) (variant "BlockEndsBinding" (ConPos (TyCon "String"))) (variant "ReservedKeyword" (ConPos (TyCon "String"))) (variant "PublicDataOnly" (ConPos (TyCon "Bool")))) ())
 (DImpl true "Eq" ((TyCon "ParseDiagnosticKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UnterminatedString") (PCon "UnterminatedString")) () (EVar "True")) (arm (PTuple (PCon "UnterminatedComment") (PCon "UnterminatedComment")) () (EVar "True")) (arm (PTuple (PCon "UnterminatedChar") (PCon "UnterminatedChar")) () (EVar "True")) (arm (PTuple (PCon "EmptyChar") (PCon "EmptyChar")) () (EVar "True")) (arm (PTuple (PCon "IntegerOverflow") (PCon "IntegerOverflow")) () (EVar "True")) (arm (PTuple (PCon "PositiveIntOverflow") (PCon "PositiveIntOverflow")) () (EVar "True")) (arm (PTuple (PCon "FloatOverflow") (PCon "FloatOverflow")) () (EVar "True")) (arm (PTuple (PCon "HsLambda") (PCon "HsLambda")) () (EVar "True")) (arm (PTuple (PCon "HsDollar") (PCon "HsDollar")) () (EVar "True")) (arm (PTuple (PCon "UnexpectedEnd") (PCon "UnexpectedEnd")) () (EVar "True")) (arm (PTuple (PCon "UnexpectedEndExpected" (PVar "__a0")) (PCon "UnexpectedEndExpected" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BadNeq") (PCon "BadNeq")) () (EVar "True")) (arm (PTuple (PCon "HsCase") (PCon "HsCase")) () (EVar "True")) (arm (PTuple (PCon "MatchWith") (PCon "MatchWith")) () (EVar "True")) (arm (PTuple (PCon "NoPow") (PCon "NoPow")) () (EVar "True")) (arm (PTuple (PCon "HsSignature") (PCon "HsSignature")) () (EVar "True")) (arm (PTuple (PCon "BlockComment") (PCon "BlockComment")) () (EVar "True")) (arm (PTuple (PCon "BraceBlock") (PCon "BraceBlock")) () (EVar "True")) (arm (PTuple (PCon "Semicolon") (PCon "Semicolon")) () (EVar "True")) (arm (PTuple (PCon "MatchGuardBar") (PCon "MatchGuardBar")) () (EVar "True")) (arm (PTuple (PCon "ExpectedMatchArm") (PCon "ExpectedMatchArm")) () (EVar "True")) (arm (PTuple (PCon "ExpectedMatchArrow") (PCon "ExpectedMatchArrow")) () (EVar "True")) (arm (PTuple (PCon "MatchContinuationHint") (PCon "MatchContinuationHint")) () (EVar "True")) (arm (PTuple (PCon "EquationGuardIf") (PCon "EquationGuardIf")) () (EVar "True")) (arm (PTuple (PCon "GenericParse" (PVar "__a0")) (PCon "GenericParse" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "InvalidEscape" (PVar "__a0") (PVar "__a1")) (PCon "InvalidEscape" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "BadUnicodeEscape" (PVar "__a0")) (PCon "BadUnicodeEscape" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BareUnicodeEscape" (PVar "__a0") (PVar "__a1")) (PCon "BareUnicodeEscape" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LongChar" (PVar "__a0")) (PCon "LongChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "UnexpectedCharacter" (PVar "__a0")) (PCon "UnexpectedCharacter" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WidePattern" (PVar "__a0")) (PCon "WidePattern" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MalformedRadix" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "MalformedRadix" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "MalformedFloat" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "MalformedFloat" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "ForeignKeyword" (PVar "__a0")) (PCon "ForeignKeyword" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MissingWhere" (PVar "__a0")) (PCon "MissingWhere" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "WhereSameLine" (PVar "__a0")) (PCon "WhereSameLine" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "BlockEndsBinding" (PVar "__a0")) (PCon "BlockEndsBinding" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ReservedKeyword" (PVar "__a0")) (PCon "ReservedKeyword" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "PublicDataOnly" (PVar "__a0")) (PCon "PublicDataOnly" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DTypeSig true "diagnosticCode" (TyFun (TyCon "ParseDiagnostic") (TyCon "String")))
+(DTypeSig true "diagnosticCode" (TyFun (TyCon "ParseDiagnostic") (TyCon "DiagCode")))
 (DFunDef false "diagnosticCode" ((PCon "ParseDiagnostic" (PVar "kind") PWild PWild)) (EApp (EVar "problemCode") (EVar "kind")))
-(DTypeSig false "problemCode" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "String")))
-(DFunDef false "problemCode" ((PCon "UnterminatedString")) (ELit (LString "L-UNTERMINATED-STRING")))
-(DFunDef false "problemCode" ((PCon "UnterminatedComment")) (ELit (LString "L-UNTERMINATED-COMMENT")))
-(DFunDef false "problemCode" ((PCon "UnterminatedChar")) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "EmptyChar")) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "IntegerOverflow")) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "PositiveIntOverflow")) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "FloatOverflow")) (ELit (LString "L-FLOAT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "HsLambda")) (ELit (LString "L-HS-LAMBDA")))
-(DFunDef false "problemCode" ((PCon "HsDollar")) (ELit (LString "L-HS-DOLLAR")))
-(DFunDef false "problemCode" ((PCon "UnexpectedEnd")) (ELit (LString "P-UNEXPECTED-EOF")))
-(DFunDef false "problemCode" ((PCon "UnexpectedEndExpected" PWild)) (ELit (LString "P-UNEXPECTED-EOF")))
-(DFunDef false "problemCode" ((PCon "BadNeq")) (ELit (LString "P-BAD-NEQ")))
-(DFunDef false "problemCode" ((PCon "HsCase")) (ELit (LString "P-HS-CASE")))
-(DFunDef false "problemCode" ((PCon "MatchWith")) (ELit (LString "P-OCAML-MATCH-WITH")))
-(DFunDef false "problemCode" ((PCon "NoPow")) (ELit (LString "P-NO-POW-OPERATOR")))
-(DFunDef false "problemCode" ((PCon "HsSignature")) (ELit (LString "P-HS-SIG")))
-(DFunDef false "problemCode" ((PCon "BlockComment")) (ELit (LString "L-BLOCKCOMMENT")))
-(DFunDef false "problemCode" ((PCon "BraceBlock")) (ELit (LString "P-BRACE-BLOCK")))
-(DFunDef false "problemCode" ((PCon "Semicolon")) (ELit (LString "L-SEMICOLON")))
-(DFunDef false "problemCode" ((PCon "MatchGuardBar")) (ELit (LString "P-GUARD-BAR-IN-MATCH")))
-(DFunDef false "problemCode" ((PCon "ExpectedMatchArm")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "ExpectedMatchArrow")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "MatchContinuationHint")) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "EquationGuardIf")) (ELit (LString "P-GUARD-IF-IN-EQUATION")))
-(DFunDef false "problemCode" ((PCon "GenericParse" PWild)) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "InvalidEscape" PWild PWild)) (ELit (LString "L-BAD-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "BadUnicodeEscape" PWild)) (ELit (LString "L-BAD-UNICODE-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "BareUnicodeEscape" PWild PWild)) (ELit (LString "L-BARE-UNICODE-ESCAPE")))
-(DFunDef false "problemCode" ((PCon "LongChar" PWild)) (ELit (LString "L-BAD-CHAR-LITERAL")))
-(DFunDef false "problemCode" ((PCon "UnexpectedCharacter" PWild)) (ELit (LString "L-BAD-CHAR")))
-(DFunDef false "problemCode" ((PCon "WidePattern" PWild)) (ELit (LString "L-INT-OVERFLOW")))
-(DFunDef false "problemCode" ((PCon "MalformedRadix" PWild PWild PWild)) (ELit (LString "L-MALFORMED-RADIX")))
-(DFunDef false "problemCode" ((PCon "MalformedFloat" PWild PWild PWild)) (ELit (LString "L-MALFORMED-FLOAT")))
-(DFunDef false "problemCode" ((PCon "MissingWhere" PWild)) (ELit (LString "P-MISSING-WHERE")))
-(DFunDef false "problemCode" ((PCon "WhereSameLine" PWild)) (ELit (LString "P-WHERE-BODY-SAME-LINE")))
-(DFunDef false "problemCode" ((PCon "BlockEndsBinding" PWild)) (ELit (LString "P-DO-ENDS-IN-BINDING")))
-(DFunDef false "problemCode" ((PCon "ReservedKeyword" PWild)) (ELit (LString "P-RESERVED-KEYWORD")))
-(DFunDef false "problemCode" ((PCon "PublicDataOnly" PWild)) (ELit (LString "P-PARSE")))
-(DFunDef false "problemCode" ((PCon "ForeignKeyword" (PVar "word"))) (EIf (EBinOp "==" (EVar "word") (ELit (LString "def"))) (ELit (LString "P-DEF-KEYWORD")) (EIf (EBinOp "||" (EBinOp "==" (EVar "word") (ELit (LString "for"))) (EBinOp "==" (EVar "word") (ELit (LString "while")))) (ELit (LString "P-FOR-WHILE")) (EIf (EVar "otherwise") (ELit (LString "P-PARSE")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "problemCode" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "DiagCode")))
+(DFunDef false "problemCode" ((PCon "UnterminatedString")) (EVar "LUnterminatedString"))
+(DFunDef false "problemCode" ((PCon "UnterminatedComment")) (EVar "LUnterminatedComment"))
+(DFunDef false "problemCode" ((PCon "UnterminatedChar")) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "EmptyChar")) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "IntegerOverflow")) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "PositiveIntOverflow")) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "FloatOverflow")) (EVar "LFloatOverflow"))
+(DFunDef false "problemCode" ((PCon "HsLambda")) (EVar "LHsLambda"))
+(DFunDef false "problemCode" ((PCon "HsDollar")) (EVar "LHsDollar"))
+(DFunDef false "problemCode" ((PCon "UnexpectedEnd")) (EVar "PUnexpectedEof"))
+(DFunDef false "problemCode" ((PCon "UnexpectedEndExpected" PWild)) (EVar "PUnexpectedEof"))
+(DFunDef false "problemCode" ((PCon "BadNeq")) (EVar "PBadNeq"))
+(DFunDef false "problemCode" ((PCon "HsCase")) (EVar "PHsCase"))
+(DFunDef false "problemCode" ((PCon "MatchWith")) (EVar "POcamlMatchWith"))
+(DFunDef false "problemCode" ((PCon "NoPow")) (EVar "PNoPowOperator"))
+(DFunDef false "problemCode" ((PCon "HsSignature")) (EVar "PHsSig"))
+(DFunDef false "problemCode" ((PCon "BlockComment")) (EVar "LBlockcomment"))
+(DFunDef false "problemCode" ((PCon "BraceBlock")) (EVar "PBraceBlock"))
+(DFunDef false "problemCode" ((PCon "Semicolon")) (EVar "LSemicolon"))
+(DFunDef false "problemCode" ((PCon "MatchGuardBar")) (EVar "PGuardBarInMatch"))
+(DFunDef false "problemCode" ((PCon "ExpectedMatchArm")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "ExpectedMatchArrow")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "MatchContinuationHint")) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "EquationGuardIf")) (EVar "PGuardIfInEquation"))
+(DFunDef false "problemCode" ((PCon "GenericParse" PWild)) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "InvalidEscape" PWild PWild)) (EVar "LBadEscape"))
+(DFunDef false "problemCode" ((PCon "BadUnicodeEscape" PWild)) (EVar "LBadUnicodeEscape"))
+(DFunDef false "problemCode" ((PCon "BareUnicodeEscape" PWild PWild)) (EVar "LBareUnicodeEscape"))
+(DFunDef false "problemCode" ((PCon "LongChar" PWild)) (EVar "LBadCharLiteral"))
+(DFunDef false "problemCode" ((PCon "UnexpectedCharacter" PWild)) (EVar "LBadChar"))
+(DFunDef false "problemCode" ((PCon "WidePattern" PWild)) (EVar "LIntOverflow"))
+(DFunDef false "problemCode" ((PCon "MalformedRadix" PWild PWild PWild)) (EVar "LMalformedRadix"))
+(DFunDef false "problemCode" ((PCon "MalformedFloat" PWild PWild PWild)) (EVar "LMalformedFloat"))
+(DFunDef false "problemCode" ((PCon "MissingWhere" PWild)) (EVar "PMissingWhere"))
+(DFunDef false "problemCode" ((PCon "WhereSameLine" PWild)) (EVar "PWhereBodySameLine"))
+(DFunDef false "problemCode" ((PCon "BlockEndsBinding" PWild)) (EVar "PDoEndsInBinding"))
+(DFunDef false "problemCode" ((PCon "ReservedKeyword" PWild)) (EVar "PReservedKeyword"))
+(DFunDef false "problemCode" ((PCon "PublicDataOnly" PWild)) (EVar "PParse"))
+(DFunDef false "problemCode" ((PCon "ForeignKeyword" (PVar "word"))) (EIf (EBinOp "==" (EVar "word") (ELit (LString "def"))) (EVar "PDefKeyword") (EIf (EBinOp "||" (EBinOp "==" (EVar "word") (ELit (LString "for"))) (EBinOp "==" (EVar "word") (ELit (LString "while")))) (EVar "PForWhile") (EIf (EVar "otherwise") (EVar "PParse") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "diagnosticLoc" (TyFun (TyCon "ParseDiagnostic") (TyCon "Loc")))
 (DFunDef false "diagnosticLoc" ((PCon "ParseDiagnostic" PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig true "diagnosticEdits" (TyFun (TyCon "ParseDiagnostic") (TyApp (TyCon "List") (TyCon "ParseEdit"))))

@@ -2,6 +2,7 @@
 -- the manifest driver choice and the empty drive outputs, then the records the module
 -- owns built by hand so no drive has to run.
 
+import support.diag_codes.{DiagCode(..)}
 import test.{expectEqual, expectNone}
 import support.ordmap.{omEmpty, omInsert, omLookup, omSize}
 import types.capability_manifest.{
@@ -37,7 +38,7 @@ sampleFacts = ElabFacts {
 }
 
 sampleDiag : TcDiag
-sampleDiag = TcDiag "E1" 0 None "boom" None None
+sampleDiag = TcDiag TTypeMismatch 0 None "boom" None None
 
 sampleElab : ElabResult
 sampleElab = ElabResult {

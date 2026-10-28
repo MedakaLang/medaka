@@ -1,5 +1,5 @@
 # META
-source_lines=312
+source_lines=313
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical identities of one WasmGC module under emission: each function,
@@ -24,6 +24,7 @@ stages=DESUGAR,MARK
 -- whichever of the two declared it.  Only an element entry may repeat: the
 -- element list is a set.
 
+import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
 }
@@ -279,12 +280,12 @@ elemNames reg = reverseL reg.elems
 -- ── rendering ───────────────────────────────────────────────────────────────
 
 export
-defectCode : SymbolDefect -> String
-defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
-defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
-defectCode (UndeclaredType _ _ _) = "E-PHYS-UNDECLARED-TYPE"
-defectCode (UndeclaredFuncRef _ _) = "E-PHYS-UNDECLARED-FUNCREF"
+defectCode : SymbolDefect -> DiagCode
+defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
+defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (UndefinedReference _ _) = EPhysUndefined
+defectCode (UndeclaredType _ _ _) = EPhysUndeclaredType
+defectCode (UndeclaredFuncRef _ _) = EPhysUndeclaredFuncref
 
 -- The binding and position the defect is reported at.
 export
@@ -315,6 +316,7 @@ describe (WasmGlobal n) = "global `$\{n}`"
 describe (WasmData n) = "data segment `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -386,12 +388,12 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "missingDefect" ((PVar "sym") (PVar "at")) (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "at")))
 (DTypeSig true "elemNames" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "elemNames" ((PVar "reg")) (EApp (EVar "reverseL") (EFieldAccess (EVar "reg") "elems")))
-(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "String")))
-(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "E-PHYS-DUPLICATE")))
-(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (ELit (LString "E-PHYS-UNDEFINED")))
-(DFunDef false "defectCode" ((PCon "UndeclaredType" PWild PWild PWild)) (ELit (LString "E-PHYS-UNDECLARED-TYPE")))
-(DFunDef false "defectCode" ((PCon "UndeclaredFuncRef" PWild PWild)) (ELit (LString "E-PHYS-UNDECLARED-FUNCREF")))
+(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "DiagCode")))
+(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "EPhysDuplicate"))
+(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (EVar "EPhysUndefined"))
+(DFunDef false "defectCode" ((PCon "UndeclaredType" PWild PWild PWild)) (EVar "EPhysUndeclaredType"))
+(DFunDef false "defectCode" ((PCon "UndeclaredFuncRef" PWild PWild)) (EVar "EPhysUndeclaredFuncref"))
 (DTypeSig true "defectOrigin" (TyFun (TyCon "SymbolDefect") (TyCon "SymbolOrigin")))
 (DFunDef false "defectOrigin" ((PCon "DuplicateDefinition" PWild (PVar "at") PWild)) (EVar "at"))
 (DFunDef false "defectOrigin" ((PCon "ShapeMismatch" PWild PWild PWild (PVar "at") PWild)) (EVar "at"))
@@ -411,6 +413,7 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "describe" ((PCon "WasmData" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "data segment `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "describe" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "element entry `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -482,12 +485,12 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "missingDefect" ((PVar "sym") (PVar "at")) (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "at")))
 (DTypeSig true "elemNames" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "elemNames" ((PVar "reg")) (EApp (EVar "reverseL") (EFieldAccess (EVar "reg") "elems")))
-(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "String")))
-(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (ELit (LString "E-PHYS-DUPLICATE")))
-(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (ELit (LString "E-PHYS-SHAPE")))
-(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (ELit (LString "E-PHYS-UNDEFINED")))
-(DFunDef false "defectCode" ((PCon "UndeclaredType" PWild PWild PWild)) (ELit (LString "E-PHYS-UNDECLARED-TYPE")))
-(DFunDef false "defectCode" ((PCon "UndeclaredFuncRef" PWild PWild)) (ELit (LString "E-PHYS-UNDECLARED-FUNCREF")))
+(DTypeSig true "defectCode" (TyFun (TyCon "SymbolDefect") (TyCon "DiagCode")))
+(DFunDef false "defectCode" ((PCon "DuplicateDefinition" PWild PWild PWild)) (EVar "EPhysDuplicate"))
+(DFunDef false "defectCode" ((PCon "ShapeMismatch" PWild PWild PWild PWild PWild)) (EVar "EPhysShape"))
+(DFunDef false "defectCode" ((PCon "UndefinedReference" PWild PWild)) (EVar "EPhysUndefined"))
+(DFunDef false "defectCode" ((PCon "UndeclaredType" PWild PWild PWild)) (EVar "EPhysUndeclaredType"))
+(DFunDef false "defectCode" ((PCon "UndeclaredFuncRef" PWild PWild)) (EVar "EPhysUndeclaredFuncref"))
 (DTypeSig true "defectOrigin" (TyFun (TyCon "SymbolDefect") (TyCon "SymbolOrigin")))
 (DFunDef false "defectOrigin" ((PCon "DuplicateDefinition" PWild (PVar "at") PWild)) (EVar "at"))
 (DFunDef false "defectOrigin" ((PCon "ShapeMismatch" PWild PWild PWild (PVar "at") PWild)) (EVar "at"))

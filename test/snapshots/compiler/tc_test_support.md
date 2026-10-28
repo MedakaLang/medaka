@@ -1,5 +1,5 @@
 # META
-source_lines=458
+source_lines=459
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -22,6 +22,7 @@ stages=DESUGAR,MARK
 -- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
 -- own `kindIsDeclared`, so the registration test it serves cannot disagree with it.
 
+import support.diag_codes.{codeText}
 import list.{drop, range, reverse, zip}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
@@ -131,7 +132,7 @@ inRootScope m =
 -- The codes of the diagnostics pushed to [m] so far, oldest first.
 export
 codesOf : ModuleCtx -> List String
-codesOf m = reverse (map tcCode (wAll m.mcCells.typeErrors))
+codesOf m = reverse (map (d => codeText (tcCode d)) (wAll m.mcCells.typeErrors))
 
 -- The messages of the diagnostics pushed to [m] so far, oldest first.
 export
@@ -461,6 +462,7 @@ oblOver iface args = UObligation {
   oblProj = OpProjected,
 }
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -497,7 +499,7 @@ oblOver iface args = UObligation {
 (DTypeSig true "inRootScope" (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))
 (DFunDef false "inRootScope" ((PVar "m")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "freshScope") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "m") "mcGraph")) (ELit LUnit))) (EVar "None")) (ELit (LInt 0))) (ELit (LString "probe"))) (EVar "ModuleOwner"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "currentScope")) (EApp (EVar "openScopeCursor") (EVar "root")))) (DoExpr (EVar "m"))))
 (DTypeSig true "codesOf" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "codesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EVar "map") (EVar "tcCode")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
+(DFunDef false "codesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))))) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
 (DTypeSig true "messagesOf" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "messagesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
 (DTypeSig true "sigsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Ty"))))
@@ -592,6 +594,7 @@ oblOver iface args = UObligation {
 (DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
 (DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -628,7 +631,7 @@ oblOver iface args = UObligation {
 (DTypeSig true "inRootScope" (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))
 (DFunDef false "inRootScope" ((PVar "m")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "freshScope") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "m") "mcGraph")) (ELit LUnit))) (EVar "None")) (ELit (LInt 0))) (ELit (LString "probe"))) (EVar "ModuleOwner"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "currentScope")) (EApp (EVar "openScopeCursor") (EVar "root")))) (DoExpr (EVar "m"))))
 (DTypeSig true "codesOf" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "codesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EMethodRef "map") (EVar "tcCode")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
+(DFunDef false "codesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))))) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
 (DTypeSig true "messagesOf" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "messagesOf" ((PVar "m")) (EApp (EVar "reverse") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "typeErrors")))))
 (DTypeSig true "sigsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Ty"))))

@@ -2,6 +2,7 @@ frontend.ast
 frontend.desugar
 frontend.exhaust
 frontend.marker
+support.diag_codes
 support.opcount
 support.ordmap
 support.path

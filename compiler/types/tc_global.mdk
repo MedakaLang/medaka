@@ -9,6 +9,7 @@
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   BuiltinClass(..),
   CohSweep(..),
@@ -385,7 +386,7 @@ checkGradedImplHead mctx iface t want = match tyAppSpine t
   (TyTuple ts, _) =>
     pushTypeErrorOncePerSite
       mctx
-      "T-IMPL-KIND-MISMATCH"
+      TImplKindMismatch
       (firstTyLocList ts)
       (implTupleHeadKindMsg iface (listLen ts) want)
   _ => ()
@@ -443,7 +444,7 @@ checkGradedImplHeadKinds mctx iface n loc nApplied want got
   | otherwise =
     pushTypeErrorOncePerSite
       mctx
-      "T-IMPL-KIND-MISMATCH"
+      TImplKindMismatch
       loc
       (implKindMismatchMsg iface n nApplied want got)
 
@@ -529,7 +530,7 @@ checkImplHeadIndices mctx (TyApp a b) = match tyAppSpine (TyApp a b)
             (KAuth _ _, TyAuth ps loc) =>
               pushTypeErrorOncePerSite
                 mctx
-                "T-AUTHORITY-KIND"
+                TAuthorityKind
                 loc
                 (implHeadIndexMsg n (ppTy (TyAuth ps loc)))
             _ => ())
@@ -922,7 +923,7 @@ pushCoherenceWarning : ModuleCtx -> Option Loc -> String -> Unit
 pushCoherenceWarning mctx loc msg =
   let warning =
     TcDiag
-      "W-INCOMPARABLE-IMPLS"
+      WIncomparableImpls
       2
       (orElseLoc loc mctx.mcLoc)
       msg
@@ -956,7 +957,7 @@ checkCoherence mctx env cur =
 cohPushHard : ModuleCtx -> Option (String, Option Loc) -> Unit
 cohPushHard mctx None = ()
 cohPushHard mctx (Some (msg, loc)) =
-  pushTypeErrorAt mctx "T-CONFLICTING-IMPL" loc msg
+  pushTypeErrorAt mctx TConflictingImpl loc msg
 
 cohPushSoft : ModuleCtx -> Option (String, Option Loc) -> Unit
 cohPushSoft mctx None = ()
@@ -1121,7 +1122,7 @@ reportMissingSuperImpl mctx subject roots loc derived sup supArgs =
   let named = Ref (map (p => (snd p, fst p)) roots)
   let goal = "\{sup.irName} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
   let missing = "requires the superinterface `\{goal}`, which no impl covers"
-  pushTypeErrorOnceAt mctx "T-MISSING-SUPER-IMPL" loc (if not derived then
+  pushTypeErrorOnceAt mctx TMissingSuperImpl loc (if not derived then
     "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
   else if derivableIface sup.irName then
     "`\{subject}` (derived) \{missing}; add `\{sup.irName}` to the type's `deriving` clause, or add an `impl \{goal}`"
@@ -1182,13 +1183,13 @@ reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) 
   if isEmptyL ids then
     pushTypeErrorOnceAt
       mctx
-      "T-NO-IMPL"
+      TNoImpl
       loc
       (superContextNoImplMsg subject derived superGoal pred predBare)
   else if allList (i => containsI i (map snd roots)) ids then
     pushTypeErrorOnceAt
       mctx
-      "T-IMPL-MISSING-REQUIRES"
+      TImplMissingRequires
       loc
       (superContextUndeclaredMsg subject derived superGoal pred predBare)
 
@@ -1223,7 +1224,7 @@ reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) 
 -- user interface's required set.
 pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
 pushIncompleteImpl mctx (loc, msg) =
-  pushTypeErrorOnceAt mctx "T-INCOMPLETE-IMPL" loc msg
+  pushTypeErrorOnceAt mctx TIncompleteImpl loc msg
 
 -- The span a missing-method error is attributed to: the first impl method's
 -- body, read from its parsed AST whether or not the body was ever inferred.
@@ -1277,7 +1278,7 @@ export
 checkPhantomMethods : ModuleCtx -> ClassEnv -> Int -> Unit
 checkPhantomMethods mctx ce cur =
   each
-    ((loc, msg) => pushTypeError (mctxAtIfSome loc mctx) "T-PHANTOM-METHOD" msg)
+    ((loc, msg) => pushTypeError (mctxAtIfSome loc mctx) TPhantomMethod msg)
     (flatMap phantomMethodMsgs (ceRowsOwnedBy cur ce))
 
 -- Each message with the span of the method's declared type it is about, or of
@@ -2375,7 +2376,7 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
         _ =>
           pushTypeErrorOnceAt
             env.teDyn.dcModule
-            "T-EFFECT-LAUNDER"
+            TEffectLaunder
             loc
             (methodBodyLaunderMsg kind iface.irName mname escaping)
       if unifyErred && gatesBodyCascade kind then
@@ -2486,7 +2487,7 @@ checkMethodRigidityCore mctx subject iface mty headMonos extraMap ownTyparams ad
   if isNonEmptyL pinned then
     pushTypeErrorOnceAt
       mctx
-      "T-IMPL-TOO-SPECIFIC"
+      TImplTooSpecific
       loc
       (pinsTyvarMsg subject mty pinned)
   else
@@ -2495,7 +2496,7 @@ checkMethodRigidityCore mctx subject iface mty headMonos extraMap ownTyparams ad
       || anyContainsI survivors (flatMap monoTyvarIds headMonos) then
       pushTypeErrorOnceAt
         mctx
-        "T-IMPL-TOO-SPECIFIC"
+        TImplTooSpecific
         loc
         (collapsesTyvarsMsg subject mty)
   checkSurvivorObligations
@@ -2571,7 +2572,7 @@ checkImplHeadNumIds mctx subject implTvMap reqs survivingIds loc (id :: rest) =
         && not (implRequiresRoot mctx "Num" id implTvMap reqs) then
         pushTypeErrorOnceAt
           mctx
-          "T-IMPL-MISSING-REQUIRES"
+          TImplMissingRequires
           loc
           (undeclaredImplPrerequisiteMsg subject "Num" vname)
     None => ()
@@ -2654,7 +2655,7 @@ checkImplHeadRigidity mctx subject iface site before loc =
     narrowed =>
       pushTypeErrorOnceAt
         mctx
-        "T-IMPL-TOO-SPECIFIC"
+        TImplTooSpecific
         loc
         (narrowsImplHeadMsg subject narrowed (narrowedImplHead iface site))
 
@@ -2790,7 +2791,7 @@ reportImplHeadResidual mctx subject roots loc (iface, args) =
       ([TVar _], [vname]) =>
         undeclaredImplPrerequisiteMsg subject iface.irName vname
       _ => undeclaredImplPredicateMsg subject pred
-    pushTypeErrorOnceAt mctx "T-IMPL-MISSING-REQUIRES" loc msg
+    pushTypeErrorOnceAt mctx TImplMissingRequires loc msg
   else if answeredOnlyByBindingHead
     mctx
     (omFromNames (map (r => intToString (snd r)) roots) omEmpty)
@@ -2800,7 +2801,7 @@ reportImplHeadResidual mctx subject roots loc (iface, args) =
       dedup (flatMap (r => if containsI (snd r) ids then [fst r] else []) roots)
     pushTypeErrorOnceAt
       mctx
-      "T-IMPL-MISSING-REQUIRES"
+      TImplMissingRequires
       loc
       (implGoalFixesHeadMsg subject pred fixed)
   else if isEmptyL

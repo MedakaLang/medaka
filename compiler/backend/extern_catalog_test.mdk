@@ -1,3 +1,4 @@
+import support.diag_codes.{codeText}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
@@ -300,7 +301,7 @@ emitWat src =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
   match emitProgramRecord input plan prepared
     Ok emitted => emitted
-    Err defects => ("", map defectCode defects)
+    Err defects => ("", map (d => codeText (defectCode d)) defects)
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.

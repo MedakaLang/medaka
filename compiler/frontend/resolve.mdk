@@ -17,6 +17,7 @@
 -- one `ResError` type, so they live together.  A module's export surface
 -- (`ModuleExports`) is `frontend/visibility.mdk`, which this file imports.
 
+import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patBindings,
@@ -3000,46 +3001,46 @@ ppResError (ReassignImmutable n _) =
 -- the two ResError→Diag conversion sites need no per-call-site change.  Codes are
 -- append-only; never renumber.
 export
-resErrorCode : ResError -> String
-resErrorCode (UnboundVariable _ _ _) = "R-UNBOUND"
-resErrorCode (UnboundVariableExported _ _ _) = "R-UNBOUND"
-resErrorCode (UnboundVariableIsModule _ _) = "R-UNBOUND"
-resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = "R-UNBOUND"
-resErrorCode (UnknownConstructor _ _ _) = "R-UNKNOWN-CTOR"
-resErrorCode (UnknownType _ _ _) = "R-UNKNOWN-TYPE"
-resErrorCode (UnknownEffect _ _) = "R-UNKNOWN-EFFECT"
-resErrorCode (UnknownField _ _) = "R-UNKNOWN-FIELD"
-resErrorCode (FieldNotInRecord _ _ _) = "R-FIELD-NOT-IN-RECORD"
-resErrorCode (DuplicateDefinition _ _ _) = "R-DUPLICATE-DEF"
-resErrorCode (UnknownInterface _ _) = "R-UNKNOWN-INTERFACE"
-resErrorCode (MethodNotInInterface _ _ _) = "R-METHOD-NOT-IN-INTERFACE"
-resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
-resErrorCode (PrivateNameAccess _ _ _ _) = "R-PRIVATE-NAME"
-resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
-resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
-resErrorCode (BareCtorImport _ _ _) = "R-BARE-CTOR-IMPORT"
-resErrorCode (AbstractCtorImport _ _ _ _) = "R-ABSTRACT-CTOR-IMPORT"
-resErrorCode (EffectLabelNoMembers _ _ _) = "R-EFFECT-LABEL-NO-MEMBERS"
-resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
-resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
-resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
-resErrorCode (DuplicateBinding _ _) = "R-DUPLICATE-BINDING"
-resErrorCode (DuplicateValueBinding _ _) = "R-DUP-BINDING"
-resErrorCode (DuplicateSignature _ _ _) = "R-DUPLICATE-SIGNATURE"
-resErrorCode (OrphanSignature _ _ _) = "R-ORPHAN-SIGNATURE"
-resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
-resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
-resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
-resErrorCode (AmbiguousConstructor _ _ _) = "R-AMBIGUOUS-CTOR"
-resErrorCode (AmbiguousAliasCtor _ _ _) = "R-AMBIGUOUS-CTOR"
-resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
-resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
-resErrorCode (AmbiguousEffect _ _ _) = "R-AMBIGUOUS-EFFECT"
-resErrorCode (UnboundAuthority _ _) = "R-UNBOUND-AUTHORITY"
-resErrorCode (MisplacedAuthorityBinder _ _) = "R-MISPLACED-AUTHORITY-BINDER"
-resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
-resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
-resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
+resErrorCode : ResError -> DiagCode
+resErrorCode (UnboundVariable _ _ _) = RUnbound
+resErrorCode (UnboundVariableExported _ _ _) = RUnbound
+resErrorCode (UnboundVariableIsModule _ _) = RUnbound
+resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = RUnbound
+resErrorCode (UnknownConstructor _ _ _) = RUnknownCtor
+resErrorCode (UnknownType _ _ _) = RUnknownType
+resErrorCode (UnknownEffect _ _) = RUnknownEffect
+resErrorCode (UnknownField _ _) = RUnknownField
+resErrorCode (FieldNotInRecord _ _ _) = RFieldNotInRecord
+resErrorCode (DuplicateDefinition _ _ _) = RDuplicateDef
+resErrorCode (UnknownInterface _ _) = RUnknownInterface
+resErrorCode (MethodNotInInterface _ _ _) = RMethodNotInInterface
+resErrorCode (ExternWithBody _ _) = RExternWithBody
+resErrorCode (PrivateNameAccess _ _ _ _) = RPrivateName
+resErrorCode (NoExportedConstructors _ _ _) = RNoExportedCtors
+resErrorCode (NewtypeCtorNotExported _ _ _) = RNewtypeCtorPrivate
+resErrorCode (BareCtorImport _ _ _) = RBareCtorImport
+resErrorCode (AbstractCtorImport _ _ _ _) = RAbstractCtorImport
+resErrorCode (EffectLabelNoMembers _ _ _) = REffectLabelNoMembers
+resErrorCode (AbstractFieldAccess _ _ _) = RAbstractField
+resErrorCode (UnknownModule _ _) = RUnknownModule
+resErrorCode (NonRecursiveValueLet _ _) = RNonrecValueLet
+resErrorCode (DuplicateBinding _ _) = RDuplicateBinding
+resErrorCode (DuplicateValueBinding _ _) = RDupBinding
+resErrorCode (DuplicateSignature _ _ _) = RDuplicateSignature
+resErrorCode (OrphanSignature _ _ _) = ROrphanSignature
+resErrorCode (DuplicateBinder _ _ _) = RDupBinder
+resErrorCode (AsPatternMisplaced _) = RAsPatternMisplaced
+resErrorCode (AmbiguousOccurrence _ _ _) = RAmbiguousOccurrence
+resErrorCode (AmbiguousConstructor _ _ _) = RAmbiguousCtor
+resErrorCode (AmbiguousAliasCtor _ _ _) = RAmbiguousCtor
+resErrorCode (AmbiguousType _ _ _) = RAmbiguousType
+resErrorCode (AmbiguousInterface _ _ _) = RAmbiguousInterface
+resErrorCode (AmbiguousEffect _ _ _) = RAmbiguousEffect
+resErrorCode (UnboundAuthority _ _) = RUnboundAuthority
+resErrorCode (MisplacedAuthorityBinder _ _) = RMisplacedAuthorityBinder
+resErrorCode (InternalExternAccess _ _) = RInternalExtern
+resErrorCode (ReassignImmutable _ _) = RImmutableAssign
+resErrorCode (DuplicateInterfaceMethod _ _ _ _) = RDuplicateIfaceMethod
 
 -- Two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.

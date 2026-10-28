@@ -4,7 +4,7 @@ import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
   diagnosticLoc, diagnosticHelp, diagnosticEdits, renderParseDiagnostic
 }
-import driver.diagnostic_value.{Diag(..), Fix(..), Severity(..)}
+import driver.diagnostic_value.{Diag(..), DiagId(..), Fix(..), Severity(..)}
 
 withPath : String -> Loc -> Loc
 withPath path (Loc _ sl sc el ec) = Loc path sl sc el ec
@@ -23,7 +23,7 @@ parseDiagnosticToDiag : String -> ParseDiagnostic -> Diag
 parseDiagnosticToDiag path diagnostic =
   Diag
     SevError
-    (diagnosticCode diagnostic)
+    (Coded (diagnosticCode diagnostic))
     (renderParseDiagnostic diagnostic)
     (Some (withPath path (diagnosticLoc diagnostic)))
     (diagnosticHelp diagnostic)

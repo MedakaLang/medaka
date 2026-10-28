@@ -1,5 +1,6 @@
 -- Binding effects are observed through production group inference, not a
 -- synthetic row helper. No standard library is needed by these tiny programs.
+import support.diag_codes.{codeText}
 import test.{expectAll, expectEqual, expectNotEqual, expectTrue}
 import frontend.ast.{Loc(..)}
 import frontend.desugar.{desugar}
@@ -92,7 +93,7 @@ test "qualified kind errors are located in the signature" =
     "import provider.*\n\nbad : (G m, P m) => Bool -> m e Unit -> m e Unit\nbad _ x = x\n"
   let diags = moduleErrorDiags provider entry
   expectAll [
-    expectEqual ["T-EFFECT-KIND-MISMATCH"] (map tcCode diags),
+    expectEqual ["T-EFFECT-KIND-MISMATCH"] (diagCodeTexts diags),
     expectEqual [(3, 20, 3, 24)] (map diagSpan diags),
   ]
 
@@ -408,7 +409,7 @@ errorsFor source =
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
-  map tcCode errors
+  diagCodeTexts errors
 
 -- A `Num` interface with `Int` and `Float` impls, the arithmetic every CLI verb
 -- checks against through the real prelude.
@@ -424,7 +425,7 @@ numErrorsFor source =
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
-  map tcCode errors
+  diagCodeTexts errors
 
 forcingFor : String -> String -> String
 forcingFor source name =
@@ -496,8 +497,11 @@ keyedModuleErrors key sources =
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
   flatMap moduleDiagCodes results
 
+diagCodeTexts : List TcDiag -> List String
+diagCodeTexts diags = map (d => codeText (tcCode d)) diags
+
 moduleDiagCodes : ModDiags -> List String
-moduleDiagCodes (_, (_, errors, _)) = map tcCode errors
+moduleDiagCodes (_, (_, errors, _)) = diagCodeTexts errors
 
 moduleErrorDiags : String -> String -> List TcDiag
 moduleErrorDiags provider entry =
@@ -684,7 +688,7 @@ test "a k>0 shadow-selected standalone attributes a missing impl to its callee" 
     "import provider.{pick, fuse}\ndata Box = Box Int\npick n x = fuse n x\nbad : Int\nbad = pick 7 (Box 3)\n"
   let diags = moduleErrorDiags provider entry
   expectAll [
-    expectEqual ["T-NO-IMPL"] (map tcCode diags),
+    expectEqual ["T-NO-IMPL"] (diagCodeTexts diags),
     expectEqual [(5, 6, 5, 10)] (map diagSpan diags),
   ]
 

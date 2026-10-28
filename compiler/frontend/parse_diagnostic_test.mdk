@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..), codeText}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{
   ParseDiagnostic(..), ParseDiagnosticKind(..), ParseEdit(..),
@@ -25,45 +26,46 @@ problem kind = locateParseProblem (indexSource "bad") 0 3 kind
 test "the established frontend code roster is assigned by kinds" =
   expectEach
     (map
-      ((kind, code) => (code, expectEqual code (diagnosticCode (problem kind))))
+      ((kind, code) =>
+        (codeText code, expectEqual code (diagnosticCode (problem kind))))
       [
-        (UnterminatedString, "L-UNTERMINATED-STRING"),
-        (UnterminatedComment, "L-UNTERMINATED-COMMENT"),
-        (UnterminatedChar, "L-BAD-CHAR-LITERAL"),
-        (InvalidEscape "\\v" False, "L-BAD-ESCAPE"),
-        (BadUnicodeEscape UnicodeEmpty, "L-BAD-UNICODE-ESCAPE"),
-        (BareUnicodeEscape "\\u0041" "\\u{0041}", "L-BARE-UNICODE-ESCAPE"),
-        (HsLambda, "L-HS-LAMBDA"),
-        (HsDollar, "L-HS-DOLLAR"),
-        (UnexpectedCharacter "?", "L-BAD-CHAR"),
-        (IntegerOverflow, "L-INT-OVERFLOW"),
-        (FloatOverflow, "L-FLOAT-OVERFLOW"),
-        (MalformedRadix "0x_FF" "0x" "FF", "L-MALFORMED-RADIX"),
-        (MalformedFloat "5." "5.0" False, "L-MALFORMED-FLOAT"),
-        (UnexpectedEnd, "P-UNEXPECTED-EOF"),
-        (BadNeq, "P-BAD-NEQ"),
-        (HsCase, "P-HS-CASE"),
-        (MatchWith, "P-OCAML-MATCH-WITH"),
-        (NoPow, "P-NO-POW-OPERATOR"),
-        (HsSignature, "P-HS-SIG"),
-        (BlockComment, "L-BLOCKCOMMENT"),
-        (BraceBlock, "P-BRACE-BLOCK"),
-        (ForeignKeyword "for", "P-FOR-WHILE"),
-        (ForeignKeyword "def", "P-DEF-KEYWORD"),
-        (Semicolon, "L-SEMICOLON"),
-        (MissingWhere "impl", "P-MISSING-WHERE"),
-        (WhereSameLine "interface", "P-WHERE-BODY-SAME-LINE"),
-        (BlockEndsBinding "do", "P-DO-ENDS-IN-BINDING"),
-        (MatchGuardBar, "P-GUARD-BAR-IN-MATCH"),
-        (EquationGuardIf, "P-GUARD-IF-IN-EQUATION"),
-        (ReservedKeyword "type", "P-RESERVED-KEYWORD"),
-        (GenericParse "expected an expression", "P-PARSE"),
+        (UnterminatedString, LUnterminatedString),
+        (UnterminatedComment, LUnterminatedComment),
+        (UnterminatedChar, LBadCharLiteral),
+        (InvalidEscape "\\v" False, LBadEscape),
+        (BadUnicodeEscape UnicodeEmpty, LBadUnicodeEscape),
+        (BareUnicodeEscape "\\u0041" "\\u{0041}", LBareUnicodeEscape),
+        (HsLambda, LHsLambda),
+        (HsDollar, LHsDollar),
+        (UnexpectedCharacter "?", LBadChar),
+        (IntegerOverflow, LIntOverflow),
+        (FloatOverflow, LFloatOverflow),
+        (MalformedRadix "0x_FF" "0x" "FF", LMalformedRadix),
+        (MalformedFloat "5." "5.0" False, LMalformedFloat),
+        (UnexpectedEnd, PUnexpectedEof),
+        (BadNeq, PBadNeq),
+        (HsCase, PHsCase),
+        (MatchWith, POcamlMatchWith),
+        (NoPow, PNoPowOperator),
+        (HsSignature, PHsSig),
+        (BlockComment, LBlockcomment),
+        (BraceBlock, PBraceBlock),
+        (ForeignKeyword "for", PForWhile),
+        (ForeignKeyword "def", PDefKeyword),
+        (Semicolon, LSemicolon),
+        (MissingWhere "impl", PMissingWhere),
+        (WhereSameLine "interface", PWhereBodySameLine),
+        (BlockEndsBinding "do", PDoEndsInBinding),
+        (MatchGuardBar, PGuardBarInMatch),
+        (EquationGuardIf, PGuardIfInEquation),
+        (ReservedKeyword "type", PReservedKeyword),
+        (GenericParse "expected an expression", PParse),
       ])
 
 test "generic wording cannot impersonate a specialized diagnostic or edit" =
   let diagnostic = problem (GenericParse "unexpected `!=`; did you mean `/=`?")
   expectAll [
-    expectEqual "P-PARSE" (diagnosticCode diagnostic),
+    expectEqual "P-PARSE" (codeText (diagnosticCode diagnostic)),
     expectEqual [] (map editText (diagnosticEdits diagnostic)),
     expectEqual None (diagnosticHelp diagnostic),
   ]
@@ -81,7 +83,9 @@ test "differently worded typed cases retain the same code and edit rule" =
         (
           old,
           expectAll [
-            expectEqual "L-BARE-UNICODE-ESCAPE" (diagnosticCode diagnostic),
+            expectEqual
+              "L-BARE-UNICODE-ESCAPE"
+              (codeText (diagnosticCode diagnostic)),
             expectEqual
               [((1, 0, 1, 6), old, new, True)]
               (map editText (diagnosticEdits diagnostic)),
@@ -107,7 +111,7 @@ expectSource source code span edits =
     Err error =>
       let diagnostic = parseErrorDiagnostic error
       expectAll [
-        expectEqual code (diagnosticCode diagnostic),
+        expectEqual code (codeText (diagnosticCode diagnostic)),
         expectEqual span (spanText (diagnosticLoc diagnostic)),
         expectEqual
           (map ((old, new) => (span, old, new, True)) edits)
@@ -241,7 +245,7 @@ test "shared diagnostic construction retains typed edits" =
   let loc = Loc "" 2 3 2 5
   let diagnostic = makeParseDiagnostic BadNeq loc
   expectAll [
-    expectEqual "P-BAD-NEQ" (diagnosticCode diagnostic),
+    expectEqual "P-BAD-NEQ" (codeText (diagnosticCode diagnostic)),
     expectEqual
       [((2, 3, 2, 5), "!=", "/=", True)]
       (map editText (diagnosticEdits diagnostic)),

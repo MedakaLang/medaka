@@ -1,3 +1,5 @@
+import support.diag_codes.{DiagCode(..)}
+import support.diag_codes.{codeText}
 import types.module_interface_test.{ownerAtoms}
 import list.{take, drop}
 -- Unit tests for the published shapes' zonk, freeze, validator and graph report
@@ -1061,7 +1063,7 @@ weakScheme : PubScheme
 weakScheme = pub (plainScheme (TFun (tvar 7) pureRow intM))
 
 someDiag : TcDiag
-someDiag = TcDiag "E0001" 1 None "boom" None None
+someDiag = TcDiag TTypeMismatch 1 None "boom" None None
 
 test "graphReport: a clean graph is checked and lists its weak variables" =
   expectEqual
@@ -1568,7 +1570,9 @@ ownDrive owned =
           desugar (parseLocated "import m.{useX}\nentry = useX 1\n"),
         ),
       ]
-  flatMap (md => map tcCode (ownErrs md)) report.trDiagnostics
+  flatMap
+    (md => map (d => codeText (tcCode d)) (ownErrs md))
+    report.trDiagnostics
 
 ownErrs : ModDiags -> List TcDiag
 ownErrs (_, (_, errs, _)) = errs

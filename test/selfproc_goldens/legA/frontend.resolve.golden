@@ -291,7 +291,7 @@ recPatHead : Option Loc -> Env -> String -> List ResError
 recUpdateField : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
 recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 reexportedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
-resErrorCode : ResError -> String
+resErrorCode : ResError -> DiagCode
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
 resErrorIsPrivateName : ResError -> Bool

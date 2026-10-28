@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
@@ -899,7 +900,7 @@ workerStages root sel runtimeDecls coreDecls decls =
     emitDiagSection
       root
       "CRASH"
-      ":0:0: runtime error [E-NO-MAIN]: \{noMainMsg}\n"
+      ":0:0: runtime error [\{ENoMain}]: \{noMainMsg}\n"
 
 -- `# TYPES` is diagnostic-bearing exactly when the pass it just ran accumulated an error
 -- or a warning — so the tag is decided from `typesOf`'s second component, not from the

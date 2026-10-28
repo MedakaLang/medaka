@@ -11,6 +11,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_occurrence`,
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   grantTopKey,
   methodGrantKey,
@@ -309,7 +310,7 @@ reportEffectSummaryFailures outer (failure :: rest) =
       else
         pushTypeErrorAt
           mctx
-          "T-AUTHORITY"
+          TAuthority
           mctx.mcLoc
           (authorityFailureMsg
             mctx
@@ -345,7 +346,7 @@ reportRowFailure mctx failure =
     ]
     pushTypeError
       mctx
-      "T-EFFECT-INDEX-MISMATCH"
+      TEffectIndexMismatch
       ("effect index mismatch: "
         ++ joinWith " vs " rows
         ++ "; an effect row in a type argument is invariant, so write the same row on both sides")
@@ -354,7 +355,7 @@ reportRowFailure mctx failure =
   else
     pushTypeError
       mctx
-      "T-EFFECT-LAUNDER"
+      TEffectLaunder
       (effectInclusionMsg
         failure.esfContext.osFn
         escaping
@@ -457,7 +458,7 @@ checkIfaceMethodEffs mctx iface scope ((IfaceMethod mname mty _ _) :: rest) =
     bad =>
       pushTypeErrorOnceAt
         mctx
-        "T-EFFECT-UNDETERMINED"
+        TEffectUndetermined
         (firstTyLoc mty)
         (effectUndeterminedMsg iface mname bad)
   checkArgEffVarCoverage mctx (Some iface) scope mname mty
@@ -548,7 +549,7 @@ checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
     Some i =>
       pushTypeErrorOnceAt
         mctx
-        "T-EFFECT-ARG-UNCOVERED"
+        TEffectArgUncovered
         (firstTyLoc mty)
         (argOnlyEffVarMsg i mname v)
     None => ()
@@ -557,7 +558,7 @@ checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
     esc =>
       pushTypeErrorOnceAt
         mctx
-        "T-EFFECT-ARG-UNCOVERED"
+        TEffectArgUncovered
         (firstTyLoc mty)
         (argAtomsMsgFor iface mname v esc)
   checkArgEffVars mctx iface mname mty argOccs retOccs rest
@@ -1373,7 +1374,7 @@ checkFileValueFlow mctx (loc, upper, lower) =
   if changesPackedFileBound False upper lower then
     pushTypeErrorOncePerSite
       mctx
-      "T-FILE-BOUND-VALUE"
+      TFileBoundValue
       loc
       ("a function's file bound cannot change inside a container: "
         ++ ppMonosShared [lower, upper]
@@ -1689,7 +1690,7 @@ checkMethodEffVarRigidity mctx subject headMonos gscope mty effVars launderFlagg
     (flatMap monoIndexEffvarIds headMonos) then
     pushTypeErrorOnceAt
       mctx
-      "T-IMPL-TOO-SPECIFIC"
+      TImplTooSpecific
       loc
       (aliasesHeadRowMsg subject mty)
   checkImplEffVarRigidity
@@ -1742,7 +1743,7 @@ checkImplEffVarRigidity mctx subject scope mty effMap launderFlagged eager loc =
   if hasDupI (effVarTailIds effMap) then
     pushTypeErrorOnceAt
       mctx
-      "T-IMPL-TOO-SPECIFIC"
+      TImplTooSpecific
       loc
       (collapsesEffvarsMsg subject mty)
 
@@ -1862,7 +1863,7 @@ checkIndexOnlyGo mctx subject effMap loc (v :: rest) =
   -- [eager] already holds only the vars the body performed on a method arrow
   -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
   -- or the ambient became a join (#821) is not the signal, the performing is.
-  pushTypeErrorOnceAt mctx "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
+  pushTypeErrorOnceAt mctx TEffectIndexEager loc (indexEagerMsg subject v)
   checkIndexOnlyGo mctx subject effMap loc rest
 
 -- The earliest collected call that ran a variable now on one of [actual]'s arrows.
@@ -1927,11 +1928,7 @@ checkEffVarAtoms mctx subject occs ((n, cell) :: rest) loc =
   let esc =
     effVarOccEscape mctx.mcGraph n (effrowLabels (EffRow [] (Some cell))) occs
   if isNonEmptyL esc then
-    pushTypeErrorOnceAt
-      mctx
-      "T-EFFECT-LAUNDER"
-      loc
-      (effVarLaunderMsg subject n esc)
+    pushTypeErrorOnceAt mctx TEffectLaunder loc (effVarLaunderMsg subject n esc)
   checkEffVarAtoms mctx subject occs rest loc
 
 -- the first occurrence of var [n] whose declared atoms fail to cover
@@ -2056,7 +2053,7 @@ flushPendingEscapes mctx (Some group) =
       if omHasKey m mctx.mcCells.rowFailureReportedRef.value then
         ()
       else
-        pushTypeErrorAt mctx "T-EFFECT-LEAK" loc msg)
+        pushTypeErrorAt mctx TEffectLeak loc msg)
     pending
 
 concreteAtom : Atom -> Bool

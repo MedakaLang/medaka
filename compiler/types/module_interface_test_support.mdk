@@ -1,6 +1,7 @@
 -- Helpers the tests of the module interface cache share (`module_interface_test`,
 -- `module_interface_sexp_test`, `typecheck_test`): a keyed drive over named
 -- sources, the fixture chain leaf, mid, entry, and the rendering of a report.
+import support.diag_codes.{codeText}
 import frontend.ast.{Decl}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -126,4 +127,4 @@ renderRow (mid, (schemes, errs, warns)) =
 
 export
 diagCode : TcDiag -> String
-diagCode (TcDiag code _ _ _ _ _) = code
+diagCode (TcDiag code _ _ _ _ _) = codeText code
