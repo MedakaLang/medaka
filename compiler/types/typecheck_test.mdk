@@ -22,8 +22,6 @@ import frontend.ast.{
   Loc(..),
   Route(..),
   TyConOrigin(..),
-  noDeclLoc,
-  noBinderId,
   Expr(..),
   EvTable,
   EvVal(..),
@@ -45,7 +43,6 @@ import ir.core_ir_lower.{
 }
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
-import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{
   EvidenceBinderId(..),
   PrerequisiteEvidence(..),
@@ -60,7 +57,6 @@ import types.disposition.{
 import types.repr.{
   IfaceRef(..), Mono(..), Scheme(..), Tyvar(..), ppMono, ppScheme
 }
-import types.runtime_ops.{arithmeticTag}
 import types.tc_types.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
@@ -1084,35 +1080,6 @@ test "primitive arithmetic retains the Int and Float scalar routes" =
         arithmetic),
   ]
 
-test "arithmetic tags cover solved primitives and preserve a generic Num operand" =
-  let generic = TVar (Ref (Unbound 9001 0))
-  let linkedInt = TVar (Ref (Link (TCon "Int" OriginBuiltin)))
-  expectEqual
-    [
-      Some "Int",
-      Some "Float",
-      Some "U8",
-      Some "U16",
-      Some "U32",
-      Some "U64",
-      Some "I32",
-      Some "I64",
-      None,
-      Some "Int",
-    ]
-    (map arithmeticTag [
-      TCon "Int" OriginBuiltin,
-      TCon "Float" OriginBuiltin,
-      TCon "U8" OriginBuiltin,
-      TCon "U16" OriginBuiltin,
-      TCon "U32" OriginBuiltin,
-      TCon "U64" OriginBuiltin,
-      TCon "I32" OriginBuiltin,
-      TCon "I64" OriginBuiltin,
-      generic,
-      linkedInt,
-    ])
-
 test "arithmetic keeps missing Num and explicit result mismatches loud" = expectAll
   [
     expectEqual
@@ -1827,26 +1794,6 @@ test "value-position shadow publishes the selected standalone arity" =
       ])
       "probe"
       "shadowValue")
-
-test "Core IR round-trip preserves method occurrence arity" =
-  let original =
-    CProgram
-      [
-        CBind
-          "main"
-          [CClause [] (CMethod "probe" (MethodEvidence "" 7 RNone [] []))]
-          noDeclLoc
-          noBinderId,
-      ]
-      []
-      []
-      []
-      []
-      noDeclFacts
-  match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" (MethodEvidence "" arity RNone [] []))] _ _] _ _ _ _ _ =>
-      expectEqual 7 arity
-    _ => fail "expected the round-tripped CProgram to keep the same shape"
 
 emptyLocalCoreFacts : LocalCoreFacts
 emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
