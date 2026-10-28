@@ -33,7 +33,9 @@ to `parse_hints`: `matchContinuationHint` receives tokens, offset pairs, line
 starts and the match and arm token positions, and returns a diagnostic kind.
 It recognizes only balanced parenthesized arrow islands with a supported header
 anchor and an immediately following plausible arm. Shared pattern/expression
-forms and uncertain shapes suppress advice. Each attempt visits at most 4096
+forms and uncertain shapes suppress advice. An invocation-owned tab flag suppresses
+advice when source contains a tab; a root `->` before a following arm also
+suppresses it. The flag retains neither source nor provider. Each attempt visits at most 4096
 tokens and bounds delimiter depth; it retains no parse context or source index.
 The advice is conditional and cannot decide acceptance.
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |

@@ -1,5 +1,5 @@
 # META
-source_lines=349
+source_lines=355
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
@@ -25,6 +25,7 @@ export data ParseContext = {
   pcTokens : Array Token,
   pcOffsets : Array (Int, Int),
   pcLineStarts : Array Int,
+  pcHasTab : Bool,
   pcLocated : Bool,
   pcGuardPositions : Bool,
   pcDepth : Ref Int,
@@ -53,6 +54,7 @@ newParseContextWith mode src toks offs = ParseContext {
   pcTokens = toks,
   pcOffsets = offs,
   pcLineStarts = lineStartsOf src,
+  pcHasTab = isSome (stringIndexOf "\t" src),
   pcLocated = match mode
     LocatedSyntax => True
     LocatedChecked => True
@@ -77,6 +79,10 @@ contextOffsets ctx = ctx.pcOffsets
 export
 contextLineStarts : ParseContext -> Array Int
 contextLineStarts ctx = ctx.pcLineStarts
+
+export
+contextHasTab : ParseContext -> Bool
+contextHasTab ctx = ctx.pcHasTab
 
 export
 runPWith : ParseContext -> ParserE e a -> Int -> <e> PR a
@@ -361,20 +367,22 @@ expectedTokenMsg t = describeToken t
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
 (DData Public "ParseMode" () ((variant "UnlocatedSyntax" (ConPos)) (variant "LocatedSyntax" (ConPos)) (variant "UnlocatedChecked" (ConPos)) (variant "LocatedChecked" (ConPos))) ())
-(DData Abstract "ParseContext" () ((variant "ParseContext" (ConNamed (field "pcTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "pcOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "pcLineStarts" (TyApp (TyCon "Array") (TyCon "Int"))) (field "pcLocated" (TyCon "Bool")) (field "pcGuardPositions" (TyCon "Bool")) (field "pcDepth" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "pcCommas" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (field "pcUnits" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))))) ())
+(DData Abstract "ParseContext" () ((variant "ParseContext" (ConNamed (field "pcTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "pcOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "pcLineStarts" (TyApp (TyCon "Array") (TyCon "Int"))) (field "pcHasTab" (TyCon "Bool")) (field "pcLocated" (TyCon "Bool")) (field "pcGuardPositions" (TyCon "Bool")) (field "pcDepth" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "pcCommas" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (field "pcUnits" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))))) ())
 (DData Abstract "ParseMark" () ((variant "ParseMark" (ConPos (TyCon "ParseContext") (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))) ())
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
 (DTypeAlias true "Parser" ("a") (TyApp (TyApp (TyCon "ParserE") (TyRow () None)) (TyVar "a")))
 (DTypeSig true "newParseContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "ParseContext")))))
 (DFunDef false "newParseContext" () (EApp (EVar "newParseContextWith") (EVar "LocatedChecked")))
 (DTypeSig true "newParseContextWith" (TyFun (TyCon "ParseMode") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "ParseContext"))))))
-(DFunDef false "newParseContextWith" ((PVar "mode") (PVar "src") (PVar "toks") (PVar "offs")) (ERecordCreate "ParseContext" ((fa "pcTokens" (EVar "toks")) (fa "pcOffsets" (EVar "offs")) (fa "pcLineStarts" (EApp (EVar "lineStartsOf") (EVar "src"))) (fa "pcLocated" (EMatch (EVar "mode") (arm (PCon "LocatedSyntax") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcGuardPositions" (EMatch (EVar "mode") (arm (PCon "UnlocatedChecked") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcDepth" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "pcCommas" (EApp (EVar "Ref") (EListLit))) (fa "pcUnits" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "newParseContextWith" ((PVar "mode") (PVar "src") (PVar "toks") (PVar "offs")) (ERecordCreate "ParseContext" ((fa "pcTokens" (EVar "toks")) (fa "pcOffsets" (EVar "offs")) (fa "pcLineStarts" (EApp (EVar "lineStartsOf") (EVar "src"))) (fa "pcHasTab" (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\t"))) (EVar "src")))) (fa "pcLocated" (EMatch (EVar "mode") (arm (PCon "LocatedSyntax") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcGuardPositions" (EMatch (EVar "mode") (arm (PCon "UnlocatedChecked") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcDepth" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "pcCommas" (EApp (EVar "Ref") (EListLit))) (fa "pcUnits" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "contextTokens" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyCon "Token"))))
 (DFunDef false "contextTokens" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcTokens"))
 (DTypeSig true "contextOffsets" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "contextOffsets" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcOffsets"))
 (DTypeSig true "contextLineStarts" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "contextLineStarts" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcLineStarts"))
+(DTypeSig true "contextHasTab" (TyFun (TyCon "ParseContext") (TyCon "Bool")))
+(DFunDef false "contextHasTab" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcHasTab"))
 (DTypeSig true "runPWith" (TyFun (TyCon "ParseContext") (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "runPWith" ((PVar "ctx") (PCon "ParserE" (PVar "f")) (PVar "pos")) (EApp (EApp (EVar "f") (EVar "ctx")) (EVar "pos")))
 (DTypeSig true "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
@@ -485,20 +493,22 @@ expectedTokenMsg t = describeToken t
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
 (DData Public "ParseMode" () ((variant "UnlocatedSyntax" (ConPos)) (variant "LocatedSyntax" (ConPos)) (variant "UnlocatedChecked" (ConPos)) (variant "LocatedChecked" (ConPos))) ())
-(DData Abstract "ParseContext" () ((variant "ParseContext" (ConNamed (field "pcTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "pcOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "pcLineStarts" (TyApp (TyCon "Array") (TyCon "Int"))) (field "pcLocated" (TyCon "Bool")) (field "pcGuardPositions" (TyCon "Bool")) (field "pcDepth" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "pcCommas" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (field "pcUnits" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))))) ())
+(DData Abstract "ParseContext" () ((variant "ParseContext" (ConNamed (field "pcTokens" (TyApp (TyCon "Array") (TyCon "Token"))) (field "pcOffsets" (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))) (field "pcLineStarts" (TyApp (TyCon "Array") (TyCon "Int"))) (field "pcHasTab" (TyCon "Bool")) (field "pcLocated" (TyCon "Bool")) (field "pcGuardPositions" (TyCon "Bool")) (field "pcDepth" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "pcCommas" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (field "pcUnits" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))))) ())
 (DData Abstract "ParseMark" () ((variant "ParseMark" (ConPos (TyCon "ParseContext") (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))) ())
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
 (DTypeAlias true "Parser" ("a") (TyApp (TyApp (TyCon "ParserE") (TyRow () None)) (TyVar "a")))
 (DTypeSig true "newParseContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "ParseContext")))))
 (DFunDef false "newParseContext" () (EApp (EVar "newParseContextWith") (EVar "LocatedChecked")))
 (DTypeSig true "newParseContextWith" (TyFun (TyCon "ParseMode") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "ParseContext"))))))
-(DFunDef false "newParseContextWith" ((PVar "mode") (PVar "src") (PVar "toks") (PVar "offs")) (ERecordCreate "ParseContext" ((fa "pcTokens" (EVar "toks")) (fa "pcOffsets" (EVar "offs")) (fa "pcLineStarts" (EApp (EVar "lineStartsOf") (EVar "src"))) (fa "pcLocated" (EMatch (EVar "mode") (arm (PCon "LocatedSyntax") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcGuardPositions" (EMatch (EVar "mode") (arm (PCon "UnlocatedChecked") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcDepth" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "pcCommas" (EApp (EVar "Ref") (EListLit))) (fa "pcUnits" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "newParseContextWith" ((PVar "mode") (PVar "src") (PVar "toks") (PVar "offs")) (ERecordCreate "ParseContext" ((fa "pcTokens" (EVar "toks")) (fa "pcOffsets" (EVar "offs")) (fa "pcLineStarts" (EApp (EVar "lineStartsOf") (EVar "src"))) (fa "pcHasTab" (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\t"))) (EVar "src")))) (fa "pcLocated" (EMatch (EVar "mode") (arm (PCon "LocatedSyntax") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcGuardPositions" (EMatch (EVar "mode") (arm (PCon "UnlocatedChecked") () (EVar "True")) (arm (PCon "LocatedChecked") () (EVar "True")) (arm PWild () (EVar "False")))) (fa "pcDepth" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "pcCommas" (EApp (EVar "Ref") (EListLit))) (fa "pcUnits" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "contextTokens" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyCon "Token"))))
 (DFunDef false "contextTokens" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcTokens"))
 (DTypeSig true "contextOffsets" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "contextOffsets" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcOffsets"))
 (DTypeSig true "contextLineStarts" (TyFun (TyCon "ParseContext") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "contextLineStarts" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcLineStarts"))
+(DTypeSig true "contextHasTab" (TyFun (TyCon "ParseContext") (TyCon "Bool")))
+(DFunDef false "contextHasTab" ((PVar "ctx")) (EFieldAccess (EVar "ctx") "pcHasTab"))
 (DTypeSig true "runPWith" (TyFun (TyCon "ParseContext") (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "runPWith" ((PVar "ctx") (PCon "ParserE" (PVar "f")) (PVar "pos")) (EApp (EApp (EVar "f") (EVar "ctx")) (EVar "pos")))
 (DTypeSig true "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))

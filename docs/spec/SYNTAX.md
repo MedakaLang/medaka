@@ -557,8 +557,10 @@ parentheses to continue it across such a line. In malformed input an expression
 can also be a pattern, so a diagnostic cannot infer which was intended. The
 compiler reports the missing arm or arrow and offers conditional continuation
 help only for narrowly recognizable parenthesized arrow expressions. Uncertain
-forms receive no continuation suggestion. This diagnostic policy does not
-change the grammar.
+forms receive no continuation suggestion. A tab anywhere in the source also
+suppresses this optional suggestion, because raw character columns do not prove
+layout indentation. A root `->` before a supposed following arm suppresses it.
+This diagnostic policy does not change the grammar.
 
 ```medaka
 data Person = Person { name : String, age : Int }

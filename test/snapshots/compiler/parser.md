@@ -1,5 +1,5 @@
 # META
-source_lines=4987
+source_lines=4991
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -10,11 +10,12 @@ import frontend.parse_hints.{
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
   ParseMode(..), newParseContext, newParseContextWith, runPWith, runP,
-  contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
-  peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
-  fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepBy1,
-  mark, rewind, locOfSpan, spanLoc, depthOf, withDepth, recordTrailingComma,
-  recordUnitStart, forgetLatestUnitStart, contextCues, unexpectedTokenMsg
+  contextTokens, contextOffsets, contextLineStarts, contextHasTab, contextP,
+  getPos, peekTok, peekP, peek2P, peek3P, advance, emit, expectTok, failP,
+  fatalP, fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many,
+  sepBy1, mark, rewind, locOfSpan, spanLoc, depthOf, withDepth,
+  recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
+  unexpectedTokenMsg
 }
 import frontend.parse_result.{
   ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
@@ -1522,12 +1523,15 @@ parseArm matchPos = ParserE (ctx pos => match runPWith ctx parsePat pos
   PFatal f q => PFatal f q
   PErr _ _ =>
     let hint =
-      matchContinuationHint
-        (contextTokens ctx)
-        (contextOffsets ctx)
-        (contextLineStarts ctx)
-        matchPos
-        pos
+      if contextHasTab ctx then
+        None
+      else
+        matchContinuationHint
+          (contextTokens ctx)
+          (contextOffsets ctx)
+          (contextLineStarts ctx)
+          matchPos
+          pos
     let kind = optionOr ExpectedMatchArm hint
     PFatal (FailProblem kind) pos)
 
@@ -4992,7 +4996,7 @@ parseResultWith mode src tokList offList =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateOffset" false) (mem "locateTokenDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "matchContinuationHint" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
-(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
+(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextHasTab" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "makeParseMetadata" false) (mem "parsedDecls" false) (mem "parsedPositions" false))))
 (DUse true (UseGroup ("frontend" "parse_result") ((mem "ParseError" true) (mem "parseErrorDiagnostic" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
@@ -5512,7 +5516,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "armsCons" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
 (DFunDef false "armsCons" ((PVar "matchPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "parseArm") (EVar "matchPos"))) (ELam ((PVar "a")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "armsLoop") (EVar "matchPos"))) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
 (DTypeSig false "parseArm" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Arm"))))
-(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos"))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
+(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EIf (EApp (EVar "contextHasTab") (EVar "ctx")) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos")))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
 (DTypeSig false "parseArmRest" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyApp (TyCon "Parser") (TyCon "Arm")))))
 (DFunDef false "parseArmRest" ((PVar "p") (PVar "pat")) (EApp (EApp (EVar "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EVar "deferThen") (EVar "matchArrow")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "matchBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))
 (DTypeSig false "matchArrow" (TyApp (TyCon "Parser") (TyCon "Unit")))
@@ -6448,7 +6452,7 @@ parseResultWith mode src tokList offList =
 # MARK
 (DUse false (UseGroup ("frontend" "parse_locate") ((mem "locateOffset" false) (mem "locateTokenDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_hints") ((mem "prescanDiagnostic" false) (mem "matchContinuationHint" false) (mem "letMutRemovedMsg" false) (mem "isLineEndTok" false) (mem "isBracketOpenTok" false) (mem "isBracketCloseTok" false))))
-(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
+(DUse false (UseGroup ("frontend" "parse_engine") ((mem "PR" true) (mem "PFail" true) (mem "ParserE" true) (mem "Parser" false) (mem "ParseContext" false) (mem "ParseMark" false) (mem "ParseMode" true) (mem "newParseContext" false) (mem "newParseContextWith" false) (mem "runPWith" false) (mem "runP" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "contextHasTab" false) (mem "contextP" false) (mem "getPos" false) (mem "peekTok" false) (mem "peekP" false) (mem "peek2P" false) (mem "peek3P" false) (mem "advance" false) (mem "emit" false) (mem "expectTok" false) (mem "failP" false) (mem "fatalP" false) (mem "fatalProblemAtP" false) (mem "fatalAtP" false) (mem "failProblem" false) (mem "orElse" false "parseOrElse") (mem "many" false) (mem "sepBy1" false) (mem "mark" false) (mem "rewind" false) (mem "locOfSpan" false) (mem "spanLoc" false) (mem "depthOf" false) (mem "withDepth" false) (mem "recordTrailingComma" false) (mem "recordUnitStart" false) (mem "forgetLatestUnitStart" false) (mem "contextCues" false) (mem "unexpectedTokenMsg" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "makeParseMetadata" false) (mem "parsedDecls" false) (mem "parsedPositions" false))))
 (DUse true (UseGroup ("frontend" "parse_result") ((mem "ParseError" true) (mem "parseErrorDiagnostic" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
@@ -6968,7 +6972,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "armsCons" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "Arm")))))
 (DFunDef false "armsCons" ((PVar "matchPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "parseArm") (EVar "matchPos"))) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "armsLoop") (EVar "matchPos"))) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))))
 (DTypeSig false "parseArm" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Arm"))))
-(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos"))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
+(DFunDef false "parseArm" ((PVar "matchPos")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "parsePat")) (EVar "pos")) (arm (PCon "POk" (PVar "pat") (PVar "q")) () (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EApp (EApp (EVar "parseArmRest") (EVar "pos")) (EVar "pat"))) (EVar "q"))) (arm (PCon "PFatal" (PVar "f") (PVar "q")) () (EApp (EApp (EVar "PFatal") (EVar "f")) (EVar "q"))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoLet false false (PVar "hint") (EIf (EApp (EVar "contextHasTab") (EVar "ctx")) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "matchContinuationHint") (EApp (EVar "contextTokens") (EVar "ctx"))) (EApp (EVar "contextOffsets") (EVar "ctx"))) (EApp (EVar "contextLineStarts") (EVar "ctx"))) (EVar "matchPos")) (EVar "pos")))) (DoLet false false (PVar "kind") (EApp (EApp (EVar "optionOr") (EVar "ExpectedMatchArm")) (EVar "hint"))) (DoExpr (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "kind"))) (EVar "pos")))))))))
 (DTypeSig false "parseArmRest" (TyFun (TyCon "Int") (TyFun (TyCon "Pat") (TyApp (TyCon "Parser") (TyCon "Arm")))))
 (DFunDef false "parseArmRest" ((PVar "p") (PVar "pat")) (EApp (EApp (EMethodRef "deferThen") (EVar "armGuardOpt")) (ELam ((PVar "guards")) (EApp (EApp (EMethodRef "deferThen") (EVar "matchArrow")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "matchBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "recordUnitStart") (ELit (LInt 0))) (EVar "p"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EVar "guards")) (EVar "body"))))))))))))
 (DTypeSig false "matchArrow" (TyApp (TyCon "Parser") (TyCon "Unit")))

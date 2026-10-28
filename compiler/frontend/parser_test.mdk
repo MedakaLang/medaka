@@ -296,9 +296,34 @@ test "match advice requires a parenthesized arrow island and a following arm" =
       "expected a match arm (`pattern => body`)",
     ]
     [
-      parseMsg "main =\n  match f x\n      Some y\n    _ => 0\n",
-      parseMsg "main =\n  match f x\n      (a => a)\n    _ => 0\n",
-      parseMsg "main =\n  match f x\n      (a => a)\n    k = a => a\n",
+      parseMsg """main =
+  match f x
+      Some y
+    _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    k = a => a
+""",
+    ]
+
+test "match advice suppresses tabs and root type arrows" =
+  expectEqual
+    [
+      "expected a match arm (`pattern => body`)",
+      "expected a match arm (`pattern => body`)",
+      "expected a match arm (`pattern => body`)",
+    ]
+    [
+      parseMsg "main =\n\tmatch f x\n            (a => a)\n        _ => 0\n",
+      parseMsg "main =\n  match f x\n      (a => a)\n    y : Int -> Int => 0\n",
+      parseMsg "-- \t\nmain =\n  match f x\n      (a => a)\n    _ => 0\n",
     ]
 
 test "malformed operands retain their enclosing context" =
@@ -688,4 +713,8 @@ test "guarded match arm accepts a record body" =
     (mapErr
       parseErrorMessage
       (P.parseResult
-        "data R = { a : Int }\nmain = match Some 1\n  Some n if n > 0 => R { a = n }.a\n  _ => 0\n"))
+        """data R = { a : Int }
+main = match Some 1
+  Some n if n > 0 => R { a = n }.a
+  _ => 0
+"""))

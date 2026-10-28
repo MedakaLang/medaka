@@ -6,11 +6,12 @@ import frontend.parse_hints.{
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
   ParseMode(..), newParseContext, newParseContextWith, runPWith, runP,
-  contextTokens, contextOffsets, contextLineStarts, contextP, getPos, peekTok,
-  peekP, peek2P, peek3P, advance, emit, expectTok, failP, fatalP,
-  fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many, sepBy1,
-  mark, rewind, locOfSpan, spanLoc, depthOf, withDepth, recordTrailingComma,
-  recordUnitStart, forgetLatestUnitStart, contextCues, unexpectedTokenMsg
+  contextTokens, contextOffsets, contextLineStarts, contextHasTab, contextP,
+  getPos, peekTok, peekP, peek2P, peek3P, advance, emit, expectTok, failP,
+  fatalP, fatalProblemAtP, fatalAtP, failProblem, orElse as parseOrElse, many,
+  sepBy1, mark, rewind, locOfSpan, spanLoc, depthOf, withDepth,
+  recordTrailingComma, recordUnitStart, forgetLatestUnitStart, contextCues,
+  unexpectedTokenMsg
 }
 import frontend.parse_result.{
   ParsedSource, makeParsedSource, makeParseMetadata, parsedDecls,
@@ -1518,12 +1519,15 @@ parseArm matchPos = ParserE (ctx pos => match runPWith ctx parsePat pos
   PFatal f q => PFatal f q
   PErr _ _ =>
     let hint =
-      matchContinuationHint
-        (contextTokens ctx)
-        (contextOffsets ctx)
-        (contextLineStarts ctx)
-        matchPos
-        pos
+      if contextHasTab ctx then
+        None
+      else
+        matchContinuationHint
+          (contextTokens ctx)
+          (contextOffsets ctx)
+          (contextLineStarts ctx)
+          matchPos
+          pos
     let kind = optionOr ExpectedMatchArm hint
     PFatal (FailProblem kind) pos)
 

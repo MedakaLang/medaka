@@ -107,7 +107,7 @@ matchCandidateGo toks offs lines i anchor col left stack depth sawIsland sawArro
     match (stack, t)
       ([], TDedent) =>
         if depth == 0 && sawIsland && sawArrow then
-          matchFollowing toks offs lines (i + 1) anchor col (left - 1) []
+          matchFollowing toks offs lines (i + 1) anchor col (left - 1)
         else
           None
       ([], TLParen) =>
@@ -292,13 +292,12 @@ matchFollowing : Array Token ->
   Int ->
   Int ->
   Int ->
-  List Token ->
   Option ParseDiagnosticKind
-matchFollowing toks offs lines i anchor col left _ =
+matchFollowing toks offs lines i anchor col left =
   if left <= 0 || i >= arrayLength toks || i >= arrayLength offs then
     None
   else if peekTok toks i == TNewline then
-    matchFollowing toks offs lines (i + 1) anchor col (left - 1) []
+    matchFollowing toks offs lines (i + 1) anchor col (left - 1)
   else
     let (_, nextCol) = offsetToLineColFast lines (fst (arrayGetUnsafe i offs))
     if nextCol <= anchor || nextCol >= col || peekTok toks i == TFatArrow then
@@ -318,6 +317,7 @@ matchFollowingGo toks i left stack =
     ([], TFatArrow) => Some MatchContinuationHint
     ([], TEqual) => None
     ([], TLArrow) => None
+    ([], TArrow) => None
     ([], TNewline) => None
     ([], TDedent) => None
     ([], TIndent) => None

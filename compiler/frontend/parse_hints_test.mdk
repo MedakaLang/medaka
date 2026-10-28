@@ -27,7 +27,10 @@ test "prescan accepts ordinary record names" =
 test "match guard arrow stops brace-block hint" =
   expectNone
     (hintSummary
-      "main = match Some 1\n  Some n if n > 0 => R { a = n }.a\n  _ => 0\n")
+      """main = match Some 1
+  Some n if n > 0 => R { a = n }.a
+  _ => 0
+""")
 
 test "brace-block if still reports its hint" =
   expectEqual
