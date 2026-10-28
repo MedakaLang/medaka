@@ -1,6 +1,6 @@
 issue: 1243
 what: A RIGID TYPE VARIABLE FORGES THE BUILTIN TUPLE HEAD. `__tuple2__` is a legal
-what: type-PARAMETER spelling -- `identStartLower` (compiler/frontend/lexer.mdk:1638)
+what: type-PARAMETER spelling -- `scanAt` (compiler/frontend/lex_scan.mdk)
 what: is `isLower … || … == '_'`, so the lexer emits `TIdent` and `parseTyAtom`
 what: (compiler/frontend/parser.mdk:2049) makes it a `TyVar`. But `__tuple2__` is ALSO
 what: the reserved builtin tuple tag that `tupleCtorTyName`

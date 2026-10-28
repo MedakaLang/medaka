@@ -3,7 +3,7 @@
 # hand-duplicated editor-tooling copies from drifting apart silently (#1451).
 #
 # WHY THIS EXISTS: the set of Medaka reserved words is defined in exactly one
-# place that matters — `keywordOrIdent` in compiler/frontend/lexer.mdk. It is
+# place that matters — `keywordOrIdent` in compiler/frontend/lex_scan.mdk. It is
 # then HAND-DUPLICATED into two consumers that no gate checked against it:
 #   * editors/vscode-medaka/syntaxes/medaka.tmLanguage.json  (syntax highlight)
 #   * playground/medaka_tokenizer.js                         (CodeMirror lexer)
@@ -17,7 +17,7 @@
 # WHAT IT CHECKS (pure text analysis — no compiler build, no toolchain, safe
 # to run anywhere, always):
 #   1. Extracts the authoritative set from every `keywordOrIdent "word" = ...`
-#      line in compiler/frontend/lexer.mdk.
+#      line in compiler/frontend/lex_scan.mdk.
 #   2. Extracts the vscode grammar's keyword set from the `"keyword"` rule
 #      group in medaka.tmLanguage.json (the `\b(a|b|c)\b` alternations across
 #      all of that group's patterns).
@@ -35,7 +35,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LEXER="$ROOT/compiler/frontend/lexer.mdk"
+LEXER="$ROOT/compiler/frontend/lex_scan.mdk"
 VSCODE="$ROOT/editors/vscode-medaka/syntaxes/medaka.tmLanguage.json"
 PLAYGROUND="$ROOT/playground/medaka_tokenizer.js"
 
@@ -46,11 +46,11 @@ done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# ── 1. Authoritative list: compiler/frontend/lexer.mdk ────────────────────────
+# ── 1. Authoritative list: compiler/frontend/lex_scan.mdk ────────────────────────
 grep -n '^keywordOrIdent "' "$LEXER" | sed 's/.*"\(.*\)".*/\1/' | sort -u >"$WORK/lexer.txt"
 [ -s "$WORK/lexer.txt" ] || {
   echo "FAIL: extracted ZERO keywords from $LEXER — extraction pattern is broken"
-  echo "      (grep '^keywordOrIdent \"' compiler/frontend/lexer.mdk found nothing)."
+  echo "      (grep '^keywordOrIdent \"' compiler/frontend/lex_scan.mdk found nothing)."
   exit 1
 }
 
@@ -90,7 +90,7 @@ report_diff() {
   extra="$(comm -13 "$WORK/lexer.txt" "$file")"
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     rc=1
-    echo "FAIL: $label keyword list is out of sync with compiler/frontend/lexer.mdk's keywordOrIdent"
+    echo "FAIL: $label keyword list is out of sync with compiler/frontend/lex_scan.mdk's keywordOrIdent"
     if [ -n "$missing" ]; then
       echo "      missing (in lexer, not in $label):"
       printf '%s\n' "$missing" | sed 's/^/        /'
@@ -110,7 +110,7 @@ if [ "$rc" -eq 0 ]; then
   echo "OK: $lexer_n lexer keywords match both editors/vscode-medaka and playground/medaka_tokenizer.js"
 else
   echo
-  echo "Authoritative list (compiler/frontend/lexer.mdk keywordOrIdent, $lexer_n words):"
+  echo "Authoritative list (compiler/frontend/lex_scan.mdk keywordOrIdent, $lexer_n words):"
   sed 's/^/  /' "$WORK/lexer.txt"
 fi
 

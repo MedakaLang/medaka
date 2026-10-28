@@ -1,0 +1,96 @@
+afterNl : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Int -> Int -> RawTok
+at : Array Char -> Int -> Char
+atToken : Array Char -> Int -> Token
+bracketTok : Array Char -> Int -> Token
+btClose : Array Char -> Int -> Int -> Int
+closeBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+collectNoUs : Array Char -> Int -> Int -> List Char
+consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
+digitVal : Char -> Int
+digitsEnd : Array Char -> Int -> Int -> Int
+dotContinuesAccess : Array Char -> Int -> Int -> Bool
+emit : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Token -> Int -> Int -> RawTok
+emitOne : ScanCursor -> RawTok -> Int -> Int -> LexFrame -> RawTok
+endOne : ScanCursor -> RawTok
+expEnd : Array Char -> Int -> Int -> Int
+floatIsFinite : Float -> Bool
+floatTok : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
+floatTokEnd : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
+handleNewline : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+identEnd : Array Char -> Int -> Int -> Int
+identToken : Array Char -> Int -> Int -> Token
+inHole : LexFrame -> Bool
+intLitOverflows : Array Char -> Int -> Int -> Bool
+is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
+is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
+isContinued : LiteralPart -> Bool
+isExpMarker : Char -> Bool
+isExprEnd : Char -> Bool
+isFloatAt : Array Char -> Int -> Int -> Bool
+isMalformedExpDot : Array Char -> Int -> Int -> Bool
+isMalformedLeadingDot : Array Char -> Int -> Int -> Bool
+isMalformedRadixPrefix : Array Char -> Int -> Int -> Bool
+isMalformedTrailingDot : Array Char -> Int -> Int -> Bool
+isRadixDigit : Char -> Char -> Bool
+isRadixPrefix : Array Char -> Int -> Int -> Bool
+isTriple : LiteralFlavor -> Bool
+isTripleAt : Array Char -> Int -> Int -> Bool
+keywordOrIdent : String -> Token
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwStart : Char -> Bool
+leadingOp : Array Char -> Int -> Int -> Option (Token, Int)
+lexErrorTok : ScanCursor -> Int -> Int -> ParseDiagnosticKind -> RawTok
+magnitudeInt : Int -> Int
+malformedExpDotTok : ScanCursor -> Array Char -> Int -> Int -> Int -> RawTok
+malformedLeadingDotTok : ScanCursor -> Array Char -> Int -> Int -> RawTok
+malformedRadixErr : ScanCursor -> Int -> String -> String -> String -> RawTok
+malformedRadixTok : ScanCursor -> Array Char -> Int -> Int -> RawTok
+malformedTrailingDotTok : ScanCursor -> Array Char -> Int -> Int -> RawTok
+minusTok : Array Char -> Int -> Int -> Token
+nextIsComment : Array Char -> Int -> Int -> Bool
+numFinish : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
+openBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+parseIntFrom : Array Char -> Int -> Int -> Int -> Int
+parseIntNeg : Array Char -> Int -> Int -> Int -> Int
+parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
+parseRadixNeg : Array Char -> Int -> Int -> Int -> Int -> Int
+radixBase : Char -> Int
+radixEnd : Array Char -> Int -> Int -> Char -> Int
+radixKind : Char -> Bool
+radixLitOverflows : Array Char -> Int -> Int -> Char -> Bool
+radixMagOverflows : List Char -> Int -> Int -> Bool
+radixMaxLead : Char -> Int
+radixMaxLen : Char -> Int
+radixTok : ScanCursor -> Array Char -> Int -> Int -> Int -> Char -> Int -> LexFrame -> RawTok
+scan : Array Char -> Int -> ScanCursor -> List RawTok
+scanAt : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
+scanBacktick : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanBarOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanChar : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanColonOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanDotOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanEqOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanGtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanLiteral : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> LiteralFlavor -> LiteralPart -> RawTok
+scanLower : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanLtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanNumber : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanOne : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
+scanRadix : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanRaw : String -> List RawTok
+scanRawChars : Array Char -> List RawTok
+scanRawUndedentedChars : Array Char -> List RawTok
+scanTwoOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> Char -> Token -> Int -> RawTok
+scanUpper : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+sigRadixDigits : Array Char -> Int -> Int -> List Char
+singleDedent : String -> String
+singleOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
+skipBlockComment : Array Char -> Int -> Int -> Int -> Int
+skipLineComment : Array Char -> Int -> Int -> Int
+stripLeadingUs : Array Char -> Int -> Int -> String
+substrNoUs : Array Char -> Int -> Int -> String
+wideBase : Array Char -> Int -> Int
+wideHalves : Int -> List Char -> Option (Int, Int)
+wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
+wideIntTok : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> List Char -> RawTok

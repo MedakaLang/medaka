@@ -290,33 +290,8 @@ class = "emoji"
 count = 3
 
 [[entry]]
-file = "compiler/frontend/lexer.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/lexer.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/lexer.mdk"
-class = "shout"
-count = 2
-
-[[entry]]
 file = "compiler/frontend/marker.mdk"
 class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/parser.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/parser.mdk"
-class = "ruling"
 count = 1
 
 [[entry]]
@@ -677,7 +652,7 @@ count = 15
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 18
+count = 17
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

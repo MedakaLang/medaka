@@ -28,6 +28,7 @@ test "the established frontend code roster is assigned by kinds" =
       ((kind, code) => (code, expectEqual code (diagnosticCode (problem kind))))
       [
         (UnterminatedString, "L-UNTERMINATED-STRING"),
+        (NestedInterpolation, "L-NESTED-INTERPOLATION"),
         (UnterminatedComment, "L-UNTERMINATED-COMMENT"),
         (UnterminatedChar, "L-BAD-CHAR-LITERAL"),
         (InvalidEscape "\\v" False, "L-BAD-ESCAPE"),

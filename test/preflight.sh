@@ -640,7 +640,7 @@ need_fixpoint=0
 while IFS= read -r f; do
   case "$f" in
     # ── front-end: everything downstream of it is suspect ──
-    compiler/frontend/lexer.mdk|compiler/frontend/lex_token.mdk)
+    compiler/frontend/lexer.mdk|compiler/frontend/lex_token.mdk|compiler/frontend/lex_scan.mdk|compiler/frontend/lex_literal.mdk)
       # The self-lex token-stream rows (the former diff_compiler_lex_files) are
       # rows of the survivor diff_compiler_fmt, whose name no `lex*` glob reaches.
       add 'diff_compiler_fmt'

@@ -261,3 +261,47 @@ test "unterminated string continuations produce terminal errors" =
         ("triple interpolation", "\"\"\"a\\{1}tail"),
         ("escaped quote tail", "\"\"\"a\\\"\"\""),
       ])
+
+nestedRow : (String, String, (Int, Int)) -> (String, Expectation)
+nestedRow (label, source, expected) =
+  let (tokens, spans) = tokenizeWithOffsetPairs source
+  let errors =
+    filterMap
+      ((token, span) => match token
+        TLexError NestedInterpolation => Some span
+        _ => None)
+      (zip tokens spans)
+  (label, expectEqual [expected] errors)
+
+test "nested interpolation rejects the inner opener" =
+  expectEach
+    (map nestedRow [
+      ("plain in plain", "\"a\\{\"b\\{1}\"}\"", (6, 8)),
+      ("triple in plain", "\"a\\{\"\"\"b\\{1}\"\"\"}\"", (8, 10)),
+      ("plain in triple", "\"\"\"a\\{\"b\\{1}\"}\"\"\"", (8, 10)),
+      ("triple in triple", "\"\"\"a\\{\"\"\"b\\{1}\"\"\"}\"\"\"", (10, 12)),
+    ])
+
+test "scanner invocations and EOF tails remain independent" =
+  let first = tokenizeWithOffsetPairs "a"
+  let empty = tokenizeWithOffsetPairs ""
+  let whitespace =
+    tokenizeWithOffsetPairs (stringFromChars (arrayMake 100000 ' '))
+  let comment = tokenizeWithOffsetPairs "-- tail"
+  let bad = tokenizeWithOffsetPairs "\"unfinished"
+  let second = tokenizeWithOffsetPairs "a"
+  let blankExpected = (["NEWLINE", "EOF"], [(0, 0), (0, 0)])
+  let shape = (tokens, spans) => (map tokenToString tokens, spans)
+  expectAll [
+    expectEqual blankExpected (shape empty),
+    expectEqual blankExpected (shape whitespace),
+    expectEqual blankExpected (shape comment),
+    expectEqual (shape first) (shape second),
+    expectEqual
+      [(11, 11)]
+      (filterMap
+        ((t, span) => match t
+          TLexError UnterminatedString => Some span
+          _ => None)
+        (zip (fst bad) (snd bad))),
+  ]

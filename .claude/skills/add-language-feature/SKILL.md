@@ -14,7 +14,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
 
 ## Stage checklist
 
-1. **Lex** — `compiler/frontend/lexer.mdk`. New keyword/operator/token? Add the
+1. **Lex** — `compiler/frontend/lex_scan.mdk`, `lex_literal.mdk` and `lex_token.mdk`. New keyword/operator/token? Add the
    rule. The lexer is indentation-sensitive (INDENT/DEDENT/NEWLINE); be careful
    with layout-significant tokens.
 2. **Parse** — `compiler/frontend/parser.mdk` (hand-written recursive-descent).

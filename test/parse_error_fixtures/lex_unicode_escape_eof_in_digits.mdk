@@ -6,7 +6,7 @@
 -- and the `otherwise` arm fires with a different message — the fixture would still fail
 -- the build, so it would silently pin the WRONG arm rather than break loudly.
 --
--- The string is unterminated too, but the unicode error WINS: `scanStr` decodes the
+-- The string is unterminated too, but the unicode error WINS: `literalEscape` decodes the
 -- escape at the backslash, before it ever reaches the string-termination check. Verified,
 -- not assumed — `L-UNTERMINATED-STRING` never fires here.
 x = "a\u{41

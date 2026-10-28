@@ -43,9 +43,9 @@ The advice is conditional and cannot decide acceptance.
 
 ## Planned lexer boundary
 
-The current lexer owns scanning, literals and layout. The adopted extraction keeps
-`lexer` as the public facade and moves those decision bodies into three planned
-frontend modules. Their dependency graph is acyclic: lexer calls lex_scan and
+The lexer facade owns layout and delegates raw scanning and literals to
+`lex_scan` and `lex_literal`. The adopted extraction will move layout to a third
+frontend module. Their dependency graph is acyclic: lexer calls lex_scan and
 lex_layout; lex_scan calls lex_literal; both lex_literal and lex_layout use
 lex_token, which depends on parse_diagnostic and ast. The owners may use
 support char, util and stage_count and selected stdlib functions; they must not
@@ -55,7 +55,7 @@ text: scanning takes a String or Array Char, never constructs or forces an index
 and diagnostic/recovery callers retain their lazy index provider.
 
 - **lex_literal** owns plain and triple literal segments, character and escape
-  decoding, range copying and triple dedent. Its planned public data are
+  decoding, range copying and triple dedent. Its public data are
   LiteralFlavor (PlainLiteral, TripleLiteral), LiteralPart (InitialLiteral,
   ContinuedLiteral), LexError (diagnostic kind and start/end offsets),
   LiteralCursor (position, opening quote, flavor, part, leading raw LF and
@@ -68,7 +68,7 @@ and diagnostic/recovery callers retain their lazy index provider.
   `dedentTripleInterp : List RawTok -> List RawTok`. Segment builders batch
   owned fragments and join once; they do not append per character or retain the source.
 - **lex_scan** owns raw scanning, numbers, identifiers, operators, comments and
-  newlines. Its planned exports are `scanRaw : String -> List RawTok`,
+  newlines. Its exports are `scanRaw : String -> List RawTok`,
   `scanRawChars : Array Char -> List RawTok`, and
   `scanRawUndedentedChars : Array Char -> List RawTok`; the last serves comment
   collection without dedent or layout. There is no separate recovering scanner.
@@ -77,6 +77,12 @@ and diagnostic/recovery callers retain their lazy index provider.
   string is read synchronously in a hole; an actual nested interpolation opener
   is a terminal local error at its two-character span. Sequential outer holes
   remain supported. Triple interpolation opener metadata survives dedent.
+  One invocation-owned ScanCursor holds four refs for position, delimiter depth,
+  frame and readiness, plus immutable source length. A single-match `scan` loop
+  owns the output spine and receives one token from `scanOne`; helpers update the
+  cursor and never call `scan`. Stage-1 tail-modulo-cons makes this loop bounded
+  in native and Wasm. The ready flag controls EOF; an ignored placeholder is not
+  a token sentinel. The cursor never escapes into tokens or retained context.
 - **lex_layout** owns extern-clause breaks, layout and the final filter. Its
   planned exports are `applyLayoutTokens : List RawTok -> List Token`,
   `applyLayoutStarts : List RawTok -> List (Token, Int)`, and
@@ -96,6 +102,7 @@ commentLine : Comment -> Int
 commentCol : Comment -> Int
 commentText : Comment -> String
 offsetToLineCol : String -> Int -> (Int, Int)
+offsetsToLines : Array Char -> List Int -> List Int
 isThenTok : Token -> Bool
 isElseTok : Token -> Bool
 ```
@@ -105,10 +112,9 @@ lineStartsOf and offsetToLineColFast. BracketFrame moves to layout; isThenTok an
 to lex_token and are re-exported by the facade. First move literal and scanner
 bodies together, including the shared range copier and triple dedent, without
 live twins. Then move the range layout family and extern breaks, parameterize
-its projections and delete the old layout and filter twins. The facade keeps
-only delegation and comment/position adapters. Existing consumers need no API
-rewrite. These planned modules and the dedicated nested-interpolation
-diagnostic are not yet implemented.
+its projections and delete the old layout and filter twins. The facade will keep only delegation and comment/position adapters after the
+layout extraction. Existing consumers need no API rewrite. The dedicated
+nested-interpolation diagnostic is implemented; layout extraction remains planned.
 
 The prototype's matched batches measured complete ordinary-source tokenization
 at 1.191x, 1.094x and 1.216x baseline: the accepted tradeoff permits up to

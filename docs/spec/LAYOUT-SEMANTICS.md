@@ -353,7 +353,7 @@ free-form inside them. `INDENT`/`DEDENT`/`NEWLINE` never appear between a matche
 bracket pair.
 
 **String interpolation** (`"… \{ e } …"`) is tracked by a *separate* depth
-(`interp_depth` / the `id` thread): a `{` inside an interpolation increments the
+(`HoleFrame` brace depth): a `{` inside an interpolation increments the
 interpolation depth, **not** the bracket depth, so the layout-disabling counter
 is never confused by interpolation braces. Layout is likewise disabled inside an
 interpolated expression.

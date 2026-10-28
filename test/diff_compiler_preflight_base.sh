@@ -206,6 +206,8 @@ printf '%s\n' "$deleted_helper_out" | grep -q '^  UNMAPPED  test/removed_test_su
 # Each extracted module inherits the selector of its owning stage.
 for pair in \
   'lex_token lexer' \
+  'lex_scan lexer' \
+  'lex_literal lexer' \
   'parse_engine parser' \
   'parse_positions parser' \
   'parse_result parser'
@@ -232,4 +234,4 @@ if [ "$fails" -ne 0 ]; then
   echo "diff_compiler_preflight_base: $fails assertion(s) FAILED"
   exit 1
 fi
-echo "diff_compiler_preflight_base: PASS (6 assertions and 4 frontend selectors)"
+echo "diff_compiler_preflight_base: PASS (6 assertions and 6 frontend selectors)"

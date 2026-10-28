@@ -32,11 +32,6 @@ rule = "rule-stdlib-reimpl"
 count = 2
 
 [[entry]]
-file = "compiler/driver/diagnostics.mdk"
-rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
 file = "compiler/driver/loader.mdk"
 rule = "rule-stdlib-reimpl"
 count = 3
@@ -52,9 +47,9 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
-file = "compiler/frontend/lexer.mdk"
+file = "compiler/frontend/lex_scan.mdk"
 rule = "rule-stdlib-reimpl"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/frontend/parse_cache.mdk"

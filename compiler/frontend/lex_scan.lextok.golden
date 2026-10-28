@@ -1,0 +1,7420 @@
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "parse_diagnostic"
+DOT_LBRACE
+UPPER "ParseDiagnosticKind"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
+NEWLINE
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_token"
+DOT_LBRACE
+UPPER "Token"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "RawTok"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
+NEWLINE
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_literal"
+DOT_LBRACE
+UPPER "LiteralFlavor"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "LiteralPart"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "LiteralCursor"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "LiteralRead"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "LiteralStop"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "LexError"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+IDENT "readLiteral"
+COMMA
+IDENT "readCharacter"
+COMMA
+IDENT "copyCharRange"
+COMMA
+IDENT "dedentSegments"
+COMMA
+IDENT "dedentTripleInterp"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "support"
+DOT
+IDENT "char"
+DOT_LBRACE
+IDENT "isSp"
+COMMA
+IDENT "isTab"
+COMMA
+IDENT "isNL"
+COMMA
+IDENT "isCR"
+COMMA
+IDENT "isQuote"
+COMMA
+IDENT "isApos"
+COMMA
+IDENT "isBackslash"
+COMMA
+IDENT "isBacktick"
+COMMA
+IDENT "isSpace"
+COMMA
+IDENT "isDigit"
+COMMA
+IDENT "isLower"
+COMMA
+IDENT "isUpper"
+COMMA
+IDENT "isAlnum"
+COMMA
+IDENT "isHexDigit"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "support"
+DOT
+IDENT "util"
+DOT_LBRACE
+IDENT "compareDecMag"
+COMMA
+IDENT "listLen"
+COMMA
+IDENT "anyList"
+RBRACE
+NEWLINE
+DATA
+UPPER "LexFrame"
+EQUAL
+UPPER "CodeFrame"
+PIPE
+UPPER "HoleFrame"
+UPPER "LiteralFlavor"
+UPPER "Int"
+UPPER "Int"
+NEWLINE
+IDENT "at"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+NEWLINE
+IDENT "at"
+IDENT "src"
+IDENT "i"
+EQUAL
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+NEWLINE
+IDENT "is2"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+IDENT "a"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+IDENT "b"
+NEWLINE
+IDENT "is3"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "is3"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "a"
+IDENT "b"
+IDENT "c"
+EQUAL
+INDENT
+IDENT "pos"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+IDENT "a"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+IDENT "b"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+EQ_EQ
+IDENT "c"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "collectNoUs"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Char"
+NEWLINE
+IDENT "collectNoUs"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "endp"
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "collectNoUs"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "at"
+IDENT "src"
+IDENT "p"
+CONS
+IDENT "collectNoUs"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "substrNoUs"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "substrNoUs"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+EQUAL
+INDENT
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayFromList"
+LPAREN
+IDENT "collectNoUs"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseIntFrom"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseIntFrom"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "acc"
+EQUAL
+IDENT "magnitudeInt"
+LPAREN
+IDENT "parseIntNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "acc"
+RPAREN
+NEWLINE
+IDENT "parseIntNeg"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseIntNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "endp"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "parseIntNeg"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "parseIntNeg"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+LPAREN
+IDENT "acc"
+STAR
+INT 10
+MINUS
+LPAREN
+IDENT "charCode"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+MINUS
+INT 48
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "magnitudeInt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "magnitudeInt"
+IDENT "neg"
+EQUAL
+IF
+IDENT "neg"
+EQ_EQ
+IDENT "intMinBound"
+THEN
+IDENT "neg"
+ELSE
+INT 0
+MINUS
+IDENT "neg"
+NEWLINE
+IDENT "intLitOverflows"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "intLitOverflows"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+EQUAL
+INDENT
+IDENT "compareDecMag"
+LPAREN
+IDENT "substrNoUs"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+RPAREN
+STRING "4611686018427387904"
+EQ_EQ
+UPPER "Gt"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wideHalves"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "Option"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "wideHalves"
+IDENT "base"
+IDENT "digits"
+EQUAL
+IDENT "wideHalvesGo"
+IDENT "base"
+IDENT "digits"
+INT 0
+INT 0
+NEWLINE
+IDENT "wideHalvesGo"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "wideHalvesGo"
+UNDERSCORE
+LBRACKET
+RBRACKET
+IDENT "hi"
+IDENT "lo"
+EQUAL
+UPPER "Some"
+LPAREN
+IDENT "hi"
+COMMA
+IDENT "lo"
+RPAREN
+NEWLINE
+IDENT "wideHalvesGo"
+IDENT "base"
+LPAREN
+IDENT "d"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "hi"
+IDENT "lo"
+EQUAL
+INDENT
+LET
+IDENT "lo2"
+EQUAL
+IDENT "lo"
+STAR
+IDENT "base"
+PLUS
+IDENT "digitVal"
+IDENT "d"
+NEWLINE
+LET
+IDENT "hi2"
+EQUAL
+IDENT "hi"
+STAR
+IDENT "base"
+PLUS
+IDENT "lo2"
+SLASH
+INT 4294967296
+NEWLINE
+IF
+IDENT "hi2"
+GT
+INT 4294967295
+THEN
+INDENT
+UPPER "None"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "wideHalvesGo"
+IDENT "base"
+IDENT "rest"
+IDENT "hi2"
+LPAREN
+IDENT "lo2"
+MOD
+INT 4294967296
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wideIntTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wideIntTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+IDENT "digits"
+EQUAL
+INDENT
+MATCH
+IDENT "wideHalves"
+LPAREN
+IDENT "wideBase"
+IDENT "src"
+IDENT "pos"
+RPAREN
+IDENT "digits"
+INDENT
+UPPER "Some"
+LPAREN
+IDENT "hi"
+COMMA
+IDENT "lo"
+RPAREN
+FAT_ARROW
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TWideInt"
+IDENT "hi"
+IDENT "lo"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+RPAREN
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "None"
+FAT_ARROW
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "e"
+UPPER "IntegerOverflow"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wideBase"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "wideBase"
+IDENT "src"
+IDENT "pos"
+INDENT
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+CHAR "0"
+AND
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "arrayLength"
+IDENT "src"
+AND
+IDENT "radixKind"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+IDENT "radixBase"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INT 10
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "keywordOrIdent"
+COLON
+UPPER "String"
+ARROW
+UPPER "Token"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "let"
+EQUAL
+UPPER "TLet"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "rec"
+EQUAL
+UPPER "TRec"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "with"
+EQUAL
+UPPER "TWith"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "mut"
+EQUAL
+UPPER "TMut"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "in"
+EQUAL
+UPPER "TIn"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "if"
+EQUAL
+UPPER "TIf"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "then"
+EQUAL
+UPPER "TThen"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "else"
+EQUAL
+UPPER "TElse"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "match"
+EQUAL
+UPPER "TMatch"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "data"
+EQUAL
+UPPER "TData"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "interface"
+EQUAL
+UPPER "TInterface"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "default"
+EQUAL
+UPPER "TDefault"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "impl"
+EQUAL
+UPPER "TImpl"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "import"
+EQUAL
+UPPER "TImport"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "export"
+EQUAL
+UPPER "TExport"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "public"
+EQUAL
+UPPER "TPublic"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "where"
+EQUAL
+UPPER "TWhere"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "of"
+EQUAL
+UPPER "TOf"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "do"
+EQUAL
+UPPER "TDo"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "defer"
+EQUAL
+UPPER "TDefer"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "as"
+EQUAL
+UPPER "TAs"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "extern"
+EQUAL
+UPPER "TExtern"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "requires"
+EQUAL
+UPPER "TRequires"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "deriving"
+EQUAL
+UPPER "TDeriving"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "type"
+EQUAL
+UPPER "TType"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "newtype"
+EQUAL
+UPPER "TNewtype"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "prop"
+EQUAL
+UPPER "TProp"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "test"
+EQUAL
+UPPER "TTest"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "bench"
+EQUAL
+UPPER "TBench"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "effect"
+EQUAL
+UPPER "TEffect"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "function"
+EQUAL
+UPPER "TFunction"
+NEWLINE
+IDENT "keywordOrIdent"
+IDENT "s"
+EQUAL
+UPPER "TIdent"
+IDENT "s"
+NEWLINE
+IDENT "scanOne"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanOne"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "pos"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "endOne"
+IDENT "ctx"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "scanAt"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanAt"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanAt"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+INDENT
+PIPE
+IDENT "isSpace"
+IDENT "c"
+EQUAL
+IDENT "scanOne"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isNL"
+IDENT "c"
+OR
+IDENT "isCR"
+IDENT "c"
+EQUAL
+IDENT "handleNewline"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "c"
+EQ_EQ
+CHAR "-"
+AND
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "skipLineComment"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RComment"
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "c"
+EQ_EQ
+CHAR "{"
+AND
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "skipBlockComment"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+INT 1
+NEWLINE
+IF
+IDENT "e"
+LT
+INT 0
+THEN
+INDENT
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "len"
+UPPER "UnterminatedComment"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RComment"
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isDigit"
+IDENT "c"
+EQUAL
+IDENT "scanNumber"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isQuote"
+IDENT "c"
+AND
+IDENT "isTripleAt"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "scanLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 3
+RPAREN
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TripleLiteral"
+UPPER "InitialLiteral"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isQuote"
+IDENT "c"
+EQUAL
+INDENT
+IDENT "scanLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "PlainLiteral"
+UPPER "InitialLiteral"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isApos"
+IDENT "c"
+EQUAL
+IDENT "scanChar"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isLower"
+IDENT "c"
+OR
+IDENT "c"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "scanLower"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isUpper"
+IDENT "c"
+EQUAL
+IDENT "scanUpper"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isBacktick"
+IDENT "c"
+EQUAL
+IDENT "scanBacktick"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "skipLineComment"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "skipLineComment"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "skipLineComment"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "lexErrorTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ParseDiagnosticKind"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "p"
+IDENT "end"
+IDENT "kind"
+EQUAL
+INDENT
+IDENT "ctx"
+DOT
+IDENT "cursorPos"
+COLONEQ
+IDENT "ctx"
+DOT
+IDENT "cursorLength"
+NEWLINE
+UPPER "RTok"
+LPAREN
+UPPER "TLexError"
+IDENT "kind"
+RPAREN
+IDENT "p"
+IDENT "end"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "skipBlockComment"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "skipBlockComment"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "d"
+INDENT
+PIPE
+IDENT "d"
+LEQ
+INT 0
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+INT 0
+MINUS
+INT 1
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "{"
+AND
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+EQUAL
+INDENT
+IDENT "skipBlockComment"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+IDENT "d"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "-"
+AND
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "}"
+EQUAL
+INDENT
+IDENT "skipBlockComment"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+IDENT "d"
+MINUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "skipBlockComment"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "d"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "identEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "identEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "len"
+AND
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "identEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanLower"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanLower"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "identEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+IDENT "identToken"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "identToken"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Token"
+NEWLINE
+IDENT "identToken"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+INDENT
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+CHAR "_"
+AND
+IDENT "e"
+MINUS
+IDENT "pos"
+EQ_EQ
+INT 1
+EQUAL
+UPPER "TUnderscore"
+NEWLINE
+PIPE
+IDENT "kwCandidate"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+EQUAL
+IDENT "keywordOrIdent"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "TIdent"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "kwCandidate"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "kwCandidate"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+IDENT "e"
+MINUS
+IDENT "pos"
+NEWLINE
+IDENT "n"
+GEQ
+INT 2
+AND
+IDENT "n"
+LEQ
+INT 9
+AND
+IDENT "kwStart"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "kwStart"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "kwStart"
+CHAR "a"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "b"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "d"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "e"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "f"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "i"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "l"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "m"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "n"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "o"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "p"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "r"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "t"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+CHAR "w"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "kwStart"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "scanUpper"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanUpper"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "identEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TUpper"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+RPAREN
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanBacktick"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanBacktick"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "btClose"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TBacktickIdent"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "e"
+RPAREN
+RPAREN
+IDENT "pos"
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "btClose"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "btClose"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "isBacktick"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "btClose"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "digitsEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "len"
+AND
+LPAREN
+IDENT "isDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+RPAREN
+EQUAL
+INDENT
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isRadixPrefix"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isRadixPrefix"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+CHAR "0"
+AND
+IDENT "pos"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "radixKind"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "isRadixDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixKind"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "radixKind"
+IDENT "k"
+EQUAL
+IDENT "k"
+EQ_EQ
+CHAR "x"
+OR
+IDENT "k"
+EQ_EQ
+CHAR "b"
+OR
+IDENT "k"
+EQ_EQ
+CHAR "o"
+NEWLINE
+IDENT "radixBase"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "radixBase"
+CHAR "x"
+EQUAL
+INT 16
+NEWLINE
+IDENT "radixBase"
+CHAR "b"
+EQUAL
+INT 2
+NEWLINE
+IDENT "radixBase"
+UNDERSCORE
+EQUAL
+INT 8
+NEWLINE
+IDENT "isRadixDigit"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isRadixDigit"
+CHAR "x"
+IDENT "c"
+EQUAL
+IDENT "isHexDigit"
+IDENT "c"
+NEWLINE
+IDENT "isRadixDigit"
+CHAR "b"
+IDENT "c"
+EQUAL
+IDENT "c"
+EQ_EQ
+CHAR "0"
+OR
+IDENT "c"
+EQ_EQ
+CHAR "1"
+NEWLINE
+IDENT "isRadixDigit"
+UNDERSCORE
+IDENT "c"
+EQUAL
+IDENT "c"
+GEQ
+CHAR "0"
+AND
+IDENT "c"
+LEQ
+CHAR "7"
+NEWLINE
+IDENT "digitVal"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "digitVal"
+IDENT "c"
+INDENT
+PIPE
+IDENT "isDigit"
+IDENT "c"
+EQUAL
+IDENT "charCode"
+IDENT "c"
+MINUS
+INT 48
+NEWLINE
+PIPE
+IDENT "c"
+GEQ
+CHAR "a"
+AND
+IDENT "c"
+LEQ
+CHAR "f"
+EQUAL
+IDENT "charCode"
+IDENT "c"
+MINUS
+INT 87
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "charCode"
+IDENT "c"
+MINUS
+INT 55
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "radixEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "k"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "len"
+AND
+LPAREN
+IDENT "isRadixDigit"
+IDENT "k"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+RPAREN
+EQUAL
+INDENT
+IDENT "radixEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "k"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseRadix"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseRadix"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
+EQUAL
+INDENT
+IDENT "magnitudeInt"
+LPAREN
+IDENT "parseRadixNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseRadixNeg"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseRadixNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "endp"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "parseRadixNeg"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "parseRadixNeg"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+IDENT "base"
+LPAREN
+IDENT "acc"
+STAR
+IDENT "base"
+MINUS
+IDENT "digitVal"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixMaxLen"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "radixMaxLen"
+CHAR "x"
+EQUAL
+INT 16
+NEWLINE
+IDENT "radixMaxLen"
+CHAR "b"
+EQUAL
+INT 63
+NEWLINE
+IDENT "radixMaxLen"
+UNDERSCORE
+EQUAL
+INT 21
+NEWLINE
+IDENT "radixMaxLead"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "radixMaxLead"
+CHAR "b"
+EQUAL
+INT 1
+NEWLINE
+IDENT "radixMaxLead"
+UNDERSCORE
+EQUAL
+INT 4
+NEWLINE
+IDENT "sigRadixDigits"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Char"
+NEWLINE
+IDENT "sigRadixDigits"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "endp"
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+OR
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "0"
+EQUAL
+IDENT "sigRadixDigits"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "collectNoUs"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixMagOverflows"
+COLON
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "radixMagOverflows"
+LBRACKET
+RBRACKET
+UNDERSCORE
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "radixMagOverflows"
+LPAREN
+IDENT "d"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "maxLen"
+IDENT "maxLead"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+INT 1
+PLUS
+IDENT "listLen"
+IDENT "rest"
+NEWLINE
+IDENT "n"
+GT
+IDENT "maxLen"
+OR
+IDENT "n"
+EQ_EQ
+IDENT "maxLen"
+AND
+LPAREN
+IDENT "digitVal"
+IDENT "d"
+GT
+IDENT "maxLead"
+OR
+IDENT "digitVal"
+IDENT "d"
+EQ_EQ
+IDENT "maxLead"
+AND
+IDENT "anyList"
+LPAREN
+NEQ
+CHAR "0"
+RPAREN
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixLitOverflows"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "radixLitOverflows"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+IDENT "k"
+EQUAL
+INDENT
+IDENT "radixMagOverflows"
+LPAREN
+IDENT "sigRadixDigits"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+RPAREN
+LPAREN
+IDENT "radixMaxLen"
+IDENT "k"
+RPAREN
+LPAREN
+IDENT "radixMaxLead"
+IDENT "k"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanRadix"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanRadix"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "k"
+EQUAL
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+LET
+IDENT "e"
+EQUAL
+IDENT "radixEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "k"
+NEWLINE
+IDENT "radixTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e"
+IDENT "k"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "radixTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e"
+IDENT "k"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "radixLitOverflows"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "e"
+IDENT "k"
+EQUAL
+INDENT
+IDENT "wideIntTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "sigRadixDigits"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "e"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInt"
+LPAREN
+IDENT "parseRadix"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "e"
+LPAREN
+IDENT "radixBase"
+IDENT "k"
+RPAREN
+INT 0
+RPAREN
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+RPAREN
+RPAREN
+IDENT "pos"
+IDENT "e"
+RPAREN
+IDENT "e"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanNumber"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanNumber"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "isRadixPrefix"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+IDENT "scanRadix"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "isMalformedRadixPrefix"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+IDENT "malformedRadixTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "numFinish"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+LPAREN
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+RPAREN
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isMalformedRadixPrefix"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isMalformedRadixPrefix"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "at"
+IDENT "src"
+IDENT "pos"
+EQ_EQ
+CHAR "0"
+AND
+IDENT "pos"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "radixKind"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+EQ_EQ
+CHAR "_"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "malformedRadixTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "malformedRadixTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+LET
+IDENT "k"
+EQUAL
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+LET
+IDENT "e"
+EQUAL
+IDENT "radixEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "k"
+NEWLINE
+LET
+IDENT "bad"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+NEWLINE
+LET
+IDENT "digits"
+EQUAL
+IDENT "stripLeadingUs"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+IDENT "e"
+NEWLINE
+IDENT "malformedRadixErr"
+IDENT "ctx"
+IDENT "pos"
+IDENT "bad"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+IDENT "digits"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripLeadingUs"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripLeadingUs"
+IDENT "src"
+IDENT "p"
+IDENT "e"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "e"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "stripLeadingUs"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "e"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "p"
+IDENT "e"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "malformedRadixErr"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "malformedRadixErr"
+IDENT "ctx"
+IDENT "pos"
+IDENT "bad"
+IDENT "prefix"
+IDENT "digits"
+EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+IDENT "stringLength"
+IDENT "bad"
+RPAREN
+LPAREN
+UPPER "MalformedRadix"
+IDENT "bad"
+IDENT "prefix"
+IDENT "digits"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isFloatAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isFloatAt"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+INDENT
+IDENT "e1"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "e1"
+EQ_EQ
+CHAR "."
+AND
+IDENT "e1"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isExpMarker"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isExpMarker"
+IDENT "c"
+EQUAL
+IDENT "c"
+EQ_EQ
+CHAR "e"
+OR
+IDENT "c"
+EQ_EQ
+CHAR "E"
+NEWLINE
+IDENT "expEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "len"
+AND
+IDENT "isExpMarker"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "q"
+EQUAL
+INDENT
+IF
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "+"
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+RPAREN
+THEN
+INDENT
+IDENT "p"
+PLUS
+INT 2
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "p"
+PLUS
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IF
+IDENT "q"
+LT
+IDENT "len"
+AND
+IDENT "isDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "q"
+RPAREN
+THEN
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+IDENT "q"
+ELSE
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "numFinish"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "numFinish"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "isFloatAt"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+IDENT "floatTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+GT
+IDENT "e1"
+EQUAL
+INDENT
+IDENT "floatTokEnd"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+LPAREN
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+RPAREN
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isMalformedExpDot"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+IDENT "malformedExpDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+NEWLINE
+PIPE
+IDENT "isMalformedTrailingDot"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+IDENT "malformedTrailingDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+NEWLINE
+PIPE
+IDENT "intLitOverflows"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+EQUAL
+INDENT
+IDENT "wideIntTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "collectNoUs"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInt"
+LPAREN
+IDENT "parseIntFrom"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+INT 0
+RPAREN
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+RPAREN
+RPAREN
+IDENT "pos"
+IDENT "e1"
+RPAREN
+IDENT "e1"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isMalformedExpDot"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isMalformedExpDot"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+INDENT
+IDENT "e1"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "e1"
+EQ_EQ
+CHAR "."
+AND
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+GT
+IDENT "e1"
+PLUS
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "malformedExpDotTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "malformedExpDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+EQUAL
+INDENT
+LET
+IDENT "expE"
+EQUAL
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+LET
+IDENT "bad"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "expE"
+NEWLINE
+LET
+IDENT "good"
+EQUAL
+INDENT
+INTERP_OPEN ""
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+INTERP_MID "0"
+IDENT "copyCharRange"
+IDENT "src"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+IDENT "expE"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "expE"
+LPAREN
+UPPER "MalformedFloat"
+IDENT "bad"
+IDENT "good"
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isMalformedTrailingDot"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isMalformedTrailingDot"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+EQUAL
+INDENT
+IDENT "e1"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "e1"
+EQ_EQ
+CHAR "."
+AND
+IDENT "not"
+LPAREN
+IDENT "dotContinuesAccess"
+IDENT "src"
+IDENT "len"
+IDENT "e1"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dotContinuesAccess"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "dotContinuesAccess"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+LPAREN
+IDENT "isLower"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+OR
+IDENT "isUpper"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "_"
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "["
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "."
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "{"
+OR
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "*"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "malformedTrailingDotTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "malformedTrailingDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "pos"
+IDENT "e1"
+EQUAL
+INDENT
+LET
+IDENT "bad"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "MalformedFloat"
+IDENT "bad"
+LPAREN
+IDENT "bad"
+PLUSPLUS
+STRING "0"
+RPAREN
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floatTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floatTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "e1"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "e2"
+EQUAL
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "floatTokEnd"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+LPAREN
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+IDENT "e2"
+RPAREN
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floatIsFinite"
+COLON
+UPPER "Float"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "floatIsFinite"
+IDENT "f"
+EQUAL
+IDENT "f"
+STAR
+FLOAT 0.0
+EQ_EQ
+FLOAT 0.0
+NEWLINE
+IDENT "floatTokEnd"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floatTokEnd"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "endp"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+IDENT "f"
+EQUAL
+IDENT "optionOr"
+FLOAT 0.0
+LPAREN
+IDENT "stringToFloat"
+LPAREN
+IDENT "substrNoUs"
+IDENT "src"
+IDENT "pos"
+IDENT "endp"
+RPAREN
+RPAREN
+NEWLINE
+IF
+IDENT "floatIsFinite"
+IDENT "f"
+THEN
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TFloat"
+IDENT "f"
+RPAREN
+IDENT "pos"
+IDENT "endp"
+RPAREN
+IDENT "endp"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "endp"
+UPPER "FloatOverflow"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isTripleAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isTripleAt"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "inHole"
+COLON
+UPPER "LexFrame"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "inHole"
+UPPER "CodeFrame"
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "inHole"
+UNDERSCORE
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "scanLiteral"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "LiteralFlavor"
+ARROW
+NEWLINE
+UPPER "LiteralPart"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "quote"
+IDENT "depth"
+IDENT "frame"
+IDENT "flavor"
+IDENT "part"
+EQUAL
+INDENT
+MATCH
+IDENT "readLiteral"
+IDENT "src"
+LPAREN
+UPPER "LiteralCursor"
+IDENT "p"
+IDENT "quote"
+IDENT "flavor"
+IDENT "part"
+UPPER "False"
+LPAREN
+IDENT "inHole"
+IDENT "frame"
+RPAREN
+RPAREN
+INDENT
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+IDENT "start"
+IDENT "end"
+RPAREN
+FAT_ARROW
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "start"
+IDENT "end"
+IDENT "kind"
+NEWLINE
+UPPER "Ok"
+LPAREN
+UPPER "LiteralRead"
+IDENT "s"
+IDENT "next"
+IDENT "stop"
+IDENT "leading"
+RPAREN
+FAT_ARROW
+MATCH
+IDENT "stop"
+INDENT
+UPPER "LiteralClose"
+FAT_ARROW
+INDENT
+LET
+IDENT "closeStart"
+EQUAL
+IF
+IDENT "not"
+LPAREN
+IDENT "isTriple"
+IDENT "flavor"
+RPAREN
+THEN
+IDENT "next"
+MINUS
+INT 1
+ELSE
+IDENT "next"
+MINUS
+INT 3
+NEWLINE
+LET
+IDENT "value"
+EQUAL
+INDENT
+IF
+IDENT "isTriple"
+IDENT "flavor"
+AND
+IDENT "not"
+LPAREN
+IDENT "isContinued"
+IDENT "part"
+RPAREN
+AND
+IDENT "leading"
+THEN
+INDENT
+IDENT "singleDedent"
+IDENT "s"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+LET
+IDENT "token"
+EQUAL
+INDENT
+IF
+IDENT "not"
+LPAREN
+IDENT "isContinued"
+IDENT "part"
+RPAREN
+THEN
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TString"
+IDENT "value"
+RPAREN
+IDENT "quote"
+IDENT "next"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpEnd"
+IDENT "value"
+RPAREN
+IDENT "closeStart"
+IDENT "next"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+IDENT "token"
+IDENT "next"
+IDENT "depth"
+IDENT "frame"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "LiteralHole"
+FAT_ARROW
+INDENT
+LET
+IDENT "start"
+EQUAL
+IDENT "next"
+MINUS
+INT 2
+NEWLINE
+LET
+IDENT "token"
+EQUAL
+INDENT
+IF
+IDENT "isContinued"
+IDENT "part"
+THEN
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpMid"
+IDENT "s"
+RPAREN
+IDENT "start"
+IDENT "next"
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "isTriple"
+IDENT "flavor"
+THEN
+INDENT
+UPPER "RTripleInterpOpen"
+IDENT "s"
+IDENT "start"
+IDENT "next"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpOpen"
+IDENT "s"
+RPAREN
+IDENT "start"
+IDENT "next"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "emitOne"
+IDENT "ctx"
+IDENT "token"
+IDENT "next"
+IDENT "depth"
+LPAREN
+UPPER "HoleFrame"
+IDENT "flavor"
+IDENT "start"
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleDedent"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "singleDedent"
+IDENT "s"
+EQUAL
+MATCH
+IDENT "dedentSegments"
+LBRACKET
+IDENT "s"
+RBRACKET
+INDENT
+LBRACKET
+IDENT "v"
+RBRACKET
+FAT_ARROW
+IDENT "v"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanChar"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanChar"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "frame"
+EQUAL
+MATCH
+IDENT "readCharacter"
+IDENT "src"
+IDENT "pos"
+INDENT
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+IDENT "start"
+IDENT "end"
+RPAREN
+FAT_ARROW
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "start"
+IDENT "end"
+IDENT "kind"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "s"
+COMMA
+IDENT "next"
+RPAREN
+FAT_ARROW
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TChar"
+IDENT "s"
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "next"
+RPAREN
+IDENT "next"
+IDENT "depth"
+IDENT "frame"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "scanRaw"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanRaw"
+IDENT "s"
+EQUAL
+IDENT "scanRawChars"
+LPAREN
+IDENT "stringToChars"
+IDENT "s"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "scanRawChars"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanRawChars"
+IDENT "src"
+EQUAL
+IDENT "dedentTripleInterp"
+LPAREN
+IDENT "scanRawUndedentedChars"
+IDENT "src"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "scanRawUndedentedChars"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanRawUndedentedChars"
+IDENT "src"
+EQUAL
+INDENT
+LET
+IDENT "len"
+EQUAL
+IDENT "arrayLength"
+IDENT "src"
+NEWLINE
+LET
+IDENT "cursor"
+EQUAL
+UPPER "ScanCursor"
+LBRACE
+IDENT "cursorPos"
+EQUAL
+UPPER "Ref"
+INT 0
+COMMA
+IDENT "cursorDepth"
+EQUAL
+UPPER "Ref"
+INT 0
+COMMA
+IDENT "cursorFrame"
+EQUAL
+UPPER "Ref"
+UPPER "CodeFrame"
+COMMA
+IDENT "cursorReady"
+EQUAL
+UPPER "Ref"
+UPPER "True"
+COMMA
+IDENT "cursorLength"
+EQUAL
+IDENT "len"
+COMMA
+RBRACE
+NEWLINE
+IDENT "scan"
+IDENT "src"
+IDENT "len"
+IDENT "cursor"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "emit"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "tok"
+IDENT "length"
+IDENT "ddelta"
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+IDENT "tok"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+IDENT "length"
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+IDENT "length"
+RPAREN
+LPAREN
+IDENT "depth"
+PLUS
+IDENT "ddelta"
+RPAREN
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "."
+EQUAL
+IDENT "scanDotOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "|"
+EQUAL
+IDENT "scanBarOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "="
+EQUAL
+IDENT "scanEqOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "<"
+EQUAL
+IDENT "scanLtOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ">"
+EQUAL
+IDENT "scanGtOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ":"
+EQUAL
+IDENT "scanColonOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "["
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "["
+CHAR "|"
+UPPER "TLArray"
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "-"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "-"
+CHAR ">"
+UPPER "TArrow"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "+"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "+"
+CHAR "+"
+UPPER "TPlusPlus"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "!"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "!"
+CHAR "="
+UPPER "TBangEq"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "/"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "/"
+CHAR "="
+UPPER "TNeq"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "&"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "&"
+CHAR "&"
+UPPER "TAnd"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+NEWLINE
+IDENT "scanTwoOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanTwoOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+IDENT "b"
+IDENT "tok"
+IDENT "ddelta"
+EQUAL
+INDENT
+IF
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "c"
+IDENT "b"
+THEN
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "tok"
+INT 2
+IDENT "ddelta"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanDotOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanDotOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is3"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "."
+CHAR "."
+CHAR "."
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TEllipsis"
+INT 3
+INT 0
+NEWLINE
+PIPE
+IDENT "is3"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "."
+CHAR "."
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TDotDotEq"
+INT 3
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "."
+CHAR "{"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TDotLBrace"
+INT 2
+INT 1
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "."
+CHAR "*"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TDotStar"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "."
+CHAR "."
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TDotDot"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "."
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanBarOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanBarOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR "]"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRArray"
+INT 2
+LPAREN
+INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR "|"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TOr"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TPipeRight"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "|"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanEqOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanEqOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "="
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TFatArrow"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "="
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TEqEq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "="
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanLtOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanLtOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "-"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLArrow"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLeq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "<"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLCompose"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "<"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanGtOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanGtOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ">"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TGeq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ">"
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRCompose"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ">"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanColonOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanColonOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ":"
+CHAR ":"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TCons"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ":"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TColonEq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ":"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "+"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TPlus"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "-"
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "minusTok"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+RPAREN
+INT 1
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "*"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TStar"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "/"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TSlash"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "<"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLt"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TGt"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TEqual"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ":"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TColon"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ","
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TComma"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "."
+INDENT
+PIPE
+IDENT "isMalformedLeadingDot"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+IDENT "malformedLeadingDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TDot"
+INT 1
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "|"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TPipe"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "("
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLParen"
+INT 1
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ")"
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRParen"
+INT 1
+LPAREN
+INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "["
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "bracketTok"
+IDENT "src"
+IDENT "pos"
+RPAREN
+INT 1
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "]"
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRBracket"
+INT 1
+LPAREN
+INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "{"
+EQUAL
+IDENT "openBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "}"
+EQUAL
+IDENT "closeBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "!"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TBang"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "%"
+EQUAL
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TMod"
+INT 1
+INT 0
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "@"
+EQUAL
+INDENT
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+LPAREN
+IDENT "atToken"
+IDENT "src"
+IDENT "pos"
+RPAREN
+INT 1
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "\\"
+EQUAL
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsLambda"
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "$"
+EQUAL
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsDollar"
+NEWLINE
+IDENT "singleOp"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "UnexpectedCharacter"
+LPAREN
+IDENT "charToStr"
+IDENT "c"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "bracketTok"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Token"
+NEWLINE
+IDENT "bracketTok"
+IDENT "src"
+IDENT "pos"
+INDENT
+PIPE
+IDENT "pos"
+GT
+INT 0
+AND
+IDENT "isExprEnd"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "TLBracketTight"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "TLBracket"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isExprEnd"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isExprEnd"
+IDENT "c"
+EQUAL
+IDENT "isAlnum"
+IDENT "c"
+OR
+IDENT "c"
+EQ_EQ
+CHAR ")"
+OR
+IDENT "c"
+EQ_EQ
+CHAR "]"
+OR
+IDENT "c"
+EQ_EQ
+CHAR "\""
+NEWLINE
+IDENT "isMalformedLeadingDot"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isMalformedLeadingDot"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+LPAREN
+IDENT "pos"
+EQ_EQ
+INT 0
+OR
+IDENT "not"
+LPAREN
+IDENT "isExprEnd"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "malformedLeadingDotTok"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "malformedLeadingDotTok"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+LET
+IDENT "d"
+EQUAL
+IDENT "digitsEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+LET
+IDENT "e"
+EQUAL
+IDENT "expEnd"
+IDENT "src"
+IDENT "len"
+IDENT "d"
+NEWLINE
+LET
+IDENT "bad"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "e"
+NEWLINE
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "e"
+LPAREN
+UPPER "MalformedFloat"
+IDENT "bad"
+LPAREN
+STRING "0"
+PLUSPLUS
+IDENT "bad"
+RPAREN
+UPPER "True"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "atToken"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Token"
+NEWLINE
+IDENT "atToken"
+IDENT "src"
+IDENT "pos"
+INDENT
+PIPE
+IDENT "pos"
+LEQ
+INT 0
+EQUAL
+UPPER "TAt"
+NEWLINE
+PIPE
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "TAsAt"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "TAt"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "minusTok"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Token"
+NEWLINE
+IDENT "minusTok"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+INDENT
+PIPE
+IDENT "pos"
+GT
+INT 0
+AND
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isSpace"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "isDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "TMinusTight"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "TMinus"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "openBrace"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "openBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+UPPER "CodeFrame"
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+UPPER "TLBrace"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "depth"
+PLUS
+INT 1
+RPAREN
+UPPER "CodeFrame"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "openBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+LPAREN
+UPPER "HoleFrame"
+IDENT "flavor"
+IDENT "opener"
+IDENT "braces"
+RPAREN
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+UPPER "TLBrace"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "depth"
+LPAREN
+UPPER "HoleFrame"
+IDENT "flavor"
+IDENT "opener"
+LPAREN
+IDENT "braces"
+PLUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closeBrace"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "closeBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+UPPER "CodeFrame"
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+UPPER "TRBrace"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "depth"
+MINUS
+INT 1
+RPAREN
+UPPER "CodeFrame"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closeBrace"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+LPAREN
+UPPER "HoleFrame"
+IDENT "flavor"
+IDENT "opener"
+IDENT "braces"
+RPAREN
+INDENT
+PIPE
+IDENT "braces"
+GT
+INT 1
+EQUAL
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+UPPER "TRBrace"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "depth"
+LPAREN
+UPPER "HoleFrame"
+IDENT "flavor"
+IDENT "opener"
+LPAREN
+IDENT "braces"
+MINUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "flavor"
+INDENT
+UPPER "PlainLiteral"
+FAT_ARROW
+INDENT
+IDENT "scanLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "pos"
+IDENT "depth"
+UPPER "CodeFrame"
+UPPER "PlainLiteral"
+UPPER "ContinuedLiteral"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "TripleLiteral"
+FAT_ARROW
+INDENT
+IDENT "scanLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+IDENT "pos"
+IDENT "depth"
+UPPER "CodeFrame"
+UPPER "TripleLiteral"
+UPPER "ContinuedLiteral"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "handleNewline"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "handleNewline"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "indent"
+COMMA
+IDENT "np"
+RPAREN
+EQUAL
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+INT 0
+NEWLINE
+IDENT "afterNl"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+IDENT "depth"
+IDENT "id"
+IDENT "indent"
+IDENT "pos"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "consumeNl"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "indent"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+LPAREN
+IDENT "indent"
+COMMA
+IDENT "p"
+RPAREN
+NEWLINE
+PIPE
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+INDENT
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+INT 0
+NEWLINE
+PIPE
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+INT 0
+NEWLINE
+PIPE
+IDENT "isSp"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "indent"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "isTab"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "consumeNl"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+LPAREN
+LPAREN
+IDENT "indent"
+SLASH
+INT 8
+PLUS
+INT 1
+RPAREN
+STAR
+INT 8
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+LPAREN
+IDENT "indent"
+COMMA
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "afterNl"
+COLON
+UPPER "ScanCursor"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LexFrame"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "afterNl"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+IDENT "depth"
+IDENT "id"
+IDENT "indent"
+IDENT "nlPos"
+INDENT
+PIPE
+IDENT "nextIsComment"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+EQUAL
+IDENT "scanOne"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "leadingOp"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+INDENT
+UPPER "Some"
+LPAREN
+IDENT "tok"
+COMMA
+IDENT "n"
+RPAREN
+FAT_ARROW
+IDENT "emit"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+IDENT "depth"
+IDENT "id"
+IDENT "tok"
+IDENT "n"
+INT 0
+NEWLINE
+UPPER "None"
+FAT_ARROW
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RNewline"
+IDENT "indent"
+IDENT "nlPos"
+RPAREN
+IDENT "np"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "nextIsComment"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "nextIsComment"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "-"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+OR
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "{"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "-"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "leadingOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "leadingOp"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "|"
+CHAR ">"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TPipeRight"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR ">"
+CHAR ">"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TRCompose"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "<"
+CHAR "<"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TLCompose"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "<"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TLeq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR ">"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TGeq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "&"
+CHAR "&"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TAnd"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "|"
+CHAR "|"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TOr"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "+"
+CHAR "+"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TPlusPlus"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR ":"
+CHAR ":"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TCons"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "="
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TEqEq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "/"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TNeq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "<"
+CHAR "-"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR ">"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR "-"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR "}"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "-"
+AND
+IDENT "np"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isSp"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "np"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TMinus"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "+"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TPlus"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "*"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TStar"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "/"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TSlash"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "%"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TMod"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "<"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TLt"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR ">"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TGt"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isTriple"
+COLON
+UPPER "LiteralFlavor"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isTriple"
+UPPER "TripleLiteral"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTriple"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isContinued"
+COLON
+UPPER "LiteralPart"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isContinued"
+UPPER "ContinuedLiteral"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isContinued"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+DATA
+UPPER "ScanCursor"
+EQUAL
+UPPER "ScanCursor"
+LBRACE
+IDENT "cursorPos"
+COLON
+UPPER "Ref"
+UPPER "Int"
+COMMA
+IDENT "cursorDepth"
+COLON
+UPPER "Ref"
+UPPER "Int"
+COMMA
+IDENT "cursorFrame"
+COLON
+UPPER "Ref"
+UPPER "LexFrame"
+COMMA
+IDENT "cursorReady"
+COLON
+UPPER "Ref"
+UPPER "Bool"
+COMMA
+IDENT "cursorLength"
+COLON
+UPPER "Int"
+COMMA
+RBRACE
+NEWLINE
+IDENT "scan"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ScanCursor"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scan"
+IDENT "src"
+IDENT "len"
+IDENT "cursor"
+EQUAL
+INDENT
+MATCH
+LPAREN
+IDENT "scanOne"
+IDENT "cursor"
+IDENT "src"
+IDENT "len"
+BANG
+IDENT "cursor"
+DOT
+IDENT "cursorPos"
+BANG
+IDENT "cursor"
+DOT
+IDENT "cursorDepth"
+BANG
+IDENT "cursor"
+DOT
+IDENT "cursorFrame"
+RPAREN
+INDENT
+IDENT "token"
+FAT_ARROW
+IF
+BANG
+IDENT "cursor"
+DOT
+IDENT "cursorReady"
+THEN
+IDENT "token"
+CONS
+IDENT "scan"
+IDENT "src"
+IDENT "len"
+IDENT "cursor"
+ELSE
+LBRACKET
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "emitOne"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "RawTok"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "emitOne"
+IDENT "cursor"
+IDENT "token"
+IDENT "next"
+IDENT "depth"
+IDENT "frame"
+EQUAL
+INDENT
+IDENT "cursor"
+DOT
+IDENT "cursorPos"
+COLONEQ
+IDENT "next"
+NEWLINE
+IDENT "cursor"
+DOT
+IDENT "cursorDepth"
+COLONEQ
+IDENT "depth"
+NEWLINE
+IDENT "cursor"
+DOT
+IDENT "cursorFrame"
+COLONEQ
+IDENT "frame"
+NEWLINE
+IDENT "token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "endOne"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "endOne"
+IDENT "cursor"
+EQUAL
+INDENT
+IDENT "cursor"
+DOT
+IDENT "cursorReady"
+COLONEQ
+UPPER "False"
+NEWLINE
+UPPER "RTok"
+UPPER "TEof"
+INT 0
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+NEWLINE
+EOF

@@ -1,0 +1,3961 @@
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "parse_diagnostic"
+DOT_LBRACE
+UPPER "ParseDiagnosticKind"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "UnicodeProblem"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
+NEWLINE
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_token"
+DOT_LBRACE
+UPPER "Token"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "RawTok"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
+NEWLINE
+IMPORT
+IDENT "support"
+DOT
+IDENT "char"
+DOT_LBRACE
+IDENT "isQuote"
+COMMA
+IDENT "isApos"
+COMMA
+IDENT "isBackslash"
+COMMA
+IDENT "isNL"
+COMMA
+IDENT "isCR"
+COMMA
+IDENT "isHexDigit"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "support"
+DOT
+IDENT "util"
+DOT_LBRACE
+IDENT "joinWith"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "list"
+DOT_LBRACE
+IDENT "reverse"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "string"
+DOT_LBRACE
+IDENT "concat"
+RBRACE
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LiteralFlavor"
+EQUAL
+UPPER "PlainLiteral"
+PIPE
+UPPER "TripleLiteral"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LiteralPart"
+EQUAL
+UPPER "InitialLiteral"
+PIPE
+UPPER "ContinuedLiteral"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LexError"
+EQUAL
+UPPER "LexError"
+UPPER "ParseDiagnosticKind"
+UPPER "Int"
+UPPER "Int"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LiteralCursor"
+EQUAL
+UPPER "LiteralCursor"
+LBRACE
+IDENT "literalPosition"
+COLON
+UPPER "Int"
+COMMA
+IDENT "literalQuoteOpen"
+COLON
+UPPER "Int"
+COMMA
+IDENT "literalFlavor"
+COLON
+UPPER "LiteralFlavor"
+COMMA
+IDENT "literalPart"
+COLON
+UPPER "LiteralPart"
+COMMA
+IDENT "literalLeadingRawLf"
+COLON
+UPPER "Bool"
+COMMA
+IDENT "literalInsideHole"
+COLON
+UPPER "Bool"
+COMMA
+RBRACE
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LiteralStop"
+EQUAL
+UPPER "LiteralClose"
+PIPE
+UPPER "LiteralHole"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "LiteralRead"
+EQUAL
+UPPER "LiteralRead"
+UPPER "String"
+UPPER "Int"
+UPPER "LiteralStop"
+UPPER "Bool"
+NEWLINE
+IDENT "at"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+NEWLINE
+IDENT "at"
+IDENT "src"
+IDENT "i"
+EQUAL
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "copyCharRange"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "start"
+IDENT "endp"
+INDENT
+PIPE
+IDENT "endp"
+LEQ
+IDENT "start"
+EQUAL
+STRING ""
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "out"
+EQUAL
+IDENT "arrayMake"
+LPAREN
+IDENT "endp"
+MINUS
+IDENT "start"
+RPAREN
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "start"
+RPAREN
+NEWLINE
+LET
+UNDERSCORE
+EQUAL
+IDENT "arrayBlit"
+IDENT "src"
+IDENT "start"
+IDENT "out"
+INT 0
+LPAREN
+IDENT "endp"
+MINUS
+IDENT "start"
+RPAREN
+NEWLINE
+IDENT "stringFromChars"
+IDENT "out"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "commonEscDecode"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "commonEscDecode"
+IDENT "e"
+INDENT
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "n"
+EQUAL
+UPPER "Some"
+STRING "\n"
+NEWLINE
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "t"
+EQUAL
+UPPER "Some"
+STRING "\t"
+NEWLINE
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "r"
+EQUAL
+UPPER "Some"
+STRING "\r"
+NEWLINE
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "0"
+EQUAL
+UPPER "Some"
+LPAREN
+IDENT "charToStr"
+LPAREN
+IDENT "optionOr"
+CHAR " "
+LPAREN
+IDENT "charFromCode"
+INT 0
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+PIPE
+IDENT "isBackslash"
+IDENT "e"
+EQUAL
+UPPER "Some"
+STRING "\\"
+NEWLINE
+PIPE
+IDENT "isQuote"
+IDENT "e"
+EQUAL
+UPPER "Some"
+STRING "\""
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripIndent"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripIndent"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+IDENT "stripIndentCs"
+IDENT "s"
+IDENT "cs"
+LPAREN
+IDENT "arrayLength"
+IDENT "cs"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripIndentCs"
+COLON
+UPPER "String"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripIndentCs"
+IDENT "s"
+IDENT "cs"
+IDENT "n"
+INDENT
+PIPE
+IDENT "n"
+EQ_EQ
+INT 0
+EQUAL
+IDENT "s"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "cs"
+INT 0
+NEQ
+CHAR "\n"
+EQUAL
+IDENT "s"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "lines"
+EQUAL
+IDENT "splitLines"
+IDENT "cs"
+INT 1
+IDENT "n"
+STRING ""
+NEWLINE
+LET
+IDENT "minInd"
+EQUAL
+IDENT "normalizeMin"
+LPAREN
+IDENT "minIndentGo"
+IDENT "lines"
+IDENT "indentSentinel"
+RPAREN
+NEWLINE
+IDENT "joinNlStr"
+LPAREN
+IDENT "stripLines"
+IDENT "minInd"
+IDENT "lines"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "splitLines"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "splitLines"
+IDENT "cs"
+IDENT "p"
+IDENT "n"
+IDENT "acc"
+EQUAL
+IDENT "splitRange"
+IDENT "cs"
+IDENT "p"
+IDENT "p"
+IDENT "n"
+NEWLINE
+IDENT "indentSentinel"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "indentSentinel"
+EQUAL
+INT 1000000000
+NEWLINE
+IDENT "indentOf"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "indentOf"
+IDENT "line"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "line"
+NEWLINE
+IDENT "indentOfGo"
+IDENT "cs"
+LPAREN
+IDENT "arrayLength"
+IDENT "cs"
+RPAREN
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "indentOfGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "indentOfGo"
+IDENT "cs"
+IDENT "n"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+IDENT "indentSentinel"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "cs"
+IDENT "i"
+EQ_EQ
+CHAR " "
+EQUAL
+IDENT "indentOfGo"
+IDENT "cs"
+IDENT "n"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "minIndentGo"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "minIndentGo"
+LBRACKET
+RBRACKET
+IDENT "acc"
+EQUAL
+IDENT "acc"
+NEWLINE
+IDENT "minIndentGo"
+LPAREN
+IDENT "l"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "acc"
+EQUAL
+IDENT "minIndentGo"
+IDENT "rest"
+LPAREN
+IDENT "min"
+IDENT "acc"
+LPAREN
+IDENT "indentOf"
+IDENT "l"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "normalizeMin"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "normalizeMin"
+IDENT "m"
+EQUAL
+IF
+IDENT "m"
+EQ_EQ
+IDENT "indentSentinel"
+THEN
+INT 0
+ELSE
+IDENT "m"
+NEWLINE
+IDENT "stripLines"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "stripLines"
+IDENT "k"
+IDENT "ls"
+EQUAL
+IDENT "map"
+LPAREN
+IDENT "stripLine"
+IDENT "k"
+RPAREN
+IDENT "ls"
+NEWLINE
+IDENT "stripLine"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripLine"
+IDENT "k"
+IDENT "line"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "line"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "cs"
+NEWLINE
+IDENT "dropCharsToStr"
+IDENT "cs"
+LPAREN
+IDENT "min"
+IDENT "k"
+IDENT "n"
+RPAREN
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dropCharsToStr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "dropCharsToStr"
+IDENT "cs"
+IDENT "k"
+IDENT "n"
+EQUAL
+IDENT "copyCharRange"
+IDENT "cs"
+IDENT "k"
+IDENT "n"
+NEWLINE
+IDENT "joinNlStr"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "joinNlStr"
+IDENT "xs"
+EQUAL
+IDENT "joinWith"
+STRING "\n"
+IDENT "xs"
+NEWLINE
+IDENT "startsWithNl"
+COLON
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "startsWithNl"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+IDENT "arrayLength"
+IDENT "cs"
+GT
+INT 0
+AND
+IDENT "at"
+IDENT "cs"
+INT 0
+EQ_EQ
+CHAR "\n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "endsWithNl"
+COLON
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "endsWithNl"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "cs"
+NEWLINE
+IDENT "n"
+GT
+INT 0
+AND
+IDENT "at"
+IDENT "cs"
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "\n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "computeMinIndent"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "computeMinIndent"
+IDENT "joined"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "joined"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "cs"
+NEWLINE
+IDENT "normalizeMin"
+LPAREN
+IDENT "minIndentGo"
+LPAREN
+IDENT "splitLines"
+IDENT "cs"
+INT 1
+IDENT "n"
+STRING ""
+RPAREN
+IDENT "indentSentinel"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dedentGroupSegs"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "dedentGroupSegs"
+IDENT "minInd"
+LPAREN
+IDENT "openStr"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "openStr"
+NEWLINE
+LET
+IDENT "openLines"
+EQUAL
+IDENT "splitLines"
+IDENT "cs"
+INT 1
+LPAREN
+IDENT "arrayLength"
+IDENT "cs"
+RPAREN
+STRING ""
+NEWLINE
+LET
+IDENT "openOut"
+EQUAL
+IDENT "joinNlStr"
+LPAREN
+IDENT "stripLines"
+IDENT "minInd"
+IDENT "openLines"
+RPAREN
+NEWLINE
+IDENT "openOut"
+CONS
+IDENT "dedentRestSegs"
+IDENT "minInd"
+LPAREN
+IDENT "endsWithNl"
+IDENT "openStr"
+RPAREN
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dedentGroupSegs"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "dedentRestSegs"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "dedentRestSegs"
+UNDERSCORE
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "dedentRestSegs"
+IDENT "minInd"
+IDENT "atLineStart"
+LPAREN
+IDENT "seg"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "seg"
+NEWLINE
+LET
+IDENT "lines"
+EQUAL
+IDENT "splitLines"
+IDENT "cs"
+INT 0
+LPAREN
+IDENT "arrayLength"
+IDENT "cs"
+RPAREN
+STRING ""
+NEWLINE
+LET
+IDENT "out"
+EQUAL
+IDENT "joinNlStr"
+LPAREN
+IDENT "stripFirstAware"
+IDENT "minInd"
+IDENT "atLineStart"
+IDENT "lines"
+RPAREN
+NEWLINE
+IDENT "out"
+CONS
+IDENT "dedentRestSegs"
+IDENT "minInd"
+LPAREN
+IDENT "endsWithNl"
+IDENT "seg"
+RPAREN
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripFirstAware"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "stripFirstAware"
+UNDERSCORE
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "stripFirstAware"
+IDENT "minInd"
+UPPER "True"
+LPAREN
+IDENT "l"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+IDENT "stripLine"
+IDENT "minInd"
+IDENT "l"
+CONS
+IDENT "stripLines"
+IDENT "minInd"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripFirstAware"
+IDENT "minInd"
+UPPER "False"
+LPAREN
+IDENT "l"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "l"
+CONS
+IDENT "stripLines"
+IDENT "minInd"
+IDENT "rest"
+NEWLINE
+IDENT "splitInterpGroup"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+LPAREN
+UPPER "List"
+UPPER "String"
+COMMA
+UPPER "List"
+UPPER "RawTok"
+COMMA
+UPPER "List"
+UPPER "RawTok"
+RPAREN
+NEWLINE
+IDENT "splitInterpGroup"
+LBRACKET
+RBRACKET
+EQUAL
+LPAREN
+LBRACKET
+RBRACKET
+COMMA
+LBRACKET
+RBRACKET
+COMMA
+LBRACKET
+RBRACKET
+RPAREN
+NEWLINE
+IDENT "splitInterpGroup"
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInterpMid"
+IDENT "s"
+RPAREN
+IDENT "mo"
+IDENT "me"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "segs"
+COMMA
+IDENT "mid"
+COMMA
+IDENT "after"
+RPAREN
+EQUAL
+IDENT "splitInterpGroup"
+IDENT "rest"
+NEWLINE
+LPAREN
+IDENT "s"
+CONS
+IDENT "segs"
+COMMA
+UPPER "RTok"
+LPAREN
+UPPER "TInterpMid"
+IDENT "s"
+RPAREN
+IDENT "mo"
+IDENT "me"
+CONS
+IDENT "mid"
+COMMA
+IDENT "after"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "splitInterpGroup"
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInterpEnd"
+IDENT "s"
+RPAREN
+IDENT "eo"
+IDENT "ee"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LPAREN
+LBRACKET
+IDENT "s"
+RBRACKET
+COMMA
+LBRACKET
+UPPER "RTok"
+LPAREN
+UPPER "TInterpEnd"
+IDENT "s"
+RPAREN
+IDENT "eo"
+IDENT "ee"
+RBRACKET
+COMMA
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "splitInterpGroup"
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "segs"
+COMMA
+IDENT "mid"
+COMMA
+IDENT "after"
+RPAREN
+EQUAL
+IDENT "splitInterpGroup"
+IDENT "rest"
+NEWLINE
+LPAREN
+IDENT "segs"
+COMMA
+IDENT "t"
+CONS
+IDENT "mid"
+COMMA
+IDENT "after"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "substituteOwn"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "substituteOwn"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "substituteOwn"
+LPAREN
+IDENT "v"
+CONS
+IDENT "vs"
+RPAREN
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInterpMid"
+UNDERSCORE
+RPAREN
+IDENT "mo"
+IDENT "me"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpMid"
+IDENT "v"
+RPAREN
+IDENT "mo"
+IDENT "me"
+CONS
+IDENT "substituteOwn"
+IDENT "vs"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "substituteOwn"
+LPAREN
+IDENT "v"
+CONS
+IDENT "vs"
+RPAREN
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInterpEnd"
+UNDERSCORE
+RPAREN
+IDENT "eo"
+IDENT "ee"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpEnd"
+IDENT "v"
+RPAREN
+IDENT "eo"
+IDENT "ee"
+CONS
+IDENT "substituteOwn"
+IDENT "vs"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "substituteOwn"
+IDENT "vals"
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "t"
+CONS
+IDENT "substituteOwn"
+IDENT "vals"
+IDENT "rest"
+NEWLINE
+IDENT "substituteOwn"
+LBRACKET
+RBRACKET
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "t"
+CONS
+IDENT "substituteOwn"
+LBRACKET
+RBRACKET
+IDENT "rest"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "dedentTripleInterp"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "dedentTripleInterp"
+IDENT "toks"
+INDENT
+PIPE
+IDENT "hasTripleInterpOpen"
+IDENT "toks"
+EQUAL
+IDENT "dedentTripleGo"
+IDENT "toks"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "toks"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "hasTripleInterpOpen"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LPAREN
+LPAREN
+UPPER "RTripleInterpOpen"
+UNDERSCORE
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "hasTripleInterpOpen"
+IDENT "rest"
+NEWLINE
+IDENT "dedentTripleGo"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "dedentTripleGo"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "dedentTripleGo"
+LPAREN
+LPAREN
+UPPER "RTripleInterpOpen"
+IDENT "s"
+IDENT "so"
+IDENT "eo"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "rawSegs"
+COMMA
+IDENT "midToks"
+COMMA
+IDENT "afterEnd"
+RPAREN
+EQUAL
+IDENT "splitInterpGroup"
+IDENT "rest"
+NEWLINE
+IDENT "dedentTripleGroup"
+IDENT "s"
+IDENT "so"
+IDENT "eo"
+IDENT "rawSegs"
+IDENT "midToks"
+IDENT "afterEnd"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dedentTripleGo"
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "t"
+CONS
+IDENT "dedentTripleGo"
+IDENT "rest"
+NEWLINE
+IDENT "dedentTripleGroup"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dedentTripleGroup"
+IDENT "sReal"
+IDENT "so"
+IDENT "eo"
+IDENT "rawSegs"
+IDENT "midToks"
+IDENT "afterEnd"
+INDENT
+PIPE
+IDENT "startsWithNl"
+IDENT "sReal"
+EQUAL
+INDENT
+LET
+IDENT "allRaw"
+EQUAL
+IDENT "sReal"
+CONS
+IDENT "rawSegs"
+NEWLINE
+LET
+IDENT "minInd"
+EQUAL
+IDENT "computeMinIndent"
+LPAREN
+IDENT "concat"
+IDENT "allRaw"
+RPAREN
+NEWLINE
+MATCH
+IDENT "dedentGroupSegs"
+IDENT "minInd"
+IDENT "allRaw"
+INDENT
+IDENT "openStr'"
+CONS
+IDENT "restVals"
+FAT_ARROW
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpOpen"
+IDENT "openStr'"
+RPAREN
+IDENT "so"
+IDENT "eo"
+CONS
+IDENT "substituteOwn"
+IDENT "restVals"
+IDENT "midToks"
+PLUSPLUS
+IDENT "dedentTripleGo"
+IDENT "afterEnd"
+NEWLINE
+DEDENT
+NEWLINE
+LBRACKET
+RBRACKET
+FAT_ARROW
+UPPER "RTok"
+LPAREN
+UPPER "TInterpOpen"
+IDENT "sReal"
+RPAREN
+IDENT "so"
+IDENT "eo"
+CONS
+IDENT "midToks"
+PLUSPLUS
+IDENT "dedentTripleGo"
+IDENT "afterEnd"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+UPPER "RTok"
+LPAREN
+UPPER "TInterpOpen"
+IDENT "sReal"
+RPAREN
+IDENT "so"
+IDENT "eo"
+CONS
+IDENT "midToks"
+PLUSPLUS
+IDENT "dedentTripleGo"
+IDENT "afterEnd"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "finish"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "finish"
+LBRACKET
+RBRACKET
+EQUAL
+STRING ""
+NEWLINE
+IDENT "finish"
+LBRACKET
+IDENT "s"
+RBRACKET
+EQUAL
+IDENT "s"
+NEWLINE
+IDENT "finish"
+IDENT "xs"
+EQUAL
+IDENT "concat"
+LPAREN
+IDENT "reverse"
+IDENT "xs"
+RPAREN
+NEWLINE
+IDENT "firstFragNl"
+COLON
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "firstFragNl"
+IDENT "leading"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "firstFragNl"
+IDENT "leading"
+UNDERSCORE
+EQUAL
+IDENT "leading"
+NEWLINE
+IDENT "splitRange"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "splitRange"
+IDENT "cs"
+IDENT "start"
+IDENT "p"
+IDENT "n"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "n"
+EQUAL
+LBRACKET
+IDENT "copyCharRange"
+IDENT "cs"
+IDENT "start"
+IDENT "n"
+RBRACKET
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "cs"
+IDENT "p"
+EQ_EQ
+CHAR "\n"
+EQUAL
+INDENT
+IDENT "copyCharRange"
+IDENT "cs"
+IDENT "start"
+IDENT "p"
+CONS
+IDENT "splitRange"
+IDENT "cs"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "splitRange"
+IDENT "cs"
+IDENT "start"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "tripleRunEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "tripleRunEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "tripleRunEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniEscWellFormed"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "uniEscWellFormed"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+LET
+IDENT "s"
+EQUAL
+IDENT "p"
+PLUS
+INT 3
+NEWLINE
+LET
+IDENT "he"
+EQUAL
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+IDENT "s"
+NEWLINE
+IDENT "he"
+GT
+IDENT "s"
+AND
+IDENT "he"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "he"
+EQ_EQ
+CHAR "}"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniHexSigLen"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "uniHexSigLen"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "endp"
+EQUAL
+INT 0
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "0"
+EQUAL
+IDENT "uniHexSigLen"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "endp"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "endp"
+MINUS
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniEscCode"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "uniEscCode"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+LET
+IDENT "s"
+EQUAL
+IDENT "p"
+PLUS
+INT 3
+NEWLINE
+LET
+IDENT "he"
+EQUAL
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+IDENT "s"
+NEWLINE
+IF
+IDENT "uniHexSigLen"
+IDENT "src"
+IDENT "s"
+IDENT "he"
+GT
+INT 6
+THEN
+UPPER "None"
+ELSE
+UPPER "Some"
+LPAREN
+IDENT "parseHex"
+IDENT "src"
+IDENT "s"
+IDENT "he"
+INT 0
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniEscText"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "uniEscText"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "uniEscChar"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+UPPER "Char"
+NEWLINE
+IDENT "uniEscChar"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "not"
+LPAREN
+IDENT "uniEscWellFormed"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "uniEscCode"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Some"
+IDENT "cp"
+FAT_ARROW
+IDENT "charFromCode"
+IDENT "cp"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniIsSurrogate"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "uniIsSurrogate"
+IDENT "cp"
+EQUAL
+IDENT "cp"
+GEQ
+INT 55296
+AND
+IDENT "cp"
+LEQ
+INT 57343
+NEWLINE
+IDENT "uniEscTermErr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "LexError"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniEscTermErr"
+IDENT "src"
+IDENT "len"
+IDENT "s"
+IDENT "he"
+IDENT "p"
+IDENT "endp"
+INDENT
+PIPE
+IDENT "he"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeUnterminated"
+RPAREN
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "he"
+EQ_EQ
+CHAR "_"
+EQUAL
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeSeparator"
+RPAREN
+NEWLINE
+PIPE
+IDENT "he"
+EQ_EQ
+IDENT "s"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "he"
+EQ_EQ
+CHAR "}"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeEmpty"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "he"
+EQ_EQ
+IDENT "s"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedDigit"
+LPAREN
+IDENT "charToStr"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "he"
+RPAREN
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedClose"
+LPAREN
+IDENT "charToStr"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "he"
+RPAREN
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uniEscErr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+IDENT "a"
+NEWLINE
+IDENT "uniEscErr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+LET
+IDENT "endp"
+EQUAL
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+IF
+IDENT "not"
+LPAREN
+IDENT "uniEscWellFormed"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+THEN
+INDENT
+IDENT "uniEscTermErr"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+RPAREN
+IDENT "p"
+IDENT "endp"
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "uniEscCode"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+UPPER "Some"
+IDENT "cp"
+IF
+IDENT "uniIsSurrogate"
+IDENT "cp"
+FAT_ARROW
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeSurrogate"
+LPAREN
+IDENT "uniEscText"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeOutOfRange"
+LPAREN
+IDENT "uniEscText"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "unicodeErrorEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+NEWLINE
+IDENT "unicodeErrorEndGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "}"
+EQUAL
+IDENT "p"
+PLUS
+INT 1
+NEWLINE
+PIPE
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "uHexEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+LT
+IDENT "len"
+AND
+IDENT "isHexDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isBareUnicodeEsc"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isBareUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+INDENT
+IDENT "e"
+EQ_EQ
+CHAR "u"
+AND
+IDENT "p"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "isHexDigit"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+AND
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+MINUS
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+EQ_EQ
+INT 4
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "bareUnicodeEscWritten"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "bareUnicodeEscWritten"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+IDENT "bareUnicodeEscSuggested"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "bareUnicodeEscSuggested"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+INTERP_OPEN "\\u{"
+IDENT "copyCharRange"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+INTERP_END "}"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "bareUnicodeEscMsgStr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ParseDiagnosticKind"
+NEWLINE
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+UPPER "BareUnicodeEscape"
+LPAREN
+IDENT "bareUnicodeEscWritten"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+LPAREN
+IDENT "bareUnicodeEscSuggested"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isUnicodeEsc"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+IDENT "e"
+EQ_EQ
+CHAR "u"
+AND
+IDENT "p"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+EQ_EQ
+CHAR "{"
+NEWLINE
+IDENT "uniEscEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "uniEscEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+PLUS
+INT 1
+NEWLINE
+IDENT "lexFailure"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ParseDiagnosticKind"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+IDENT "a"
+NEWLINE
+IDENT "lexFailure"
+IDENT "start"
+IDENT "end"
+IDENT "kind"
+EQUAL
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+IDENT "start"
+IDENT "end"
+RPAREN
+NEWLINE
+IDENT "parseHex"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseHex"
+IDENT "src"
+IDENT "p"
+IDENT "end"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "end"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "c"
+EQUAL
+IDENT "at"
+IDENT "src"
+IDENT "p"
+NEWLINE
+LET
+IDENT "d"
+EQUAL
+INDENT
+IF
+IDENT "c"
+GEQ
+CHAR "0"
+AND
+IDENT "c"
+LEQ
+CHAR "9"
+THEN
+INDENT
+IDENT "charCode"
+IDENT "c"
+MINUS
+IDENT "charCode"
+CHAR "0"
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "c"
+GEQ
+CHAR "a"
+AND
+IDENT "c"
+LEQ
+CHAR "f"
+THEN
+INDENT
+IDENT "charCode"
+IDENT "c"
+MINUS
+IDENT "charCode"
+CHAR "a"
+PLUS
+INT 10
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "charCode"
+IDENT "c"
+MINUS
+IDENT "charCode"
+CHAR "A"
+PLUS
+INT 10
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseHex"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "end"
+LPAREN
+IDENT "acc"
+STAR
+INT 16
+PLUS
+IDENT "d"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "readLiteral"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "LiteralCursor"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+UPPER "LiteralRead"
+NEWLINE
+IDENT "readLiteral"
+IDENT "src"
+LPAREN
+UPPER "LiteralCursor"
+IDENT "p"
+IDENT "quote"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+RPAREN
+EQUAL
+INDENT
+IDENT "literalGo"
+IDENT "src"
+LPAREN
+IDENT "arrayLength"
+IDENT "src"
+RPAREN
+IDENT "p"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+LBRACKET
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "literalGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LiteralFlavor"
+ARROW
+NEWLINE
+UPPER "LiteralPart"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "LexError"
+UPPER "LiteralRead"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "lexFailure"
+IDENT "p"
+IDENT "p"
+UPPER "UnterminatedString"
+NEWLINE
+PIPE
+IDENT "isPlain"
+IDENT "flavor"
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+INDENT
+UPPER "Ok"
+LPAREN
+UPPER "LiteralRead"
+LPAREN
+IDENT "finish"
+IDENT "acc"
+RPAREN
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+UPPER "LiteralClose"
+IDENT "leading"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "not"
+LPAREN
+IDENT "isPlain"
+IDENT "flavor"
+RPAREN
+AND
+IDENT "isTripleAt"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+UPPER "Ok"
+LPAREN
+UPPER "LiteralRead"
+LPAREN
+IDENT "finish"
+IDENT "acc"
+RPAREN
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+UPPER "LiteralClose"
+IDENT "leading"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+EQUAL
+INDENT
+IDENT "literalEscape"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+IDENT "acc"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isPlain"
+IDENT "flavor"
+AND
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "isInitial"
+IDENT "part"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+IDENT "len"
+UPPER "UnterminatedString"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "not"
+LPAREN
+IDENT "isPlain"
+IDENT "flavor"
+RPAREN
+AND
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+INDENT
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "flavor"
+IDENT "part"
+LPAREN
+IDENT "firstFragNl"
+IDENT "leading"
+IDENT "acc"
+RPAREN
+IDENT "inside"
+LPAREN
+STRING "\n"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "not"
+LPAREN
+IDENT "isPlain"
+IDENT "flavor"
+RPAREN
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+INDENT
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+LPAREN
+STRING "\""
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "q"
+EQUAL
+INDENT
+IF
+IDENT "isPlain"
+IDENT "flavor"
+THEN
+INDENT
+IDENT "plainRunEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "tripleRunEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+IDENT "q"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "p"
+IDENT "q"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "literalEscape"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "LiteralFlavor"
+ARROW
+NEWLINE
+UPPER "LiteralPart"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "LexError"
+UPPER "LiteralRead"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "literalEscape"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+IDENT "acc"
+IDENT "e"
+INDENT
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "{"
+AND
+IDENT "inside"
+AND
+IDENT "isPlain"
+IDENT "flavor"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+UPPER "NestedInterpolation"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "{"
+AND
+IDENT "inside"
+AND
+IDENT "not"
+LPAREN
+IDENT "isPlain"
+IDENT "flavor"
+RPAREN
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+UPPER "NestedInterpolation"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "e"
+EQ_EQ
+CHAR "{"
+EQUAL
+UPPER "Ok"
+LPAREN
+UPPER "LiteralRead"
+LPAREN
+IDENT "finish"
+IDENT "acc"
+RPAREN
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+UPPER "LiteralHole"
+IDENT "leading"
+RPAREN
+NEWLINE
+PIPE
+IDENT "isUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+MATCH
+IDENT "uniEscChar"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+UPPER "None"
+FAT_ARROW
+IDENT "uniEscErr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+UPPER "Some"
+IDENT "c"
+FAT_ARROW
+INDENT
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "uniEscEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+LPAREN
+IDENT "charToStr"
+IDENT "c"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isBareUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "commonEscDecode"
+IDENT "e"
+INDENT
+UPPER "Some"
+IDENT "s"
+FAT_ARROW
+IDENT "literalGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+IDENT "flavor"
+IDENT "part"
+IDENT "leading"
+IDENT "inside"
+LPAREN
+IDENT "s"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+UPPER "None"
+FAT_ARROW
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
+IDENT "charToStr"
+IDENT "e"
+RPAREN
+UPPER "False"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isTripleAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isTripleAt"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "plainRunEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "plainRunEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "plainRunEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "readCharacter"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "readCharacter"
+IDENT "src"
+IDENT "pos"
+EQUAL
+IDENT "charRead"
+IDENT "src"
+LPAREN
+IDENT "arrayLength"
+IDENT "src"
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "charRead"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "charRead"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+IDENT "len"
+UPPER "UnterminatedChar"
+NEWLINE
+PIPE
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "p"
+PLUS
+INT 1
+GEQ
+IDENT "len"
+EQUAL
+INDENT
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+IDENT "len"
+UPPER "UnterminatedChar"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "charEscape"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+PIPE
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+UPPER "EmptyChar"
+NEWLINE
+PIPE
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "charToStr"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+COMMA
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "charClose"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+IF
+IDENT "e"
+GEQ
+IDENT "len"
+THEN
+INDENT
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+IDENT "len"
+UPPER "UnterminatedChar"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "LongChar"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "p"
+IDENT "e"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "charEscape"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "charEscape"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+INDENT
+PIPE
+IDENT "isUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+MATCH
+IDENT "uniEscChar"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+UPPER "None"
+FAT_ARROW
+IDENT "uniEscErr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+UPPER "Some"
+IDENT "c"
+FAT_ARROW
+IDENT "charFinished"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+LPAREN
+IDENT "uniEscEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+LPAREN
+IDENT "charToStr"
+IDENT "c"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "isBareUnicodeEsc"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "e"
+EQUAL
+INDENT
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IF
+IDENT "isApos"
+IDENT "e"
+THEN
+UPPER "Some"
+STRING "'"
+ELSE
+IDENT "commonEscDecode"
+IDENT "e"
+INDENT
+UPPER "None"
+FAT_ARROW
+IDENT "lexFailure"
+IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
+IDENT "charToStr"
+IDENT "e"
+RPAREN
+UPPER "True"
+RPAREN
+NEWLINE
+UPPER "Some"
+IDENT "s"
+FAT_ARROW
+IDENT "charFinished"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "charFinished"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "charFinished"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+IDENT "end"
+IDENT "s"
+EQUAL
+INDENT
+IF
+IDENT "end"
+LT
+IDENT "len"
+AND
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "end"
+RPAREN
+THEN
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "s"
+COMMA
+IDENT "end"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "lexFailure"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+IDENT "len"
+UPPER "UnterminatedChar"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "charClose"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "charClose"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "charClose"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "dedentSegments"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "dedentSegments"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "dedentSegments"
+LBRACKET
+IDENT "s"
+RBRACKET
+EQUAL
+LBRACKET
+IDENT "stripIndent"
+IDENT "s"
+RBRACKET
+NEWLINE
+IDENT "dedentSegments"
+LPAREN
+IDENT "segs"
+AS_AT
+LPAREN
+IDENT "first"
+CONS
+UNDERSCORE
+RPAREN
+RPAREN
+EQUAL
+INDENT
+IF
+IDENT "startsWithNl"
+IDENT "first"
+THEN
+INDENT
+IDENT "dedentGroupSegs"
+LPAREN
+IDENT "computeMinIndent"
+LPAREN
+IDENT "concat"
+IDENT "segs"
+RPAREN
+RPAREN
+IDENT "segs"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "segs"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isPlain"
+COLON
+UPPER "LiteralFlavor"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isPlain"
+UPPER "PlainLiteral"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isPlain"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isInitial"
+COLON
+UPPER "LiteralPart"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isInitial"
+UPPER "InitialLiteral"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isInitial"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+NEWLINE
+EOF
