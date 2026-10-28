@@ -1,5 +1,6 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
+import backend.llvm_symbols.{defectMessage}
 import backend.emit_plan.{buildEmitPlan}
 import types.runtime_abi.{runtimeRowsFromSource}
 import test_process.{boundedVerbSeconds, underRoot}
@@ -364,14 +365,16 @@ checkEtaArity shape name =
   let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
   let emitted =
     emitProgramRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
-  let text = match emitted
-    Ok (t, _) => t
-    Err _ => ""
-  let definitions =
-    filter (line => contains "define internal i64 @mdk_eta_" line) (lines text)
-  expectEqual
-    [shape.loweredCoreArity]
-    (map (line => listLen (split "," line) - 1) definitions)
+  match emitted
+    Err defects => fail (joinNl (map defectMessage defects))
+    Ok (text, _) =>
+      let definitions =
+        filter
+          (line => contains "define internal i64 @mdk_eta_" line)
+          (lines text)
+      expectEqual
+        [shape.loweredCoreArity]
+        (map (line => listLen (split "," line) - 1) definitions)
 
 test "every native census mismatch eta wrapper uses the independently parsed runtime Core arity" =
   match readFile (underRoot "stdlib/runtime.mdk")

@@ -302,10 +302,15 @@ test "no entry runs reach itself" =
 codeLinesOf : String -> List String
 codeLinesOf text = filter (l => not (startsWith "--" (trimLeft l))) (lines text)
 
-backendCode : String -> <IO, FileRead> List String
-backendCode file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
-  Err _ => ["<unreadable \{file}>"]
-  Ok text => codeLinesOf text
+-- [check] over the code lines of compiler/backend/[file]; a file that cannot be
+-- read fails rather than passing as one with nothing in it.
+withBackendCode : String ->
+  (List String -> Expectation) ->
+  <IO, FileRead> Expectation
+withBackendCode file check =
+  match readFile "\{medakaRoot}/compiler/backend/\{file}"
+    Err e => fail "cannot read compiler/backend/\{file}: \{e}"
+    Ok text => check (codeLinesOf text)
 
 -- A line that writes `call <type> @<name>`, a direct call of a named function.
 -- An indirect call (`call i64 %fp`) names no symbol and is not one.
@@ -335,8 +340,9 @@ uncheckedLlvmCalls recent (l :: rest) =
   (if bare then [trimLeft l] else [])
     ++ uncheckedLlvmCalls (take 3 (l :: recent)) rest
 
-test "llvm_emit writes a named call only through directCall or after checkWordCall" =
-  expectEqual [] (uncheckedLlvmCalls [] (backendCode "llvm_emit.mdk"))
+test "llvm_emit writes a named call only through directCall or after checkWordCall" = withBackendCode
+  "llvm_emit.mdk"
+  (code => expectEqual [] (uncheckedLlvmCalls [] code))
 
 -- Lines naming a direct Wasm call (`call $f`, `return_call $f`) outside
 -- `callInstrW` and the closure check's own needle.
@@ -349,8 +355,9 @@ uncheckedWasmCalls ls =
         && not (contains "identsAfterAllRevW" l))
     ls
 
-test "wasm_emit writes a direct call only through callInstrW" =
-  expectEqual [] (uncheckedWasmCalls (backendCode "wasm_emit.mdk"))
+test "wasm_emit writes a direct call only through callInstrW" = withBackendCode
+  "wasm_emit.mdk"
+  (code => expectEqual [] (uncheckedWasmCalls code))
 
 test "no emitter derives declares from emitted text" =
   expectAll
@@ -358,11 +365,12 @@ test "no emitter derives declares from emitted text" =
       (file =>
         labelFail
           "\{file} derives declares from text"
-          (expectFalse
-            (any
-              (l =>
-                contains "declareOfDefine" l || contains "emitDeclaresFor" l)
-              (backendCode file))))
+          (withBackendCode file (code =>
+            expectFalse
+              (any
+                (l =>
+                  contains "declareOfDefine" l || contains "emitDeclaresFor" l)
+                code))))
       ["llvm_emit.mdk", "wasm_emit.mdk", "llvm_preamble.mdk"])
 
 test "no emitter counts leading dictionary parameters from their spelling" =
@@ -371,14 +379,15 @@ test "no emitter counts leading dictionary parameters from their spelling" =
       (file =>
         labelFail
           "\{file} counts dictionary parameters itself"
-          (expectFalse
-            (any
-              (l =>
-                contains "leadingDictPats" l
-                  || contains "wLeadingDictPats" l
-                  || contains "isDictParamName" l
-                  || contains "startsWith \"$dict\"" l)
-              (backendCode file))))
+          (withBackendCode file (code =>
+            expectFalse
+              (any
+                (l =>
+                  contains "leadingDictPats" l
+                    || contains "wLeadingDictPats" l
+                    || contains "isDictParamName" l
+                    || contains "startsWith \"$dict\"" l)
+                code))))
       ["llvm_emit.mdk", "wasm_emit.mdk", "trmc_analysis.mdk", "emit_plan.mdk"])
 
 -- Every entry that imports an emitter is a route a program reaches an artifact

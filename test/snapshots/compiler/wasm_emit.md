@@ -2103,10 +2103,6 @@ cFieldExpr (CField _ _ e) = e
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
--- `locals` is the scope's locally-bound names (parameters, let, lambda and
--- let-group binders): a local named like a top-level fn shadows it, so it is not a
--- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
--- rule `exprUsesClosures` applies.
 scanFnValueUses : OrdMap Unit -> List (String, Int) -> List CBind -> List String
 scanFnValueUses fnNames ctorArs groups =
   dedupKeep (flatMap (scanBindValueUses fnNames ctorArs envEmpty) groups)
@@ -2132,6 +2128,10 @@ scanImplEntryValueUses fnNames ctorArs (ent@(CImplEntry _ _ _ body)) =
     CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
     CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
 
+-- `locals` is the scope's locally-bound names (parameters, let, lambda and
+-- let-group binders): a local named like a top-level fn shadows it, so it is not a
+-- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
+-- rule `exprUsesClosures` applies.
 scanBindValueUses : OrdMap Unit ->
   List (String, Int) ->
   Env ->

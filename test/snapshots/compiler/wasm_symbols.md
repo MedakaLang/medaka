@@ -1,5 +1,5 @@
 # META
-source_lines=314
+source_lines=312
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical identities of one WasmGC module under emission: each function,
@@ -241,9 +241,7 @@ checkTypeUse t user origin reg =
 wait : Waiting -> SymbolRegistry -> SymbolRegistry
 wait (w@(Waiting sym _ _)) reg =
   let key = symbolKey sym
-  let earlier = match omLookup key reg.waiting
-    Some uses => uses
-    None => []
+  let earlier = optionOr [] (omLookup key reg.waiting)
   { reg | waiting = omInsert key (w :: earlier) reg.waiting }
 
 -- [sym]'s definer recorded a gap instead of defining it, so a use of it is the
@@ -376,7 +374,7 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DTypeSig true "checkTypeUse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "checkTypeUse" ((PVar "t") (PVar "user") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmType") (EVar "t")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "UndeclaredType") (EVar "t")) (EVar "user")) (EVar "origin")))))
 (DTypeSig false "wait" (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
-(DFunDef false "wait" ((PAs "w" (PCon "Waiting" (PVar "sym") PWild PWild)) (PVar "reg")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "symbolKey") (EVar "sym"))) (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "uses")) () (EVar "uses")) (arm (PCon "None") () (EListLit)))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
+(DFunDef false "wait" ((PAs "w" (PCon "Waiting" (PVar "sym") PWild PWild)) (PVar "reg")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "symbolKey") (EVar "sym"))) (DoLet false false (PVar "earlier") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
 (DTypeSig true "excuseSymbol" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolKey") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
@@ -472,7 +470,7 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DTypeSig true "checkTypeUse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
 (DFunDef false "checkTypeUse" ((PVar "t") (PVar "user") (PVar "origin") (PVar "reg")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "symbolKey") (EApp (EVar "WasmType") (EVar "t")))) (EFieldAccess (EVar "reg") "entries")) (EApp (EVar "Ok") (EVar "reg")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "UndeclaredType") (EVar "t")) (EVar "user")) (EVar "origin")))))
 (DTypeSig false "wait" (TyFun (TyCon "Waiting") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
-(DFunDef false "wait" ((PAs "w" (PCon "Waiting" (PVar "sym") PWild PWild)) (PVar "reg")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "symbolKey") (EVar "sym"))) (DoLet false false (PVar "earlier") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "Some" (PVar "uses")) () (EVar "uses")) (arm (PCon "None") () (EListLit)))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
+(DFunDef false "wait" ((PAs "w" (PCon "Waiting" (PVar "sym") PWild PWild)) (PVar "reg")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "symbolKey") (EVar "sym"))) (DoLet false false (PVar "earlier") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")))) (DoExpr (ERecordUpdate (EVar "reg") ((fa "waiting" (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "w") (EVar "earlier"))) (EFieldAccess (EVar "reg") "waiting"))))))))
 (DTypeSig true "excuseSymbol" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolRegistry") (TyCon "SymbolRegistry"))))
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolKey") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))

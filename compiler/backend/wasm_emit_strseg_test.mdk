@@ -17,7 +17,7 @@ import backend.wasm_emit.{inputCtorFloatFieldsW}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import test.{Expectation, expectAll, expectEqual, labelFail}
-import string.{split, stripSuffix}
+import string.{split, stripSuffix, unlines}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -29,6 +29,7 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
+import backend.wasm_symbols.{defectMessage}
 import backend.emit_plan.{buildEmitPlan}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
@@ -42,7 +43,8 @@ watOf src =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
   match emitProgramRecord input plan prepared
     Ok (text, _) => text
-    Err _ => ""
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map defectMessage defects))
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line
 segmentOf : String -> Option (String, String)

@@ -120,17 +120,18 @@ emitGapIsolation =
         ],
       }
   let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
-  let gaps = match emitProgramRecord input plan cp
-    Ok (_, events) => events
-    Err _ => []
-  if contains "?\tunsupported Core IR node CMatch" gaps then
-    let _ = putStr "LLVM_GAP_RECORD_OK\n"
-    let _ =
-      emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
-    failWith
-      "LLVM gap isolation failure: strict emission returned after a recorded gap"
-  else
-    failWith "LLVM gap isolation failure: record emission did not report CMatch"
+  match emitProgramRecord input plan cp
+    Err defects => refuseLlvmSymbolDefects "" defects
+    Ok (_, gaps) =>
+      if contains "?\tunsupported Core IR node CMatch" gaps then
+        let _ = putStr "LLVM_GAP_RECORD_OK\n"
+        let _ =
+          emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+        failWith
+          "LLVM gap isolation failure: strict emission returned after a recorded gap"
+      else
+        failWith
+          "LLVM gap isolation failure: record emission did not report CMatch"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =

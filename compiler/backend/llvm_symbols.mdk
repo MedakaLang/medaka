@@ -246,9 +246,7 @@ checkRef sym origin reg =
 
 wait : String -> Waiting -> SymbolRegistry -> SymbolRegistry
 wait name w reg =
-  let earlier = match omLookup name reg.waiting
-    Some uses => uses
-    None => []
+  let earlier = optionOr [] (omLookup name reg.waiting)
   { reg | waiting = omInsert name (w :: earlier) reg.waiting }
 
 -- [sym]'s definer recorded a gap instead of defining it, so a call of it is the

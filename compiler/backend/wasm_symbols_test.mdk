@@ -335,9 +335,9 @@ test "record mode keeps a gap's census and finds no physical defect" =
         events
     Err defects => expectEqual [] (map defectFacts defects)
 
--- #4528: a parameter named like a top-level function is a local, not a value use
--- of the function, so no `$codety` wrapper is written for a module that declares
--- no closure types.
+-- A parameter named like a top-level function is a local, not a value use of the
+-- function, so no `$codety` wrapper is written for a module that declares no
+-- closure types.
 test "a local named like a top-level function needs no closure wrapper" = expectAll
   [
     labelFail

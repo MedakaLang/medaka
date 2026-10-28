@@ -468,8 +468,8 @@ identity there. Record mode excuses only an identity whose definer recorded a ga
 
 The LLVM emitter keeps the same kind of registry over its one namespace of
 functions and global variables (`emitProgram`, `emitProgramWithStats`,
-`emitProgramRecord`, `emitProgramGaps`), rendered by
-`renderLlvmSymbolDefects`/`refuseLlvmSymbolDefects`. Every define, the declares it
+`emitProgramRecord`, `emitProgramGaps`), refused by `refuseLlvmSymbolDefects`.
+Every define, the declares it
 writes for the other half of a prelude-object build, the value globals, the user
 externs' and site traps' declares, and every direct call through `emitImplCall` or
 `emitDirectTailCall` are registered. A whole module (no prelude object) may not leave

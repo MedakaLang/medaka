@@ -2986,17 +2986,8 @@ refusePhysical diags =
       diags
   stageExit emitDiagExitCode
 
--- The LLVM emitter's physical-symbol defects (backend/llvm_symbols.mdk), rendered
--- and refused as the Wasm emitter's are above.
-export
-renderLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> List String
-renderLlvmSymbolDefects file ds =
-  map
-    (d =>
-      let (at, diag) = llvmSymbolDefectDiag file d
-      ppDiagCliLines (arrayFromList []) at diag)
-    ds
-
+-- The LLVM emitter's physical-symbol defects (backend/llvm_symbols.mdk), refused
+-- as the Wasm emitter's are above.
 export
 refuseLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> <IO> Unit
 refuseLlvmSymbolDefects file ds =

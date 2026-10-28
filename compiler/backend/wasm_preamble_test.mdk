@@ -27,6 +27,7 @@ import backend.wasm_symbols.{
   emptyRegistry,
   unresolved,
 }
+import list.{subsequences}
 import support.ordmap.{omEmpty, omFromNames, omHasKey, omKeys}
 import support.symbol_origin.{SymbolOrigin(..)}
 import support.util.{contains, joinWith, stringTrimLeft}
@@ -145,19 +146,13 @@ planOf helpers ints nonexh = WasmDemandPlan {
 intNames : List String
 intNames = ["add", "sub", "mul", "div", "neg", "left", "right"]
 
-subsets : List String -> List (List String)
-subsets [] = [[]]
-subsets (x :: xs) =
-  let rest = subsets xs
-  map (x :: _) rest ++ rest
-
 -- every helper, without each combination of the two wide-integer blocks the
 -- `$mdk_value_*` blocks splice arms for
 wideVariants : List (List String)
 wideVariants =
   map
     (dropped => filter (n => not (contains n dropped)) helperOrder)
-    (subsets ["u64RuntimeLines", "i64RuntimeLines"])
+    (subsequences ["u64RuntimeLines", "i64RuntimeLines"])
 
 driftUnder : WasmDemandPlan -> String -> List String
 driftUnder plan name =
@@ -183,7 +178,7 @@ test "each helper block's text defines and calls what its manifest row states" =
         []
         (flatMap
           (ints => driftUnder (planOf helperOrder ints True) "intRuntimeLines")
-          (subsets intNames))),
+          (subsequences intNames))),
     labelFail
       "the located-trap block without the non-exhaustive trap"
       (expectEqual

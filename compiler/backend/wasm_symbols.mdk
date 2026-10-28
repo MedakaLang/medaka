@@ -237,9 +237,7 @@ checkTypeUse t user origin reg =
 wait : Waiting -> SymbolRegistry -> SymbolRegistry
 wait (w@(Waiting sym _ _)) reg =
   let key = symbolKey sym
-  let earlier = match omLookup key reg.waiting
-    Some uses => uses
-    None => []
+  let earlier = optionOr [] (omLookup key reg.waiting)
   { reg | waiting = omInsert key (w :: earlier) reg.waiting }
 
 -- [sym]'s definer recorded a gap instead of defining it, so a use of it is the
