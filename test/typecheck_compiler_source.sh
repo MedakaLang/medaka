@@ -325,11 +325,11 @@ compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
+compiler/types/tc_module.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_solve.mdk
 compiler/types/tc_solve_givens.mdk
-compiler/types/tc_state.mdk
-compiler/types/typecheck.mdk"
+compiler/types/tc_state.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
@@ -959,7 +959,7 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk $ROOT/compiler/types/tc_elab.mdk $ROOT/compiler/types/tc_global.mdk"
+predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk $ROOT/compiler/types/tc_elab.mdk $ROOT/compiler/types/tc_global.mdk $ROOT/compiler/types/tc_module.mdk"
 cat $predicate_slot_row_files > "$predicate_slot_rows_src"
 tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
 tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"

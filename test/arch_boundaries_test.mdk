@@ -1152,6 +1152,7 @@ typecheckFamily = [
   "types.tc_infer",
   "types.tc_elab",
   "types.tc_global",
+  "types.tc_module",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

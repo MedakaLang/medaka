@@ -124,15 +124,14 @@ import types.typecheck.{
   elaborateModulesGraph,
   elaborateOne,
   elaborateOneFacts,
-  isLiveSpan,
   ModDiags,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
-  spanKeys,
 }
 import string as S
 import types.tc_infer.{matchWarningsNow}
+import types.tc_module.{isLiveSpan, spanKeys}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omKeys, omEmpty, omFromNames}
