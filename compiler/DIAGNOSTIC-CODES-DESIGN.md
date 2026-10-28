@@ -38,18 +38,17 @@ decisions" §1 (code scheme) and §5 (warning-range regression).
 
 ## 0. TL;DR for the orchestrator
 
-- **Distinct error kinds per stage:** DERIVE, never read from here. The codes
-  emitted as literals (lex `L-*`, parse `P-*`, warnings `W-*`) enumerate with:
+- **Distinct error kinds per stage:** DERIVE, never read from here. Every code is one row of
+  the registry table (section 0b); count the live codes of one prefix family from it:
 
   ```sh
-  grep -ohE '"[LPRTW]-[A-Z0-9-]+"' compiler/driver/diagnostics.mdk | sort -u
+  sed -n '/registry:begin/,/registry:end/p' compiler/DIAGNOSTIC-CODES-DESIGN.md | grep -c '^| `L-[A-Z0-9-]*` | live |'
   ```
 
-  Resolve and typecheck are **ADTs**, so their kinds are counted at the data
-  declaration, not by this grep. This bullet used to carry per-stage counts and a
-  total; every one of them had rotted (the "lex 4" was 11 by #594), because a
-  written-down count has no derivation and no expiry — the same disease #556 fixed
-  in `diagnostics.mdk` itself. Run the command.
+  Replace `L-` with `P-`, `R-`, `T-`, `W-` or `E-` for the other families. The same count
+  from the module is `grep -c '^codeText L' compiler/support/diag_codes.mdk`, and
+  `diag_codes_doc_test.mdk` pins the two together. A written-down count has no derivation
+  and no expiry, so none is kept here. Run the command.
 - **Threading:** three push funcs in typecheck (`pushTypeError`,
   `pushTypeErrorOnce`, `pushTypeErrorOnceAt`) are the only type-error entry
   points → **~55 call sites** must supply a code. Resolve needs **0 call-site
@@ -72,6 +71,220 @@ decisions" §1 (code scheme) and §5 (warning-range regression).
   fix is renderer-side + threading loc through the multi-module warn path.
 - **Stage-1 size: M.** No re-mint (diagnostics/typecheck self-compile but are not
   the emitter); cost is the ~55 authored codes + fixpoint + golden recapture.
+
+---
+
+## 0b. The registry
+
+The canonical list of every code, one row per code. `live` codes are exactly the
+`allDiagCodes` of `compiler/support/diag_codes.mdk`; `retired` and `reserved` texts are never
+reused and have no constructor; `runtime` codes are minted only by the C runtime
+(`runtime/medaka_rt.c`). `compiler/support/diag_codes_doc_test.mdk` pins this table against the
+module both ways. The tables below stay as narrative.
+
+<!-- registry:begin -->
+| Code | Status | Meaning |
+|---|---|---|
+| `E-AMBIGUOUS-DISPATCH` | live | dispatch on a receiver type with more than one impl at that head is undecidable |
+| `E-CYCLIC-VALUE` | live | a value refers to itself during its own initialization |
+| `E-DIV-ZERO` | live | integer division by zero |
+| `E-INDEX-OOB` | live | list/array/string index out of bounds |
+| `E-INT-OVERFLOW` | live | `Int` `+`, `-`, `*`, negation or `/` whose result is outside |
+| `E-LET-REFUTE` | live | refutable `let` pattern failed |
+| `E-MAIN-ASYNC-PAYLOAD` | live | the entry main has an unsupported async payload (playground) |
+| `E-MOD-ZERO` | live | integer modulo by zero |
+| `E-NO-MAIN` | live | no main in the file |
+| `E-NONEXHAUSTIVE-MATCH` | live | `match` had no arm for the runtime value |
+| `E-NOT-A-FUNCTION` | live | applied a non-function value (borderline) |
+| `E-PANIC` | live | explicit user `panic` |
+| `E-PHYS-DUPLICATE` | live | one function, type or global is declared or defined twice |
+| `E-PHYS-SHAPE` | live | a direct call supplies a different operand count from the definition's parameter count |
+| `E-PHYS-UNDECLARED-FUNCREF` | live | a `ref.func` in a body names a function no `(elem declare func …)` lists |
+| `E-PHYS-UNDECLARED-TYPE` | live | a function is declared `(type $T)` and the type section declares no `$T` (#4528) |
+| `E-PHYS-UNDEFINED` | live | a call, `ref.func` or global access names an identity nothing in the module defines |
+| `E-SLICE-OOB` | live | slice bounds out of range |
+| `E-STACK-OVERFLOW` | live | evaluation recursion past the depth guard |
+| `E-WASM-NO-BINDING` | live | a wasm extern has no host binding on this target |
+| `L-BAD-CHAR` | live | unexpected character |
+| `L-BAD-CHAR-LITERAL` | live | A character literal that is not exactly one codepoint (#668) |
+| `L-BAD-ESCAPE` | live | invalid escape sequence |
+| `L-BAD-UNICODE-ESCAPE` | live | Any `\u{…}` escape the lexer must reject |
+| `L-BARE-UNICODE-ESCAPE` | live | A `\u` immediately followed by a hex digit rather than `{` |
+| `L-BLOCKCOMMENT` | live | `/* … */` C-style block comment (suggest `{- … -}` block / `--` line) |
+| `L-FLOAT-OVERFLOW` | live | float literal whose magnitude overflows the IEEE-754 double range |
+| `L-HS-DOLLAR` | live | stray `$` |
+| `L-HS-LAMBDA` | live | stray `\` |
+| `L-INT-OVERFLOW` | live | an integer literal that does not fit its type |
+| `L-MALFORMED-FLOAT` | live | A `.` next to digits with no valid float on the other side |
+| `L-MALFORMED-RADIX` | live | `0x`/`0b`/`0o` immediately followed by the digit separator `_` (`0x_FF`) |
+| `L-SEMICOLON` | live | trailing `;` statement terminator (suggest newline/indentation separation) |
+| `L-UNTERMINATED-COMMENT` | live | unterminated block comment |
+| `L-UNTERMINATED-STRING` | live | unterminated string literal |
+| `P-BAD-NEQ` | live | `!=` used for not-equal (suggest `/=`) |
+| `P-BRACE-BLOCK` | live | C-style `{ … }` brace block on `if` (suggest `then`/`else` + indentation) |
+| `P-DEF-KEYWORD` | live | foreign `def`/`function` header (suggest `f x = …`) |
+| `P-DO-ENDS-IN-BINDING` | live | a `do` (or `defer`) block whose LAST statement is a `let` or an `x <- e` bind |
+| `P-FOR-WHILE` | live | foreign `for`/`while` loop (suggest recursion or list functions) |
+| `P-GUARD-BAR-IN-MATCH` | live | `/` used for a MATCH-ARM guard, which uses `if` |
+| `P-GUARD-IF-IN-EQUATION` | live | `if` used for an EQUATION (function-clause) guard, which uses `/` |
+| `P-HS-CASE` | live | Haskell `case … of` (suggest `match e` with `pattern => body` arms) |
+| `P-HS-SIG` | live | Haskell `f :: T` type-signature syntax |
+| `P-MISSING-WHERE` | live | an `interface`/`impl` header with members indented below it but no `where` |
+| `P-NO-POW-OPERATOR` | live | `**` exponentiation |
+| `P-OCAML-MATCH-WITH` | live | OCaml `match e with` |
+| `P-PARSE` | live | general "expected …" parse failure (umbrella) |
+| `P-RESERVED-KEYWORD` | live | a reserved keyword (`as`, `test`, `type`, …) used where a variable/pattern name is expected |
+| `P-UNEXPECTED-EOF` | live | unexpected end of input |
+| `P-WHERE-BODY-SAME-LINE` | live | an `interface`/`impl` member written on the same line as `where` |
+| `R-ABSTRACT-CTOR-IMPORT` | live | resolve error `AbstractCtorImport` |
+| `R-ABSTRACT-FIELD` | live | resolve error `AbstractFieldAccess` |
+| `R-AMBIGUOUS-CTOR` | live | resolve error `AmbiguousConstructor` |
+| `R-AMBIGUOUS-EFFECT` | live | resolve error `AmbiguousEffect` |
+| `R-AMBIGUOUS-INTERFACE` | live | resolve error `AmbiguousInterface` |
+| `R-AMBIGUOUS-OCCURRENCE` | live | resolve error `AmbiguousOccurrence` |
+| `R-AMBIGUOUS-TYPE` | live | resolve error `AmbiguousType` |
+| `R-AS-PATTERN-MISPLACED` | live | resolve error `AsPatternMisplaced` |
+| `R-BARE-CTOR-IMPORT` | live | resolve error `BareCtorImport` |
+| `R-BUILD-FAILED` | live | Not a `ResError` constructor |
+| `R-CANNOT-DERIVE` | live | a `deriving (…)` name no deriver claims (#421) |
+| `R-DUP-BINDER` | live | resolve error `DuplicateBinder` |
+| `R-DUP-BINDING` | live | resolve error `DuplicateValueBinding` |
+| `R-DUPLICATE-BINDING` | live | resolve error `DuplicateBinding` |
+| `R-DUPLICATE-DEF` | live | resolve error `DuplicateDefinition` |
+| `R-DUPLICATE-IFACE-METHOD` | live | resolve error `DuplicateInterfaceMethod` |
+| `R-DUPLICATE-SIGNATURE` | live | resolve error `DuplicateSignature` |
+| `R-EFFECT-LABEL-NO-MEMBERS` | live | an effect label imported with (..) has no constructors to bring |
+| `R-EXTERN-WITH-BODY` | live | resolve error `ExternWithBody` |
+| `R-FIELD-NOT-IN-RECORD` | live | resolve error `FieldNotInRecord` |
+| `R-FILE-NOT-FOUND` | live | Not a `ResError` constructor |
+| `R-FILE-NOT-UTF8` | live | Not a `ResError` constructor |
+| `R-IMMUTABLE-ASSIGN` | live | resolve error `ReassignImmutable` |
+| `R-INTERNAL-EXTERN` | live | resolve error `InternalExternAccess` |
+| `R-METHOD-NOT-IN-INTERFACE` | live | resolve error `MethodNotInInterface` |
+| `R-MISPLACED-AUTHORITY-BINDER` | live | resolve error `MisplacedAuthorityBinder` |
+| `R-MODULE-LOAD` | live | Not a `ResError` constructor |
+| `R-NEWTYPE-CTOR-PRIVATE` | live | resolve error `NewtypeCtorNotExported` |
+| `R-NO-EXPORTED-CTORS` | live | resolve error `NoExportedConstructors` |
+| `R-NONREC-VALUE-LET` | live | resolve error `NonRecursiveValueLet` |
+| `R-ORPHAN-SIGNATURE` | live | resolve error `OrphanSignature` |
+| `R-PRIVATE-NAME` | live | resolve error `PrivateNameAccess` |
+| `R-UNBOUND` | live | resolve error `UnboundVariable` |
+| `R-UNBOUND-AUTHORITY` | live | resolve error `UnboundAuthority` |
+| `R-UNKNOWN-CTOR` | live | resolve error `UnknownConstructor` |
+| `R-UNKNOWN-EFFECT` | live | resolve error `UnknownEffect` |
+| `R-UNKNOWN-FIELD` | live | resolve error `UnknownField` |
+| `R-UNKNOWN-INTERFACE` | live | resolve error `UnknownInterface` |
+| `R-UNKNOWN-MODULE` | live | resolve error `UnknownModule` |
+| `R-UNKNOWN-TYPE` | live | resolve error `UnknownType` |
+| `T-ABSTRACT-FIELD` | live | abstract field |
+| `T-ALIAS-ARITY` | live | alias arity |
+| `T-AMBIGUOUS-ALIAS-METHOD` | live | ambiguous alias-qualified method |
+| `T-AMBIGUOUS-FIELD` | live | ambiguous field |
+| `T-AMBIGUOUS-INSTANCE` | live | ambiguous instance |
+| `T-AMBIGUOUS-METHOD` | live | ambiguous method (admitted set) |
+| `T-AMBIGUOUS-REEXPORT` | live | ambiguous re-exported value |
+| `T-AMBIGUOUS-SHADOW-DECL` | live | ambiguous shadow declaration |
+| `T-AUTHORITY` | live | authority not admitted |
+| `T-AUTHORITY-BINDER` | live | authority binder type |
+| `T-AUTHORITY-DOMAIN` | live | authority binder domain |
+| `T-AUTHORITY-ESCAPE` | live | existential escapes its scope |
+| `T-AUTHORITY-EXISTENTIAL-SCOPE` | live | existential opened outside a scope, or updated in part |
+| `T-AUTHORITY-INDEX-MISMATCH` | live | authority index mismatch |
+| `T-AUTHORITY-KIND` | live | authority kind |
+| `T-AUTHORITY-PATTERN` | live | pattern slot filled by a non-pattern |
+| `T-AUTHORITY-PHANTOM-EXPORT` | live | phantom authority index exported |
+| `T-BANG-ON-BOOL` | live | `!` on a `Bool` |
+| `T-BIND-OUTSIDE-DO` | live | `<-` bind outside do |
+| `T-CONFLICTING-IMPL` | live | conflicting impl |
+| `T-CYCLIC-SUPERINTERFACE` | live | cyclic superinterface |
+| `T-DISCARDED-VALUE` | live | discarded statement value |
+| `T-DO-NOT-MONAD` | live | do not a monad |
+| `T-EFFECT-ARG-UNCOVERED` | live | effect arg-occurrence uncovered |
+| `T-EFFECT-INDEX-EAGER` | live | effect index eager |
+| `T-EFFECT-INDEX-MISMATCH` | live | effect index mismatch |
+| `T-EFFECT-KIND-MISMATCH` | live | an effect row and an ordinary type written in each other's slot |
+| `T-EFFECT-LAUNDER` | live | effect launder (impl body) |
+| `T-EFFECT-LEAK` | live | effect leak |
+| `T-EFFECT-PARAM` | live | effect param |
+| `T-EFFECT-PARAM-VARIANCE` | live | effect param variance mismatch |
+| `T-EFFECT-UNDETERMINED` | live | under-determined effect var |
+| `T-EXPORT-UNSOLVED-AUTHORITY` | live | exported authority nothing determines |
+| `T-FFI-BUILTIN-BIND` | live | built-in redeclaration with a bind clause |
+| `T-FFI-BUILTIN-SHADOW` | live | extern shadows a builtin, incompatibly |
+| `T-FFI-C-SYMBOL` | live | extern C symbol not an identifier |
+| `T-FFI-CATALOG-NARROW` | live | extern narrows a builtin's effect row |
+| `T-FFI-DUPLICATE-HOST` | live | extern binds a host twice |
+| `T-FFI-JS-NAME` | live | extern JavaScript name not an identifier |
+| `T-FFI-NO-HOST` | live | extern row names no host |
+| `T-FFI-NONCROSSABLE` | live | extern type not crossable |
+| `T-FFI-NULLARY` | live | extern nullary (no arrow) |
+| `T-FFI-RESERVED-NAME` | live | extern claims a reserved name |
+| `T-FFI-UNBOUND-HOST` | live | extern row names an unbound host |
+| `T-FFI-UNKNOWN-HOST` | live | extern binds an unknown host |
+| `T-FFI-UNLABELLED` | live | extern row missing FFI |
+| `T-FIELD-NOT-IN-ALL-CTORS` | live | field not in all ctors |
+| `T-FIELD-POSITION-DIFFERS` | live | field at different positions |
+| `T-FIELD-TYPE-DIFFERS` | live | field with different types |
+| `T-FILE-BOUND-VALUE` | live | function file bound inside a container |
+| `T-IMPL-KIND-MISMATCH` | live | graded instance head kind |
+| `T-IMPL-MISSING-REQUIRES` | live | impl missing requires |
+| `T-IMPL-TOO-SPECIFIC` | live | impl pins method-scheme var |
+| `T-INCOMPLETE-IMPL` | live | incomplete impl |
+| `T-INFINITE-TYPE` | live | infinite type |
+| `T-INTERNAL-ORDINAL` | live | unknown module ordinal (internal) |
+| `T-MAIN-USED` | live | `main` used by another binding |
+| `T-MANIFEST-ENTRY` | live | the manifest entry binding was not found |
+| `T-MANIFEST-INVALID` | live | the publish manifest is invalid |
+| `T-MANIFEST-WRAPPER` | live | no checked Async driver is selected for an executed async main |
+| `T-METHOD-MISMATCH` | live | method type mismatch |
+| `T-MISSING-CONSTRAINT` | live | missing constraint |
+| `T-MISSING-FIELD` | live | missing field |
+| `T-MISSING-SUPER-IMPL` | live | an impl requires a superinterface that no impl covers |
+| `T-NO-IMPL` | live | no impl (class) |
+| `T-NONREC-VALUE-LET` | live | non-recursive value let |
+| `T-NOT-A-FUNCTION` | live | not a function |
+| `T-PHANTOM-METHOD` | live | an interface method whose type never mentions the interface variable |
+| `T-RECURSIVE-ALIAS` | live | recursive alias |
+| `T-REQUIRES-CYCLE` | live | `requires` chain repeats a goal |
+| `T-REQUIRES-DEPTH` | live | `requires` chain does not shrink |
+| `T-REQUIRES-UNROUTED` | live | `requires` evidence cannot be routed |
+| `T-RESIDUAL` | live | unlocated elaboration residual (`run --json` only) |
+| `T-SIG-OVER-EXPANSIVE` | live | a signature generalises over an expansive (non-value) definition |
+| `T-TARGET-CAPABILITY` | live | entry exceeds the target profile (`check`/`run`) |
+| `T-TARGET-NO-BINDING` | live | reached extern not bound for the target's host (`check`/`run`/`build`) |
+| `T-TARGET-NOT-PROVIDED` | live | reached built-in not provided by the target (`check`/`run`) |
+| `T-TYPE-MISMATCH` | live | type mismatch |
+| `T-TYPE-TOO-GENERAL` | live | the declared signature is more general than the definition |
+| `T-UNBOUND` | live | unbound var (tc) |
+| `T-UNKNOWN-CTOR` | live | unknown ctor |
+| `T-UNKNOWN-FIELD` | live | unknown field |
+| `T-UNKNOWN-RECORD` | live | unknown record |
+| `T-UNROUTED-DISPATCH` | live | unrouted dispatch (evidence hole) |
+| `T-UPDATE-MULTI-CTOR` | live | record update on a multi-constructor type |
+| `W-GUARD-INEXHAUSTIVE` | live | guards may not be exhaustive (exhaust) |
+| `W-IMPORT-METHOD-SHADOW` | live | A name module `M` **selectively imports** (`import m.{f}`) is also an interface method |
+| `W-INCOMPARABLE-IMPLS` | live | **`⊑`-incomparable impls** (warning) |
+| `W-KEEP-IR-FAILED` | live | Not a typecheck warning |
+| `W-MAIN-MISSING` | live | the entry module has no `main` |
+| `W-MAIN-SHAPE` | live | `main` is a FUNCTION |
+| `W-NONEXHAUSTIVE` | live | **non-exhaustive match** (warning) |
+| `W-NONEXHAUSTIVE-CLAUSES` | live | non-exhaustive clauses of a multi-clause function |
+| `W-PRELUDE-METHOD-SHADOW` | live | An interface method declared in module `M` whose name collides with an **implicit-prelude |
+| `W-UNREACHABLE-ARM` | live | **unreachable match arm** (warning) |
+| `T-NO-IMPL-NAMED` | retired | never minted; the doc listed it as live |
+| `T-ROW-KIND-MISMATCH` | retired | never minted; the doc listed it as live |
+| `T-EMPTY-RECORD-UPDATE` | retired | a panic in tc_infer, not a diagnostic |
+| `T-UNSUPPORTED` | retired | a panic in tc_infer and tc_pat, not a diagnostic |
+| `T-ROUTE-WORD-AMBIGUOUS` | retired | method route word was not unique; unreachable since ARCH B-2.1-g |
+| `T-LOCAL-CONSTRAINED-MONO` | retired | local binding not constraint-polymorphic; never emitted by the current binary |
+| `T-WASM-FILE-GRANT` | retired | wasm file grant; the wasm host confines file operations |
+| `W-OPEN-GOAL-COMMITTED` | retired | committed to the first-declared match at a non-closed goal; retired by DICT-SEMANTICS 6.2 T4 |
+| `E-MISSING-FIELD` | reserved | record-field miss; no live emit site |
+| `E-DISPATCH-NO-IMPL` | runtime | no impl found at runtime dispatch (C runtime) |
+| `E-APPEND-UNROUTED` | runtime | unrouted append (C runtime) |
+| `E-BYTEBLOCK-APPEND` | runtime | byte-block append failure (C runtime) |
+| `E-FATAL-SIGNAL` | runtime | fatal signal caught by the C runtime |
+<!-- registry:end -->
 
 ---
 
@@ -141,10 +354,9 @@ replaced with new ones** — a hand-maintained census in prose rots at the next 
 as the "Distinct-kind totals" note at the end of the code table already says. Derive them:
 
 ```sh
-grep -rhE 'pushTypeError(Once)?(At|HelpFixAt)? [A-Za-z.]+ "' --include='tc_*.mdk' --include=typecheck.mdk \
-  --exclude='*_test.mdk' compiler/types | wc -l                                  # push sites with a literal code
-grep -rhoE 'pushTypeError(Once)?(At|HelpFixAt)? [A-Za-z.]+ "[A-Z-]+"' --include='tc_*.mdk' --include=typecheck.mdk \
-  --exclude='*_test.mdk' compiler/types | grep -oE '"[A-Z-]+"' | sort -u | wc -l  # distinct literal codes
+sed -n '/registry:begin/,/registry:end/p' compiler/DIAGNOSTIC-CODES-DESIGN.md | grep -c '^| `T-[A-Z0-9-]*` | live |'   # distinct live type codes
+grep -rhoE '\bpushTypeError(Once)?(At|HelpFixAt)? [A-Za-z.]+ ("[LPRTWE]-|[LPRTWE][A-Z][a-z])' --include='tc_*.mdk' --include=typecheck.mdk \
+  --exclude='*_test.mdk' compiler/types | wc -l                                  # push sites with a code (literal or constructor)
 ```
 
 The sites all go through `pushTypeError` / `pushTypeErrorOnce` / `pushTypeErrorOnceAt` /

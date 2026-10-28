@@ -194,6 +194,9 @@ inlang-support-symbol-origin-test:
 inlang-support-diag-codes-test:
 	./medaka test compiler/support/diag_codes_test.mdk
 
+inlang-support-diag-codes-doc-test:
+	./medaka test compiler/support/diag_codes_doc_test.mdk
+
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
