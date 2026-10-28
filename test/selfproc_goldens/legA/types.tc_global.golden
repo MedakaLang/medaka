@@ -1,0 +1,126 @@
+calleeNumObls : ModuleCtx -> Int -> Int -> List UObligation
+checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
+checkGradedImplHead : ModuleCtx -> String -> Ty -> List Kind -> Unit
+checkGradedImplHeadCon : ModuleCtx -> String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
+checkGradedImplHeadDecl : ModuleCtx -> ClassEnv -> Int -> Decl -> Unit
+checkGradedImplHeadKinds : ModuleCtx -> String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
+checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
+checkGradedImplTys : ModuleCtx -> ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
+checkImplCompletenessMap : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
+checkImplHeadGoal : SiteCtx -> String -> List (String, Int) -> List PredicateSlot -> (IfaceRef, List Mono, Option Loc) -> Unit
+checkImplHeadIndices : ModuleCtx -> Ty -> Unit
+checkImplHeadNumIds : ModuleCtx -> String -> List (String, Mono) -> List Require -> Map String Unit -> Option Loc -> List Int -> Unit
+checkImplHeadNumObligations : ModuleCtx -> String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
+checkImplHeadPrerequisites : ModuleCtx -> String -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Unit
+checkImplHeadRigidity : ModuleCtx -> String -> String -> ImplBodySite -> List (String, HeadVarRoot) -> Option Loc -> Unit
+checkImplSuperContexts : ModuleCtx -> List Decl -> ClassEnv -> Int -> List ImplRow -> Decl -> Unit
+checkMethodBodyAgainst : TcEnv -> IfaceRef -> MethodBodyKind -> String -> Ty -> List (String, List Kind) -> MethodBodyInstance -> (Map Int Unit, Map Int Unit) -> Option Loc -> List Pat -> Expr -> MethodBodyCheck
+checkMethodRigidityCore : ModuleCtx -> String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
+checkPhantomMethods : ModuleCtx -> ClassEnv -> Int -> Unit
+checkSuperImpls : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
+checkSuperInstanceContext : ModuleCtx -> String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> (Unit -> Bool) -> Unit
+checkSurvivorCallObligations : ModuleCtx -> String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
+cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
+cohFreshTys : ModuleCtx -> List Ty -> List Mono
+cohHardInScope : CohSweep -> String -> String -> Bool
+cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
+cohImplIface : CohImpl -> IfaceRef
+cohImplIfaceName : CohImpl -> String
+cohImplLoc : CohImpl -> Option Loc
+cohImplOfRow : ModuleCtx -> ImplRow -> CohImpl
+cohIncomparableMsg : String -> List Mono -> List Mono -> String -> String -> String
+cohIsCrossModule : String -> String -> Bool
+cohKeepFirst : Option a -> Option a -> Option a
+cohMutuallySubsumes : List Mono -> List Mono -> Bool
+cohPairsPrelude : String -> String -> Bool
+cohPreludeMid : String
+cohPreludeOrd : Int
+cohPreludeRows : ImplEnv -> List ImplRow
+cohPushHard : ModuleCtx -> Option (String, Option Loc) -> Unit
+cohPushSoft : ModuleCtx -> Option (String, Option Loc) -> Unit
+cohRowsOf : ImplEnv -> List ImplRow
+cohRowsOwnedBy : Int -> ImplEnv -> List ImplRow
+cohSameIface : IfaceRef -> IfaceRef -> Bool
+cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
+cohScanDone : CohScan -> Bool
+cohScanInner : CohSweep -> CohImpl -> List CohImpl -> CohScan -> CohScan
+cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
+cohSoftInScope : CohSweep -> String -> String -> Bool
+cohStep : Mono -> Mono -> MStep Int Mono Mono
+cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
+cohSubsumes : List Mono -> List Mono -> Bool
+cohWhereSuffix : String -> String -> String
+constraintPredicateSlot : ModuleCtx -> List (String, Mono) -> Constraint -> PredicateSlot
+constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
+declNameLocs : String -> Decl -> List Loc
+defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
+derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
+eqInt : Int -> Int -> Bool
+firstImplMethodLoc : List ImplMethod -> Option Loc
+followRequireGoal : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
+followRequireLevel : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation -> List (List (UObligation, ReqWalk)) -> (List UObligation, List (UObligation, ReqWalk))
+foreachUnit : (a -> Unit) -> List a -> Unit
+gatesBodyCascade : MethodBodyKind -> Bool
+globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
+headRemainingKinds : ModuleCtx -> TyConOrigin -> String -> Int -> Option (List Kind)
+headVarNarrowed : List (String, HeadVarRoot) -> List (String, HeadVarRoot) -> (String, HeadVarRoot) -> Bool
+headVarsNarrowedBy : List (String, HeadVarRoot) -> List (String, Mono) -> List String
+implBodyGivens : ModuleCtx -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List PredicateSlot
+implBodyLoc : Expr -> Option Loc
+implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
+implDeclLoc : Decl -> Option (Option Loc)
+implHeadGround : Decl -> Bool
+implHeadMonos : ModuleCtx -> List Ty -> (List (String, Mono), List Mono)
+implHeadParametric : Decl -> Bool
+implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
+implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
+implRequiresRoot : ModuleCtx -> String -> Int -> List (String, Mono) -> List Require -> Bool
+implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
+inferDefaultBodies : TcEnv -> List Decl -> Unit
+inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
+inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
+inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
+inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit
+inferImplMethod : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> ScopedImplMethod -> Unit
+inferImplMethods : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> List ScopedImplMethod -> Unit
+inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List (String, List Kind)) -> String -> List Pat -> Expr -> Unit
+inferOneIfaceDefaults : TcEnv -> Decl -> Unit
+inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
+inferPlainImpl : TcEnv -> ClassEnv -> Int -> IfaceRef -> List Ty -> List ImplMethod -> Unit
+inferRequiresImpl : TcEnv -> List String -> ClassEnv -> Int -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
+instantiateMethodBody : ModuleCtx -> MethodBodyKind -> List String -> Ty -> List (String, List Kind) -> MethodBodyInstance
+knownPredicateSlot : IfaceRef -> List Mono -> PredicateSlot
+methodBodyHeadMonos : MethodBodyKind -> List Mono
+methodBodyOwnTyparams : MethodBodyKind -> List String -> List String
+methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
+methodLevelConstraintMonos : List String -> Ty -> List (String, Mono) -> List Mono
+narrowedImplHead : String -> ImplBodySite -> String
+nestedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> List UObligation -> List UObligation
+nestedRequireGoalsGo : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+nestedRequireGoalsOnce : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+numCallObls : GraphCtx -> List UObligation -> List UObligation
+numChannelRootSet : List UObligation -> List Mono -> Map String Unit
+numDictObls : GraphCtx -> List PendingDictApp -> List UObligation
+openMethodBodyScope : ModuleCtx -> IfaceRef -> String -> MethodBodyKind -> ScopeId
+phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List (Option Loc, String)
+phantomMethodMsgs : CeRow -> List (Option Loc, String)
+prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
+pushCoherenceWarning : ModuleCtx -> Option Loc -> String -> Unit
+pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
+registerMethodBodyGivens : GraphCtx -> IfaceRef -> MethodBodyKind -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
+registerMethodBodyGrants : GraphCtx -> IfaceRef -> String -> List Mono -> MethodBodyInstance -> ScopeId -> Unit
+reportImplHeadResidual : ModuleCtx -> String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
+reportMissingSuperImpl : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
+reportSuperContextLeaf : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> (IfaceRef, List Mono) -> Unit
+requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
+requireGoalSeeds : GraphCtx -> List UObligation -> List (UObligation, ReqWalk)
+requirePredicateSlot : ModuleCtx -> List (String, Mono) -> Require -> PredicateSlot
+scopeImplMethods : ModuleCtx -> ScopeId -> List ImplMethod -> List ScopedImplMethod
+selectedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
+substParams : List String -> List (String, Ty) -> List Ty
+superContextLeaves : ModuleCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+superHeadCovers : List Ty -> List Ty -> Bool
+superHeadStep : Ty -> Ty -> MStep String Ty Ty
+superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
+superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
+uOblGoalArgs : GraphCtx -> UObligation -> List Mono

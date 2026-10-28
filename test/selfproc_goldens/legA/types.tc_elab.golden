@@ -1,0 +1,112 @@
+applyExprs : Expr -> List Expr -> Expr
+armDictSites : PassEvidence -> Arm -> List String
+binopDispatchMethod : String -> Option String
+binopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Expr -> Route -> Expr
+binopRouteSplit : Route -> (Route, List Route)
+bottomGrant : Expr
+builtinClassOfMethod : String -> Option BuiltinClass
+builtinMethodIfaceWord : GraphCtx -> String -> String
+clauseImplDictUser : ModuleCtx -> PassEvidence -> IfaceRef -> Int -> ImplMethod -> List String
+collectDictSites : PassEvidence -> Expr -> List String
+constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
+dictArityOf : ModuleCtx -> String -> Int
+dictParams : String -> Int -> List Pat
+dictParamsFrom : String -> Int -> Int -> List Pat
+dictParamsGo : String -> Int -> Int -> List Pat
+dictPass : ModuleCtx -> EvIndex -> String -> List String -> List Decl -> List Decl
+dictPassDecl : ModuleCtx -> PassEvidence -> Map String Unit -> List String -> Decl -> Decl
+dictPassLetBind : ModuleCtx -> Map String Unit -> LetBind -> LetBind
+dictPassModulesIfEnabled : ModuleCtx -> List String -> Bool -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+dictPassModulesScoped : ModuleCtx -> EvIndex -> List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+doStmtDictSites : PassEvidence -> DoStmt -> List String
+drivenEvidence : GraphCtx -> Unit -> List EvEntry
+fieldAssignDictSites : PassEvidence -> FieldAssign -> List String
+fileBoundExpr : GraphCtx -> List GrantBinder -> EffRow -> Expr -> Expr
+fileBoundValue : GraphCtx -> List GrantBinder -> Mono -> Expr -> Expr
+fixedWidthLiteralFits : Route -> Int -> Bool
+freshGrantName : GrantState -> Unit -> String
+funClauseDictSites : PassEvidence -> FunClause -> List String
+grantArrows : Int -> Ty -> Ty
+grantBody : GraphCtx -> PassEvidence -> Expr -> Expr
+grantDecl : GraphCtx -> PassEvidence -> String -> Decl -> Decl
+grantExpr : GraphCtx -> PassEvidence -> Expr -> Expr
+grantExprInner : GraphCtx -> PassEvidence -> Expr -> Expr
+grantIdTerm : GraphCtx -> List GrantBinder -> Int -> Expr
+grantIfaceMethod : GraphCtx -> PassEvidence -> String -> IfaceMethod -> IfaceMethod
+grantImplMethod : GraphCtx -> PassEvidence -> String -> ImplMethod -> ImplMethod
+grantLetBind : GraphCtx -> PassEvidence -> List Pat -> LetBind -> LetBind
+grantLocalRhs : GraphCtx -> String -> Expr -> Expr
+grantMethodParams : GraphCtx -> MethodGrant -> String -> List Pat -> Expr -> (List Pat, Expr)
+grantParamFor : GraphCtx -> List GrantBinder -> Int -> Option String
+grantParamName : String -> Int -> String
+grantParamPats : List a -> String -> List Pat
+grantPass : GraphCtx -> PassEvidence -> String -> List Decl -> List Decl
+grantSpine : Expr -> List Expr -> (Expr, List Expr)
+grantStmt : GraphCtx -> PassEvidence -> DoStmt -> DoStmt
+grantTerm : GraphCtx -> List GrantBinder -> Authority -> Expr
+grantTerms : GraphCtx -> GrantOcc -> List Expr
+grantUse : GraphCtx -> String -> EvId -> Expr
+grantVarParams : GraphCtx -> List GrantBinder -> List (Ref Authvar) -> List String -> Option (List String)
+grantWholeDomain : List Decl -> List Decl
+guardDictSites : PassEvidence -> Guard -> List String
+ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Option Loc -> Int -> IfaceMethod
+ifaceDictPassMethod : List String -> IfaceMethod -> IfaceMethod
+implDictNames : String -> Int -> Int -> List String
+implDictPassMethods : ModuleCtx -> PassEvidence -> IfaceRef -> Int -> List ImplMethod -> List ImplMethod
+implMethodDictArity : ModuleCtx -> IfaceRef -> String -> Int
+insertGrantArrows : Int -> Int -> Ty -> Ty
+isSourceless : GraphCtx -> Int -> Bool
+letBindDictSites : PassEvidence -> LetBind -> List String
+literalRouteHead : String -> String
+localAbsFor : GraphCtx -> String -> Option LocalAbs
+localDictPat : String -> Pat
+localGrantIds : GraphCtx -> String -> List Int
+mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
+methodDictArityAtOrigin : ModuleCtx -> TyConOrigin -> String -> Int
+methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
+methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
+methodTerms : GraphCtx -> String -> MethodGrant -> GrantOcc -> List Expr
+mintMethodCellWith : ModuleCtx -> PassEvidence -> String -> Int -> Route -> List Route -> EvId
+modInScope : String -> Map String Unit -> Bool
+negatedI32Lit : Expr -> Option Int
+negatedInI32 : Int -> Option Int
+passIndex : PassEvidence -> EvIndex
+passMethodFacts : EvVal -> PassMethod
+passMethodOf : PassEvidence -> EvId -> PassMethod
+prependDictClause : String -> Int -> FunClause -> FunClause
+prependImplDictIfUser : ModuleCtx -> IfaceRef -> Int -> List String -> ImplMethod -> ImplMethod
+prependLocalDictClause : List String -> FunClause -> FunClause
+prependLocalDicts : List String -> Expr -> Expr
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+resolveAdmittedSite : SiteCtx -> String -> Ref String -> Ref Route -> Ref (List Route) -> Mono -> String -> ScopeId -> Unit
+resolveArgStamp : SiteCtx -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
+resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
+resolveArithSite : Ref Route -> Mono -> Unit
+resolveExactReturnSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
+resolveNumLitSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
+resolveOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> String -> ScopeId -> Unit
+resolvePredicateOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> ClassPredicate -> String -> ScopeId -> Unit
+resolveSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
+rewriteBinopExpr : ModuleCtx -> PassEvidence -> Expr -> Expr
+rewriteLocalDictExpr : GraphCtx -> Expr -> Expr
+rewriteLocalDoStmt : GraphCtx -> DoStmt -> DoStmt
+rewriteLocalLetBind : GraphCtx -> LetBind -> LetBind
+routeRDictName : Route -> List String
+saturateGrants : GrantState -> Expr -> Int -> List Expr -> List Expr -> Expr
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> Map String Unit -> List (String, List MethodPredicateSlot)
+scopePredicateSlots : List ((String, String), List PredicateSlot) -> Map String Unit -> List Decl -> List (String, List PredicateSlot)
+selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
+selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
+setOccurrenceArity : GraphCtx -> PassEvidence -> EvId -> Int -> Unit
+sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
+siteRDictName : Route -> List String
+siteRDictNamesL : List Route -> List String
+standaloneOcc : Option GrantOcc -> Option (Int, GrantOcc)
+topAbsorbs : String -> Expr -> Expr
+topGrantIds : GraphCtx -> String -> String -> List Int
+transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)
+u64LiteralFits : Route -> Int -> Bool
+unopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Route -> Expr
+usesImplDict : PassEvidence -> String -> Int -> Int -> Expr -> Bool
+wholeDomainExpr : GrantState -> Expr -> Expr
