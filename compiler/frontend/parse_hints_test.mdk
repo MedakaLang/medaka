@@ -23,3 +23,16 @@ test "prescan reports removed inequality" =
 
 test "prescan accepts ordinary record names" =
   expectNone (hintSummary "record = 1")
+
+test "match guard arrow stops brace-block hint" =
+  expectNone
+    (hintSummary
+      "main = match Some 1\n  Some n if n > 0 => R { a = n }.a\n  _ => 0\n")
+
+test "brace-block if still reports its hint" =
+  expectEqual
+    (Some (
+      "P-BRACE-BLOCK",
+      "Medaka has no `{ ... }` blocks; indent the body after `then` and `else`",
+    ))
+    (hintSummary "main = if True { 1 } else { 0 }")

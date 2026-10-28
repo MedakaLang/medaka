@@ -320,19 +320,15 @@ isBracketCloseTok _ = False
 blockCommentMsg : ParseDiagnosticKind
 blockCommentMsg = BlockComment
 
--- Brace-block `if` (`if cond { … } else { … }`): C-style braces used as an if
--- body.  SAFETY (the sharp hazard — braces vs record literals `{ f = v }` /
--- `{ r | f = v }`): a VALID `if` ALWAYS has `then` at if-level before any body,
--- so we scan the if-header at if-bracket-level and ABORT the moment we see a
--- `then` at that level.  A record literal in the CONDITION (`if {x}.b then …`)
--- is thus always excused — its `then` follows.  We only fire when a `{` appears
--- at if-level AND the header ends (an `else`/newline/eof at if-level) with NO
--- `then` — which no valid `if` ever does.  So valid records (which never sit in
--- an `if` header without a following `then`) cannot trip this.  Located at `{`.
+-- Brace-block `if` (`if cond { … } else { … }`) uses C-style bodies.
+-- A top-level fat arrow may end a match guard or a lambda, so it is not
+-- safe to infer that a preceding `if` needs a `then` past that boundary.
+-- A `then` at the same bracket level also exempts record conditions.
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockFrom toks i depth cand
   | i >= arrayLength toks = if depth == 0 then cand else 0 - 1
-  | peekTok toks i == TThen && depth == 0 = 0 - 1
+  | (peekTok toks i == TThen || peekTok toks i == TFatArrow) && depth == 0 =
+    0 - 1
   | peekTok toks i == TElse && depth == 0 = cand
   | (isNewlineTok (peekTok toks i) || isEofTok (peekTok toks i)) && depth == 0 =
     cand

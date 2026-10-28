@@ -650,3 +650,11 @@ publishedView p =
     commas,
     units,
   )
+
+test "guarded match arm accepts a record body" =
+  expectOkThen
+    (decls => expectEqual 2 (length decls))
+    (mapErr
+      parseErrorMessage
+      (P.parseResult
+        "data R = { a : Int }\nmain = match Some 1\n  Some n if n > 0 => R { a = n }.a\n  _ => 0\n"))
