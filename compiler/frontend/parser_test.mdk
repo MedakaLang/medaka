@@ -4,7 +4,7 @@
    binary-operator ladder: precedence, associativity, and an operator whose
    right operand fails. -}
 
-import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..)}
+import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..), Section(..)}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parse_engine.{
   PR(..),
@@ -137,16 +137,17 @@ test "a tie goes to the later alternative" =
     (failText (runP (E.orElse (failP "first") (failP "second")) twoToks 0))
 
 -- ── The binary-operator ladder ──────────────────────────────────────────
--- Expected values follow the ladder `binLevelOf` encodes, which is the one the
--- combinator ladder it replaced encoded: loosest first `|>`, `>>` `<<`, `||`,
--- `&&`, comparisons, `::`, `++`, `+` `-`, `*` `/` `%`; all left-associative but
--- `::`; application binds tighter than any operator.
+-- Expectations follow the precedence contract in docs/spec/SYNTAX.md.
 
 -- The operator skeleton of `x = <src>`'s body, fully parenthesised.
 shape : Expr -> String
 shape (ELoc _ e) = shape e
 shape (EBinOp op l r _) = "(\{shape l} \{op} \{shape r})"
 shape (EApp f a) = "(\{shape f} \{shape a})"
+shape (EUnOp op e _) = "(\{op}\{shape e})"
+shape (ESection (SecBare op)) = "(bare \{op})"
+shape (ESection (SecRight op e)) = "(right \{op} \{shape e})"
+shape (ESection (SecLeft e op)) = "(left \{shape e} \{op})"
 shape (EVar v) = v
 shape (ENumLit _ _ lx) = lx
 shape _ = "?"
@@ -229,6 +230,29 @@ test "every level is left-associative except cons" =
       "a - b + c",
       "a / b * c",
     ])
+
+test "parentheses, application, unary and assignment group by the syntax contract" =
+  expectEqual
+    [
+      "((a + b) * c)", "(a - (b - c))", "((f a) b)", "(-(f a))",
+      "(a := (b := c))", "(a := (b + c))"
+    ]
+    (map bodyShape [
+      "(a + b) * c", "a - (b - c)", "f a b", "-f a", "a := b := c", "a := b + c"
+    ])
+
+test "sections and parenthesized negation keep their distinct shapes" =
+  expectEqual
+    ["(right + 5)", "(left 2 *)", "(bare +)", "(-1)"]
+    (map bodyShape ["(+ 5)", "(2 * _)", "(+)", "(- 1)"])
+
+test "leading continuation includes arithmetic and comparison, but not tight minus" =
+  expectEqual
+    [
+      "(1 + 2)", "(1 < 2)", "(8 - 3)",
+      "error: unexpected `-`; this line is indented to column 2, which matches no enclosing block"
+    ]
+    (map bodyShape ["1\n  + 2", "1\n  < 2", "8\n  - 3", "8\n  -3"])
 
 -- A tight minus after a numeric head is subtraction; after any other head it
 -- is a negative argument.

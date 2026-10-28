@@ -259,24 +259,21 @@ TRAILING-continuation ops (≈21): prev token that absorbs the next deeper line
      a trailing `in` continues a `let … in` onto its deeper body line)
 
 LEADING-continuation ops: next-line-initial token that continues prev line
-    every binary operator:  |>  >>  <<  &&  ||  ++  ::  ==  /=  <  >  <=  >=
-                            +  *  /  %   and  `- ` (minus followed by a space)
-    (arrows -> => <- and `=` never lead; a tight `-1`/`-x` is an atom, so a
-     leading `-` continues ONLY when whitespace follows it)
+    |>  >>  <<  &&  ||  ++  ::  ==  /=  <  >  <=  >=  +  *  /  %
+    - immediately followed by ASCII space (U+0020)
 ```
 
-The one operator that needs a rule is `-`: at the start of a line a tight `-1`
-or `-x` is a negative literal / negation (an atom, which opens a block or
-continues an application by rule 3 below), while a spaced `- x` is the binary
-operator continuing the previous line. Every other operator is
-infix-and-nothing-else at the start of a line, so it always continues.
+The scanner suppresses the physical newline before these operators regardless
+of indentation. A tight `-1` or `-x` does not trigger leading or atom
+continuation. It can begin a block RHS; a parenthesized negative can continue an
+application. `=`, `:=`, `->`, `=>`, and `<-` are outside the leading set.
+Bracket layout and assignment RHS blocks are separate rules.
 
 ### 5.1 Leading-operator continuation (Stage A)
 
-If, after a newline, the first non-whitespace begins a binary operator (per
-the table above), the scanner emits the operator token and **no `Nl`** — the
-line is glued to the previous one. `a⏎  |> f` lexes as `a |> f`; `a⏎  + b`
-lexes as `a + b`.
+If, after a newline, the first non-whitespace begins an operator in the table
+above, the scanner emits the operator token and **no `Nl`**. `a⏎  |> f`
+lexes as `a |> f`; `a⏎  + b` lexes as `a + b`.
 
 ### 5.2 Comment transparency (Stage A) — see §3.
 
@@ -566,23 +563,23 @@ r = identity              IDENT "r" EQUAL IDENT "identity" INT 5     ← atom co
   5                       NEWLINE NEWLINE EOF                          → parses as `identity 5`
 ```
 ```
-x = 1                     IDENT "x" EQUAL INT 1 INDENT MINUS INT 2    ← `-` is not an atom/leading-op:
-  - 2                     NEWLINE DEDENT NEWLINE NEWLINE EOF            opens a block ⟹ RHS parse error (§11)
+x = 1                     IDENT "x" EQUAL INT 1 INDENT MINUS_TIGHT INT 2
+  -2                      NEWLINE DEDENT NEWLINE NEWLINE EOF            ← opens a block ⟹ RHS parse error (§11)
 ```
 
 ---
 
 ## 11. The "expression RHS cannot wrap" rule, stated precisely
 
-SYNTAX.md says an expression RHS "cannot wrap onto a second indented line, except
-when the continuation starts with a leading binary operator." That is an
-*approximation*. The exact rule, derived from §4–§5:
+For candidate expression continuations after the block-herald decisions in §4,
+and outside bracket layout, the rule is:
 
 > A deeper-indented line **continues** the current logical line (emits **no**
 > `INDENT`) iff **one** of:
 > 1. the previous token is a **trailing-continuation operator** (§5.0), or
-> 2. the line **starts with a leading-continuation operator** (§5.0, the 7-op
->    set — note this set includes `::`, which SYNTAX.md omits), or
+> 2. the line **starts with a leading-continuation operator** from §5.0,
+>    including arithmetic and comparison operators and subject to the ASCII-space
+>    rule for `-`, or
 > 3. the previous token **`canEndExpr`** *and* the line's first token
 >    **`canStartAtom`** (or is `then`/`else`).
 >
@@ -592,7 +589,8 @@ when the continuation starts with a leading binary operator." That is an
 > can't wrap."
 
 So `r = 1 +⏎ x` (1, trailing), `r = a⏎ |> f` (2, leading), and `r = id⏎ x`
-(3, atom) **all wrap and parse**; `x = 1⏎ - 2` and `x = id⏎ let …` open a block
+(3, atom), and `x = 1⏎ - 2` (2, spaced minus) **all wrap and parse**;
+`x = 1⏎ -2` and `x = id⏎ let …` open a block
 and **fail**. The `let … in` own-line case (§9) fails for the related reason: no
 `parse-error(t)` exists to retro-close the let-block when `in` appears
 left-shifted.
