@@ -182,9 +182,9 @@ p4 = "multi \{name}"  -- works in triple-quoted too
 ```
 
 Nested interpolation is unsupported: a quoted string inside an interpolation
-hole cannot itself open a `\{` hole. The planned lexer boundary rejects the
+hole cannot itself open a `\{` hole. The lexer rejects the
 actual inner opener with `L-NESTED-INTERPOLATION`, located at the backslash and
-opening brace; this diagnostic is not yet implemented. Ordinary plain and
+opening brace. Ordinary plain and
 triple-quoted strings inside holes remain supported, including braces, Unicode
 escapes and escaped backslashes such as `\\{`, which are not openers.
 Multiple sequential holes in the outer string remain supported.

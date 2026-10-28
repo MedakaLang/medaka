@@ -1,44 +1,81 @@
 import frontend.lexer.{tokenize}
 import test.{
-  Expectation, expectEach, expectAll, expectGreaterThan, expectLessThan
+  Expectation, expectEach, expectAll, expectGreaterThan, expectLessThan, fail
 }
 
-source : String -> String -> String -> Int -> String
-source open piece close n =
-  open ++ stringConcat (map (_ => piece) [1..=n]) ++ close
+data SourceCase = SourceCase {
+  label : String,
+  opening : String,
+  piece : String,
+  closing : String,
+}
 
-allocation : String -> <IO> Float
+source : SourceCase -> Int -> String
+source c n = c.opening ++ stringConcat (map (_ => c.piece) [1..=n]) ++ c.closing
+
+allocation : String -> <IO> Option Float
 allocation src =
   let before = allocBytes ()
   let count = length (tokenize src)
   let after = allocBytes ()
-  if count > 0 then after - before else 0.0
+  if count > 0 then Some (after - before) else None
 
-minimumAllocation : String -> <IO> Float
-minimumAllocation src =
-  min (allocation src) (min (allocation src) (allocation src))
+minimumAllocation : String -> <IO> Option Float
+minimumAllocation src = match (allocation src, allocation src, allocation src)
+  (Some a, Some b, Some c) => Some (min a (min b c))
+  _ => None
 
-scaling : (String, String, String, String) -> <IO> (String, Expectation)
-scaling (label, open, piece, close) =
-  let small = minimumAllocation (source open piece close 2000)
-  let middle = minimumAllocation (source open piece close 4000)
-  let large = minimumAllocation (source open piece close 8000)
-  (
-    label,
-    expectAll [
-      expectGreaterThan 0.0 small,
-      expectLessThan (small * 2.3) middle,
-      expectLessThan (middle * 2.3) large,
-    ],
-  )
+scaling : SourceCase -> <IO> (String, Expectation)
+scaling c =
+  let small = minimumAllocation (source c 2000)
+  let middle = minimumAllocation (source c 4000)
+  let large = minimumAllocation (source c 8000)
+  let result = match (small, middle, large)
+    (Some a, Some b, Some d) => expectAll [
+      expectGreaterThan 0.0 a,
+      expectLessThan (a * 2.3) b,
+      expectLessThan (b * 2.3) d,
+    ]
+    _ => fail "tokenization returned no tokens"
+  (c.label, result)
 
 test "literal scanner allocation scales" =
   expectEach
     (map scaling [
-      ("plain", "main = \"", "a", "\""),
-      ("escaped", "main = \"", "\\n", "\""),
-      ("triple long", "main = \"\"\"", "a", "\"\"\""),
-      ("triple lines", "main = \"\"\"\n", "  abcdefgh\n", "  \"\"\""),
-      ("segments", "main = \"\"\"\n", "  a\\{1}\n", "  \"\"\""),
-      ("mixed utf8", "main = \"", "😀é\\n", "\""),
+      SourceCase {
+        label = "plain",
+        opening = "main = \"",
+        piece = "a",
+        closing = "\"",
+      },
+      SourceCase {
+        label = "escaped",
+        opening = "main = \"",
+        piece = "\\n",
+        closing = "\"",
+      },
+      SourceCase {
+        label = "triple long",
+        opening = "main = \"\"\"",
+        piece = "a",
+        closing = "\"\"\"",
+      },
+      SourceCase {
+        label = "triple lines",
+        opening = "main = \"\"\"\n",
+        piece = "  abcdefgh\n",
+        closing = "  \"\"\"",
+      },
+      SourceCase {
+        label = "segments",
+        opening = "main = \"\"\"\n",
+        piece = "  a\\{1}\n",
+        closing = "  \"\"\"",
+      },
+      SourceCase {
+        label = "mixed utf8",
+        opening = "main = \"",
+        piece = "😀é\\n",
+        closing = "\"",
+      },
     ])

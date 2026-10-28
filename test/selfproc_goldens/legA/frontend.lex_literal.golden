@@ -39,7 +39,7 @@ plainRunEnd : Array Char -> Int -> Int -> Int
 readCharacter : Array Char -> Int -> Result LexError (String, Int)
 readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
 splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
-splitLines : Array Char -> Int -> Int -> String -> List String
+splitLines : Array Char -> Int -> Int -> List String
 splitRange : Array Char -> Int -> Int -> Int -> List String
 startsWithNl : String -> Bool
 stripFirstAware : Int -> Bool -> List String -> List String

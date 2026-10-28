@@ -51,12 +51,12 @@ stripIndentCs s cs n
   | n == 0 = s
   | at cs 0 /= '\n' = s
   | otherwise =
-    let lines = splitLines cs 1 n ""
+    let lines = splitLines cs 1 n
     let minInd = normalizeMin (minIndentGo lines indentSentinel)
     joinNlStr (stripLines minInd lines)
 
-splitLines : Array Char -> Int -> Int -> String -> List String
-splitLines cs p n acc = splitRange cs p p n
+splitLines : Array Char -> Int -> Int -> List String
+splitLines cs p n = splitRange cs p p n
 
 indentSentinel : Int
 indentSentinel = 1000000000
@@ -111,12 +111,12 @@ computeMinIndent joined =
   let n = arrayLength cs
   -- position 1: the leading '\n' (guaranteed present) is dropped, same as
   -- `stripIndentCs` does for the single-segment case.
-  normalizeMin (minIndentGo (splitLines cs 1 n "") indentSentinel)
+  normalizeMin (minIndentGo (splitLines cs 1 n) indentSentinel)
 
 dedentGroupSegs : Int -> List String -> List String
 dedentGroupSegs minInd (openStr :: rest) =
   let cs = stringToChars openStr
-  let openLines = splitLines cs 1 (arrayLength cs) ""
+  let openLines = splitLines cs 1 (arrayLength cs)
   let openOut = joinNlStr (stripLines minInd openLines)
   openOut :: dedentRestSegs minInd (endsWithNl openStr) rest
 dedentGroupSegs _ [] = []
@@ -125,7 +125,7 @@ dedentRestSegs : Int -> Bool -> List String -> List String
 dedentRestSegs _ _ [] = []
 dedentRestSegs minInd atLineStart (seg :: rest) =
   let cs = stringToChars seg
-  let lines = splitLines cs 0 (arrayLength cs) ""
+  let lines = splitLines cs 0 (arrayLength cs)
   let out = joinNlStr (stripFirstAware minInd atLineStart lines)
   out :: dedentRestSegs minInd (endsWithNl seg) rest
 
@@ -406,10 +406,7 @@ literalEscape : Array Char ->
   Char ->
   Result LexError LiteralRead
 literalEscape src len p flavor part leading inside acc e
-  | e == '{' && inside && isPlain flavor =
-    lexFailure p (p + 2) NestedInterpolation
-  | e == '{' && inside && not (isPlain flavor) =
-    lexFailure p (p + 2) NestedInterpolation
+  | e == '{' && inside = lexFailure p (p + 2) NestedInterpolation
   | e == '{' = Ok (LiteralRead (finish acc) (p + 2) LiteralHole leading)
   | isUnicodeEsc src len p e = match uniEscChar src len p
     None => uniEscErr src len p

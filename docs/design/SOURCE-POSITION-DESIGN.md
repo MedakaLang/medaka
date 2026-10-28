@@ -161,16 +161,16 @@ convention."** Contradiction between code and the docs' intent is flagged in §2
 SOURCE STRING
   │
   ▼  lex_scan.mdk → lex_layout.mdk → lexer.mdk facade
-RawTok Token startOff endOff            (RTok carries 0-based char offsets; lexer.mdk:359-367)
+RawTok Token startOff endOff            (RTok carries 0-based char offsets; lex_token.mdk (RawTok); lex_scan.mdk (spans))
   │
-  ├─► tokenizeWithLines   (lexer.mdk:2032)  → (tokens, per-token 1-based LINE)   [drops columns]
-  ├─► tokenizeWithOffsets (lexer.mdk:2047)  → (tokens, per-token start OFFSET)
-  └─► tokenizeWithOffsetPairs (lexer.mdk:2062) → (tokens, per-token (start,end) OFFSET pair)
+  ├─► tokenizeWithLines   (lexer.mdk)  → (tokens, per-token 1-based LINE)   [drops columns]
+  ├─► tokenizeWithOffsets (lexer.mdk)  → (tokens, per-token start OFFSET)
+  └─► tokenizeWithOffsetPairs (lexer.mdk) → (tokens, per-token (start,end) OFFSET pair)
   │
   ▼  offset→(line,col) SERVICE
-offsetToLineCol      (lexer.mdk:2075)  String  -> Int -> (1-based line, 0-based col)   [O(N) walk]
-offsetToLineColFast  (lexer.mdk:2099)  Array Int(lineStarts) -> Int -> (line,col)      [O(log N)]
-lineStartsOf         (lexer.mdk:2082)  precomputes the sorted line-start array
+offsetToLineCol      (lexer.mdk)  String  -> Int -> (1-based line, 0-based col)   [O(N) walk]
+offsetToLineColFast  (support/source_index.mdk)  Array Int(lineStarts) -> Int -> (line,col)      [O(log N)]
+lineStartsOf         (support/source_index.mdk)  precomputes the sorted line-start array
   │
   ├───────────────── EXPRESSION LAYER (column-precise) ─────────────────┐
   │                                                                       │
@@ -427,7 +427,7 @@ name's real `Loc`; give the inlay-hint site a real name column too (retiring `co
 
 **Mechanism (parser-authoritative — shape A, see §7):**
 1. In the positions parse path, make per-token **offsets** available alongside lines
-   (`tokenizeWithOffsetPairs` already exists, `lexer.mdk:2062`; the located entry
+   (`tokenizeWithOffsetPairs` already exists, `lexer.mdk`; the located entry
    `parseWithPositionsLocated` already primes `setLocState`, `parser.mdk:3710`).
 2. Add `declNameSpanOf : (tokens, offsetPairs, lineStarts) -> (Decl, startTok, endTok) ->
    Option Loc` in `parser.mdk`: scan forward from the decl's `startTok` over leading
@@ -672,7 +672,7 @@ column. #331 needs a **name-token finder**, not a new parallel column array. Bui
   as a "consumer" matched that comment. **#331 needs no typecheck edit.** (This also means the
   original HARD CONSTRAINT in the brief was chasing a phantom collision.)
 - **The orchestrator's `offsetToLineCol` and `ELoc` hypotheses are CORRECT and stronger than
-  stated.** Not only does `offsetToLineCol` exist (`lexer.mdk:2075`), there is a full
+  stated.** Not only does `offsetToLineCol` exist (`lexer.mdk`), there is a full
   col-precise decl-span pipeline already built for expressions (`locOfSpan`/`setLocState`/
   `offsetToLineColFast`) that the decl layer simply never adopted. The fix is smaller than "A"
   implies — no `cols` array needed (§7 refinement).

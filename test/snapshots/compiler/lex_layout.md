@@ -1,5 +1,5 @@
 # META
-source_lines=502
+source_lines=500
 stages=DESUGAR,MARK
 # SOURCE
 -- Indentation-sensitive layout over raw tokens.
@@ -347,9 +347,7 @@ wouldIndentPairs project col off stack rest frames prev opener
         False
   | otherwise = resolveContPairs project col off stack rest frames prev opener
 
--- #1751: mirrors `resolveCont`'s fallback-INDENT location fix — `toff`/`tend`
--- (the deeper line's own first token span), not `off` (the prior line's
--- RNewline offset). Must stay in step with `resolveCont` (WS-2, above).
+-- A fallback INDENT uses the first deeper token’s offset, not the newline offset.
 resolveContPairs : (Token -> Int -> Int -> a) ->
   Int ->
   Int ->

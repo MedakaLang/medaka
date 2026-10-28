@@ -1,32 +1,12 @@
 # META
-source_lines=200
+source_lines=180
 stages=DESUGAR,MARK
 # SOURCE
 -- Tokenize Medaka source and apply indentation-sensitive layout.
 -- Handles literals, interpolation, comments, operators, and layout continuations.
 -- Nested interpolation inside an interpolated expression is not supported.
 
-import frontend.parse_diagnostic.{
-  ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
-}
 import support.stage_count.{stageBump}
-import support.char.{
-  isSp,
-  isTab,
-  isNL,
-  isCR,
-  isQuote,
-  isApos,
-  isBackslash,
-  isBacktick,
-  isSpace,
-  isDigit,
-  isLower,
-  isUpper,
-  isAlnum,
-  isHexDigit,
-}
-import support.util.{joinWith, compareDecMag, listLen, anyList}
 export import frontend.lex_token.{
   Token(..), tokenToString, describeToken, isCommaTok, isThenTok, isElseTok
 }
@@ -203,10 +183,7 @@ collectComments s =
   let len = arrayLength src
   rawToComments src (scanRawUndedentedChars src)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "UnicodeProblem" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isSp" false) (mem "isTab" false) (mem "isNL" false) (mem "isCR" false) (mem "isQuote" false) (mem "isApos" false) (mem "isBackslash" false) (mem "isBacktick" false) (mem "isSpace" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isAlnum" false) (mem "isHexDigit" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "compareDecMag" false) (mem "listLen" false) (mem "anyList" false))))
 (DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isThenTok" false) (mem "isElseTok" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse true (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
@@ -255,10 +232,7 @@ collectComments s =
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lint.comments")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EVar "scanRawUndedentedChars") (EVar "src"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "UnicodeProblem" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isSp" false) (mem "isTab" false) (mem "isNL" false) (mem "isCR" false) (mem "isQuote" false) (mem "isApos" false) (mem "isBackslash" false) (mem "isBacktick" false) (mem "isSpace" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isAlnum" false) (mem "isHexDigit" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "compareDecMag" false) (mem "listLen" false) (mem "anyList" false))))
 (DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isThenTok" false) (mem "isElseTok" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse true (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))

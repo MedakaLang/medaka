@@ -23,15 +23,33 @@ projectionRow (label, source) =
 test "layout projections agree on continuations and clauses" =
   expectEach
     (map projectionRow [
-      ("continuation", "main =\n  f\n    x\n"),
-      ("fallback", "main =\n  1\n    -2\n"),
-      ("herald", "main = (match x\n  A => 1, 2)\n"),
-      ("extern", "extern f : String -> String\n  bind c \"f\"\n"),
+      ("continuation", """
+main =
+  f
+    x
+"""),
+      ("fallback", """
+main =
+  1
+    -2
+"""),
+      ("herald", """
+main = (match x
+  A => 1, 2)
+"""),
+      ("extern", """
+extern f : String -> String
+  bind c "f"
+"""),
       ("unicode", "main = \"😀\"\r\n"),
     ])
 
 test "fallback indent and EOF use exact offsets" =
-  let ranges = applyLayoutRanges (scanRaw "main =\n  1\n    -2\n")
+  let ranges = applyLayoutRanges (scanRaw """
+main =
+  1
+    -2
+""")
   let relevant =
     filter
       ((t, _, _) => match t
@@ -68,7 +86,10 @@ test "bracket herald exact ranges" =
       ("NEWLINE", 0, 0),
       ("EOF", 0, 0),
     ]
-    (projectionDump "main = (match x\n  A => 1, 2)\n")
+    (projectionDump """
+main = (match x
+  A => 1, 2)
+""")
 
 test "extern bind exact ranges" =
   expectEqual
@@ -89,4 +110,7 @@ test "extern bind exact ranges" =
       ("NEWLINE", 0, 0),
       ("EOF", 0, 0),
     ]
-    (projectionDump "extern f : String -> String\n  bind c \"f\"\n")
+    (projectionDump """
+extern f : String -> String
+  bind c "f"
+""")

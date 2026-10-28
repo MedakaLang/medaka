@@ -2,27 +2,7 @@
 -- Handles literals, interpolation, comments, operators, and layout continuations.
 -- Nested interpolation inside an interpolated expression is not supported.
 
-import frontend.parse_diagnostic.{
-  ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
-}
 import support.stage_count.{stageBump}
-import support.char.{
-  isSp,
-  isTab,
-  isNL,
-  isCR,
-  isQuote,
-  isApos,
-  isBackslash,
-  isBacktick,
-  isSpace,
-  isDigit,
-  isLower,
-  isUpper,
-  isAlnum,
-  isHexDigit,
-}
-import support.util.{joinWith, compareDecMag, listLen, anyList}
 export import frontend.lex_token.{
   Token(..), tokenToString, describeToken, isCommaTok, isThenTok, isElseTok
 }

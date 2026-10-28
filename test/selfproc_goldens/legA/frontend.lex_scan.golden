@@ -9,13 +9,13 @@ consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
 digitVal : Char -> Int
 digitsEnd : Array Char -> Int -> Int -> Int
 dotContinuesAccess : Array Char -> Int -> Int -> Bool
-emit : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Token -> Int -> Int -> RawTok
+emit : ScanCursor -> Int -> Int -> LexFrame -> Token -> Int -> Int -> RawTok
 emitOne : ScanCursor -> RawTok -> Int -> Int -> LexFrame -> RawTok
 endOne : ScanCursor -> RawTok
 expEnd : Array Char -> Int -> Int -> Int
 floatIsFinite : Float -> Bool
 floatTok : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
-floatTokEnd : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
+floatTokEnd : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 handleNewline : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 identEnd : Array Char -> Int -> Int -> Int
 identToken : Array Char -> Int -> Int -> Token
@@ -66,12 +66,12 @@ scan : Array Char -> Int -> ScanCursor -> List RawTok
 scanAt : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
 scanBacktick : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanBarOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
-scanChar : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanChar : ScanCursor -> Array Char -> Int -> Int -> LexFrame -> RawTok
 scanColonOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanDotOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanEqOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanGtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
-scanLiteral : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> LiteralFlavor -> LiteralPart -> RawTok
+scanLiteral : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> LiteralFlavor -> LiteralPart -> RawTok
 scanLower : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanLtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanNumber : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
@@ -93,4 +93,4 @@ substrNoUs : Array Char -> Int -> Int -> String
 wideBase : Array Char -> Int -> Int
 wideHalves : Int -> List Char -> Option (Int, Int)
 wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
-wideIntTok : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> List Char -> RawTok
+wideIntTok : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> List Char -> RawTok

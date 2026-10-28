@@ -1,77 +1,10 @@
 NEWLINE
 IMPORT
-IDENT "frontend"
-DOT
-IDENT "parse_diagnostic"
-DOT_LBRACE
-UPPER "ParseDiagnosticKind"
-LPAREN
-DOTDOT
-RPAREN
-COMMA
-UPPER "UnicodeProblem"
-LPAREN
-DOTDOT
-RPAREN
-COMMA
-IDENT "renderParseProblem"
-RBRACE
-NEWLINE
-IMPORT
 IDENT "support"
 DOT
 IDENT "stage_count"
 DOT_LBRACE
 IDENT "stageBump"
-RBRACE
-NEWLINE
-IMPORT
-IDENT "support"
-DOT
-IDENT "char"
-DOT_LBRACE
-IDENT "isSp"
-COMMA
-IDENT "isTab"
-COMMA
-IDENT "isNL"
-COMMA
-IDENT "isCR"
-COMMA
-IDENT "isQuote"
-COMMA
-IDENT "isApos"
-COMMA
-IDENT "isBackslash"
-COMMA
-IDENT "isBacktick"
-COMMA
-IDENT "isSpace"
-COMMA
-IDENT "isDigit"
-COMMA
-IDENT "isLower"
-COMMA
-IDENT "isUpper"
-COMMA
-IDENT "isAlnum"
-COMMA
-IDENT "isHexDigit"
-COMMA
-RBRACE
-NEWLINE
-IMPORT
-IDENT "support"
-DOT
-IDENT "util"
-DOT_LBRACE
-IDENT "joinWith"
-COMMA
-IDENT "compareDecMag"
-COMMA
-IDENT "listLen"
-COMMA
-IDENT "anyList"
 RBRACE
 NEWLINE
 EXPORT

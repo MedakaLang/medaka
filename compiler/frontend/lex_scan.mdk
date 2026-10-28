@@ -96,11 +96,10 @@ wideIntTok : ScanCursor ->
   Int ->
   Int ->
   Int ->
-  Int ->
   LexFrame ->
   List Char ->
   RawTok
-wideIntTok ctx src len pos e depth id digits =
+wideIntTok ctx src pos e depth id digits =
   match wideHalves (wideBase src pos) digits
     Some (hi, lo) =>
       emitOne
@@ -217,10 +216,10 @@ scanAt ctx src len pos depth id c
       emitOne ctx (RComment pos e) e depth id
   | isDigit c = scanNumber ctx src len pos depth id
   | isQuote c && isTripleAt src len pos =
-    scanLiteral ctx src len (pos + 3) pos depth id TripleLiteral InitialLiteral
+    scanLiteral ctx src (pos + 3) pos depth id TripleLiteral InitialLiteral
   | isQuote c =
-    scanLiteral ctx src len (pos + 1) pos depth id PlainLiteral InitialLiteral
-  | isApos c = scanChar ctx src len pos depth id
+    scanLiteral ctx src (pos + 1) pos depth id PlainLiteral InitialLiteral
+  | isApos c = scanChar ctx src pos depth id
   | isLower c || c == '_' = scanLower ctx src len pos depth id
   | isUpper c = scanUpper ctx src len pos depth id
   | isBacktick c = scanBacktick ctx src len pos depth id
@@ -247,7 +246,7 @@ lexErrorTok ctx p end kind =
 -- open-comment nesting depth. Returns the position just past the matching `-}`.
 skipBlockComment : Array Char -> Int -> Int -> Int -> Int
 -- Returns the position just past the matching `-}`, or the sentinel `-1` when
--- the comment is never closed (so the caller can emit ctx a located lexer error
+-- the comment is never closed (so the caller can emit a located lexer error
 -- rather than silently swallowing the rest of the file).
 skipBlockComment src len p d
   | d <= 0 = p
@@ -456,7 +455,7 @@ radixTok : ScanCursor ->
   RawTok
 radixTok ctx src len pos e k depth id
   | radixLitOverflows src (pos + 2) e k =
-    wideIntTok ctx src len pos e depth id (sigRadixDigits src (pos + 2) e)
+    wideIntTok ctx src pos e depth id (sigRadixDigits src (pos + 2) e)
   | otherwise =
     emitOne
       ctx
@@ -550,11 +549,11 @@ numFinish : ScanCursor ->
 numFinish ctx src len pos e1 depth id
   | isFloatAt src len e1 = floatTok ctx src len pos e1 depth id
   | expEnd src len e1 > e1 =
-    floatTokEnd ctx src len pos (expEnd src len e1) depth id
+    floatTokEnd ctx src pos (expEnd src len e1) depth id
   | isMalformedExpDot src len e1 = malformedExpDotTok ctx src len pos e1
   | isMalformedTrailingDot src len e1 = malformedTrailingDotTok ctx src pos e1
   | intLitOverflows src pos e1 =
-    wideIntTok ctx src len pos e1 depth id (collectNoUs src pos e1)
+    wideIntTok ctx src pos e1 depth id (collectNoUs src pos e1)
   | otherwise =
     emitOne
       ctx
@@ -623,7 +622,7 @@ floatTok : ScanCursor ->
   RawTok
 floatTok ctx src len pos e1 depth id =
   let e2 = digitsEnd src len (e1 + 1)
-  floatTokEnd ctx src len pos (expEnd src len e2) depth id
+  floatTokEnd ctx src pos (expEnd src len e2) depth id
 
 -- A Float is finite iff `f * 0.0 == 0.0`: for ±inf, `inf * 0.0` is NaN and
 -- `NaN == 0.0` is False; for NaN, `NaN == 0.0` is likewise False. There is no
@@ -634,17 +633,16 @@ floatIsFinite f = f * 0.0 == 0.0
 -- Emit a `TFloat` spanning [pos, endp). `substrNoUs` strips underscores across the
 -- whole mantissa+exponent, and `stringToFloat` (strtod) reads the exponent form.
 -- A literal whose magnitude overflows the IEEE-754 double range parses to `inf`,
--- which the native backend would emit ctx as an invalid `store double inf`; reject it
+-- which the native backend would emit as an invalid `store double inf`; reject it
 -- at the source with a located error rather than let it reach codegen.
 floatTokEnd : ScanCursor ->
   Array Char ->
   Int ->
   Int ->
   Int ->
-  Int ->
   LexFrame ->
   RawTok
-floatTokEnd ctx src len pos endp depth id =
+floatTokEnd ctx src pos endp depth id =
   let f = optionOr 0.0 (stringToFloat (substrNoUs src pos endp))
   if floatIsFinite f then
     emitOne ctx (RTok (TFloat f) pos endp) endp depth id
@@ -664,12 +662,11 @@ scanLiteral : ScanCursor ->
   Int ->
   Int ->
   Int ->
-  Int ->
   LexFrame ->
   LiteralFlavor ->
   LiteralPart ->
   RawTok
-scanLiteral ctx src len p quote depth frame flavor part =
+scanLiteral ctx src p quote depth frame flavor part =
   match readLiteral src (LiteralCursor p quote flavor part False (inHole frame))
     Err (LexError kind start end) => lexErrorTok ctx start end kind
     Ok (LiteralRead s next stop leading) => match stop
@@ -702,8 +699,8 @@ singleDedent s = match dedentSegments [s]
   [v] => v
   _ => s
 
-scanChar : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
-scanChar ctx src len pos depth frame = match readCharacter src pos
+scanChar : ScanCursor -> Array Char -> Int -> Int -> LexFrame -> RawTok
+scanChar ctx src pos depth frame = match readCharacter src pos
   Err (LexError kind start end) => lexErrorTok ctx start end kind
   Ok (s, next) => emitOne ctx (RTok (TChar s) (pos + 1) next) next depth frame
 
@@ -727,17 +724,8 @@ scanRawUndedentedChars src =
     cursorLength = len,
   }
   scan src len cursor
-emit : ScanCursor ->
-  Array Char ->
-  Int ->
-  Int ->
-  Int ->
-  LexFrame ->
-  Token ->
-  Int ->
-  Int ->
-  RawTok
-emit ctx src len pos depth id tok length ddelta =
+emit : ScanCursor -> Int -> Int -> LexFrame -> Token -> Int -> Int -> RawTok
+emit ctx pos depth id tok length ddelta =
   emitOne ctx (RTok tok pos (pos + length)) (pos + length) (depth + ddelta) id
 
 scanOp : ScanCursor ->
@@ -781,43 +769,43 @@ scanTwoOp : ScanCursor ->
   RawTok
 scanTwoOp ctx src len pos depth id c b tok ddelta =
   if is2 src len pos c b then
-    emit ctx src len pos depth id tok 2 ddelta
+    emit ctx pos depth id tok 2 ddelta
   else
     singleOp ctx src len pos depth id c
 
 scanDotOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanDotOp ctx src len pos depth id
-  | is3 src len pos '.' '.' '.' = emit ctx src len pos depth id TEllipsis 3 0
-  | is3 src len pos '.' '.' '=' = emit ctx src len pos depth id TDotDotEq 3 0
-  | is2 src len pos '.' '{' = emit ctx src len pos depth id TDotLBrace 2 1
-  | is2 src len pos '.' '*' = emit ctx src len pos depth id TDotStar 2 0
-  | is2 src len pos '.' '.' = emit ctx src len pos depth id TDotDot 2 0
+  | is3 src len pos '.' '.' '.' = emit ctx pos depth id TEllipsis 3 0
+  | is3 src len pos '.' '.' '=' = emit ctx pos depth id TDotDotEq 3 0
+  | is2 src len pos '.' '{' = emit ctx pos depth id TDotLBrace 2 1
+  | is2 src len pos '.' '*' = emit ctx pos depth id TDotStar 2 0
+  | is2 src len pos '.' '.' = emit ctx pos depth id TDotDot 2 0
   | otherwise = singleOp ctx src len pos depth id '.'
 
 scanBarOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanBarOp ctx src len pos depth id
-  | is2 src len pos '|' ']' = emit ctx src len pos depth id TRArray 2 (0 - 1)
-  | is2 src len pos '|' '|' = emit ctx src len pos depth id TOr 2 0
-  | is2 src len pos '|' '>' = emit ctx src len pos depth id TPipeRight 2 0
+  | is2 src len pos '|' ']' = emit ctx pos depth id TRArray 2 (0 - 1)
+  | is2 src len pos '|' '|' = emit ctx pos depth id TOr 2 0
+  | is2 src len pos '|' '>' = emit ctx pos depth id TPipeRight 2 0
   | otherwise = singleOp ctx src len pos depth id '|'
 
 scanEqOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanEqOp ctx src len pos depth id
-  | is2 src len pos '=' '>' = emit ctx src len pos depth id TFatArrow 2 0
-  | is2 src len pos '=' '=' = emit ctx src len pos depth id TEqEq 2 0
+  | is2 src len pos '=' '>' = emit ctx pos depth id TFatArrow 2 0
+  | is2 src len pos '=' '=' = emit ctx pos depth id TEqEq 2 0
   | otherwise = singleOp ctx src len pos depth id '='
 
 scanLtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanLtOp ctx src len pos depth id
-  | is2 src len pos '<' '-' = emit ctx src len pos depth id TLArrow 2 0
-  | is2 src len pos '<' '=' = emit ctx src len pos depth id TLeq 2 0
-  | is2 src len pos '<' '<' = emit ctx src len pos depth id TLCompose 2 0
+  | is2 src len pos '<' '-' = emit ctx pos depth id TLArrow 2 0
+  | is2 src len pos '<' '=' = emit ctx pos depth id TLeq 2 0
+  | is2 src len pos '<' '<' = emit ctx pos depth id TLCompose 2 0
   | otherwise = singleOp ctx src len pos depth id '<'
 
 scanGtOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanGtOp ctx src len pos depth id
-  | is2 src len pos '>' '=' = emit ctx src len pos depth id TGeq 2 0
-  | is2 src len pos '>' '>' = emit ctx src len pos depth id TRCompose 2 0
+  | is2 src len pos '>' '=' = emit ctx pos depth id TGeq 2 0
+  | is2 src len pos '>' '>' = emit ctx pos depth id TRCompose 2 0
   | otherwise = singleOp ctx src len pos depth id '>'
 
 scanColonOp : ScanCursor ->
@@ -828,8 +816,8 @@ scanColonOp : ScanCursor ->
   LexFrame ->
   RawTok
 scanColonOp ctx src len pos depth id
-  | is2 src len pos ':' ':' = emit ctx src len pos depth id TCons 2 0
-  | is2 src len pos ':' '=' = emit ctx src len pos depth id TColonEq 2 0
+  | is2 src len pos ':' ':' = emit ctx pos depth id TCons 2 0
+  | is2 src len pos ':' '=' = emit ctx pos depth id TColonEq 2 0
   | otherwise = singleOp ctx src len pos depth id ':'
 
 singleOp : ScanCursor ->
@@ -840,34 +828,32 @@ singleOp : ScanCursor ->
   LexFrame ->
   Char ->
   RawTok
-singleOp ctx src len pos depth id '+' = emit ctx src len pos depth id TPlus 1 0
+singleOp ctx src len pos depth id '+' = emit ctx pos depth id TPlus 1 0
 singleOp ctx src len pos depth id '-' =
-  emit ctx src len pos depth id (minusTok src len pos) 1 0
-singleOp ctx src len pos depth id '*' = emit ctx src len pos depth id TStar 1 0
-singleOp ctx src len pos depth id '/' = emit ctx src len pos depth id TSlash 1 0
-singleOp ctx src len pos depth id '<' = emit ctx src len pos depth id TLt 1 0
-singleOp ctx src len pos depth id '>' = emit ctx src len pos depth id TGt 1 0
-singleOp ctx src len pos depth id '=' = emit ctx src len pos depth id TEqual 1 0
-singleOp ctx src len pos depth id ':' = emit ctx src len pos depth id TColon 1 0
-singleOp ctx src len pos depth id ',' = emit ctx src len pos depth id TComma 1 0
+  emit ctx pos depth id (minusTok src len pos) 1 0
+singleOp ctx src len pos depth id '*' = emit ctx pos depth id TStar 1 0
+singleOp ctx src len pos depth id '/' = emit ctx pos depth id TSlash 1 0
+singleOp ctx src len pos depth id '<' = emit ctx pos depth id TLt 1 0
+singleOp ctx src len pos depth id '>' = emit ctx pos depth id TGt 1 0
+singleOp ctx src len pos depth id '=' = emit ctx pos depth id TEqual 1 0
+singleOp ctx src len pos depth id ':' = emit ctx pos depth id TColon 1 0
+singleOp ctx src len pos depth id ',' = emit ctx pos depth id TComma 1 0
 singleOp ctx src len pos depth id '.'
   | isMalformedLeadingDot src len pos = malformedLeadingDotTok ctx src len pos
-  | otherwise = emit ctx src len pos depth id TDot 1 0
-singleOp ctx src len pos depth id '|' = emit ctx src len pos depth id TPipe 1 0
-singleOp ctx src len pos depth id '(' =
-  emit ctx src len pos depth id TLParen 1 1
-singleOp ctx src len pos depth id ')' =
-  emit ctx src len pos depth id TRParen 1 (0 - 1)
+  | otherwise = emit ctx pos depth id TDot 1 0
+singleOp ctx src len pos depth id '|' = emit ctx pos depth id TPipe 1 0
+singleOp ctx src len pos depth id '(' = emit ctx pos depth id TLParen 1 1
+singleOp ctx src len pos depth id ')' = emit ctx pos depth id TRParen 1 (0 - 1)
 singleOp ctx src len pos depth id '[' =
-  emit ctx src len pos depth id (bracketTok src pos) 1 1
+  emit ctx pos depth id (bracketTok src pos) 1 1
 singleOp ctx src len pos depth id ']' =
-  emit ctx src len pos depth id TRBracket 1 (0 - 1)
+  emit ctx pos depth id TRBracket 1 (0 - 1)
 singleOp ctx src len pos depth id '{' = openBrace ctx src len pos depth id
 singleOp ctx src len pos depth id '}' = closeBrace ctx src len pos depth id
-singleOp ctx src len pos depth id '!' = emit ctx src len pos depth id TBang 1 0
-singleOp ctx src len pos depth id '%' = emit ctx src len pos depth id TMod 1 0
+singleOp ctx src len pos depth id '!' = emit ctx pos depth id TBang 1 0
+singleOp ctx src len pos depth id '%' = emit ctx pos depth id TMod 1 0
 singleOp ctx src len pos depth id '@' =
-  emit ctx src len pos depth id (atToken src pos) 1 0
+  emit ctx pos depth id (atToken src pos) 1 0
 singleOp ctx src len pos depth id '\\' = lexErrorTok ctx pos (pos + 1) HsLambda
 singleOp ctx src len pos depth id '$' = lexErrorTok ctx pos (pos + 1) HsDollar
 singleOp ctx src len pos depth id c =
@@ -934,7 +920,6 @@ closeBrace ctx src len pos depth (HoleFrame flavor opener braces)
       scanLiteral
         ctx
         src
-        len
         (pos + 1)
         pos
         depth
@@ -945,7 +930,6 @@ closeBrace ctx src len pos depth (HoleFrame flavor opener braces)
       scanLiteral
         ctx
         src
-        len
         (pos + 1)
         pos
         depth
@@ -987,7 +971,7 @@ afterNl : ScanCursor ->
 afterNl ctx src len np depth id indent nlPos
   | nextIsComment src len np = scanOne ctx src len np depth id
   | otherwise = match leadingOp src len np
-    Some (tok, n) => emit ctx src len np depth id tok n 0
+    Some (tok, n) => emit ctx np depth id tok n 0
     None => emitOne ctx (RNewline indent nlPos) np depth id
 
 nextIsComment : Array Char -> Int -> Int -> Bool
