@@ -160,7 +160,7 @@ and interface methods take them after value arguments. Partial applications are
 saturated to preserve that convention. Grant arguments are separate from
 dictionary evidence and do not participate in instance selection.
 
-This integration currently lives in `types/typecheck.mdk`; the native runtime and
+This integration currently lives in `types/tc_effects.mdk` and `types/tc_elab.mdk` (the entry `types/typecheck.mdk` drives them); the native runtime and
 interpreter enforce file grants, and the Wasm emitter refuses unsupported pattern
 grants. Backends consume the elaborated arguments, not unsolved authority cells.
 An empty grant list means the whole domain; the empty authority uses a list with
@@ -192,7 +192,7 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 | `effect_check.mdk` | Declared-signature and method-effect checks | Solver and explicit checking context; same entry for supplied/default bodies |
 | `repr.mdk` | HM monotypes, schemes and type rendering | Imports effect representation; does not own a second effect algebra |
 | `solver_contract.mdk` | Common wanted/outcome scheduling and qualified schemes | Domain-specific payloads do not require fake evidence destinations |
-| `typecheck.mdk` | Integration into eager inference, SCC boundaries, graph publication and current grant elaboration (`GrantState`, `grantPass`) | Calls services; grant occurrences retain the inference substitution and lower to ordinary arguments, never backend re-inference |
+| `tc_effects.mdk`, `tc_elab.mdk`, `typecheck.mdk` | Integration into eager inference, SCC boundaries, graph publication and current grant elaboration (`GrantState` in `tc_types.mdk`, `grantPass` in `tc_elab.mdk`) | Calls services; grant occurrences retain the inference substitution and lower to ordinary arguments, never backend re-inference |
 
 Extraction is by ownership, not by a requirement that every module be pure.
 Stateful services receive narrow contexts: fresh identity allocation, inference

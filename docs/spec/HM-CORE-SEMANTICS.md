@@ -87,7 +87,7 @@ Three clauses make the rule total, each the site of a measured defect:
    every verb; the predicate must see through the marking or the same program is a
    value under `check` and expansive under `build`.
 
-**Where it is enforced.** `sccSchemes` (`grep -n 'sccSchemes :' compiler/types/typecheck.mdk`)
+**Where it is enforced.** `sccSchemes` (`grep -n 'sccSchemes :' compiler/types/tc_groups.mdk`)
 gates each member on `memberClauseIsValue` → `isNonexpansive` and nothing else; local
 `let`/`where` bindings go through `genRestricted` with the same predicate (G2). Pinned by
 `test/typecheck_error_fixtures/value_restriction.mdk`, `value_restriction_scc.mdk` and
