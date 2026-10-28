@@ -60,8 +60,6 @@ import frontend.ast.{
   DataVis(..),
   implMethodName,
   BinderId(..),
-  isU64Head,
-  taggedFixedRange,
   Ty(..),
   EffParamTy(..),
   TyConOrigin(..),
@@ -75,7 +73,6 @@ import frontend.ast.{
   EvEntry(..),
   EvTable,
   Pat(..),
-  Arm(..),
   FunClause(..),
   LetBind(..),
   Expr(..),
@@ -180,7 +177,6 @@ import types.tc_types.{
   MethodSchemeRow(..),
   Predicate(..),
   UObligation(..),
-  PendingDictApp(..),
   RecDictApp(..),
   GraphMarks(..),
   EvidenceOutcomeKind(..),
@@ -209,7 +205,6 @@ import types.tc_types.{
   GraphDrive(..),
   ElabResult,
   ElabFacts(..),
-  MarkCtx(..),
   StampStep(..),
   StampCtx(..),
   DrainFinding(..),
@@ -282,9 +277,6 @@ import frontend.resolve.{
 -- reuses the Maranget matrix machinery already ported in exhaust.mdk — the only
 -- difference from the guard-coverage pass is the ctor oracle (here it comes from
 -- the typechecked program's data decls + the inferred scrutinee type).
-import frontend.exhaust.{
-  buildOracle,
-}
 import types.private_mangle.{mangledName}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
@@ -434,8 +426,12 @@ import types.tc_state.{
   internersOf,
   mctxAt,
   mintGraphCtx,
+  noteHighWater,
   noteInterners,
+  plainModuleSeed,
   probeGraphCtx,
+  raiseToHighWater,
+  seedCheckRun,
   wMark,
   wPushAll,
   wRestore,
@@ -503,7 +499,6 @@ import types.tc_env.{
 import types.tc_diag.{
   pushTypeError,
   pushTypeErrorAt,
-  recordTypeError,
 }
 import types.tc_diag_text.{
   locKey,
@@ -513,7 +508,6 @@ import types.tc_diag_text.{
   locGoalKey,
   ordinalSentinelMsg,
   stickyDiagsInPushOrder,
-  u64RangeText,
 }
 import types.tc_scope.{
   aliasConstraintEntries,
@@ -612,7 +606,6 @@ import types.tc_solve.{
   determineByUniqueInstance,
   dictAppEntry,
   dropGoalsSince,
-  fileDeterminedRow,
   goalKindName,
   goalKindTag,
   goalsMark,
@@ -628,6 +621,7 @@ import types.tc_solve.{
   openScope,
   outerRigidIds,
   recDictAppEntry,
+  refileDeterminedRows,
   returnPosMethodNames,
   routesOfMonosTopV,
   siteEntry,
@@ -656,9 +650,11 @@ import types.tc_solve_check.{
 }
 import types.tc_shadow.{
   checkAdmittedOccObls,
+  declExternNames,
   definerShadowsFromSet,
+  directExternSigs,
   isPreludeMid,
-  methodMarkCtx,
+  moduleMarkCtx,
   nameableIfaceMethodSet,
   nameableIfaceRows,
   nameableIfaceShadows,
@@ -721,13 +717,14 @@ import types.tc_groups.{
 }
 import types.tc_pat.{
   recordBinderType,
-  settlePatLitsGo,
+  settleDeferredPatLits,
 }
 import types.tc_infer_records.{
   recordFieldNames,
 }
 import types.tc_infer.{
-  checkMatchChecks,
+  checkDeferredMatches,
+  checkFixedWidthLiterals,
   checkWideLiterals,
   declareRigidVars,
   infer,
@@ -742,6 +739,7 @@ import types.tc_elab.{
   resolveAdmittedSite,
   resolveArgStamps,
   resolveArithSite,
+  resolveDictApps,
   resolveExactReturnSite,
   resolveMethodDicts,
   resolveNumLitSite,
@@ -1602,14 +1600,6 @@ captureEntryTables mctx coreContexts modules = match last modules
 -- typechecks (the oracle fails fast on the unknown field; we accumulate, so
 -- skipping the binding would raise spurious downstream unbound-variable errors)
 
--- The module's inference is complete: every deferred literal pattern takes the
--- type its scrutinee finally got, or `Int`.
-settleDeferredPatLits : ModuleCtx -> Unit -> Unit
-settleDeferredPatLits mctx _ =
-  let deferred = mctx.mcCells.patLitDeferred.value
-  mctx.mcCells.patLitDeferred := []
-  settlePatLitsGo (dynFor mctx) True deferred
-
 -- still infer the sub-patterns so their bindings reach the arm body
 -- (else the continued path raises spurious unbound-variable errors the
 -- oracle never reaches — it fails fast on the unknown constructor)
@@ -1679,42 +1669,6 @@ seedBuiltinClasses gctx mid prog =
     gctx.crossRun.builtinClassesRef :=
       builtinClassesGo prog gctx.crossRun.builtinClassesRef.value
 
--- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
--- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
--- the range.  Runs once per module after inference, on every driver, so `check`,
--- `run` and `build` all refuse `(300 : U8)`.  `-2 : U8` is caught here too, as the
--- negative value `recordNegatedLitRange` records for it.  Each literal reports at its
--- own location (no message dedup: two `300`s are two errors).
-checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
-checkFixedWidthLiterals mctx [] = ()
-checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
-  match normalize m
-    TCon tag _ => match taggedFixedRange tag
-      Some (lo, hi) =>
-        if n < lo || n > hi then
-          recordTypeError
-            mctx
-            (TcDiag
-              "L-INT-OVERFLOW"
-              1
-              (orElseLoc loc mctx.mcLoc)
-              "integer literal \{n} does not fit \{tag} (\{lo}..\{hi})"
-              None
-              None)
-      None =>
-        if isU64Head tag && n < 0 then
-          recordTypeError
-            mctx
-            (TcDiag
-              "L-INT-OVERFLOW"
-              1
-              (orElseLoc loc mctx.mcLoc)
-              "integer literal \{n} does not fit U64 (\{u64RangeText})"
-              None
-              None)
-    _ => ()
-  checkFixedWidthLiterals mctx rest
-
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
 -- the two oracle arms `EApp(f, EVar h)` and `EApp(f, ELoc(_, EVar h))` with
@@ -1738,11 +1692,6 @@ checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
 -- pre-bind `go` with a monomorphic placeholder so the RHS can reference
 -- itself, then generalize (a function is a value — oracle `:1668-1681`).
 
-checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
-checkDeferredMatches mctx [] = ()
-checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
-  checkMatchChecks (mctxAt loc mctx) scrutTy arms
-  checkDeferredMatches mctx rest
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
 
@@ -2464,24 +2413,6 @@ containsRowKey k (r :: rest)
 -- This recursion is aware (constraint-dictionary-routed) and bounded by the shared
 -- `requires` measure (`reqWalkEnter`): a mono pinned to a concrete head routes RKey,
 -- an in-scope constraint var routes RDict, per DICT-SEMANTICS §3 `assum`.
-
--- fill each constrained-fn call site's routes: one route per constraint mono.  A
--- mono pinned to a concrete head → RKey; still a constraint variable (a nested
--- constrained call) → RDict; otherwise RNone.
-resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
-resolveDictApps sx [] = ()
-resolveDictApps sx (app :: rest) =
-  let sx = { sx | sxSite = app.pdaLoc }
-  let routes =
-    routesOfMonosTopV
-      sx
-      app.pdaEncl
-      app.pdaScope
-      app.pdaMonos
-      app.pdaIfaces
-      app.pdaArgVecs
-  app.pdaRoutesRef := routes
-  resolveDictApps sx rest
 
 -- #80: the single per-module typecheck body, reached from the graph driver through
 -- `checkModuleFullImpl`. DICT-SEMANTICS §7's single-evaluator law means one
@@ -3574,18 +3505,6 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
     _ => ()
   setNumlitFloatsGo rest
 
--- Files every commit again under the variable now heading its goal.  A later group
--- or module that unified the committed variable moved its representative, and a
--- lookup reads the representative.  Called where the lookups run: the module's end
--- and each module's stamping in the drain.
-refileDeterminedRows : ModuleCtx -> Unit -> Unit
-refileDeterminedRows mctx _ =
-  let table = mctx.mcCells.determinedRowsRef.value
-  if not (IdMap.isEmpty table) then
-    let entries = reverseL (flatMap identity (IdMap.values table))
-    mctx.mcCells.determinedRowsRef := Tip
-    fold (_ entry => fileDeterminedRow mctx (fst entry) (snd entry)) () entries
-
 -- Records, at the module's end, the variables its non-generalized members still
 -- leave open, for the graph-end drain (`GraphRun.liveRoots`).
 recordLiveRoots : ModuleCtx -> Unit -> Unit
@@ -3944,15 +3863,6 @@ aliasOwnAt cur ((key, ad) :: rest)
 externSchemesGo : ModuleCtx -> List Decl -> List (String, Scheme)
 externSchemesGo mctx decls =
   map ((n, ty) => (n, sigToScheme mctx ty)) (directExternSigs decls)
-
-directExternSigs : List Decl -> List (String, Ty)
-directExternSigs [] = []
-directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  (n, ty) :: directExternSigs rest
-directExternSigs (_ :: rest) = directExternSigs rest
-
-declExternNames : List Decl -> List String
-declExternNames decls = map fst (directExternSigs decls)
 
 -- DRIVER-COLLAPSE Phase 2: skip when [mname] is ALREADY registered in THIS pass.
 -- The ids must be the SAME quantified ids the call-site instantiation maps through
@@ -4688,19 +4598,6 @@ typeErrorLines : List String -> List String
 typeErrorLines [] = []
 typeErrorLines (e :: rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 
--- #415 item 1: the seeding PREAMBLE every runtime-seeded entry point runs before its
--- typecheck pass — the head half of the sandwich whose tail is `runFinalChecks`.
--- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
--- legitimately differ on (the flat paths pass `prog`; checkModuleFullDiags passes
--- `prog ++ accData` own-module-FIRST — see the P0-9 note there, that order is load-bearing).
--- The module's mint (`checkBodyImpl`) installs the seed: this oracle and an empty
--- warnings list.
-seedCheckRun : List Decl -> CheckRunSeed
-seedCheckRun oracleDecls = CheckRunSeed {
-  crsOracle = buildOracle oracleDecls,
-  crsWarnings = [],
-}
-
 -- #415 item 1: seed-and-run for the three FLAT runtime-seeded entry points
 -- (the `checkOne*` wrappers). They
 -- used to repeat this body verbatim under a "Mirrors checkToLinesWithRuntime's
@@ -5053,14 +4950,6 @@ importedMethodBindingNames gctx prog aliases =
   flatMap snd (nameableIfaceRows gctx prog)
     ++ importedMemberBindingNames prog
     ++ map fst aliases
-
-plainModuleSeed : List (String, Scheme) -> ModuleSeed
-plainModuleSeed schemes = ModuleSeed {
-  msSchemes = schemes,
-  msImportedValues = omEmpty,
-  msImportedNames = omEmpty,
-  msImportedExterns = omEmpty,
-}
 
 -- The ordinary winner and standalone alternative travel together through
 -- import selection, aliases, re-exports, and graph memoization.
@@ -7554,24 +7443,6 @@ cutRanges lo hi [] = if lo < hi then [(lo, hi)] else []
 cutRanges lo hi ((a, b) :: rest) =
   (if a > lo then [(lo, a)] else []) ++ cutRanges (max lo b) hi rest
 
--- A serving drive's type and effect variables start above every id a serving drive
--- before it ended at, so no variable it mints shares an id with one a served
--- interface holds: the existential and pattern-authority tables are keyed by those
--- ids.
-raiseToHighWater : GraphCtx -> Unit
-raiseToHighWater gctx =
-  let lineage = interners.value.lineage
-  let r = gctx.graphRun
-  r.tyvarCounter := max r.tyvarCounter.value lineage.lnTyvarHigh.value
-  r.effvarCounter := max r.effvarCounter.value lineage.lnEffvarHigh.value
-
-noteHighWater : GraphCtx -> Unit
-noteHighWater gctx =
-  let lineage = interners.value.lineage
-  let r = gctx.graphRun
-  lineage.lnTyvarHigh := max lineage.lnTyvarHigh.value r.tyvarCounter.value
-  lineage.lnEffvarHigh := max lineage.lnEffvarHigh.value r.effvarCounter.value
-
 -- [rows] with every row past the oldest [n] frozen: the oldest [n] were frozen when
 -- they were recorded or served.
 freezeFrom : Int -> List ModDiags -> List ModDiags
@@ -8989,48 +8860,6 @@ ifaceMethodSlotKeys ((DInterface { name, methods, ifaceOrigin, ... }) :: rest) =
       (ifaceMethodNames methods)
     ++ ifaceMethodSlotKeys rest
 ifaceMethodSlotKeys (_ :: rest) = ifaceMethodSlotKeys rest
-
--- `moduleMarkCtx ms mid prog`: core (`mid == ""`) is marked with the unsplit set and
--- the core-scoped shadow map (#2153).  A user module gets the split set, scoped by the
--- filter below.
---
--- CORE'S rp/arg SETS ARE S1-FILTERED TOO, and the argument that they need not be is
--- retired.  It read: "core's references to its own standalones are all mangled
--- `core__<n>` by the time this runs, so neither set can match one."  #2809 moved
--- mangling AFTER elaboration, so core's references now carry the names its author
--- wrote and a USER interface method spelled like a core standalone matches them.
--- MEASURED on `test/prelude_shadow_census.ledger`'s own probe shape — `interface Ifc c
--- where identity : c -> Int` beside `impl Ifc Int`, in a module that defines no
--- `identity` — `check` and `run` accept and print 1 while `build` died `E-PANIC: no
--- impl of method 'identity' for type 'List'`: core's own `identity` call, on a `List`,
--- had been rewritten to a dispatch on the USER's interface.  Four ledger rows
--- (`identity`, `otherwise`, `arbitraryList`, `arbitraryString`) moved PASS -> FAIL_BUILD
--- that way.  The rule applied is the one `coreShadowMapFor` already applies to the
--- shadow map for the same reason: an interface declared in a USER module is not
--- nameable in `core`, so no `core.mdk` occurrence is one of its method occurrences.
--- Same fail-OPEN guard as `nameableIfaceShadows`: an absent graph index leaves the sets
--- unfiltered rather than emptying them.
-moduleMarkCtx : GraphCtx ->
-  MarkSets ->
-  String ->
-  List Decl ->
-  OrdMap Scheme ->
-  MarkCtx
-moduleMarkCtx gctx ms mid prog imported =
-  let candidates = methodMarkCtx gctx ms mid prog
-  let local = namesToSet (declTopFnNames prog) omEmpty
-  -- A module's own extern denotes itself wherever the module spells it, as its
-  -- own function named like an interface method does (SHADOW-SEMANTICS S2's
-  -- definer arm), so its occurrences are never method occurrences.
-  let externs = namesToSet (declExternNames prog) omEmpty
-  MarkCtx {
-    mcRp = IdMap.difference candidates.mcRp externs,
-    mcAn = IdMap.difference candidates.mcAn externs,
-    mcSm =
-      filterList
-        (entry => omHasKey (fst entry) local || omHasKey (snd entry) imported)
-        candidates.mcSm,
-  }
 
 -- ⚠️ THE IMPLICIT-PRELUDE ARM ABOVE IS LOAD-BEARING, AND ITS ABSENCE WAS MEASURED.
 -- The prelude is in scope in EVERY module under BARE names and contributes NO `DUse`

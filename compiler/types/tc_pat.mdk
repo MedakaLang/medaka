@@ -1,5 +1,6 @@
 -- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
--- patterns, binder types.
+-- patterns, binder types, and the module-end settle of the deferred literal patterns
+-- (`settleDeferredPatLits`).
 --
 -- Spec: HM-CORE has no section on pattern typing yet (owed, #2555); language-design Data Types;
 -- EFFECTS section 4.1.
@@ -11,6 +12,7 @@
 
 import types.tc_types.{
   DynCtx,
+  dynFor,
   ExistentialScope,
   GraphCtx,
   ModuleCtx,
@@ -316,7 +318,6 @@ settlePatLitsOnly dyn saved =
   dyn.dcModule.mcCells.patLitPending := saved
 
 -- [final]: the module is done, so an unknown var defaults instead of deferring.
-export
 settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
 settlePatLitsGo dyn _ [] = ()
 settlePatLitsGo dyn final ((a, n, loc) :: rest) =
@@ -331,6 +332,15 @@ settlePatLitsGo dyn final ((a, n, loc) :: rest) =
         (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
     _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
   settlePatLitsGo dyn final rest
+
+-- The module's inference is complete: every deferred literal pattern takes the
+-- type its scrutinee finally got, or `Int`.
+export
+settleDeferredPatLits : ModuleCtx -> Unit -> Unit
+settleDeferredPatLits mctx _ =
+  let deferred = mctx.mcCells.patLitDeferred.value
+  mctx.mcCells.patLitDeferred := []
+  settlePatLitsGo (dynFor mctx) True deferred
 
 -- A `U64` or `I64` is a boxed cell, and no engine's pattern matcher compares one
 -- against a constant, so a literal pattern cannot match it (INTEGER-TYPES-DESIGN

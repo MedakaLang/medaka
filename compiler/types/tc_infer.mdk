@@ -1,7 +1,9 @@
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
 -- match and arms, blocks, the shadow-application arms, the record arms, and the operator arms with
 -- their typing rules (`inferBinop`, `inferUnop`)), signature pre-unification, exhaustiveness and
--- wide-literal checks at their sites; the record arms' helpers are `tc_infer_records`.
+-- wide-literal checks at their sites, with their module-end steps beside them
+-- (`checkDeferredMatches`, `checkFixedWidthLiterals`); the record arms' helpers are
+-- `tc_infer_records`.
 --
 -- Spec: DICT section 4 (the elaboration judgment); HM-CORE section 3-section 5 (owed, #2555);
 -- SHADOW section 1 (S2, S4-S7), section 1.1; S2-DECL (d); EFFECTS section 3.
@@ -321,6 +323,7 @@ import frontend.ast.{
   isU64Head,
   letBindName,
   orElseLoc,
+  taggedFixedRange,
 }
 import types.effect_rows.{
   Atom(..), EffRow(..), collectRows, effrowLabels, joinRows, pureRow
@@ -1207,6 +1210,43 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
           (Some (wideAnnotateHelp shown negated))
           None)
   checkWideLiterals mctx rest
+
+-- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
+-- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
+-- the range.  Runs once per module after inference, on every driver, so `check`,
+-- `run` and `build` all refuse `(300 : U8)`.  `-2 : U8` is caught here too, as the
+-- negative value `recordNegatedLitRange` records for it.  Each literal reports at its
+-- own location (no message dedup: two `300`s are two errors).
+export
+checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
+checkFixedWidthLiterals mctx [] = ()
+checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
+  match normalize m
+    TCon tag _ => match taggedFixedRange tag
+      Some (lo, hi) =>
+        if n < lo || n > hi then
+          recordTypeError
+            mctx
+            (TcDiag
+              "L-INT-OVERFLOW"
+              1
+              (orElseLoc loc mctx.mcLoc)
+              "integer literal \{n} does not fit \{tag} (\{lo}..\{hi})"
+              None
+              None)
+      None =>
+        if isU64Head tag && n < 0 then
+          recordTypeError
+            mctx
+            (TcDiag
+              "L-INT-OVERFLOW"
+              1
+              (orElseLoc loc mctx.mcLoc)
+              "integer literal \{n} does not fit U64 (\{u64RangeText})"
+              None
+              None)
+    _ => ()
+  checkFixedWidthLiterals mctx rest
 
 -- Stage-1 Eq dispatch (EQ-DISPATCH-DESIGN.md §2.1): `==`/`/=` carry an `Eq`
 -- obligation on their (unified) operand type — a verbatim mirror of
@@ -2948,6 +2988,13 @@ checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchChecks mctx scrutTy arms =
   checkMatchExhaustive mctx scrutTy arms
   checkMatchRedundant mctx scrutTy arms
+
+export
+checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
+checkDeferredMatches mctx [] = ()
+checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
+  checkMatchChecks (mctxAt loc mctx) scrutTy arms
+  checkDeferredMatches mctx rest
 
 -- Warn if an all-wildcard query is still useful against the matrix of the
 -- non-guarded arms — i.e. some scrutinee value escapes every arm.  Guarded arms

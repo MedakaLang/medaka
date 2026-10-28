@@ -1,7 +1,8 @@
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
 -- and method-return solver (`solveExactReturn*`, the method-return predicate and its templates);
--- improvement and determination by the unique instance; instance selection for the judgments above
--- entailment (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
+-- improvement and determination by the unique instance, with the module-end refiling of the
+-- determined rows (`refileDeterminedRows`); instance selection for the judgments above entailment
+-- (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`,
 -- `residualSelectionStable`); the goal store, its dict-application reads (`dictAppsSince`) and the
 -- solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); and the
 -- evidence routes a solved goal answers with (the call-slot route family `routeOf`,
@@ -257,6 +258,7 @@ import support.util.{
   listLen,
   lookupAssoc,
   orElseOpt,
+  reverseL,
   splitOnChar,
 }
 import list.{drop, get, head, indexed, reverse, take, zip}
@@ -1632,7 +1634,6 @@ determineHeldGoal mctx rigidIds window o args
 
 -- Files a commit's instance under the variable heading the committed goal, the
 -- one `determinedGoalInstance` reads when selection by head finds nothing.
-export
 fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
 fileDeterminedRow mctx _ [] = ()
 fileDeterminedRow mctx row (first :: rest) = match normalize first
@@ -1643,6 +1644,19 @@ fileDeterminedRow mctx row (first :: rest) = match normalize first
     mctx.mcCells.determinedRowsRef :=
       IdMap.set (tyvarId cell) (entry :: filed) table
   _ => ()
+
+-- Files every commit again under the variable now heading its goal.  A later group
+-- or module that unified the committed variable moved its representative, and a
+-- lookup reads the representative.  Called where the lookups run: the module's end
+-- and each module's stamping in the drain.
+export
+refileDeterminedRows : ModuleCtx -> Unit -> Unit
+refileDeterminedRows mctx _ =
+  let table = mctx.mcCells.determinedRowsRef.value
+  if not (IdMap.isEmpty table) then
+    let entries = reverseL (flatMap identity (IdMap.values table))
+    mctx.mcCells.determinedRowsRef := Tip
+    fold (_ entry => fileDeterminedRow mctx (fst entry) (snd entry)) () entries
 
 -- Every variable of the goal is one the boundary holds rigid, so a commit could
 -- bind none of them.

@@ -1,7 +1,9 @@
--- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
--- span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process
--- interners cell, the `Windowed` channel ops, and the test-only trace-sink probes that only build
--- or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
+-- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
+-- check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries
+-- `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and
+-- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the
+-- `Windowed` channel ops, and the test-only trace-sink probes that only build or read a
+-- `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
 -- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
 -- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
 --
@@ -25,9 +27,9 @@ import types.tc_types.{
   DynCtx(..), EvidenceObservationEntry(..), GrantState(..), GraphCtx(..),
   GraphRun(..), ImplEnv(..), ImplUniverse(..), Interners(..),
   InvocationView(..), Lineage(..), LocalAbsState(..), MethodEnv(..),
-  ModuleCells(..), ModuleCtx(..), NumericPredicateTraceEntry(..),
-  ShadowDicts(..), SigVars(..), TcConfig(..), TcEnv(..), TraceSink(..),
-  Windowed(..), StampCtx, UObligation
+  ModuleCells(..), ModuleCtx(..), ModuleSeed(..),
+  NumericPredicateTraceEntry(..), ShadowDicts(..), SigVars(..), TcConfig(..),
+  TcEnv(..), TraceSink(..), Windowed(..), StampCtx, UObligation
 }
 import map.{Map(..)}
 import list.{take}
@@ -61,6 +63,20 @@ checkRunResidue : ModuleCtx -> CheckRunSeed
 checkRunResidue m = CheckRunSeed {
   crsOracle = m.mcCells.matchOracle.value,
   crsWarnings = m.mcCells.matchWarnings.value,
+}
+
+-- #415 item 1: the seeding PREAMBLE every runtime-seeded entry point runs before its
+-- typecheck pass — the head half of the sandwich whose tail is `runFinalChecks`.
+-- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
+-- legitimately differ on (the flat paths pass `prog`; checkModuleFullDiags passes
+-- `prog ++ accData` own-module-FIRST — see the P0-9 note there, that order is load-bearing).
+-- The module's mint (`checkBodyImpl`) installs the seed: this oracle and an empty
+-- warnings list.
+export
+seedCheckRun : List Decl -> CheckRunSeed
+seedCheckRun oracleDecls = CheckRunSeed {
+  crsOracle = buildOracle oracleDecls,
+  crsWarnings = [],
 }
 
 -- Builds [ctx]'s record, with the two module tables the drain reads taken from
@@ -245,6 +261,15 @@ emptyDeclEnvSeedAcc = DeclEnvSeedAcc {
   dsNames = omInsert "" omEmpty omEmpty,
 }
 
+export
+plainModuleSeed : List (String, Scheme) -> ModuleSeed
+plainModuleSeed schemes = ModuleSeed {
+  msSchemes = schemes,
+  msImportedValues = omEmpty,
+  msImportedNames = omEmpty,
+  msImportedExterns = omEmpty,
+}
+
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- This index is deliberately syntactic: an identity-keyed table over the raw
 -- `Variant`/`Field`/`Ty` declaration nodes, carrying no elaborated
@@ -389,6 +414,26 @@ noteInterners c =
       lnEffvarHigh = high.lnEffvarHigh,
     },
   }
+
+-- A serving drive's type and effect variables start above every id a serving drive
+-- before it ended at, so no variable it mints shares an id with one a served
+-- interface holds: the existential and pattern-authority tables are keyed by those
+-- ids.
+export
+raiseToHighWater : GraphCtx -> Unit
+raiseToHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  r.tyvarCounter := max r.tyvarCounter.value lineage.lnTyvarHigh.value
+  r.effvarCounter := max r.effvarCounter.value lineage.lnEffvarHigh.value
+
+export
+noteHighWater : GraphCtx -> Unit
+noteHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  lineage.lnTyvarHigh := max lineage.lnTyvarHigh.value r.tyvarCounter.value
+  lineage.lnEffvarHigh := max lineage.lnEffvarHigh.value r.effvarCounter.value
 
 -- A test probe's graph record: every field fresh, as a process's first record.
 export
