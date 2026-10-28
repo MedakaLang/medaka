@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- matching and the run fails closed with the key it looked for — the loud half
 -- of the invariant above, not a wrong answer.
 
-import driver.diagnostics.{Diag(..), DiagId(..), diagIdText, Severity(..)}
+import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
   contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome
@@ -287,7 +287,7 @@ baselineFileHeader = stringConcat [
   "\n",
 ]
 # DESUGAR
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true) (mem "diagIdText" false) (mem "Severity" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
@@ -360,7 +360,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineFileHeader" (TyCon "String"))
 (DFunDef false "baselineFileHeader" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "# lint finding-count baseline — GENERATED, never hand-edited (#2619).\n")) (ELit (LString "#\n")) (ELit (LString "# One [[entry]] per (file, rule) with at least one finding: the number of\n")) (ELit (LString "# findings that file is currently ALLOWED for that rule.  A file may drop\n")) (ELit (LString "# below its count freely; exceeding it is an error, and so is having\n")) (ELit (LString "# findings for a rule with no row here at all.\n")) (ELit (LString "#\n")) (ELit (LString "# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)\n")) (ELit (LString "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n")) (ELit (LString "# cannot smuggle an increase past the hook).\n")) (ELit (LString "#\n")) (ELit (LString "# Regenerate from the repo root, never by hand:\n")) (ELit (LString "#\n")) (ELit (LString "#   sh test/diff_compiler_lint_baseline.sh --write\n")) (ELit (LString "#\n")) (ELit (LString "# Paths are relative to the directory `medaka lint` runs in (the repo root\n")) (ELit (LString "# for both consumers above).\n")) (ELit (LString "\n")))))
 # MARK
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true) (mem "diagIdText" false) (mem "Severity" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))

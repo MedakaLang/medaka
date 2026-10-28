@@ -1,5 +1,5 @@
 # META
-source_lines=3469
+source_lines=3450
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -346,37 +346,19 @@ diagOfTypeWarning : TcDiag -> Diag
 diagOfTypeWarning (TcDiag code _ loc w help _) =
   Diag SevWarning (Coded code) (stripWarnPrefix w) loc help None
 
--- THE JSON `kind`, derived from the code prefix AND the severity TOGETHER.  Use
--- this, not bare `diagIdKind`, wherever the severity is not already a literal.
+-- THE JSON `kind`, from the code AND the severity together.  Use this, not bare
+-- `diagIdKind`, wherever the severity is not already a literal.
 --
--- `diagIdKind` alone reads only the CODE, so it renders a per-stage kind whenever the
--- code carries a per-stage prefix — no matter what severity the diagnostic actually
--- has.  That is harmless only while every stage-prefixed code is an error, and it
--- lies silently the moment one is not.  Two shapes, both reachable the instant a
--- warning is authored on the `matchWarnings` channel (see `diagOfTypeWarning`):
+-- `diagIdKind` reads only the code, so a demoted error that kept its `T-*` code
+-- (a warning authored on the `matchWarnings` channel, see `diagOfTypeWarning`)
+-- would render `"kind":"type"` beside `"severity":2`, and a consumer filtering
+-- the per-stage taxonomy would read it as a type error.  So a `SevWarning`
+-- diagnostic never renders a per-stage kind: it is `warning`.
 --
---   {"code":"T-…","kind":"type",  "severity":2}   a demoted error that KEPT its
---       `T-*` code — a consumer filtering the documented per-stage taxonomy drops
---       it, because it reads as a type ERROR.
---   {"code":"",    "kind":"error","severity":2}   a push site that forgot its code
---       (`""` is what a copy-pasted one produces) — self-contradictory JSON, exit 0,
---       and nothing anywhere reports it.
---
--- So: a `SevWarning` diagnostic may never render a per-STAGE kind.
---
--- ⚠️ That is NOT the same rule as "severity 2 implies kind `warning`", and the
--- difference is load-bearing: `lint` is a real severity-2 kind — `medaka lint --json`
--- ships `{"code":"rule-…","kind":"lint","severity":2}` through this very envelope —
--- so collapsing every severity-2 diagnostic to `warning` would REGRESS every lint
--- finding's kind.  Only the four stage kinds, and `diagIdKind`'s `otherwise = "error"`
--- fallback (which is not even a stage), collapse to `warning`.
---
--- The CODE is passed through verbatim and is never rewritten.  Normalising `T-FOO`
--- to `W-FOO` would invent an identity from a spelling — the exact L2 violation this
--- change exists to remove, committed silently — so an off-taxonomy code stays
--- visible as itself, now rendered beside `"kind":"warning"`.  The mismatch is then
--- legible to its author on their first run, instead of being confidently mislabelled
--- as a type error.
+-- That is not "severity 2 implies kind `warning`": `lint` is a real severity-2
+-- kind (`medaka lint --json` ships `{"kind":"lint","severity":2}` through this
+-- envelope), so lint stays `lint`.  The code text itself is passed through
+-- unchanged.
 export
 diagKind : Severity -> DiagId -> String
 diagKind SevError code = diagIdKind code
@@ -2914,8 +2896,7 @@ runBuildWarnCodes = [
 
 export
 isCoherenceWarn : Diag -> Bool
-isCoherenceWarn (Diag SevWarning (Coded c) _ _ _ _) =
-  anyList (== c) runBuildWarnCodes
+isCoherenceWarn (Diag SevWarning (Coded c) _ _ _ _) = elem c runBuildWarnCodes
 isCoherenceWarn _ = False
 
 -- The exit code the emit driver uses when what it wrote to stderr is a LOCATED
@@ -3881,7 +3862,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "DiagCode")))
 (DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (EVar "WPreludeMethodShadow") (EVar "WImportMethodShadow")))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
-(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PCon "Coded" (PVar "c")) PWild PWild PWild PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "c")))) (EVar "runBuildWarnCodes")))
+(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PCon "Coded" (PVar "c")) PWild PWild PWild PWild)) (EApp (EApp (EVar "elem") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
 (DTypeSig true "emitDiagExitCode" (TyCon "Int"))
 (DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))
@@ -4398,7 +4379,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "DiagCode")))
 (DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (EVar "WPreludeMethodShadow") (EVar "WImportMethodShadow")))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
-(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PCon "Coded" (PVar "c")) PWild PWild PWild PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "c")))) (EVar "runBuildWarnCodes")))
+(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PCon "Coded" (PVar "c")) PWild PWild PWild PWild)) (EApp (EApp (EDictApp "elem") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
 (DTypeSig true "emitDiagExitCode" (TyCon "Int"))
 (DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))

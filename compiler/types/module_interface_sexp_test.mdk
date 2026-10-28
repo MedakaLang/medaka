@@ -424,3 +424,45 @@ test "a module basis is mandatory and uses the shared view grammar" =
             (verdict (decodeModuleInterface (alter [SAtom "invocation-view"]))),
         ),
       ]
+
+-- [mi] written with its recorded diagnostic's code text replaced by [text] and
+-- the digest recomputed, so only the code is wrong.
+withCodeText : ModuleInterface -> String -> String
+withCodeText mi text =
+  let good = encodeModuleInterface (withExtras mi)
+  withDigestOf
+    good
+    (S.replace
+      "T-TYPE-MISMATCH"
+      text
+      (S.drop (optionOr 0 (S.indexOf "\n" good) + 1) good))
+
+-- The class of a reader's answer: accepted, or refused as a malformed file.
+verdictClass : Result InterfaceFault a -> String
+verdictClass (Ok _) = "ok"
+verdictClass (Err (Malformed _)) = "malformed"
+verdictClass (Err _) = "other"
+
+test "a reader accepts a live diagnostic code and refuses any other text" =
+  match recorded ()
+    None => fail "no interface recorded"
+    Some (mi, _) =>
+      let classOf text =
+        verdictClass (decodeModuleInterface (withCodeText mi text))
+      expectEach [
+        ("a live code", expectEqual "ok" (classOf "T-TYPE-MISMATCH")),
+        ("an unknown code", expectEqual "malformed" (classOf "T-NO-SUCH-CODE")),
+        ("a retired code", expectEqual "malformed" (classOf "T-UNSUPPORTED")),
+        (
+          "a runtime code",
+          expectEqual "malformed" (classOf "E-DISPATCH-NO-IMPL"),
+        ),
+        (
+          "a lint rule id",
+          expectEqual "malformed" (classOf "rule-unused-import"),
+        ),
+        (
+          "a wrong-case code",
+          expectEqual "malformed" (classOf "t-type-mismatch"),
+        ),
+      ]

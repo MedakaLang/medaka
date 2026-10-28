@@ -1,5 +1,5 @@
 # META
-source_lines=3769
+source_lines=3771
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -2702,7 +2702,8 @@ blastHit (p :: ps) path = if globMatch p path then Some p else blastHit ps path
    `.github/workflows/ci.yml`'s `detect` job applies (its `nondoc` case), kept
    in the same order for the same reason its own comment gives: `test/**` is
    NEVER prose (it holds functional goldens), while `docs/spec/SYNTAX.md`,
-   `docs/guide/*.md` and `docs/advanced/*.md` are executable documentation.
+   `docs/guide/*.md`, `docs/advanced/*.md` and
+   `compiler/DIAGNOSTIC-CODES-DESIGN.md` are executable documentation.
 
    > isProsePath "docs/ops/CI-ARCHITECTURE.md"
    True
@@ -2723,6 +2724,7 @@ isProsePath : String -> Bool
 isProsePath p
   | startsWith "test/" p = False
   | p == "docs/spec/SYNTAX.md" = False
+  | p == "compiler/DIAGNOSTIC-CODES-DESIGN.md" = False
   | startsWith "docs/guide/" p && endsWith ".md" p = False
   | startsWith "docs/advanced/" p && endsWith ".md" p = False
   | startsWith "docs/" p = True
@@ -4317,7 +4319,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "blastHit" ((PList) PWild) (EVar "None"))
 (DFunDef false "blastHit" ((PCons (PVar "p") (PVar "ps")) (PVar "path")) (EIf (EApp (EApp (EVar "globMatch") (EVar "p")) (EVar "path")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "blastHit") (EVar "ps")) (EVar "path"))))
 (DTypeSig true "isProsePath" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isProsePath" ((PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test/"))) (EVar "p")) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "docs/spec/SYNTAX.md"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/guide/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/advanced/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "docs/"))) (EVar "p")) (EVar "True") (EIf (EBinOp "==" (EVar "p") (ELit (LString "LICENSE"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "LICENSE."))) (EVar "p")) (EVar "True") (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p")) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
+(DFunDef false "isProsePath" ((PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test/"))) (EVar "p")) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "docs/spec/SYNTAX.md"))) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "compiler/DIAGNOSTIC-CODES-DESIGN.md"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/guide/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/advanced/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "docs/"))) (EVar "p")) (EVar "True") (EIf (EBinOp "==" (EVar "p") (ELit (LString "LICENSE"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "LICENSE."))) (EVar "p")) (EVar "True") (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p")) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
 (DTypeSig true "proseVerdict" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "proseVerdict" ((PVar "p")) (EIf (EApp (EVar "isProsePath") (EVar "p")) (ELit (LString "PROSE\n")) (ELit (LString "NONDOC\n"))))
 (DTypeSig false "wholeTreeGlob" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -5098,7 +5100,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "blastHit" ((PList) PWild) (EVar "None"))
 (DFunDef false "blastHit" ((PCons (PVar "p") (PVar "ps")) (PVar "path")) (EIf (EApp (EApp (EVar "globMatch") (EVar "p")) (EVar "path")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "blastHit") (EVar "ps")) (EVar "path"))))
 (DTypeSig true "isProsePath" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isProsePath" ((PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test/"))) (EVar "p")) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "docs/spec/SYNTAX.md"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/guide/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/advanced/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "docs/"))) (EVar "p")) (EVar "True") (EIf (EBinOp "==" (EVar "p") (ELit (LString "LICENSE"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "LICENSE."))) (EVar "p")) (EVar "True") (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p")) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
+(DFunDef false "isProsePath" ((PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test/"))) (EVar "p")) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "docs/spec/SYNTAX.md"))) (EVar "False") (EIf (EBinOp "==" (EVar "p") (ELit (LString "compiler/DIAGNOSTIC-CODES-DESIGN.md"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/guide/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "docs/advanced/"))) (EVar "p")) (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p"))) (EVar "False") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "docs/"))) (EVar "p")) (EVar "True") (EIf (EBinOp "==" (EVar "p") (ELit (LString "LICENSE"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "LICENSE."))) (EVar "p")) (EVar "True") (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".md"))) (EVar "p")) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
 (DTypeSig true "proseVerdict" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "proseVerdict" ((PVar "p")) (EIf (EApp (EVar "isProsePath") (EVar "p")) (ELit (LString "PROSE\n")) (ELit (LString "NONDOC\n"))))
 (DTypeSig false "wholeTreeGlob" (TyFun (TyCon "String") (TyCon "Bool")))

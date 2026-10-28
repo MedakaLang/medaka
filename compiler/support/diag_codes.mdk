@@ -1,18 +1,20 @@
 -- diag_codes: the closed set of diagnostic codes the compiler mints, as one flat type.
 -- It holds `DiagCode` (one nullary constructor per live code; `T-TYPE-MISMATCH` is
--- `TTypeMismatch`, the prefix letter then the CamelCase of the dash segments), the one place
+-- `TTypeMismatch`, the prefix letter then the CamelCase of the dash segments; constructors share
+-- the `E*`/`P*`/`T*` namespace with the AST constructors, so a code whose camel name collides
+-- with one is renamed in the registry), the one place
 -- a code's text exists (`codeText`), its prefix family (`DiagKind`, `codeKind`), the list of
 -- every code (`allDiagCodes`) and the inverse of `codeText` (`codeOfText`).
 --
 -- Spec: DIAGNOSTIC-CODES-DESIGN.md section 2 (code taxonomy: prefixes, `kind` derived from the
 -- prefix, names stable and append-only); ARCHITECTURE.md A1 (support is the bottom layer).
 --
--- Closure rule: this module imports only the prelude and `support.util`; it may not import any
+-- Closure rule: this module imports only the prelude and `string`; it may not import any
 -- module of `frontend`, `types`, `ir`, `backend`, `eval`, `driver`, `tools` or `entries`.
 -- A retired or reserved code text has no constructor and is never reused.  There is no `Ord`
 -- on `DiagCode`: a derived `Ord` is one arm per constructor pair; order by `codeText`.
 
-import support.util.{startsWith}
+import string.{startsWith}
 
 -- The coarse family of a code, as the JSON `kind` field renders it.  `E-*` codes render as
 -- "error".

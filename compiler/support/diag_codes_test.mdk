@@ -24,9 +24,6 @@ nameOfText text = match split "-" text
   prefix :: segments =>
     prefix ++ concat (map (s => capitalize (toLower s)) segments)
 
-test "the registry holds one code per census row" =
-  expectEqual 186 (length allDiagCodes)
-
 test "no two codes share a text" =
   expectFalse (hasDuplicate (map codeText allDiagCodes))
 

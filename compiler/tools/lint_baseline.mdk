@@ -25,7 +25,7 @@
 -- matching and the run fails closed with the key it looked for — the loud half
 -- of the invariant above, not a wrong answer.
 
-import driver.diagnostics.{Diag(..), DiagId(..), diagIdText, Severity(..)}
+import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
   contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome

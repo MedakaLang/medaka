@@ -220,7 +220,7 @@ decDiag path (SList [SAtom "tcdiag", c, s, l, m, h, f]) = do
   name <- expectAtom (at path "tcdiag" 1) c
   code <- match codeOfText name
     Some known => Ok known
-    None => misfit (at path "tcdiag" 1) [("a live diagnostic code", 0)] c
+    None => refuse (at path "tcdiag" 1) c "not a live diagnostic code"
   severity <- atomInt (at path "tcdiag" 2) s
   loc <- optionOfSExp decLoc (at path "tcdiag" 3) l
   message <- expectAtom (at path "tcdiag" 4) m

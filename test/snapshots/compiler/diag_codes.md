@@ -1,22 +1,24 @@
 # META
-source_lines=488
+source_lines=490
 stages=DESUGAR,MARK
 # SOURCE
 -- diag_codes: the closed set of diagnostic codes the compiler mints, as one flat type.
 -- It holds `DiagCode` (one nullary constructor per live code; `T-TYPE-MISMATCH` is
--- `TTypeMismatch`, the prefix letter then the CamelCase of the dash segments), the one place
+-- `TTypeMismatch`, the prefix letter then the CamelCase of the dash segments; constructors share
+-- the `E*`/`P*`/`T*` namespace with the AST constructors, so a code whose camel name collides
+-- with one is renamed in the registry), the one place
 -- a code's text exists (`codeText`), its prefix family (`DiagKind`, `codeKind`), the list of
 -- every code (`allDiagCodes`) and the inverse of `codeText` (`codeOfText`).
 --
 -- Spec: DIAGNOSTIC-CODES-DESIGN.md section 2 (code taxonomy: prefixes, `kind` derived from the
 -- prefix, names stable and append-only); ARCHITECTURE.md A1 (support is the bottom layer).
 --
--- Closure rule: this module imports only the prelude and `support.util`; it may not import any
+-- Closure rule: this module imports only the prelude and `string`; it may not import any
 -- module of `frontend`, `types`, `ir`, `backend`, `eval`, `driver`, `tools` or `entries`.
 -- A retired or reserved code text has no constructor and is never reused.  There is no `Ord`
 -- on `DiagCode`: a derived `Ord` is one arm per constructor pair; order by `codeText`.
 
-import support.util.{startsWith}
+import string.{startsWith}
 
 -- The coarse family of a code, as the JSON `kind` field renders it.  `E-*` codes render as
 -- "error".
@@ -491,7 +493,7 @@ codeOfText t = find (c => codeText c == t) allDiagCodes
 impl Display DiagCode where
   display = codeText
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "startsWith" false))))
 (DData Public "DiagKind" () ((variant "DkLex" (ConPos)) (variant "DkParse" (ConPos)) (variant "DkResolve" (ConPos)) (variant "DkType" (ConPos)) (variant "DkWarning" (ConPos)) (variant "DkError" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "DiagKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DkLex") (PCon "DkLex")) () (EVar "True")) (arm (PTuple (PCon "DkParse") (PCon "DkParse")) () (EVar "True")) (arm (PTuple (PCon "DkResolve") (PCon "DkResolve")) () (EVar "True")) (arm (PTuple (PCon "DkType") (PCon "DkType")) () (EVar "True")) (arm (PTuple (PCon "DkWarning") (PCon "DkWarning")) () (EVar "True")) (arm (PTuple (PCon "DkError") (PCon "DkError")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "DiagKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DkLex") () (ELit (LString "DkLex"))) (arm (PCon "DkParse") () (ELit (LString "DkParse"))) (arm (PCon "DkResolve") () (ELit (LString "DkResolve"))) (arm (PCon "DkType") () (ELit (LString "DkType"))) (arm (PCon "DkWarning") () (ELit (LString "DkWarning"))) (arm (PCon "DkError") () (ELit (LString "DkError")))))))
@@ -702,7 +704,7 @@ impl Display DiagCode where
 (DFunDef false "codeOfText" ((PVar "t")) (EApp (EApp (EVar "find") (ELam ((PVar "c")) (EBinOp "==" (EApp (EVar "codeText") (EVar "c")) (EVar "t")))) (EVar "allDiagCodes")))
 (DImpl false "Display" ((TyCon "DiagCode")) () ((im "display" () (EVar "codeText"))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "startsWith" false))))
 (DData Public "DiagKind" () ((variant "DkLex" (ConPos)) (variant "DkParse" (ConPos)) (variant "DkResolve" (ConPos)) (variant "DkType" (ConPos)) (variant "DkWarning" (ConPos)) (variant "DkError" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "DiagKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DkLex") (PCon "DkLex")) () (EVar "True")) (arm (PTuple (PCon "DkParse") (PCon "DkParse")) () (EVar "True")) (arm (PTuple (PCon "DkResolve") (PCon "DkResolve")) () (EVar "True")) (arm (PTuple (PCon "DkType") (PCon "DkType")) () (EVar "True")) (arm (PTuple (PCon "DkWarning") (PCon "DkWarning")) () (EVar "True")) (arm (PTuple (PCon "DkError") (PCon "DkError")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "DiagKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DkLex") () (ELit (LString "DkLex"))) (arm (PCon "DkParse") () (ELit (LString "DkParse"))) (arm (PCon "DkResolve") () (ELit (LString "DkResolve"))) (arm (PCon "DkType") () (ELit (LString "DkType"))) (arm (PCon "DkWarning") () (ELit (LString "DkWarning"))) (arm (PCon "DkError") () (ELit (LString "DkError")))))))
