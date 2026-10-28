@@ -160,6 +160,15 @@ errorsOf src = (fst (onlyModule src)).chErrors
 callingSz : String -> String
 callingSz arg = sizeable ++ "y : Int\ny = sz \{arg}\n"
 
+-- A module that imports the interface of the module "m" and a binding `y` that calls its method
+-- at [arg].
+importingSz : String -> String
+importingSz arg = """
+import m.{Sz(..)}
+y : Int
+y = sz \{arg}
+"""
+
 -- ── a module's published schemes ──────────────────────────────────────────
 
 test "a signed binding publishes its declared type" =
@@ -337,22 +346,8 @@ export impl Sz Int where
   sz x = x
 """,
     ),
-    (
-      "n",
-      """
-import m.{Sz(..)}
-y : Int
-y = sz True
-""",
-    ),
-    (
-      "o",
-      """
-import m.{Sz(..)}
-y : Int
-y = sz False
-""",
-    ),
+    ("n", importingSz "True"),
+    ("o", importingSz "False"),
   ]
   expectEqual
     [("n", "T-UNROUTED-DISPATCH"), ("o", "T-UNROUTED-DISPATCH")]

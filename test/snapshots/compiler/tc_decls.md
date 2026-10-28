@@ -1,5 +1,5 @@
 # META
-source_lines=3242
+source_lines=3241
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -2348,7 +2348,6 @@ graphAliasRow (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rh
   [(tyTabKey o n, (ps, rhs))]
 graphAliasRow _ = []
 
-export
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 implHeadNormalDecl aliases (DAttrib a d) =
   DAttrib a (implHeadNormalDecl aliases d)
@@ -3644,7 +3643,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "graphAliasRow" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "graphAliasRow") (EVar "d")))
 (DFunDef false "graphAliasRow" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs")))))
 (DFunDef false "graphAliasRow" (PWild) (EListLit))
-(DTypeSig true "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
@@ -4185,7 +4184,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "graphAliasRow" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "graphAliasRow") (EVar "d")))
 (DFunDef false "graphAliasRow" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (ETuple (EVar "ps") (EVar "rhs")))))
 (DFunDef false "graphAliasRow" (PWild) (EListLit))
-(DTypeSig true "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))

@@ -2344,7 +2344,6 @@ graphAliasRow (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rh
   [(tyTabKey o n, (ps, rhs))]
 graphAliasRow _ = []
 
-export
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 implHeadNormalDecl aliases (DAttrib a d) =
   DAttrib a (implHeadNormalDecl aliases d)
