@@ -253,6 +253,7 @@ refsClause (CClause _ body) = refsE body
 
 refsArm : CArm -> List String
 refsArm (CArm _ guards body) = flatMap refsGuard guards ++ refsE body
+refsArm (CArmAlt _ guards _) = flatMap refsGuard guards
 
 refsGuard : CGuard -> List String
 refsGuard (CGBool e) = refsE e

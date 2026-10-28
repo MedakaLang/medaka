@@ -10,6 +10,7 @@
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   stripLocE,
   noBinderId,
   unminted,
@@ -272,8 +273,11 @@ fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 armChain : List Guard -> Expr -> Expr -> Expr
 armChain [] body _ = body
 armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
-armChain ((GBind p e) :: qs) body els =
-  EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
+-- A guard-bind through an or-pattern keeps the guards after it on its match
+-- arm, so a later guard that fails under one alternative re-tries the next.
+armChain ((GBind p e) :: qs) body els
+  | patHasOr p = EMatch e [Arm p qs body, Arm PWild [] els]
+  | otherwise = EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr

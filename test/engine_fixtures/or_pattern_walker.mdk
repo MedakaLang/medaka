@@ -1,0 +1,58 @@
+-- A 20-constructor walker written with two or-pattern arms of ten alternatives
+-- each; every alternative binds `n`.
+-- Expected, derived from the source: `walk` of Ck k is 3k for k <= 10 and
+-- k + 7777777 for k >= 11, so the sum over k = 1..20 is
+-- 3 * 55 + (155 + 10 * 7777777) = 77778090.
+data E =
+  | C1 Int
+  | C2 Int
+  | C3 Int
+  | C4 Int
+  | C5 Int
+  | C6 Int
+  | C7 Int
+  | C8 Int
+  | C9 Int
+  | C10 Int
+  | C11 Int
+  | C12 Int
+  | C13 Int
+  | C14 Int
+  | C15 Int
+  | C16 Int
+  | C17 Int
+  | C18 Int
+  | C19 Int
+  | C20 Int
+
+walk : E -> Int
+walk e = match e
+  C1 n | C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n => n * 3
+  C11 n | C12 n | C13 n | C14 n | C15 n | C16 n | C17 n | C18 n | C19 n | C20 n =>
+    n + 7777777
+
+every : List E
+every = [
+  C1 1,
+  C2 2,
+  C3 3,
+  C4 4,
+  C5 5,
+  C6 6,
+  C7 7,
+  C8 8,
+  C9 9,
+  C10 10,
+  C11 11,
+  C12 12,
+  C13 13,
+  C14 14,
+  C15 15,
+  C16 16,
+  C17 17,
+  C18 18,
+  C19 19,
+  C20 20,
+]
+
+main = fold (acc e => acc + walk e) 0 every

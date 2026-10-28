@@ -161,6 +161,9 @@ ubArm : OrdMap Int -> CArm -> CArm
 ubArm sc (CArm pat guards body) =
   let (guards2, sc2) = ubGuards (ubExtend sc [pat]) guards
   CArm (ubPat sc pat) guards2 (ubExpr sc2 body)
+ubArm sc (CArmAlt pat guards owner) =
+  let (guards2, _) = ubGuards (ubExtend sc [pat]) guards
+  CArmAlt (ubPat sc pat) guards2 owner
 
 ubGuards : OrdMap Int -> List CGuard -> (List CGuard, OrdMap Int)
 ubGuards sc [] = ([], sc)

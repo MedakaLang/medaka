@@ -1,5 +1,5 @@
 # META
-source_lines=271
+source_lines=272
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -257,6 +257,7 @@ refsClause (CClause _ body) = refsE body
 
 refsArm : CArm -> List String
 refsArm (CArm _ guards body) = flatMap refsGuard guards ++ refsE body
+refsArm (CArmAlt _ guards _) = flatMap refsGuard guards
 
 refsGuard : CGuard -> List String
 refsGuard (CGBool e) = refsE e
@@ -348,6 +349,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "refsClause" ((PCon "CClause" PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DTypeSig false "refsArm" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsArm" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "refsGuard")) (EVar "guards")) (EApp (EVar "refsE") (EVar "body"))))
+(DFunDef false "refsArm" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "flatMap") (EVar "refsGuard")) (EVar "guards")))
 (DTypeSig false "refsGuard" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsGuard" ((PCon "CGBool" (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsGuard" ((PCon "CGBind" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
@@ -435,6 +437,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "refsClause" ((PCon "CClause" PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DTypeSig false "refsArm" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsArm" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "refsGuard")) (EVar "guards")) (EApp (EVar "refsE") (EVar "body"))))
+(DFunDef false "refsArm" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "refsGuard")) (EVar "guards")))
 (DTypeSig false "refsGuard" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsGuard" ((PCon "CGBool" (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsGuard" ((PCon "CGBind" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))

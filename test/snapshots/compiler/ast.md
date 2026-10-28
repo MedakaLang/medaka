@@ -1,5 +1,5 @@
 # META
-source_lines=2788
+source_lines=2875
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -827,6 +827,93 @@ patBindings (POr []) = []
 patBindings (POr (p :: _)) = patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+
+-- Whether [p] contains an or-pattern anywhere.
+export
+patHasOr : Pat -> Bool
+patHasOr (POr _) = True
+patHasOr (PCon _ ps) = any patHasOr ps
+patHasOr (PCons a b) = patHasOr a || patHasOr b
+patHasOr (PTuple ps) = any patHasOr ps
+patHasOr (PList ps) = any patHasOr ps
+patHasOr (PAs _ _ _ p) = patHasOr p
+patHasOr (PRec _ fields _) = any recFieldHasOr fields
+patHasOr _ = False
+
+recFieldHasOr : RecPatField -> Bool
+recFieldHasOr (RecPatField _ _ _ (Some p)) = patHasOr p
+recFieldHasOr _ = False
+
+-- The or-pattern-free patterns [p] stands for, in the order a match tries them:
+-- the alternatives left to right, and across several or-patterns the leftmost
+-- one varying slowest.  A pattern with no or-pattern is its own one candidate.
+-- Every candidate binds the same names under the same binder ids.
+export
+orCandidates : Pat -> List Pat
+orCandidates p = if patHasOr p then orExpand p else [p]
+
+orExpand : Pat -> List Pat
+orExpand (POr ps) = flatMap orExpand ps
+orExpand (PCon c ps) = map (PCon c) (orProduct ps)
+orExpand (PCons h t) =
+  let ts = orExpand t
+  flatMap (h2 => map (PCons h2) ts) (orExpand h)
+orExpand (PTuple ps) = map PTuple (orProduct ps)
+orExpand (PList ps) = map PList (orProduct ps)
+orExpand (PAs x l bid p) = map (PAs x l bid) (orExpand p)
+orExpand (PRec c fields open) =
+  map (fs => PRec c fs open) (recFieldProduct fields)
+orExpand p = [p]
+
+orProduct : List Pat -> List (List Pat)
+orProduct [] = [[]]
+orProduct (p :: ps) =
+  let rest = orProduct ps
+  flatMap (q => map (q :: _) rest) (orExpand p)
+
+recFieldProduct : List RecPatField -> List (List RecPatField)
+recFieldProduct [] = [[]]
+recFieldProduct (f :: fs) =
+  let rest = recFieldProduct fs
+  flatMap (g => map (g :: _) rest) (recFieldCandidates f)
+
+recFieldCandidates : RecPatField -> List RecPatField
+recFieldCandidates (RecPatField n l bid (Some p)) =
+  map (q => RecPatField n l bid (Some q)) (orExpand p)
+recFieldCandidates f = [f]
+
+-- The parameter lists a clause stands for, in try order, when its parameters
+-- hold or-patterns; the leftmost parameter varies slowest.
+export
+paramCandidates : List Pat -> List (List Pat)
+paramCandidates ps = if any patHasOr ps then orProduct ps else [ps]
+
+-- The (pattern, guards) rows a match arm stands for, in try order: the pattern's
+-- candidates and, under each, the candidates of its guard-bind patterns.  A
+-- failing guard moves to the next row, so a guard re-runs under each matching
+-- alternative before control leaves the arm.
+export
+armCandidates : Pat -> List Guard -> List (Pat, List Guard)
+armCandidates pat guards =
+  let gss = guardCandidates guards
+  flatMap (p => map (gs => (p, gs)) gss) (orCandidates pat)
+
+guardCandidates : List Guard -> List (List Guard)
+guardCandidates [] = [[]]
+guardCandidates ((GBool e) :: qs) = map (GBool e :: _) (guardCandidates qs)
+guardCandidates ((GBind p e) :: qs) =
+  let rest = guardCandidates qs
+  flatMap (q => map (GBind q e :: _) rest) (orCandidates p)
+
+-- Whether a match arm's pattern or one of its guard-bind patterns holds an
+-- or-pattern.
+export
+armHasOr : Pat -> List Guard -> Bool
+armHasOr pat guards = patHasOr pat || any guardHasOr guards
+
+guardHasOr : Guard -> Bool
+guardHasOr (GBind p _) = patHasOr p
+guardHasOr (GBool _) = False
 
 export
 recFieldBindings : RecPatField -> List String
@@ -2883,6 +2970,51 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "patBindings" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBindings") (EVar "p")))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DTypeSig true "patHasOr" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patHasOr" ((PCon "POr" PWild)) (EVar "True"))
+(DFunDef false "patHasOr" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EVar "patHasOr") (EVar "a")) (EApp (EVar "patHasOr") (EVar "b"))))
+(DFunDef false "patHasOr" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "any") (EVar "recFieldHasOr")) (EVar "fields")))
+(DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DTypeSig false "recFieldHasOr" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
+(DFunDef false "recFieldHasOr" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
+(DTypeSig true "orCandidates" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orCandidates" ((PVar "p")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EVar "orExpand") (EVar "p")) (EListLit (EVar "p"))))
+(DTypeSig false "orExpand" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orExpand" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "orExpand")) (EVar "ps")))
+(DFunDef false "orExpand" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "map") (EApp (EVar "PCon") (EVar "c"))) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PVar "ts") (EApp (EVar "orExpand") (EVar "t"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "h2")) (EApp (EApp (EVar "map") (EApp (EVar "PCons") (EVar "h2"))) (EVar "ts")))) (EApp (EVar "orExpand") (EVar "h"))))))
+(DFunDef false "orExpand" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "map") (EVar "PTuple")) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "map") (EVar "PList")) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid"))) (EApp (EVar "orExpand") (EVar "p"))))
+(DFunDef false "orExpand" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EVar "map") (ELam ((PVar "fs")) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs")) (EVar "open")))) (EApp (EVar "recFieldProduct") (EVar "fields"))))
+(DFunDef false "orExpand" ((PVar "p")) (EListLit (EVar "p")))
+(DTypeSig false "orProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
+(DFunDef false "orProduct" ((PList)) (EListLit (EListLit)))
+(DFunDef false "orProduct" ((PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "orProduct") (EVar "ps"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "q")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "q") (EVar "_s")))) (EVar "rest")))) (EApp (EVar "orExpand") (EVar "p"))))))
+(DTypeSig false "recFieldProduct" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "RecPatField")))))
+(DFunDef false "recFieldProduct" ((PList)) (EListLit (EListLit)))
+(DFunDef false "recFieldProduct" ((PCons (PVar "f") (PVar "fs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "recFieldProduct") (EVar "fs"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "g") (EVar "_s")))) (EVar "rest")))) (EApp (EVar "recFieldCandidates") (EVar "f"))))))
+(DTypeSig false "recFieldCandidates" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "RecPatField"))))
+(DFunDef false "recFieldCandidates" ((PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "map") (ELam ((PVar "q")) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q"))))) (EApp (EVar "orExpand") (EVar "p"))))
+(DFunDef false "recFieldCandidates" ((PVar "f")) (EListLit (EVar "f")))
+(DTypeSig true "paramCandidates" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
+(DFunDef false "paramCandidates" ((PVar "ps")) (EIf (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")) (EApp (EVar "orProduct") (EVar "ps")) (EListLit (EVar "ps"))))
+(DTypeSig true "armCandidates" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")))))))
+(DFunDef false "armCandidates" ((PVar "pat") (PVar "guards")) (EBlock (DoLet false false (PVar "gss") (EApp (EVar "guardCandidates") (EVar "guards"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "gs")) (ETuple (EVar "p") (EVar "gs")))) (EVar "gss")))) (EApp (EVar "orCandidates") (EVar "pat"))))))
+(DTypeSig false "guardCandidates" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Guard")))))
+(DFunDef false "guardCandidates" ((PList)) (EListLit (EListLit)))
+(DFunDef false "guardCandidates" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EVar "GBool") (EVar "e")) (EVar "_s")))) (EApp (EVar "guardCandidates") (EVar "qs"))))
+(DFunDef false "guardCandidates" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "guardCandidates") (EVar "qs"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "q")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "q")) (EVar "e")) (EVar "_s")))) (EVar "rest")))) (EApp (EVar "orCandidates") (EVar "p"))))))
+(DTypeSig true "armHasOr" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool"))))
+(DFunDef false "armHasOr" ((PVar "pat") (PVar "guards")) (EBinOp "||" (EApp (EVar "patHasOr") (EVar "pat")) (EApp (EApp (EVar "any") (EVar "guardHasOr")) (EVar "guards"))))
+(DTypeSig false "guardHasOr" (TyFun (TyCon "Guard") (TyCon "Bool")))
+(DFunDef false "guardHasOr" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "guardHasOr" ((PCon "GBool" PWild)) (EVar "False"))
 (DTypeSig true "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
@@ -3367,6 +3499,51 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "patBindings" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBindings") (EVar "p")))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DTypeSig true "patHasOr" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patHasOr" ((PCon "POr" PWild)) (EVar "True"))
+(DFunDef false "patHasOr" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EVar "patHasOr") (EVar "a")) (EApp (EVar "patHasOr") (EVar "b"))))
+(DFunDef false "patHasOr" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")))
+(DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "any") (EVar "recFieldHasOr")) (EVar "fields")))
+(DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DTypeSig false "recFieldHasOr" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
+(DFunDef false "recFieldHasOr" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
+(DTypeSig true "orCandidates" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orCandidates" ((PVar "p")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EVar "orExpand") (EVar "p")) (EListLit (EVar "p"))))
+(DTypeSig false "orExpand" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orExpand" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "orExpand")) (EVar "ps")))
+(DFunDef false "orExpand" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "PCon") (EVar "c"))) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PVar "ts") (EApp (EVar "orExpand") (EVar "t"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "h2")) (EApp (EApp (EMethodRef "map") (EApp (EVar "PCons") (EVar "h2"))) (EVar "ts")))) (EApp (EVar "orExpand") (EVar "h"))))))
+(DFunDef false "orExpand" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EMethodRef "map") (EVar "PTuple")) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EMethodRef "map") (EVar "PList")) (EApp (EVar "orProduct") (EVar "ps"))))
+(DFunDef false "orExpand" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid"))) (EApp (EVar "orExpand") (EVar "p"))))
+(DFunDef false "orExpand" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fs")) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs")) (EVar "open")))) (EApp (EVar "recFieldProduct") (EVar "fields"))))
+(DFunDef false "orExpand" ((PVar "p")) (EListLit (EVar "p")))
+(DTypeSig false "orProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
+(DFunDef false "orProduct" ((PList)) (EListLit (EListLit)))
+(DFunDef false "orProduct" ((PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "orProduct") (EVar "ps"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "q")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "q") (EVar "_s")))) (EVar "rest")))) (EApp (EVar "orExpand") (EVar "p"))))))
+(DTypeSig false "recFieldProduct" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "RecPatField")))))
+(DFunDef false "recFieldProduct" ((PList)) (EListLit (EListLit)))
+(DFunDef false "recFieldProduct" ((PCons (PVar "f") (PVar "fs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "recFieldProduct") (EVar "fs"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "g") (EVar "_s")))) (EVar "rest")))) (EApp (EVar "recFieldCandidates") (EVar "f"))))))
+(DTypeSig false "recFieldCandidates" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "RecPatField"))))
+(DFunDef false "recFieldCandidates" ((PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "q")) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q"))))) (EApp (EVar "orExpand") (EVar "p"))))
+(DFunDef false "recFieldCandidates" ((PVar "f")) (EListLit (EVar "f")))
+(DTypeSig true "paramCandidates" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
+(DFunDef false "paramCandidates" ((PVar "ps")) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")) (EApp (EVar "orProduct") (EVar "ps")) (EListLit (EVar "ps"))))
+(DTypeSig true "armCandidates" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")))))))
+(DFunDef false "armCandidates" ((PVar "pat") (PVar "guards")) (EBlock (DoLet false false (PVar "gss") (EApp (EVar "guardCandidates") (EVar "guards"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "gs")) (ETuple (EVar "p") (EVar "gs")))) (EVar "gss")))) (EApp (EVar "orCandidates") (EVar "pat"))))))
+(DTypeSig false "guardCandidates" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Guard")))))
+(DFunDef false "guardCandidates" ((PList)) (EListLit (EListLit)))
+(DFunDef false "guardCandidates" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EVar "GBool") (EVar "e")) (EVar "_s")))) (EApp (EVar "guardCandidates") (EVar "qs"))))
+(DFunDef false "guardCandidates" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "guardCandidates") (EVar "qs"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "q")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "q")) (EVar "e")) (EVar "_s")))) (EVar "rest")))) (EApp (EVar "orCandidates") (EVar "p"))))))
+(DTypeSig true "armHasOr" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool"))))
+(DFunDef false "armHasOr" ((PVar "pat") (PVar "guards")) (EBinOp "||" (EApp (EVar "patHasOr") (EVar "pat")) (EApp (EApp (EDictApp "any") (EVar "guardHasOr")) (EVar "guards"))))
+(DTypeSig false "guardHasOr" (TyFun (TyCon "Guard") (TyCon "Bool")))
+(DFunDef false "guardHasOr" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
+(DFunDef false "guardHasOr" ((PCon "GBool" PWild)) (EVar "False"))
 (DTypeSig true "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))

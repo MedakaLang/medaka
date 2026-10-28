@@ -1,0 +1,50 @@
+-- Or-patterns in match arms, without guards: top-level and nested alternatives,
+-- binders taken from a later alternative, an as-pattern over alternatives, and
+-- overlapping alternatives, where the first one that matches binds.
+-- Expected, derived from the source:
+-- kind: Red/Blue -> 1, Gray 4 -> 2, Mix -> 3, so `1 1 2 3`.
+-- grayVal: Gray 6 -> 6 (first alternative), Mix (Gray 8) Red -> 8 (second
+-- alternative), Blue -> 0, so `6 8 0`.
+-- nested: Some Green -> 10, Some (Gray 0) -> 20, Some Blue -> 20, Some (Gray 1) -> 30,
+-- None -> 40, so `10 20 20 30 40`.
+-- asOr: Blue -> `rb Blue`, Green -> `other`.
+-- firstWins: (3, 4) binds x from the first alternative -> 3; (5, 0) -> 5;
+-- (0, 7) -> 7 from the second; (1, 2) matches neither -> -1, so `3 5 7 -1`.
+data C = Red | Green | Blue | Gray Int | Mix C C deriving (Display)
+
+kind : C -> Int
+kind c = match c
+  Red | Green | Blue => 1
+  Gray _ => 2
+  Mix _ _ => 3
+
+grayVal : C -> Int
+grayVal c = match c
+  Gray n | Mix (Gray n) _ => n
+  _ => 0
+
+nested : Option C -> Int
+nested o = match o
+  Some (Red | Green) => 10
+  Some (Blue | Gray 0) => 20
+  Some _ => 30
+  None => 40
+
+asOr : C -> String
+asOr c = match c
+  whole@(Red | Blue) => "rb \{display whole}"
+  _ => "other"
+
+firstWins : (Int, Int) -> Int
+firstWins p = match p
+  (x, 4) | (x, 0) | (0, x) => x
+  _ => 0 - 1
+
+main =
+  println "\{kind Red} \{kind Blue} \{kind (Gray 4)} \{kind (Mix Red Red)}"
+  println "\{grayVal (Gray 6)} \{grayVal (Mix (Gray 8) Red)} \{grayVal Blue}"
+  println
+    "\{nested (Some Green)} \{nested (Some (Gray 0))} \{nested (Some Blue)} \{nested (Some (Gray 1))} \{nested None}"
+  println "\{asOr Blue} \{asOr Green}"
+  println
+    "\{firstWins (3, 4)} \{firstWins (5, 0)} \{firstWins (0, 7)} \{firstWins (1, 2)}"

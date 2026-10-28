@@ -1,5 +1,5 @@
 # META
-source_lines=1395
+source_lines=1399
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -14,6 +14,7 @@ stages=DESUGAR,MARK
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   stripLocE,
   noBinderId,
   unminted,
@@ -276,8 +277,11 @@ fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 armChain : List Guard -> Expr -> Expr -> Expr
 armChain [] body _ = body
 armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
-armChain ((GBind p e) :: qs) body els =
-  EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
+-- A guard-bind through an or-pattern keeps the guards after it on its match
+-- arm, so a later guard that fails under one alternative re-tries the next.
+armChain ((GBind p e) :: qs) body els
+  | patHasOr p = EMatch e [Arm p qs body, Arm PWild [] els]
+  | otherwise = EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
@@ -1399,7 +1403,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
   RecPatField l loc noBinderId (Some (stampPatBy mint p))
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1511,7 +1515,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
 (DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))))
+(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))
@@ -1911,7 +1915,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -2023,7 +2027,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
 (DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))))
+(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))

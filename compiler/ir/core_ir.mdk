@@ -251,7 +251,13 @@ undecidedCall = CallSite CallDynamic False
 public export data CField = CField String Int CExpr
 
 -- a match arm: pattern, guard qualifiers (fall through to next arm), body
-public export data CArm = CArm Pat (List CGuard) CExpr
+public export data CArm =
+  | CArm Pat (List CGuard) CExpr
+  -- one further candidate of an or-pattern arm: its own or-pattern-free pattern
+  -- and guards, sharing the body of the `CArm` at the given index of the same
+  -- arm list (an earlier entry).  It binds the names that arm's pattern binds,
+  -- under the same binder ids, so the shared body reads the same variables.
+  | CArmAlt Pat (List CGuard) Int
 
 public export data CGuard = CGBool CExpr | CGBind Pat CExpr
 
@@ -607,6 +613,7 @@ mapPatBinders (w@(BinderWalk _ f)) _ (PAs x l bid p) =
   let bid2 = f (PatternBinder None) x bid
   PAs x l bid2 (mapPatBinders w None p)
 mapPatBinders _ _ (PRng lo hi incl) = PRng lo hi incl
+mapPatBinders f _ (POr ps) = POr (map (mapPatBinders f None) ps)
 mapPatBinders f _ (PRec name fields rest) =
   PRec name (map (mapRecFieldBinders f) fields) rest
 
@@ -698,6 +705,9 @@ mapArmBinders f (CArm pat guards body) =
   let pat2 = mapPatBinders f None pat
   let guards2 = map (mapGuardBinders f) guards
   CArm pat2 guards2 (mapExprBinders f body)
+mapArmBinders f (CArmAlt pat guards owner) =
+  let pat2 = mapPatBinders f None pat
+  CArmAlt pat2 (map (mapGuardBinders f) guards) owner
 
 mapGuardBinders : BinderWalk -> CGuard -> CGuard
 mapGuardBinders f (CGBool c) = CGBool (mapExprBinders f c)
