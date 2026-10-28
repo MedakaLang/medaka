@@ -22,16 +22,10 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import types.evidence.{ScopeId(..)}
-import types.evidence_complete.{innerNone}
 import types.private_mangle.{mangledName}
 import types.repr.{Mono, ppMono, ppTy}
 import types.tc_env.{
-  buildImplEnvGo,
-  declEnvModule,
   envFor,
-  implAccFinish,
-  methodEnvGo,
-  emptyDeclEnvAcc,
 }
 import types.tc_mono.{monoScheme}
 import types.tc_shadow.{
@@ -52,7 +46,9 @@ import types.tc_shadow.{
   stampRoutes,
   methodMarkCtx,
 }
-import types.tc_state.{blankModuleCtx, probeGraphCtx}
+import types.tc_state.{
+  probeGraphCtx,
+}
 import types.tc_test_support.{
   boolM, fresh, intM, methodOccurrence, readerOfLib, shadowEnvOf, varM
 }

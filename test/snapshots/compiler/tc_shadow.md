@@ -1,5 +1,5 @@
 # META
-source_lines=2250
+source_lines=2249
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
@@ -2097,7 +2097,6 @@ shadowSymSpelledBare sc sm n = match lookupAssoc n sm
   None => True
   Some bare => moduleSpellsShadowBare sc n bare
 
-export
 spellCtxOf : GraphCtx -> List Decl -> SpellCtx
 spellCtxOf gctx prog = SpellCtx {
   scTopFns = declTopFnNames prog,
@@ -2529,7 +2528,7 @@ methodMarkCtx gctx ms _ prog
 (DFunDef false "coreShadowMapFor" ((PVar "gctx") (PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "shadowSymSpelledBare" (TyFun (TyCon "SpellCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "sc") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EVar "n")) (EVar "bare")))))
-(DTypeSig true "spellCtxOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx"))))
+(DTypeSig false "spellCtxOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx"))))
 (DFunDef false "spellCtxOf" ((PVar "gctx") (PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EVar "declTopFnNames") (EVar "prog"))) (fa "scBare" (EApp (EApp (EApp (EVar "declBareLocals") (EVar "gctx")) (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EListLit)))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
 (DTypeSig true "moduleSpellsShadowBare" (TyFun (TyCon "SpellCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))
@@ -2824,7 +2823,7 @@ methodMarkCtx gctx ms _ prog
 (DFunDef false "coreShadowMapFor" ((PVar "gctx") (PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "shadowSymSpelledBare" (TyFun (TyCon "SpellCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "sc") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EVar "n")) (EVar "bare")))))
-(DTypeSig true "spellCtxOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx"))))
+(DTypeSig false "spellCtxOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx"))))
 (DFunDef false "spellCtxOf" ((PVar "gctx") (PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EVar "declTopFnNames") (EVar "prog"))) (fa "scBare" (EApp (EApp (EApp (EVar "declBareLocals") (EVar "gctx")) (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EListLit)))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
 (DTypeSig true "moduleSpellsShadowBare" (TyFun (TyCon "SpellCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))

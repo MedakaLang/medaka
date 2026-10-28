@@ -710,7 +710,6 @@ clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
 clauseIsValue env (FunClause _ _) = True
 
 -- [o]'s prerequisites, each entered on [o]'s walk by [enter].
-export
 requireGoalsBelow : ModuleCtx ->
   (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) ->
   OrdMap Unit ->

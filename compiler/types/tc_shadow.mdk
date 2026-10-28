@@ -2093,7 +2093,6 @@ shadowSymSpelledBare sc sm n = match lookupAssoc n sm
   None => True
   Some bare => moduleSpellsShadowBare sc n bare
 
-export
 spellCtxOf : GraphCtx -> List Decl -> SpellCtx
 spellCtxOf gctx prog = SpellCtx {
   scTopFns = declTopFnNames prog,

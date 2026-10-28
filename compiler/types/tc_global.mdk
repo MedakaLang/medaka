@@ -2,7 +2,7 @@
 -- impl head, super-context and completeness checks, impl and default method bodies, survivor call
 -- obligations.
 --
--- Spec: DICT section 5.1 M1, M3; section 6 C1, C2, C4.
+-- Spec: DICT section 5.1 M1, M3, section 6 C1, C2, C4.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
