@@ -1714,7 +1714,10 @@ jobs:
     needs: [detect, build]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # `inlang-backend-core-validate-test` (compiler/backend/core_validate_test.mdk) re-runs
+    # its own probe in serial children and has grown to 22-25 min; until that test is fixed
+    # the job needs headroom over its old 30-minute ceiling (#4568).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # #1931. The job-level `if:` stays `!cancelled()` — NEVER a job-level skip, or
