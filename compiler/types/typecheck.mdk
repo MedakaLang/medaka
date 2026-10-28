@@ -3050,17 +3050,15 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- (interfaces + accumulated impls) grounds the field types. See
   -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
 
-  let _ =
-    inferUserImplBodies
-      tailEnv
-      implDecls
-      (fst classEnvHere)
-      (snd classEnvHere)
-      progT
-  let _ = inferDefaultBodies tailEnv progT
-  let _ = inferPropBodies tailEnv progT
-  let _ = inferTestBodies tailEnv progT
-  ()
+  inferUserImplBodies
+    tailEnv
+    implDecls
+    (fst classEnvHere)
+    (snd classEnvHere)
+    progT
+  inferDefaultBodies tailEnv progT
+  inferPropBodies tailEnv progT
+  inferTestBodies tailEnv progT
   -- (#3) cross-module dict-threading SNAPSHOT — MODULE ONLY (flat SKIPS: running it would
   -- pollute the cross-module accumulators with a phantom single-file attribution).
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
