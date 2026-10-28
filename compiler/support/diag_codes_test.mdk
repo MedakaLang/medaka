@@ -1,0 +1,85 @@
+-- Sibling test for `compiler/support/diag_codes.mdk` ([P-TEST-SIBLING]).
+
+import support.diag_codes.{
+  DiagCode(..),
+  DiagKind(..),
+  allDiagCodes,
+  codeKind,
+  codeOfText,
+  codeText,
+  kindText,
+}
+import string.{capitalize, concat, split, take, toLower}
+import test.{expectAll, expectEqual, expectFalse, expectNone}
+
+hasDuplicate : List String -> Bool
+hasDuplicate [] = False
+hasDuplicate (x :: rest) = elem x rest || hasDuplicate rest
+
+-- The constructor name the naming rule derives from a code text: the prefix letter, then the
+-- CamelCase of the dash segments.
+nameOfText : String -> String
+nameOfText text = match split "-" text
+  [] => ""
+  prefix :: segments =>
+    prefix ++ concat (map (s => capitalize (toLower s)) segments)
+
+test "the registry holds one code per census row" =
+  expectEqual 186 (length allDiagCodes)
+
+test "no two codes share a text" =
+  expectFalse (hasDuplicate (map codeText allDiagCodes))
+
+test "no constructor is listed twice in the registry" =
+  expectFalse (hasDuplicate (map debug allDiagCodes))
+
+test "codeOfText inverts codeText for every code" =
+  expectAll
+    (map (c => expectEqual (Some c) (codeOfText (codeText c))) allDiagCodes)
+
+test "codeOfText rejects a text that is no live code" = expectAll [
+  expectNone (codeOfText "T-NO-SUCH-CODE"),
+  expectNone (codeOfText ""),
+  expectNone (codeOfText "rule-unused"),
+]
+
+test "each constructor name follows from its text" =
+  expectAll
+    (map (c => expectEqual (nameOfText (codeText c)) (debug c)) allDiagCodes)
+
+test "each prefix family has its kind" = expectAll [
+  expectEqual DkLex (codeKind LIntOverflow),
+  expectEqual DkParse (codeKind PBadNeq),
+  expectEqual DkResolve (codeKind RUnbound),
+  expectEqual DkType (codeKind TTypeMismatch),
+  expectEqual DkWarning (codeKind WNonexhaustive),
+  expectEqual DkError (codeKind EDivZero),
+]
+
+test "a kind renders as its JSON text" = expectAll [
+  expectEqual "lex" (kindText DkLex),
+  expectEqual "parse" (kindText DkParse),
+  expectEqual "resolve" (kindText DkResolve),
+  expectEqual "type" (kindText DkType),
+  expectEqual "warning" (kindText DkWarning),
+  expectEqual "error" (kindText DkError),
+]
+
+test "every code's kind agrees with its prefix letter" =
+  expectAll
+    (map (c => expectEqual (prefixKind (codeText c)) (codeKind c)) allDiagCodes)
+
+test "display is the code text" =
+  expectAll (map (c => expectEqual (codeText c) (display c)) allDiagCodes)
+
+test "interpolation renders the code text" =
+  expectEqual "code T-TYPE-MISMATCH here" "code \{TTypeMismatch} here"
+
+prefixKind : String -> DiagKind
+prefixKind text = match take 2 text
+  "L-" => DkLex
+  "P-" => DkParse
+  "R-" => DkResolve
+  "T-" => DkType
+  "W-" => DkWarning
+  _ => DkError
