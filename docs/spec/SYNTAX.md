@@ -1469,7 +1469,7 @@ fails:
 2. **Reserved-but-removed constructs** — `mut`, `function`, `with` have *no
    remaining valid grammar use at all* (unlike group 1's keywords, which are
    legal in their own declaration form — just not as a name elsewhere). A
-   dedicated pre-grammar scan in `parser.mdk` (`prescanWalk`, via
+   dedicated pre-grammar scan in `parse_hints.mdk` (`prescanWalk`, via
    `prescanTokHit`) catches every occurrence of these three
    before the generic diagnostic ever fires, and reports the *removal*
    directly — e.g. a bare `mut = 5` fails as `` `let mut` has been removed —

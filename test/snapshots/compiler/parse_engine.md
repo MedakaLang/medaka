@@ -1,8 +1,8 @@
 # META
-source_lines=351
+source_lines=349
 stages=DESUGAR,MARK
 # SOURCE
-import frontend.lex_token.{Token(..), describeToken}
+import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
@@ -131,9 +131,7 @@ getPos = ParserE (_ctx pos => POk pos pos)
 
 export
 peekTok : Array Token -> Int -> Token
-peekTok toks pos
-  | pos < arrayLength toks = arrayGetUnsafe pos toks
-  | otherwise = TEof
+peekTok toks pos = tokenPeekTok toks pos
 
 export
 peekP : ParserE e Token
@@ -354,7 +352,7 @@ expectedTokenMsg TIndent = "an indented block"
 expectedTokenMsg TDedent = "the end of the block"
 expectedTokenMsg t = describeToken t
 # DESUGAR
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "describeToken" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "describeToken" false) (mem "peekTok" false "tokenPeekTok"))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
@@ -397,7 +395,7 @@ expectedTokenMsg t = describeToken t
 (DTypeSig true "getPos" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Int")))
 (DFunDef false "getPos" () (EApp (EVar "ParserE") (ELam ((PVar "_ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EVar "pos")) (EVar "pos")))))
 (DTypeSig true "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
-(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "tokenPeekTok") (EVar "toks")) (EVar "pos")))
 (DTypeSig true "peekP" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Token")))
 (DFunDef false "peekP" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "ctx") "pcTokens")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig true "peek2P" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Token")))
@@ -478,7 +476,7 @@ expectedTokenMsg t = describeToken t
 (DFunDef false "expectedTokenMsg" ((PCon "TDedent")) (ELit (LString "the end of the block")))
 (DFunDef false "expectedTokenMsg" ((PVar "t")) (EApp (EVar "describeToken") (EVar "t")))
 # MARK
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "describeToken" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "describeToken" false) (mem "peekTok" false "tokenPeekTok"))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
@@ -521,7 +519,7 @@ expectedTokenMsg t = describeToken t
 (DTypeSig true "getPos" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Int")))
 (DFunDef false "getPos" () (EApp (EVar "ParserE") (ELam ((PVar "_ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EVar "pos")) (EVar "pos")))))
 (DTypeSig true "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
-(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "tokenPeekTok") (EVar "toks")) (EVar "pos")))
 (DTypeSig true "peekP" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Token")))
 (DFunDef false "peekP" () (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EVar "peekTok") (EFieldAccess (EVar "ctx") "pcTokens")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig true "peek2P" (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Token")))

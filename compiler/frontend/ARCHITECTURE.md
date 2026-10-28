@@ -14,7 +14,9 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `ast.mdk` | The surface (pre-desugar) AST nodes the parser builds; post-parse-only nodes are omitted by design | `Lit`, `Expr`, `Decl`, `Pat` |
 | `ast_codec.mdk` | The compact s-expression codec for elaborated declarations and evidence rows: an `SExp` writer and a cursor reader that fails closed; imports `ast` and `support/` only | `declsSExp`, `readDecls`, `decodeDecls`, `evEntriesSExp`, `decodeEvEntries` |
 | `parse_diagnostic.mdk` | Structured parse problems, locations, edits and rendering | `ParseDiagnostic`, `ParseDiagnosticKind`, `locateParseProblem`, `renderParseDiagnostic` |
-| `lex_token.mdk` | Token and raw-token types, token descriptions and predicates | `Token`, `RawTok`, `describeToken`, `isLayoutTok` |
+| `lex_token.mdk` | Token and raw-token types, token descriptions, predicates and EOF-clamped token access | `Token`, `RawTok`, `describeToken`, `peekTok` |
+| `parse_locate.mdk` | Token offsets and typed diagnostic locations; imports only `lex_token`, `parse_diagnostic` and `support/source_index` | `locateOffset`, `locateTokenDiagnostic` |
+| `parse_hints.mdk` | Syntax-only removed-form and contextual recognition, using a lazy invocation-scoped source index | `prescanDiagnostic`, token-shape helpers |
 | `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize`, `tokenizeWithOffsetPairs` |
 | `parse_positions.mdk` | Derives immutable declaration positions from tokens and spans | `Positions`, `DeclPos`, `positionsFromSpans` |
 | `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
@@ -35,6 +37,12 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 - **A8** — a new frontend subsystem is a new module, as `parse_cache` and `desugar_cache` were.
 
 ## Boundaries and checks
+- `parse_locate` is the single owner of token offset and EOF location rules. The
+  parser and syntax hints both call it; parser adapters wrap typed diagnostics as
+  `ParseError`. `parse_hints` depends only on token, diagnostic, location and
+  support modules, never grammar or tools. Its index provider is invocation-owned
+  and does not escape. Prescan bodies migrate out of `parser`; existing parser
+  prescan APIs remain compatibility adapters.
 - Planned recovery owns current-source partial syntax in `parse_recovery` and
   immutable `recovery_result` values. It drives the strict declaration grammar
   at trustworthy root fences, stops at ambiguous delimiters or terminal lexical

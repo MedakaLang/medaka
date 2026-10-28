@@ -1,0 +1,25 @@
+import frontend.lexer.{tokenizeWithOffsetPairs}
+import frontend.parse_hints.{prescanDiagnostic}
+import frontend.parse_diagnostic.{diagnosticCode, renderParseDiagnostic}
+import support.source_index.{indexSource}
+import test.{expectEqual, expectNone}
+
+hintSummary : String -> Option (String, String)
+hintSummary src =
+  let (tokens, pairs) = tokenizeWithOffsetPairs src
+  let result =
+    prescanDiagnostic
+      (() => indexSource src)
+      (arrayFromList tokens)
+      (arrayFromList (map fst pairs))
+      (arrayFromList (map snd pairs))
+      (stringLength src)
+  map (d => (diagnosticCode d, renderParseDiagnostic d)) result
+
+test "prescan reports removed inequality" =
+  expectEqual
+    (Some ("P-BAD-NEQ", "unexpected `!=`; did you mean `/=`?"))
+    (hintSummary "main = 1 != 2")
+
+test "prescan accepts ordinary record names" =
+  expectNone (hintSummary "record = 1")

@@ -33,9 +33,9 @@
 # diagnostics-accumulator design — AGENTS.md "Errors accumulate"), and for 7
 # of the 8 constructs the PARSER ITSELF already carries a dedicated, located
 # "has been removed" / "is not a keyword" / "is not supported" diagnostic
-# (grep compiler/frontend/parser.mdk for letMutRemovedMsg / recordRemovedMsg
-# / functionRemovedMsg / backtickInfixMsg / defaultImplRemovedMsg /
-# namedImplRemovedMsg / benchRemovedMsg). These strings are precise BY
+# (see compiler/frontend/parse_hints.mdk for letMutRemovedMsg / recordRemovedMsg
+# / functionRemovedMsg / backtickInfixMsg and compiler/frontend/parser.mdk for
+# defaultImplRemovedMsg / namedImplRemovedMsg / benchRemovedMsg). These strings are precise BY
 # CONSTRUCTION — the parser only ever emits them when that exact removed
 # construct is used, so substring-matching the `--json` diagnostic message has
 # ZERO false-positive risk. This is TIER 1, and it is the sole mechanism for 7

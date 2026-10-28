@@ -488,3 +488,9 @@ export
 isCommaTok : Token -> Bool
 isCommaTok TComma = True
 isCommaTok _ = False
+
+export
+peekTok : Array Token -> Int -> Token
+peekTok toks pos
+  | pos < arrayLength toks = arrayGetUnsafe pos toks
+  | otherwise = TEof

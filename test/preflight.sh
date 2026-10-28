@@ -653,7 +653,7 @@ while IFS= read -r f; do
     # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
     # enforcement table (`grep -oE 'compiler/[a-zA-Z_/]+\.mdk' docs/spec/*-SEMANTICS.md`),
     # so both spec-conformance gates belong here too.
-    compiler/frontend/parser.mdk|compiler/frontend/ast.mdk|compiler/frontend/parse_engine.mdk|compiler/frontend/parse_positions.mdk|compiler/frontend/parse_result.mdk|compiler/frontend/parse_diagnostic.mdk|compiler/frontend/parse_recovery.mdk|compiler/frontend/recovery_result.mdk)
+    compiler/frontend/parser.mdk|compiler/frontend/parse_hints.mdk|compiler/frontend/parse_locate.mdk|compiler/frontend/ast.mdk|compiler/frontend/parse_engine.mdk|compiler/frontend/parse_positions.mdk|compiler/frontend/parse_result.mdk|compiler/frontend/parse_diagnostic.mdk|compiler/frontend/parse_recovery.mdk|compiler/frontend/recovery_result.mdk)
       # Same diff_compiler_check repoint as the lexer.mdk arm above.
       add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'

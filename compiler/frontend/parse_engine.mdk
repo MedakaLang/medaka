@@ -1,4 +1,4 @@
-import frontend.lex_token.{Token(..), describeToken}
+import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
@@ -127,9 +127,7 @@ getPos = ParserE (_ctx pos => POk pos pos)
 
 export
 peekTok : Array Token -> Int -> Token
-peekTok toks pos
-  | pos < arrayLength toks = arrayGetUnsafe pos toks
-  | otherwise = TEof
+peekTok toks pos = tokenPeekTok toks pos
 
 export
 peekP : ParserE e Token

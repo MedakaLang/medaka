@@ -237,7 +237,7 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > `TRecord` in the fence above until #62 deleted that token outright: keeping the token costs the WORD, and
 > `record` is a noun users want as a value, field, type and module name. Where the removed construct has a
 > positional discriminator, key the pre-scan on the construct's SHAPE and free the token
-> (`recordHeadIdx`, `compiler/frontend/parser.mdk`, carries the never-valid-Medaka proof such a scan
+> (`recordHeadIdx`, `compiler/frontend/parse_hints.mdk`, carries the never-valid-Medaka proof such a scan
 > owes). Keep the token only when there is NO such shape — which is exactly why `mut`/`function` still have
 > one (`keywordOrIdent`, `compiler/frontend/lexer.mdk`, records that split).
 
@@ -295,7 +295,7 @@ The construct removals:
   `!=` is a **located beginner-hint** (`"unexpected '!='. (Did you mean '/='?)"`, `P-BAD-NEQ`, with a
   machine-applicable `--json` `fix`). The half-built machinery was FLIPPED, not written: `TSlashEq` is
   DELETED, `TNeq` is now the `/=` token (so the `binOp`/`sectionOpStr` wiring is unchanged), and the new
-  `TBangEq` sentinel feeds `prescanTokHit` (`compiler/frontend/parser.mdk` — cite by SYMBOL; the line
+  `TBangEq` sentinel feeds `prescanTokHit` (`compiler/frontend/parse_hints.mdk` — cite by SYMBOL; the line
   numbers this bullet used to carry had drifted by ~900). The internal opcode string moved `"!="` → `"/="`
   across all 23 sites, so the printer needs no spelling map. **Migration was 2.7× the estimate:** the "54
   `!=` sites" premise was stale — the actual cut was **197 in compiler+stdlib** plus **138 more** across
