@@ -1,27 +1,26 @@
-import tools.snapshot_syntax.{parseSnapshotSyntax}
+import tools.snapshot_syntax.{PreparedSyntax, parseSnapshotSyntax}
 import json.{Json, get, asString}
 import tools.source_snapshot.{SourceRevision(..)}
 import tools.syntax_queries.{
   symbolsFromRecovered, strictDocumentSymbols, jRange
 }
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEqual, expectTrue, expectOkThen}
 
 symbolName : Json -> Option String
-symbolName symbol = match get "name" symbol
-  Some value => asString value
-  None => None
+symbolName symbol = andThen (get "name" symbol) asString
 
-namesOrEmpty : Result e (List Json) -> List (Option String)
-namesOrEmpty (Ok symbols) = map symbolName symbols
-namesOrEmpty (Err _) = []
+querySymbols : SourceRevision -> PreparedSyntax -> Result String (List Json)
+querySymbols revision syntax = match symbolsFromRecovered revision syntax
+  Ok symbols => Ok symbols
+  Err _ => Err "snapshot mismatch"
 
 test "projection uses recovered current declarations" =
   let source = "before = 1\nbroken = )\nafter = 2\n"
   let snapshot = SourceRevision "file:///a" (Some 2) 2 source
-  expectEqual
-    [Some "before", Some "after"]
-    (namesOrEmpty
-      (symbolsFromRecovered snapshot (parseSnapshotSyntax snapshot)))
+  expectOkThen
+    (symbols =>
+      expectEqual [Some "before", Some "after"] (map symbolName symbols))
+    (querySymbols snapshot (parseSnapshotSyntax snapshot))
 
 test "projection rejects stale identity or version" =
   let snapshot = SourceRevision "file:///a" (Some 1) 1 "before = 1\n"
@@ -37,9 +36,12 @@ test "projection rejects stale identity or version" =
   expectAll [
     expectTrue (isErr stale),
     expectTrue (isErr wrongVersion),
-    expectEqual
-      (map symbolName (strictDocumentSymbols "before = 1\n"))
-      (namesOrEmpty (symbolsFromRecovered snapshot syntax)),
+    expectOkThen
+      (symbols =>
+        expectEqual
+          (map symbolName (strictDocumentSymbols "before = 1\n"))
+          (map symbolName symbols))
+      (querySymbols snapshot syntax),
   ]
 
 test "discarded declarations separate same-name clauses" =
@@ -47,20 +49,18 @@ test "discarded declarations separate same-name clauses" =
     SourceRevision "file:///a" None 1 "f : Int -> Int\nbroken = )\nf x = x\n"
   let valid = SourceRevision "file:///a" None 1 "f : Int -> Int\nf x = x\n"
   expectAll [
-    expectEqual
-      [Some "f", Some "f"]
-      (namesOrEmpty (symbolsFromRecovered broken (parseSnapshotSyntax broken))),
-    expectEqual
-      [Some "f"]
-      (namesOrEmpty (symbolsFromRecovered valid (parseSnapshotSyntax valid))),
-    expectEqual
-      [Some (jRange 0 0 1 0), Some (jRange 2 0 3 0)]
-      (ranges (symbolsFromRecovered broken (parseSnapshotSyntax broken))),
-    expectEqual
-      [Some (jRange 0 0 2 0)]
-      (ranges (symbolsFromRecovered valid (parseSnapshotSyntax valid))),
+    expectOkThen
+      (symbols => expectAll [
+        expectEqual [Some "f", Some "f"] (map symbolName symbols),
+        expectEqual
+          [Some (jRange 0 0 1 0), Some (jRange 2 0 3 0)]
+          (map (get "range") symbols),
+      ])
+      (querySymbols broken (parseSnapshotSyntax broken)),
+    expectOkThen
+      (symbols => expectAll [
+        expectEqual [Some "f"] (map symbolName symbols),
+        expectEqual [Some (jRange 0 0 2 0)] (map (get "range") symbols),
+      ])
+      (querySymbols valid (parseSnapshotSyntax valid)),
   ]
-
-ranges : Result e (List Json) -> List (Option Json)
-ranges (Ok symbols) = map (get "range") symbols
-ranges (Err _) = []

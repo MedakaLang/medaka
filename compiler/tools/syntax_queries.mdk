@@ -258,14 +258,12 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
       |> collapseSymbols
       |> map (renderSymbol index len)
 
-barrierLines : SourceIndex -> List InvalidRegion -> List Int
-barrierLines index regions =
-  map
-    (region => match invalidExtent region
-      SourceExtent start _ => match offsetToUtf16Position index start
-        Some (line, _) => line
-        None => -1)
-    regions
+barrierLines : SourceIndex -> List InvalidRegion -> Option (List Int)
+barrierLines _ [] = Some []
+barrierLines index (region :: rest) = match invalidExtent region
+  SourceExtent start _ => match offsetToUtf16Position index start
+    None => None
+    Some (line, _) => map (line :: _) (barrierLines index rest)
 
 collapseRecovered : List Int -> List SymRow -> List SymRow
 collapseRecovered barriers rows = go barriers rows []
@@ -291,8 +289,10 @@ symbolsFromRecovered revision syntax =
     Some (SourceSnapshot _ _ _ src index) =>
       let result = snapshotSyntaxResult syntax
       let len = stringLength src
-      Ok
-        (positionsDecls (recoveredPositions result)
+      let rows =
+        positionsDecls (recoveredPositions result)
           |> symbolParts index len (recoveredDecls result)
-          |> collapseRecovered (barrierLines index (invalidRegions result))
-          |> map (renderSymbol index len))
+      let collapsed = match barrierLines index (invalidRegions result)
+        Some barriers => collapseRecovered barriers rows
+        None => rows
+      Ok (map (renderSymbol index len) collapsed)
