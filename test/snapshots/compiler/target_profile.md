@@ -1,5 +1,5 @@
 # META
-source_lines=255
+source_lines=257
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -82,7 +82,9 @@ wholeDomain : List String -> List (String, EffParamTy)
 wholeDomain labels = map (l => (l, EPTop)) labels
 
 -- The eleven host labels: the labels `IO` is the join of, and with `FFI` the
--- only labels a profile gates.
+-- only labels a profile gates.  `FFI` is not one of them: an `<IO>` bound must not
+-- subsume an `<FFI>`-performing body, because FFI crosses a trust boundary the alias
+-- is not meant to paper over (#2071).
 export
 hostLabels : List String
 hostLabels = [

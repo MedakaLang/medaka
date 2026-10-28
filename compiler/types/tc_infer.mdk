@@ -2999,6 +2999,12 @@ checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
 -- Warn if an all-wildcard query is still useful against the matrix of the
 -- non-guarded arms — i.e. some scrutinee value escapes every arm.  Guarded arms
 -- are excluded (their guard may fail at runtime), matching the reference.
+--
+-- `matchWarnings` is the channel for a typecheck-stage warning, so a push carries its own
+-- `W-*` code: `diagOfTypeWarning` passes the code straight to `--json`, and `codeKind` derives
+-- the JSON kind from its prefix.  A demoted error must not be pushed through `recordTypeError`
+-- as a severity-2 diagnostic instead: that arms `typeErrorsSticky` and bumps `errorsDetected`
+-- whatever the severity, so the warning would still abort `build` and `run`.
 checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchExhaustive mctx scrutTy arms =
   let rows = nonGuardedRows mctx arms

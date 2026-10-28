@@ -1,5 +1,5 @@
 # META
-source_lines=3241
+source_lines=3248
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -1357,6 +1357,13 @@ registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtype
 registerData env _ = env
 
 -- ── record metadata registration & instantiation ──────────────────────────
+-- `registerRecordInfoKeyed` is the sole registration writer of `recordByNameRef` and
+-- `fieldOwnersRef`, which `freshModuleCtx` clears together.  `applyRecordScopeOverrides`
+-- re-points `recordByNameRef` for a collided key without touching `fieldOwnersRef`, so
+-- the owner list can name a key as the owner of a field the selected record does not
+-- declare (#1377 was one consequence; `resolveFieldRecord` now selects by the receiver's
+-- identity and no longer asks the overlay).  A write to either table must state which
+-- one it writes and why the other stays correct.
 -- registerRecordInfoKeyed uses a distinct registry KEY and result TYPE name:
 -- for a record they coincide, but a named-field data variant is keyed by its
 -- constructor (DInterface) while its values have the data type (Decl).
