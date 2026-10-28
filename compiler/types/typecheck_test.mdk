@@ -24,7 +24,6 @@ import frontend.ast.{
   TyConOrigin(..),
   noDeclLoc,
   noBinderId,
-  unminted,
   Expr(..),
   EvTable,
   EvVal(..),
@@ -130,7 +129,9 @@ import types.typecheck.{
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
+  spanKeys,
 }
+import string as S
 import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
@@ -146,7 +147,6 @@ import types.publish.{TcReport(..)}
 import types.tc_solve.{
   finishMethodReturnTrace,
   methodReturnMemoCurrentViews,
-  spanKeys,
 }
 import types.tc_occurrence.{cellGoalInnerAliasing}
 
@@ -1722,6 +1722,34 @@ loweredMethodArity source bindName method =
     elaborateOneFacts defaultDriveInputs [] core ("method_arity", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   bindMethodArity bindName method binds
+
+-- The Core of the bind [name] in [source], elaborated and lowered, as text.
+loweredBindText : String -> String -> String
+loweredBindText source name =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let (elaborated, elabFacts) =
+    elaborateOneFacts defaultDriveInputs [] core ("grant_join", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
+  joinNl
+    (map
+      (b => cprogramToSexp (CProgram [b] [] [] [] [] noDeclFacts))
+      (filter (b => bindNameOf b == name) binds))
+
+bindNameOf : CBind -> String
+bindNameOf (CBind n _ _ _) = n
+
+test "the join of two authority variables lists them in the order the signature quantifies them" =
+  expectTrue
+    (S.contains
+      "(CBinPrim \"++\" (CBinPrim \"++\" (CList) (CVar \"$auth_inner_0\" AGlobal)) (CVar \"$auth_inner_1\" AGlobal))"
+      (loweredBindText
+        (joinNl [
+          "inner : (a : String) -> (b : String) -> <FileRead a, FileRead b> Unit",
+          "inner a b = ()",
+          "main = inner \"a\" \"b\"",
+        ])
+        "inner"))
 
 test "method occurrence freezes declared arity before higher-order specialization" =
   expectEqual
@@ -6593,3 +6621,15 @@ test "an integer literal at a type with no Num instance is a type mismatch" =
   expectEqual
     ["T-TYPE-MISMATCH"]
     (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))
+
+test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
+  let first = Some (Loc "probe.mdk" 3 1 3 5)
+  let second = Some (Loc "probe.mdk" 9 1 9 5)
+  expectAll [
+    expectEqual [] (spanKeys [None, None]),
+    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
+    expectNotEqual (spanKeys [first]) (spanKeys [second]),
+    expectEqual
+      (spanKeys [first] ++ spanKeys [second])
+      (spanKeys [first, None, second]),
+  ]

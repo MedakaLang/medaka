@@ -57,6 +57,8 @@ SRCS = [
     f"{ROOT}/compiler/types/tc_pat.mdk",
     f"{ROOT}/compiler/types/tc_infer_records.mdk",
     f"{ROOT}/compiler/types/tc_infer.mdk",
+    f"{ROOT}/compiler/types/tc_elab.mdk",
+    f"{ROOT}/compiler/types/tc_global.mdk",
     f"{ROOT}/compiler/types/repr.mdk",
     f"{ROOT}/compiler/types/chain_key.mdk",
     f"{ROOT}/compiler/types/evidence_coverage.mdk",

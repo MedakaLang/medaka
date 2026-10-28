@@ -1,0 +1,1083 @@
+-- Tests of `types.tc_elab`'s own API, each built from hand-made trees and a fresh module record:
+-- `dictPassModulesIfEnabled` (dictionary parameters of a definition, a let-group member, an impl
+-- method and an interface default; the rewrite of a routed operator, negation or literal; the
+-- local binders that abstracted a dictionary; the prelude tree left as it came),
+-- `selfDeclArities`, `grantWholeDomain` (a file extern granted the whole domain),
+-- `drivenEvidence`, and the resolvers that
+-- realize a solved route into a site's cells (`resolveArithSite`, `resolveSite`,
+-- `resolveOpSite`, `resolvePredicateOpSite`, `resolveNumLitSite`, `resolveArgStamps`,
+-- `resolveAdmittedSite`, `resolveMethodDicts`, `realizeRecDictApps`).  Not driven here: the
+-- grant rewrite of a method occurrence and of a recorded use (it needs the grant tables a drive
+-- fills), `resolveExactReturnSite` (it needs a method-return request a drive builds), and the
+-- committed arm of `resolveAdmittedSite` (it needs two admitted declarations of one spelling).
+-- What a whole check elaborates is observed through `types.typecheck` in `typecheck_test`.
+
+import test.{expectAll, expectEqual}
+import frontend.ast.{
+  Constraint(..),
+  Decl(..),
+  EvEntry(..),
+  EvId(..),
+  EvVal(..),
+  FunClause(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  LetBind(..),
+  Expr(..),
+  Lit(..),
+  MethodDefault(..),
+  Pat(..),
+  Route(..),
+  Ty(..),
+  TyConOrigin(..),
+  noBinderId,
+  noDeclLoc,
+  tyConBuiltin,
+}
+import ir.sexp.{exprSexp, programToSexp}
+import types.repr.{Mono(..)}
+import types.solver_contract.{ClassPredicate(..)}
+import types.tc_mono.{tconBuiltin}
+import types.tc_types.{
+  LocalAbs(..),
+  ModuleCtx,
+  PendingEntry(..),
+  PendingMethodDict(..),
+  PredicateSlot(..),
+  PredicateSlotArgs(..),
+  RecDictApp(..),
+  SiteKind(..),
+  siteFor,
+}
+import types.tc_occurrence.{mintMethodCellRaw}
+import types.scopes.{ScopeOwner(..), freshScope}
+import types.tc_state.{
+  currentScopeStore,
+  dictParamName,
+}
+import frontend.parser.{parse}
+import list.{
+  drop,
+  range,
+  replicate,
+  take,
+}
+import types.evidence.{ScopeId(..)}
+import types.evidence_complete.{innerNone}
+import support.ordmap.{
+  omEmpty,
+  omInsert,
+}
+import types.tc_elab.{
+  dictPassModulesIfEnabled,
+  drivenEvidence,
+  grantWholeDomain,
+  realizeRecDictApps,
+  resolveArgStamps,
+  resolveAdmittedSite,
+  resolveArithSite,
+  resolveNumLitSite,
+  resolvePredicateOpSite,
+  resolveMethodDicts,
+  resolveOpSite,
+  resolveSite,
+  selfDeclArities,
+}
+import types.tc_test_support.{
+  at,
+  boolM,
+  fresh,
+  ifaceOf,
+  intM,
+  pvar,
+  readerOfLib,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
+routeTag : Route -> String
+routeTag (RScalar tag) = "scalar:\{tag}"
+routeTag RNone = "none"
+routeTag (RDict d) = "dict:\{d}"
+routeTag (RKey word _ _) = "key:\{word}"
+routeTag _ = "other"
+
+-- A top-level definition of [name] over [pats] with [body].
+defOf : String -> List Pat -> Expr -> Decl
+defOf name pats body = DFunDef False name pats body at noBinderId
+
+-- A constrained signature `name : Sizeable a => a -> Int`.
+constrainedSig : String -> Decl
+constrainedSig name = DTypeSig False name constrainedTy at
+
+constrainedTy : Ty
+constrainedTy =
+  TyConstrained
+    [
+      Constraint {
+        constraintHead = "Sizeable",
+        constraintArgs = [TyVar "a"],
+        constraintOrigin = OriginModule "probe",
+      },
+    ]
+    (TyFun (TyVar "a") (tyConBuiltin "Int" None))
+
+-- A predicate slot of the interface `Sizeable`, one constraint of an inferred row.
+slotOf : PredicateSlot
+slotOf = PredicateSlot {
+  psIface = ifaceOf "Sizeable",
+  psArgs = PSArgsUnknown,
+  psBoundIds = [],
+}
+
+-- [mods] dict-passed, [names] the dict-passed set, over a graph whose evidence table holds
+-- [rows] and whose inference recorded one constraint for each (module, name) of [promoted].
+passedModules : List EvEntry ->
+  List (String, String) ->
+  List String ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+passedModules rows promoted names mods =
+  let m = fresh ()
+  m.mcGraph.graphRun.evTable := rows
+  m.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef :=
+    map (p => (p, [slotOf])) promoted
+  snd (dictPassModulesIfEnabled m names True [] mods)
+
+-- The declarations of the one module "m" among [prog], dict-passed as in `passedModules`;
+-- `None` when the pass does not hand back exactly that module.
+passedWith : List EvEntry ->
+  List (String, String) ->
+  List String ->
+  List Decl ->
+  Option (List Decl)
+passedWith rows promoted names prog =
+  match passedModules rows promoted names [("m", prog)]
+    [("m", out)] => Some out
+    _ => None
+
+passed : List String -> List Decl -> Option (List Decl)
+passed names prog = passedWith [] [] names prog
+
+-- The one site `EvId "m" 0` routed to [route].
+routedAt : Route -> List EvEntry
+routedAt route = [EvEntry (EvId "m" 0) (EvOne route)]
+
+site0 : EvId
+site0 = EvId "m" 0
+
+-- The body of the single definition `g = body`, run through the pass over the evidence [rows].
+bodyOver : List EvEntry -> Expr -> Option Expr
+bodyOver rows body = match passedWith rows [] [] [defOf "g" [] body]
+  Some [DFunDef _ _ _ out _ _] => Some out
+  _ => None
+
+-- The same, with the one site routed to [route].
+bodyAt : Route -> Expr -> Option Expr
+bodyAt route body = bodyOver (routedAt route) body
+
+-- The same, with the one literal site's float and route [answer].
+litBodyAt : (Option Float, Route) -> Expr -> Option Expr
+litBodyAt (f, route) body = bodyOver [EvEntry site0 (EvLit f route)] body
+
+-- A method occurrence of [name] as the pass mints it, its cell erased.
+methodAt : String -> Expr
+methodAt name = EMethodAt name "" (EvId "" 0)
+
+-- [e] as text, a method occurrence by its method name alone, so a minted cell compares by
+-- what the pass rewrote the node to.
+shape : Expr -> String
+shape (EApp f x) = "(\{shape f} \{shape x})"
+shape (EMethodAt n _ _) = "method \{n}"
+shape (EDictAt n _) = "dict \{n}"
+shape (ELoc _ e) = shape e
+shape e = exprSexp e
+
+-- The text of [prog], for a comparison of declaration lists.
+progText : Option (List Decl) -> Option String
+progText = map programToSexp
+
+litInt : Int -> Expr
+litInt n = ELit (LInt n)
+
+-- ── dictPassModulesIfEnabled: dictionary parameters ────────────────────────
+
+-- `f x = x` and the same with the dictionary parameter of its one constraint ahead of `x`.
+plainF : Decl
+plainF = defOf "f" [pvar "x"] (EVar "x")
+
+dictedF : Decl
+dictedF = defOf "f" [pvar (dictParamName "f" 0), pvar "x"] (EVar "x")
+
+test "a definition takes one dictionary parameter per constraint its module's inference recorded" =
+  expectEqual
+    (progText (Some [constrainedSig "f", dictedF]))
+    (progText (passedWith [] [("m", "f")] ["f"] [constrainedSig "f", plainF]))
+
+test "a definition outside the dictionary-passed set keeps its parameters" =
+  expectEqual
+    (progText (Some [constrainedSig "f", plainF]))
+    (progText (passedWith [] [("m", "f")] [] [constrainedSig "f", plainF]))
+
+test "a named definition with no recorded constraint takes no dictionary parameter, signature or not" = expectAll
+  [
+    expectEqual (progText (Some [plainF])) (progText (passed ["f"] [plainF])),
+    expectEqual
+      (progText (Some [constrainedSig "f", plainF]))
+      (progText (passed ["f"] [constrainedSig "f", plainF])),
+  ]
+
+test "every clause of a constrained let-group member takes the dictionary parameter" =
+  let member =
+    LetBind
+      "f"
+      [
+        FunClause [pvar "x"] (EVar "x"),
+        FunClause [PWild] (litInt 1),
+      ]
+      at
+      noBinderId
+  expectEqual
+    (progText
+      (Some [
+        DLetGroup False [
+          LetBind
+            "f"
+            [
+              FunClause [pvar (dictParamName "f" 0), pvar "x"] (EVar "x"),
+              FunClause [pvar (dictParamName "f" 0), PWild] (litInt 1),
+            ]
+            at
+            noBinderId,
+        ],
+      ]))
+    (progText (passedWith [] [("m", "f")] ["f"] [DLetGroup False [member]]))
+
+test "a prelude tree handed over already passed is returned as it came, an unpassed one is passed from its signatures" =
+  let core = [constrainedSig "g", defOf "g" [pvar "x"] (EVar "x")]
+  let run corePassed = dictPassModulesIfEnabled (fresh ()) [] corePassed core []
+  expectAll [
+    expectEqual (programToSexp core) (programToSexp (fst (run True))),
+    expectEqual
+      (programToSexp [
+        constrainedSig "g",
+        defOf "g" [pvar (dictParamName "g" 0), pvar "x"] (EVar "x"),
+      ])
+      (programToSexp (fst (run False))),
+  ]
+
+test "a definition takes its constraints from its own module's row, not from a same-named one elsewhere" =
+  let out =
+    passedModules [] [("a", "f")] ["f"] [("a", [plainF]), ("b", [plainF])]
+  expectEqual
+    [("a", programToSexp [dictedF]), ("b", programToSexp [plainF])]
+    (map (m => (fst m, programToSexp (snd m))) out)
+
+test "the modules come back in the order they went in" =
+  let out = passedModules [] [] [] [("z", []), ("a", []), ("m", [])]
+  expectEqual ["z", "a", "m"] (map fst out)
+
+-- ── dictPassModulesIfEnabled: routed operators and literals ───────────────
+
+test "an operator routed to a scalar type is wrapped in an annotation naming that type" =
+  expectEqual
+    (Some
+      (exprSexp
+        (EAnnot
+          (EBinOp "+" (litInt 1) (litInt 2) site0)
+          (tyConBuiltin "Int" None))))
+    (map
+      exprSexp
+      (bodyAt (RScalar "Int") (EBinOp "+" (litInt 1) (litInt 2) site0)))
+
+test "an operator with no route stays the builtin operator" =
+  expectEqual
+    (Some (exprSexp (EBinOp "+" (litInt 1) (litInt 2) site0)))
+    (map exprSexp (bodyAt RNone (EBinOp "+" (litInt 1) (litInt 2) site0)))
+
+test "an operator routed to an instance becomes the method applied to its operands" =
+  expectEqual
+    (Some (shape (EApp (EApp (methodAt "add") (litInt 1)) (litInt 2))))
+    (map
+      shape
+      (bodyAt (RKey "Num|Foo|" [] []) (EBinOp "+" (litInt 1) (litInt 2) site0)))
+
+test "a comparison routed to an instance becomes the method of its operator" = expectAll
+  [
+    expectEqual
+      (Some (shape (EApp (EApp (methodAt "lt") (EVar "a")) (EVar "b"))))
+      (map
+        shape
+        (bodyAt
+          (RKey "Ord|Foo|" [] [])
+          (EBinOp "<" (EVar "a") (EVar "b") site0))),
+    expectEqual
+      (Some (shape (EApp (EApp (methodAt "eq") (EVar "a")) (EVar "b"))))
+      (map
+        shape
+        (bodyAt
+          (RKey "Eq|Foo|" [] [])
+          (EBinOp "==" (EVar "a") (EVar "b") site0))),
+  ]
+
+test "an inequality routed to an instance is the negation of its equality method" =
+  expectEqual
+    (Some
+      (shape
+        (EApp
+          (EVar "not")
+          (EApp (EApp (methodAt "eq") (EVar "a")) (EVar "b")))))
+    (map
+      shape
+      (bodyAt (RKey "Eq|Foo|" [] []) (EBinOp "/=" (EVar "a") (EVar "b") site0)))
+
+test "a negation routed to an instance becomes the negate method and an unrouted one stays" = expectAll
+  [
+    expectEqual
+      (Some (shape (EApp (methodAt "negate") (EVar "a"))))
+      (map shape (bodyAt (RKey "Num|Foo|" [] []) (EUnOp "-" (EVar "a") site0))),
+    expectEqual
+      (Some (exprSexp (EUnOp "-" (EVar "a") site0)))
+      (map exprSexp (bodyAt RNone (EUnOp "-" (EVar "a") site0))),
+    expectEqual
+      (Some (exprSexp (EUnOp "-" (EVar "a") site0)))
+      (map exprSexp (bodyAt (RScalar "Int") (EUnOp "-" (EVar "a") site0))),
+  ]
+
+test "a literal with no route is the integer itself" =
+  expectEqual
+    (Some (exprSexp (litInt 7)))
+    (map exprSexp (litBodyAt (None, RNone) (ENumLit 7 site0 "")))
+
+test "a literal the solver found to be a float is that float" =
+  expectEqual
+    (Some (exprSexp (ELit (LFloat 7.0))))
+    (map exprSexp (litBodyAt (Some 7.0, RNone) (ENumLit 7 site0 "")))
+
+test "a literal routed to a fixed-width head is the integer when in range and the fromInt call when not" = expectAll
+  [
+    expectEqual
+      (Some (exprSexp (litInt 200)))
+      (map
+        exprSexp
+        (litBodyAt (None, RKey "Num|I32|" [] []) (ENumLit 200 site0 ""))),
+    expectEqual
+      (Some (shape (EApp (methodAt "fromInt") (litInt 3000000000))))
+      (map
+        shape
+        (litBodyAt (None, RKey "Num|I32|" [] []) (ENumLit 3000000000 site0 ""))),
+  ]
+
+test "a literal routed to an unknown instance is the fromInt method applied to the integer" =
+  expectEqual
+    (Some (shape (EApp (methodAt "fromInt") (litInt 7))))
+    (map shape (litBodyAt (None, RKey "Num|Foo|" [] []) (ENumLit 7 site0 "")))
+-- ── dictPassModulesIfEnabled: abstracted locals ───────────────────────────
+
+-- The graph [m] belongs to records `x` as a local binder that abstracted over [params].
+abstractsOver : ModuleCtx -> String -> List String -> Unit
+abstractsOver m x params =
+  m.mcGraph.graphRun.localAbs.lasBinders :=
+    omInsert
+      x
+      (Some LocalAbs {
+        laScope = ScopeId 0,
+        laSlots = [],
+        laParams = params,
+      })
+      omEmpty
+
+-- The body of `g = body` as the module "m" dict-passed in the graph of [m].
+bodyIn : ModuleCtx -> Expr -> Option String
+bodyIn m body =
+  match dictPassModulesIfEnabled m [] True [] [("m", [defOf "g" [] body])]
+    (_, [("m", [DFunDef _ _ _ out _ _])]) => Some (shape out)
+    _ => None
+
+test "a let of an abstracted binder takes its dictionary parameters ahead of its right-hand side" =
+  let m = fresh ()
+  abstractsOver m "x" ["$dict_x_0"]
+  let rhs = ELam [pvar "y"] (EVar "y")
+  expectEqual
+    (Some
+      (shape
+        (ELet
+          noDeclLoc
+          False
+          (pvar "x")
+          (ELam [pvar "$dict_x_0", pvar "y"] (EVar "y"))
+          (EVar "x"))))
+    (bodyIn m (ELet noDeclLoc False (pvar "x") rhs (EVar "x")))
+
+test "a let of a binder that abstracted nothing is left as written" =
+  let body = ELet noDeclLoc False (pvar "x") (litInt 1) (EVar "x")
+  expectEqual (Some (shape body)) (bodyIn (fresh ()) body)
+
+test "a dictionary use of a local name that abstracted nothing is the plain variable again" =
+  let local = "f$m$0$lb"
+  expectEqual
+    (Some (shape (EVar local)))
+    (bodyIn (fresh ()) (EDictAt local site0))
+
+test "a dictionary use of a local name that abstracted over something stays a dictionary use" =
+  let local = "f$m$0$lb"
+  let m = fresh ()
+  abstractsOver m local ["$dict_f_0"]
+  expectEqual
+    (Some (shape (EDictAt local site0)))
+    (bodyIn m (EDictAt local site0))
+
+-- ── selfDeclArities ───────────────────────────────────────────────────────
+
+-- The qualified arity rows the tests thread: a (module, name) key and a distinguishing payload.
+qualRows : List ((String, String), Int)
+qualRows = [(("m", "f"), 1), (("other", "f"), 2), (("other", "h"), 3)]
+
+test "with no module id the incoming table is returned untouched" =
+  expectEqual
+    [("f", 9), ("h", 8)]
+    (selfDeclArities "" [plainF] qualRows [("f", 9), ("h", 8)])
+
+test "a name the module declares takes this module's own row in place of the incoming one" =
+  expectEqual
+    [("f", 1), ("h", 8)]
+    (selfDeclArities "m" [plainF] qualRows [("f", 9), ("h", 8)])
+
+test "a name the module declares with no row of its own has no entry, however the incoming table answers" =
+  expectEqual
+    [("h", 8)]
+    (selfDeclArities "m" [plainF] [(("other", "f"), 2)] [("f", 9), ("h", 8)])
+
+test "a name the module does not declare keeps the incoming answer, and another module's row is not taken" =
+  expectEqual
+    [("f", 9), ("h", 8)]
+    (selfDeclArities
+      "m"
+      [defOf "k" [] (litInt 0)]
+      qualRows
+      [("f", 9), ("h", 8)])
+
+-- ── grantWholeDomain ──────────────────────────────────────────────────────
+
+-- `name` applied to [args].
+applied : String -> List Expr -> Expr
+applied name args = fold (acc a => EApp acc a) (EVar name) args
+
+str : String -> Expr
+str s = ELit (LString s)
+
+test "a saturated call of a file extern is granted the whole domain" =
+  expectEqual
+    (exprSexp (applied "readFile" [str "p", EListLit []]))
+    (exprSexp (granted (applied "readFile" [str "p"])))
+
+test "a file extern over two paths is granted two whole domains" =
+  expectEqual
+    (exprSexp (applied "rename" [str "a", str "b", EListLit [], EListLit []]))
+    (exprSexp (granted (applied "rename" [str "a", str "b"])))
+
+test "a call of anything else is left as written" =
+  expectEqual
+    (exprSexp (applied "id" [str "p"]))
+    (exprSexp (granted (applied "id" [str "p"])))
+
+test "an argument of a granted call is granted in turn" =
+  expectEqual
+    (exprSexp
+      (applied "readFile" [
+        applied "readFile" [str "p", EListLit []],
+        EListLit [],
+      ]))
+    (exprSexp (granted (applied "readFile" [applied "readFile" [str "p"]])))
+
+test "a file extern used as a value becomes a function of the arguments still missing" = expectEqual
+  (Some True)
+  (match granted (EVar "readFile")
+    ELam [PVar x _ _] (EApp (EApp (EVar "readFile") (EVar y)) (EListLit [])) =>
+      Some (x == y)
+    _ => None)
+
+-- The strings bound by the chain of lets [e] opens with, outermost first.
+letValues : Expr -> List String
+letValues (ELet _ _ _ (ELit (LString s)) body) = s :: letValues body
+letValues _ = []
+
+test "a partial use binds the arguments it was given in the order the program wrote them" =
+  expectEqual
+    ["a", "b"]
+    (letValues (granted (applied "writeFileMode" [str "a", str "b"])))
+
+test "the bodies of every kind of declaration are granted and a signature is left alone" =
+  let call = applied "readFile" [str "p"]
+  let done = applied "readFile" [str "p", EListLit []]
+  expectEqual
+    (programToSexp [
+      DFunDef False "f" [] done at noBinderId,
+      DTest False "t" done,
+      DTypeSig False "f" constrainedTy at,
+    ])
+    (programToSexp
+      (grantWholeDomain [
+        DFunDef False "f" [] call at noBinderId,
+        DTest False "t" call,
+        DTypeSig False "f" constrainedTy at,
+      ]))
+
+-- [e] as the body of one definition, granted.
+granted : Expr -> Expr
+granted e = match grantWholeDomain [DFunDef False "g" [] e at noBinderId]
+  [DFunDef _ _ _ out _ _] => out
+  _ => EVar "the definition came back as one definition"
+
+-- ── drivenEvidence ────────────────────────────────────────────────────────
+
+-- The (module, ordinal) of each entry of [table].
+idsOf : List EvEntry -> List (String, Int)
+idsOf table =
+  map
+    (e => match e
+      EvEntry (EvId mid n) _ => (mid, n))
+    table
+
+-- What an entry says: a method cell by its interface, arity and route, a site by its route.
+describeEntry : EvEntry -> String
+describeEntry (EvEntry _ (EvMethod iface arity tag _ _)) =
+  "method \{iface}/\{intToString arity} \{routeTag tag}"
+describeEntry (EvEntry _ (EvOne route)) = "one \{routeTag route}"
+describeEntry _ = "another kind of entry"
+
+test "a graph that solved nothing publishes no evidence" =
+  expectEqual [] (idsOf (drivenEvidence (fresh ()).mcGraph ()))
+
+test "the evidence a drive recorded is published with it" =
+  let m = fresh ()
+  m.mcGraph.graphRun.evTable := [
+    EvEntry (EvId "m" 0) (EvOne RNone),
+    EvEntry (EvId "m" 1) (EvOne (RScalar "Int")),
+  ]
+  expectEqual [("m", 0), ("m", 1)] (idsOf (drivenEvidence m.mcGraph ()))
+
+test "a method cell minted in the graph is published first, then the recorded rows" =
+  let m = fresh ()
+  let _ = mintMethodCellRaw m "Iface" (Some 2) (RScalar "Int") []
+  m.mcGraph.graphRun.evTable := [EvEntry (EvId "m" 7) (EvOne RNone)]
+  expectEqual
+    ["method Iface/2 scalar:Int", "one none"]
+    (map describeEntry (drivenEvidence m.mcGraph ()))
+
+-- ── resolveArithSite ──────────────────────────────────────────────────────
+
+test "an arithmetic site is stamped with the scalar tag of a solved numeric type" =
+  let cell = Ref RNone
+  resolveArithSite cell (tconBuiltin "Int")
+  expectEqual "scalar:Int" (routeTag cell.value)
+
+test "an arithmetic site stays unstamped at a type with no scalar tag and keeps a route it already has" =
+  let open = Ref RNone
+  let stamped = Ref (RDict "d")
+  resolveArithSite open (tconBuiltin "String")
+  resolveArithSite stamped (tconBuiltin "Int")
+  expectEqual ["none", "dict:d"] [routeTag open.value, routeTag stamped.value]
+
+-- ── resolveSite ───────────────────────────────────────────────────────────
+
+-- A fresh scope of the function `enc` in the module [m]: the scope a site is stood in.
+scopeIn : ModuleCtx -> ScopeId
+scopeIn m =
+  freshScope
+    (currentScopeStore m.mcGraph ())
+    None
+    0
+    "probe"
+    (BindingOwner "enc")
+
+-- The route and the impl-dict routes `resolveSite` leaves on a `size` site seeded with [seed],
+-- resolved at [mono] in the module [m].
+siteAt : ModuleCtx -> Route -> Mono -> (String, List String)
+siteAt m seed mono =
+  let tag = Ref seed
+  let impls = Ref []
+  resolveSite
+    (siteFor m)
+    omEmpty
+    "size"
+    tag
+    impls
+    mono
+    mono
+    "enc"
+    None
+    (scopeIn m)
+  (routeTag tag.value, map routeTag impls.value)
+
+test "a return site at a type a live impl answers is stamped with that impl's word" =
+  expectEqual
+    ("key:lib::Sizeable|Int|", [])
+    (siteAt (readerOfLib ()) RNone intM)
+
+test "a return site at a type no impl answers keeps the seed it had" = expectAll
+  [
+    expectEqual ("none", []) (siteAt (readerOfLib ()) RNone boolM),
+    expectEqual ("dict:seed", []) (siteAt (readerOfLib ()) (RDict "seed") boolM),
+  ]
+
+test "a return site's impl-dict routes are rewritten whether or not the route was" =
+  let m = readerOfLib ()
+  let tag = Ref (RDict "seed")
+  let impls = Ref [RDict "stale"]
+  resolveSite
+    (siteFor m)
+    omEmpty
+    "size"
+    tag
+    impls
+    boolM
+    boolM
+    "enc"
+    None
+    (scopeIn m)
+  expectEqual ("dict:seed", []) (routeTag tag.value, map routeTag impls.value)
+
+-- ── resolveOpSite ─────────────────────────────────────────────────────────
+
+-- The route `resolveOpSite` leaves on an operator site seeded with [seed], at [operand].
+opSiteAt : Route -> Mono -> String
+opSiteAt seed operand =
+  let m = readerOfLib ()
+  let tag = Ref seed
+  let isBinop = True
+  let inImpl = False
+  resolveOpSite (siteFor m) isBinop "add" tag operand inImpl "enc" (scopeIn m)
+  routeTag tag.value
+
+test "an operator at a primitive operand keeps the route it was minted with" = expectAll
+  [
+    expectEqual "none" (opSiteAt RNone intM),
+    expectEqual "dict:seed" (opSiteAt (RDict "seed") intM),
+  ]
+
+-- ── resolveArgStamps ──────────────────────────────────────────────────────
+
+-- A pending argument-position site of `size` at [mono], seeded with [seed], and the cells the
+-- resolver wrote: the route and the impl-dict routes.
+argSiteAt : Route -> Mono -> (String, List String)
+argSiteAt seed mono =
+  let m = readerOfLib ()
+  let tag = Ref seed
+  let impls = Ref []
+  resolveArgStamps (siteFor m) [
+    PendingEntry
+      "size"
+      tag
+      mono
+      "enc"
+      (SKArg impls mono [])
+      None
+      (scopeIn m)
+      (EvId "probe" 0),
+  ]
+  (routeTag tag.value, map routeTag impls.value)
+
+test "an argument-position site at a type a live impl answers is stamped with that impl's word" =
+  expectEqual ("key:lib::Sizeable|Int|", []) (argSiteAt RNone intM)
+
+test "an argument-position site at a type no impl answers keeps its seed" =
+  expectEqual ("dict:seed", []) (argSiteAt (RDict "seed") boolM)
+
+test "a pending site that is not an argument site is left to its own resolver, and the sites after it are still resolved" =
+  let m = readerOfLib ()
+  let returned = Ref RNone
+  let arg = Ref RNone
+  let impls = Ref []
+  resolveArgStamps (siteFor m) [
+    PendingEntry
+      "size"
+      returned
+      intM
+      "enc"
+      (SKReturn impls intM)
+      None
+      (scopeIn m)
+      (EvId "probe" 0),
+    PendingEntry
+      "size"
+      arg
+      intM
+      "enc"
+      (SKArg impls intM [])
+      None
+      (scopeIn m)
+      (EvId "probe" 1),
+  ]
+  expectEqual
+    ("none", "key:lib::Sizeable|Int|")
+    (routeTag returned.value, routeTag arg.value)
+
+-- ── resolveMethodDicts and realizeRecDictApps ─────────────────────────────
+
+test "a method occurrence with no method-level constraint records no dictionary routes" =
+  let m = readerOfLib ()
+  let routes = Ref [RDict "stale"]
+  resolveMethodDicts (siteFor m) [
+    PendingMethodDict {
+      pmdRoutesRef = routes,
+      pmdEv = EvId "probe" 0,
+      pmdSlots = [],
+      pmdEncl = "enc",
+      pmdScope = scopeIn m,
+      pmdInner = Ref innerNone,
+    },
+  ]
+  expectEqual [] (map routeTag routes.value)
+
+test "a deferred recursive call whose callee has no recorded constraints records no routes" =
+  let m = readerOfLib ()
+  let routes = Ref [RDict "stale"]
+  realizeRecDictApps (siteFor m) [
+    RecDictApp routes "callee" "enc" intM (scopeIn m) (EvId "probe" 0),
+  ]
+  expectEqual [] (map routeTag routes.value)
+
+-- ── dictPassModulesIfEnabled: impls, interface defaults, wide and negated literals ──
+
+-- The first impl declaration of [src], its methods replaced by [methods]; `None` when [src]
+-- declares no impl.
+implOf : String -> List ImplMethod -> Option Decl
+implOf src methods = match filter isImpl (parse src)
+  (d@(DImpl { methods = _ })) :: _ => Some DImpl { d | methods = methods }
+  _ => None
+
+isImpl : Decl -> Bool
+isImpl (DImpl { methods = _ }) = True
+isImpl _ = False
+
+-- The parameter names of each method clause of the impls among [prog], by method.
+implParams : List Decl -> List (String, List String)
+implParams prog =
+  flatMap
+    (d => match d
+      DImpl { methods = ms } =>
+        map
+          (m => match m
+            ImplMethod n ps _ => (n, flatMap patNames ps))
+          ms
+      _ => [])
+    prog
+
+patNames : Pat -> List String
+patNames (PVar n _ _) = [n]
+patNames _ = []
+
+boxImpl : String
+boxImpl =
+  """
+data Box a = Box a
+impl Sizeable (Box a) requires Sizeable a where
+  size b = 0
+"""
+
+-- The method clause `size b` whose body is the method occurrence of cell `m#0`.
+sizeUsingCell : ImplMethod
+sizeUsingCell = ImplMethod "size" [pvar "b"] (EMethodAt "size" "" site0)
+
+-- The parameters of the impl's `size` once the pass has run, the cell `m#0` having been routed
+-- to [route] with the element-dictionary routes [impls].
+implParamsRouted : Route -> List Route -> Option (List (String, List String))
+implParamsRouted route impls = match implOf boxImpl [sizeUsingCell]
+  Some decl =>
+    map
+      implParams
+      (passedWith
+        [EvEntry site0 (EvMethod "Sizeable" 1 route impls [])]
+        []
+        []
+        [decl])
+  None => None
+
+test "an impl method that reads its requirement's dictionary takes that dictionary as its first parameter" =
+  expectEqual
+    (Some [("size", [dictParamName "size" 0, "b"])])
+    (implParamsRouted (RDict (dictParamName "size" 0)) [])
+
+test "an impl method whose occurrences route nowhere near its requirement takes no dictionary parameter" =
+  expectEqual (Some [("size", ["b"])]) (implParamsRouted RNone [])
+
+test "a dictionary nested in an element route counts as read by the method that holds it" =
+  expectEqual
+    (Some [("size", [dictParamName "size" 0, "b"])])
+    (implParamsRouted RNone [
+      RKey "Sizeable|List|" [RDict (dictParamName "size" 0)] [],
+    ])
+
+-- The interface declared by [src] with its first method given the default `m x = x`; the parser
+-- keeps a default clause apart from its signature, and the pass reads them joined.
+interfaceWithDefault : String -> List Decl
+interfaceWithDefault src = match parse src
+  (d@(DInterface { methods = (IfaceMethod n ty _ _) :: _ })) :: _ => [
+    DInterface { d |
+      methods =
+        [IfaceMethod n ty (Some (MethodDefault [pvar "x"] (EVar "x"))) None],
+    },
+  ]
+  _ => []
+
+-- The parameter names of each interface method default among [prog], by method.
+defaultParams : List Decl -> List (String, List String)
+defaultParams prog =
+  flatMap
+    (d => match d
+      DInterface { methods = ms } =>
+        flatMap
+          (m => match m
+            IfaceMethod n _ (Some (MethodDefault ps _)) _ =>
+              [(n, flatMap patNames ps)]
+            _ => [])
+          ms
+      _ => [])
+    prog
+
+-- The default parameters of the interface [src] declares, once the pass has run.
+passedDefaults : String -> Option (List (String, List String))
+passedDefaults src = map defaultParams (passed [] (interfaceWithDefault src))
+
+test "an interface default of a method with a method-level constraint takes one dictionary per constraint" =
+  expectEqual
+    (Some [("foldAll", [dictParamName "foldAll" 0, "x"])])
+    (passedDefaults
+      """
+interface Folder f where
+  foldAll : Monoid m => f -> m
+""")
+
+test "an interface default of an unconstrained method keeps its parameters" =
+  expectEqual
+    (Some [("size", ["x"])])
+    (passedDefaults """
+interface Sized a where
+  size : a -> Int
+""")
+
+test "a wide literal is a U64 constant, and an I64 constant where its site is routed to I64" =
+  let wide = EWideLit 1 2 site0 ""
+  expectAll [
+    expectEqual
+      (Some (exprSexp (ELit (LU64 1 2))))
+      (map exprSexp (bodyAt RNone wide)),
+    expectEqual
+      (Some (exprSexp (ELit (LI64 1 2))))
+      (map exprSexp (bodyAt (RKey "Num|I64|" [] []) wide)),
+  ]
+
+test "a literal routed to U64 is its constant when not negative and keeps its fromInt call when negative" = expectAll
+  [
+    expectEqual
+      (Some (exprSexp (ELit (LU64 0 5))))
+      (map
+        exprSexp
+        (litBodyAt (None, RKey "Num|U64|" [] []) (ENumLit 5 site0 ""))),
+    expectEqual
+      (Some (exprSexp (ELit (LU64 1 1))))
+      (map
+        exprSexp
+        (litBodyAt
+          (None, RKey "Num|U64|" [] [])
+          (ENumLit 4294967297 site0 ""))),
+    expectEqual
+      (Some (shape (EApp (methodAt "fromInt") (litInt (0 - 5)))))
+      (map
+        shape
+        (litBodyAt (None, RKey "Num|U64|" [] []) (ENumLit (0 - 5) site0 ""))),
+  ]
+
+test "a negated literal at I32 is the one constant, so the smallest I32 needs no out-of-range call" =
+  let negated n = EUnOp "-" (ENumLit n (EvId "m" 1) "") site0
+  let rows = [
+    EvEntry site0 (EvOne (RKey "Num|I32|" [] [])),
+    EvEntry (EvId "m" 1) (EvLit None (RKey "Num|I32|" [] [])),
+  ]
+  expectEqual
+    (Some (exprSexp (litInt (0 - 2147483648))))
+    (map exprSexp (bodyOver rows (negated 2147483648)))
+
+-- ── resolveNumLitSite, resolvePredicateOpSite, resolveAdmittedSite ────────
+
+-- The predicate `Sizeable [arg]`.
+sizeablePred : Mono -> ClassPredicate
+sizeablePred arg = ClassPredicate {
+  predicateInterface = ifaceOf "Sizeable",
+  predicateArguments = [arg],
+}
+
+numLitAt : Route -> Mono -> String
+numLitAt seed mono =
+  let m = readerOfLib ()
+  let tag = Ref seed
+  resolveNumLitSite
+    (siteFor m)
+    omEmpty
+    "size"
+    tag
+    mono
+    mono
+    (sizeablePred mono)
+    "enc"
+    None
+    (scopeIn m)
+  routeTag tag.value
+
+predOpAt : Route -> Mono -> String
+predOpAt seed mono =
+  let m = readerOfLib ()
+  let tag = Ref seed
+  let isBinop = True
+  let inImpl = False
+  resolvePredicateOpSite
+    (siteFor m)
+    isBinop
+    "size"
+    tag
+    mono
+    inImpl
+    (sizeablePred mono)
+    "enc"
+    (scopeIn m)
+  routeTag tag.value
+
+test "a numeric literal at a concrete Int keeps the route it was minted with" = expectAll
+  [
+    expectEqual "none" (numLitAt RNone intM),
+    expectEqual "dict:seed" (numLitAt (RDict "seed") intM),
+  ]
+
+test "a predicate operator at a type with a scalar tag is stamped with it and at one without keeps its route" = expectAll
+  [
+    expectEqual "scalar:Int" (predOpAt RNone intM),
+    expectEqual "none" (predOpAt RNone boolM),
+    expectEqual "dict:seed" (predOpAt (RDict "seed") boolM),
+  ]
+
+test "an admitted-set occurrence no declaration selects keeps its cells" =
+  let m = readerOfLib ()
+  let iface = Ref "seed"
+  let tag = Ref (RDict "seed")
+  let impls = Ref [RDict "stale"]
+  resolveAdmittedSite (siteFor m) "size" iface tag impls intM "enc" (scopeIn m)
+  expectEqual
+    ("seed", "dict:seed", ["dict:stale"])
+    (iface.value, routeTag tag.value, map routeTag impls.value)
+
+-- ── properties ────────────────────────────────────────────────────────────
+
+-- A call of the head numbered [head] with its arity's worth of arguments and [extra] more.
+data GrantCase = GrantCase Int Int
+
+impl Arbitrary GrantCase where
+  arbitrary () = GrantCase (randomInt 0 3) (randomInt 0 2)
+  shrink (GrantCase head extra)
+    | extra > 0 = [GrantCase head (extra - 1)]
+    | otherwise = []
+
+-- The heads the cases call: two file externs with their value arity and path count, and two
+-- names no table knows.
+grantHead : Int -> (String, Option (Int, Int))
+grantHead 0 = ("readFile", Some (1, 1))
+grantHead 1 = ("rename", Some (2, 2))
+grantHead 2 = ("id", None)
+grantHead _ = ("grantless", None)
+
+-- The arguments of a case: as many as the head takes, and one for a head that takes none.
+grantArgs : GrantCase -> List Expr
+grantArgs (GrantCase head extra) =
+  let n = match snd (grantHead head)
+    Some (arity, _) => arity + extra
+    None => 1 + extra
+  map (i => str (intToString i)) (range 0 n)
+
+-- What the whole-domain grant makes of a case, from the table above alone: a file extern
+-- takes its path count of empty grants after its value arguments, and any other call is as
+-- written.
+grantModel : GrantCase -> Expr
+grantModel (c@(GrantCase head _)) =
+  let (name, info) = grantHead head
+  let args = grantArgs c
+  match info
+    Some (arity, paths) =>
+      applied
+        name
+        (take arity args ++ replicate paths (EListLit []) ++ drop arity args)
+    None => applied name args
+
+-- Law: the whole-domain grant of a call is the call with its extern's empty grants inserted
+-- after the value arguments, and every other call is untouched.  Precondition (`grantsApply`):
+-- the head is a file extern, so the grant has something to insert.
+prop "a call is granted the whole domain of its extern and nothing else" (c : GrantCase) =
+  let (GrantCase head _) = c
+  exprSexp (granted (applied (fst (grantHead head)) (grantArgs c)))
+    == exprSexp (grantModel c)
+
+-- Whether a case calls a file extern.
+grantsApply : GrantCase -> Bool
+grantsApply (GrantCase head _) = isSome (snd (grantHead head))
+
+-- An operator index and a route index.
+data OpCase = OpCase Int Int
+
+impl Arbitrary OpCase where
+  arbitrary () = OpCase (randomInt 0 5) (randomInt 0 2)
+  shrink (OpCase op route)
+    | route > 0 = [OpCase op 0]
+    | otherwise = []
+
+-- The operator numbered [i], and the method a routed use of it becomes.
+opRow : Int -> (String, String)
+opRow 0 = ("+", "add")
+opRow 1 = ("-", "sub")
+opRow 2 = ("*", "mul")
+opRow 3 = ("<", "lt")
+opRow 4 = ("==", "eq")
+opRow _ = ("/=", "eq")
+
+-- The route numbered [i]: none, a scalar tag, an instance.
+routeRow : Int -> Route
+routeRow 0 = RNone
+routeRow 1 = RScalar "Int"
+routeRow _ = RKey "Num|Foo|" [] []
+
+-- What the pass makes of `a op b` at a route, from the two tables above: unchanged at no route,
+-- annotated at a scalar tag, the method applied (under `not` for an inequality) at an instance.
+opModel : OpCase -> String
+opModel (OpCase op route) =
+  let (name, method) = opRow op
+  let plain = EBinOp name (EVar "a") (EVar "b") site0
+  match routeRow route
+    RNone => exprSexp plain
+    RScalar tag => exprSexp (EAnnot plain (tyConBuiltin tag None))
+    _ =>
+      let call = EApp (EApp (methodAt method) (EVar "a")) (EVar "b")
+      shape (if name == "/=" then EApp (EVar "not") call else call)
+
+-- Law: what the pass makes of a binary operator depends on its route alone.
+prop "a binary operator is rewritten by its route alone" (c : OpCase) =
+  let (OpCase op route) = c
+  let (name, _) = opRow op
+  let body = EBinOp name (EVar "a") (EVar "b") site0
+  match routeRow route
+    RNone => map exprSexp (bodyAt RNone body) == Some (opModel c)
+    RScalar _ => map exprSexp (bodyAt (routeRow route) body) == Some (opModel c)
+    r => map shape (bodyAt r body) == Some (opModel c)
+
+-- Whether a case's site is routed.
+opRouted : OpCase -> Bool
+opRouted (OpCase _ route) = route > 0
+
+test "a grant case calls a file extern exactly when its head is one, and an operator case is routed unless its route is none" =
+  expectEqual
+    (
+      [True, True, False, False],
+      [False, True, True],
+    )
+    (
+      map (h => grantsApply (GrantCase h 0)) [0, 1, 2, 3],
+      map (r => opRouted (OpCase 0 r)) [0, 1, 2],
+    )

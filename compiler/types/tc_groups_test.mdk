@@ -9,7 +9,8 @@
 -- properties run over generated groups: the dependency edges of a group do not depend on
 -- what its parameter is called, and the components of a block come dependencies first.  Each
 -- test builds the module record or environment it reads; none reaches the inference
--- recursion, and the mark pass over groups is tested in `tc_occurrence_test`.
+-- recursion, and the mark pass over groups is tested in `tc_occurrence_test`.  Not driven here:
+-- `nestedRequireGoals` over an obligation and the impl table of a hand-written module.
 
 import test.{
   expectAll,
@@ -30,7 +31,8 @@ import frontend.ast.{
   noBinderId,
 }
 import frontend.parser.{parse}
-import types.repr.{AuthResidual(..), ppMono}
+import types.repr.{AuthResidual(..), Mono(..), ppMono}
+import types.tc_mono.{tconBuiltin}
 import types.tc_effects.{clausesOf}
 import types.tc_env.{envFor}
 import types.tc_groups.{
@@ -47,6 +49,7 @@ import types.tc_groups.{
   isLetrecGroup,
   isNonexpansive,
   letGroupComponents,
+  nestedRequireGoals,
   residualsOf,
   sccProtectedSignatureIds,
   sigConstraintArgTys,
@@ -56,16 +59,20 @@ import types.tc_test_support.{
   at,
   boolM,
   codesOf,
+  declsOf,
+  envsOf,
   fresh,
   ifaceOf,
   intM,
+  inRootScope,
   intTy,
+  oblOver,
   pvar,
   varM,
   withFirstSig,
 }
 import support.ordmap.{omEmpty, omKeys, omLookup}
-import support.util.{contains, listLen}
+import support.util.{contains, joinWith, listLen}
 import list.{findIndex, range, sort, zip}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
@@ -613,3 +620,61 @@ prop "a block's components hold every binding once and come dependencies first" 
           rs)
       (zip names refs)
   sort (flatMap (c => c) comps) == sort names && dependenciesFirst
+
+-- ── nestedRequireGoals ────────────────────────────────────────────────────
+
+-- The interfaces `R`, `P`, `Q`, `S` and `T`, each with one method.
+requireInterfaces : String
+requireInterfaces =
+  """
+interface R a where
+  r : a -> Int
+interface P a where
+  p : a -> Int
+interface Q a where
+  q : a -> Int
+interface S a where
+  s : a -> Int
+interface T a where
+  t : a -> Int
+"""
+
+-- The interface names of the goals `nestedRequireGoals` follows from `R (List v)` over the
+-- impls in [impls], after `requireInterfaces`, nested [depth] lists deep.
+requireGoalNames : String -> Int -> List String
+requireGoalNames impls depth =
+  let m = inRootScope (fresh ())
+  let (_, ie) = envsOf m (declsOf "probe" (requireInterfaces ++ impls))
+  m.mcCells.bodyImplEnvRef := ie
+  let list = x => TApp (tconBuiltin "List") x
+  let goal =
+    oblOver (ifaceOf "R") [fold (acc _ => list acc) (varM 1) (range 0 depth)]
+  map (o => o.pred.iface.irName) (nestedRequireGoals m omEmpty omEmpty [goal])
+
+test "the goals one impl requires are followed in the order the impl lists them" = expectAll
+  [
+    expectEqual
+      ["P", "Q"]
+      (requireGoalNames
+        "impl R (List a) requires P a, Q a where\n  r _ = 0\n"
+        1),
+    expectEqual
+      ["S", "Q", "P"]
+      (requireGoalNames
+        "impl R (List a) requires S a, Q a, P a where\n  r _ = 0\n"
+        1),
+  ]
+
+test "the goals below each goal of a level follow in the order of that level" =
+  expectEqual
+    ["P", "Q", "S", "T"]
+    (requireGoalNames
+      """
+impl R (List a) requires P a, Q a where
+  r _ = 0
+impl P (List a) requires S a where
+  p _ = 0
+impl Q (List a) requires T a where
+  q _ = 0
+"""
+      2)

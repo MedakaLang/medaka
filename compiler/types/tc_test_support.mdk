@@ -17,9 +17,10 @@
 -- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
 -- own `kindIsDeclared`, so the registration test it serves cannot disagree with it.
 
-import list.{drop, reverse}
+import list.{drop, range, reverse, zip}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import frontend.exhaust.{buildOracle}
 import frontend.ast.{
   Decl(..),
@@ -36,12 +37,14 @@ import frontend.ast.{
 import types.effect_rows.{pureRow}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
-import support.ordmap.{omEmpty, omInsert, omLookup}
+import support.ordmap.{omEmpty, omInsert}
 import types.publish.{tcCode, tcMsg}
 import types.tc_decls.{kindIsDeclared, registerData}
 import types.tc_scope.{insertRecordPop}
 import types.tc_env.{
+  buildClassEnvGo,
   buildImplEnvGo,
+  classEnvFinish,
   declEnvModule,
   declParamKinds,
   emptyDeclEnvAcc,
@@ -57,10 +60,12 @@ import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
 import types.tc_state.{
   blankModuleCtx,
   currentScopeStore,
+  emptyClassEnv,
   freshModuleCtx,
   probeGraphCtx,
   wAll,
 }
+import types.evidence.{ScopeId(..)}
 import types.evidence_complete.{innerNone}
 import types.tc_types.{
   CheckRunSeed(..),
@@ -68,9 +73,15 @@ import types.tc_types.{
   Kind(..),
   MarkCtx(..),
   ModuleCtx(..),
+  ClassEnv,
+  ImplEnv,
   ModuleMarking(..),
+  OblProjection(..),
+  Predicate(..),
+  Provenance(..),
   StandaloneOrigin(..),
   TcEnv,
+  UObligation(..),
   ValueScheme(..),
 }
 
@@ -213,14 +224,17 @@ impl Sizeable Int where
   size n = n
 """
 
--- The declarations of [ds] stamped as declared in the module [mid].
+-- The declarations of [ds] stamped as declared in the module [mid]: each interface, its supers
+-- and each impl.
 export
 declaredIn : String -> List Decl -> List Decl
 declaredIn mid ds = map (declaredAs mid) ds
 
 declaredAs : String -> Decl -> Decl
-declaredAs mid (d@(DInterface { ifaceOrigin = _ })) =
-  DInterface { d | ifaceOrigin = OriginModule mid }
+declaredAs mid (d@(DInterface { supers = ss, ... })) = DInterface { d |
+  ifaceOrigin = OriginModule mid,
+  supers = map (sup => { sup | superOrigin = OriginModule mid }) ss,
+}
 declaredAs mid (d@(DImpl { implOrigin = _ })) =
   DImpl { d | implOrigin = OriginModule mid }
 declaredAs _ d = d
@@ -366,3 +380,58 @@ methodOccurrence m name =
 export
 sizeScheme : Scheme
 sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
+
+-- The declarations of [src] as the module "m" declares them: desugared, as the checks over a
+-- whole module read them, with each interface and impl stamped as declared in "m".
+export
+moduleDecls : String -> List Decl
+moduleDecls src = declsOf "m" src
+
+-- The declarations of [src], desugared, with each interface and impl stamped as declared in the
+-- module [origin]: an impl of another module's interface carries that module's identity.
+export
+declsOf : String -> String -> List Decl
+declsOf origin src = declaredIn origin (desugar (parse src))
+
+-- The ordinal of the first user module in the tables `envsOf` builds.  Ordinal 0 is the
+-- prelude's, which the coherence sweep never checks against itself.
+export
+moduleOrdinal : Int
+moduleOrdinal = 1
+
+-- The class table and the impl table of [ds], the declarations of the module "m" at ordinal
+-- `moduleOrdinal`, built in the graph of [m].
+export
+envsOf : ModuleCtx -> List Decl -> (ClassEnv, ImplEnv)
+envsOf m ds = envsOfModules m [("m", ds)]
+
+-- The same over several modules, the first at ordinal `moduleOrdinal` and each next one after it.
+export
+envsOfModules : ModuleCtx -> List (String, List Decl) -> (ClassEnv, ImplEnv)
+envsOfModules m modules =
+  let dms =
+    map
+      (p =>
+        declEnvModule
+          m.mcGraph
+          (moduleOrdinal + fst p)
+          (fst (snd p))
+          (snd (snd p)))
+      (zip (range 0 (length modules)) modules)
+  (
+    classEnvFinish (buildClassEnvGo m.mcGraph dms emptyClassEnv),
+    implAccFinish (buildImplEnvGo dms emptyDeclEnvAcc.daImpls),
+  )
+
+-- An obligation of the interface [iface] over the argument monos [args], carried as the
+-- arguments it was built over.
+export
+oblOver : IfaceRef -> List Mono -> UObligation
+oblOver iface args = UObligation {
+  pred = Predicate { iface = iface, args = args },
+  originId = 0,
+  prov = PNumLit,
+  loc = None,
+  uoScope = ScopeId 0,
+  oblProj = OpProjected,
+}

@@ -44,7 +44,7 @@ import support.ordmap.{omEmpty, omInsert}
 import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
-import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts}
 import types.program_facts.{emptyFacts}
 import ir.core_ir.{
   CBind(..),
@@ -113,6 +113,7 @@ import backend.global_plan.{GlobalInitPlan(..)}
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
 import string.{contains, split, stripPrefix}
+import types.tc_elab.{grantWholeDomain}
 
 -- The Wasm emitters as these tests read them.  None of the programs here has a
 -- physical-symbol defect, so a defect stands in the text as its codes.

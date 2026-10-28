@@ -1,5 +1,5 @@
 # META
-source_lines=368
+source_lines=437
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -21,9 +21,10 @@ stages=DESUGAR,MARK
 -- import those, and its fixtures need the same tables.  `recordKindsOf` reads `tc_decls`'
 -- own `kindIsDeclared`, so the registration test it serves cannot disagree with it.
 
-import list.{drop, reverse}
+import list.{drop, range, reverse, zip}
 import test.{Expectation, expectEqual}
 import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import frontend.exhaust.{buildOracle}
 import frontend.ast.{
   Decl(..),
@@ -40,12 +41,14 @@ import frontend.ast.{
 import types.effect_rows.{pureRow}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), Tyvar(..)}
 import types.tc_mono.{tconBuiltin}
-import support.ordmap.{omEmpty, omInsert, omLookup}
+import support.ordmap.{omEmpty, omInsert}
 import types.publish.{tcCode, tcMsg}
 import types.tc_decls.{kindIsDeclared, registerData}
 import types.tc_scope.{insertRecordPop}
 import types.tc_env.{
+  buildClassEnvGo,
   buildImplEnvGo,
+  classEnvFinish,
   declEnvModule,
   declParamKinds,
   emptyDeclEnvAcc,
@@ -61,10 +64,12 @@ import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
 import types.tc_state.{
   blankModuleCtx,
   currentScopeStore,
+  emptyClassEnv,
   freshModuleCtx,
   probeGraphCtx,
   wAll,
 }
+import types.evidence.{ScopeId(..)}
 import types.evidence_complete.{innerNone}
 import types.tc_types.{
   CheckRunSeed(..),
@@ -72,9 +77,15 @@ import types.tc_types.{
   Kind(..),
   MarkCtx(..),
   ModuleCtx(..),
+  ClassEnv,
+  ImplEnv,
   ModuleMarking(..),
+  OblProjection(..),
+  Predicate(..),
+  Provenance(..),
   StandaloneOrigin(..),
   TcEnv,
+  UObligation(..),
   ValueScheme(..),
 }
 
@@ -217,14 +228,17 @@ impl Sizeable Int where
   size n = n
 """
 
--- The declarations of [ds] stamped as declared in the module [mid].
+-- The declarations of [ds] stamped as declared in the module [mid]: each interface, its supers
+-- and each impl.
 export
 declaredIn : String -> List Decl -> List Decl
 declaredIn mid ds = map (declaredAs mid) ds
 
 declaredAs : String -> Decl -> Decl
-declaredAs mid (d@(DInterface { ifaceOrigin = _ })) =
-  DInterface { d | ifaceOrigin = OriginModule mid }
+declaredAs mid (d@(DInterface { supers = ss, ... })) = DInterface { d |
+  ifaceOrigin = OriginModule mid,
+  supers = map (sup => { sup | superOrigin = OriginModule mid }) ss,
+}
 declaredAs mid (d@(DImpl { implOrigin = _ })) =
   DImpl { d | implOrigin = OriginModule mid }
 declaredAs _ d = d
@@ -370,24 +384,81 @@ methodOccurrence m name =
 export
 sizeScheme : Scheme
 sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
+
+-- The declarations of [src] as the module "m" declares them: desugared, as the checks over a
+-- whole module read them, with each interface and impl stamped as declared in "m".
+export
+moduleDecls : String -> List Decl
+moduleDecls src = declsOf "m" src
+
+-- The declarations of [src], desugared, with each interface and impl stamped as declared in the
+-- module [origin]: an impl of another module's interface carries that module's identity.
+export
+declsOf : String -> String -> List Decl
+declsOf origin src = declaredIn origin (desugar (parse src))
+
+-- The ordinal of the first user module in the tables `envsOf` builds.  Ordinal 0 is the
+-- prelude's, which the coherence sweep never checks against itself.
+export
+moduleOrdinal : Int
+moduleOrdinal = 1
+
+-- The class table and the impl table of [ds], the declarations of the module "m" at ordinal
+-- `moduleOrdinal`, built in the graph of [m].
+export
+envsOf : ModuleCtx -> List Decl -> (ClassEnv, ImplEnv)
+envsOf m ds = envsOfModules m [("m", ds)]
+
+-- The same over several modules, the first at ordinal `moduleOrdinal` and each next one after it.
+export
+envsOfModules : ModuleCtx -> List (String, List Decl) -> (ClassEnv, ImplEnv)
+envsOfModules m modules =
+  let dms =
+    map
+      (p =>
+        declEnvModule
+          m.mcGraph
+          (moduleOrdinal + fst p)
+          (fst (snd p))
+          (snd (snd p)))
+      (zip (range 0 (length modules)) modules)
+  (
+    classEnvFinish (buildClassEnvGo m.mcGraph dms emptyClassEnv),
+    implAccFinish (buildImplEnvGo dms emptyDeclEnvAcc.daImpls),
+  )
+
+-- An obligation of the interface [iface] over the argument monos [args], carried as the
+-- arguments it was built over.
+export
+oblOver : IfaceRef -> List Mono -> UObligation
+oblOver iface args = UObligation {
+  pred = Predicate { iface = iface, args = args },
+  originId = 0,
+  prov = PNumLit,
+  loc = None,
+  uoScope = ScopeId 0,
+  oblProj = OpProjected,
+}
 # DESUGAR
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EvId" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true) (mem "Route" true) (mem "TabKey" false) (mem "Ty" true) (mem "TyConOrigin" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "pureRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "buildImplEnvGo" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
+(DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "ValueScheme" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
 (DTypeSig true "pvar" (TyFun (TyCon "String") (TyCon "Pat")))
@@ -441,7 +512,7 @@ sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declaredIn" ((PVar "mid") (PVar "ds")) (EApp (EApp (EVar "map") (EApp (EVar "declaredAs") (EVar "mid"))) (EVar "ds")))
 (DTypeSig false "declaredAs" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))
+(DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "supers" (PVar "ss"))) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "mid"))) (fa "supers" (EApp (EApp (EVar "map") (ELam ((PVar "sup")) (ERecordUpdate (EVar "sup") ((fa "superOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))) (EVar "ss"))))))
 (DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))
 (DFunDef false "declaredAs" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig true "readerOfLib" (TyFun (TyCon "Unit") (TyCon "ModuleCtx")))
@@ -479,24 +550,38 @@ sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
 (DFunDef false "methodOccurrence" ((PVar "m") (PVar "name")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "EvId") (ELit (LString "probe"))) (ELit (LInt 0)))) (DoLet false false (PVar "cell") (ERecordCreate "EvCell" ((fa "ecId" (EVar "ev")) (fa "ecIface" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecArity" (EApp (EVar "Ref") (EVar "None"))) (fa "ecTag" (EApp (EVar "Ref") (EVar "RNone"))) (fa "ecImpl" (EApp (EVar "Ref") (EListLit))) (fa "ecMeth" (EApp (EVar "Ref") (EListLit))) (fa "ecLoc" (EApp (EVar "Ref") (EVar "None"))) (fa "ecName" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecInner" (EApp (EVar "Ref") (EVar "innerNone")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcGraph") "graphRun") "evCells")) (EApp (EApp (EVar "arrayMake") (ELit (LInt 1))) (EApp (EVar "Some") (EVar "cell"))))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (ELit (LString ""))) (EVar "ev")))))
 (DTypeSig true "sizeScheme" (TyCon "Scheme"))
 (DFunDef false "sizeScheme" () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit (ELit (LInt 1)))) (EListLit)) (EListLit)) (EListLit)) (EVar "pureRow")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "varM") (ELit (LInt 1)))) (EVar "pureRow")) (EVar "intM"))))
+(DTypeSig true "moduleDecls" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "moduleDecls" ((PVar "src")) (EApp (EApp (EVar "declsOf") (ELit (LString "m"))) (EVar "src")))
+(DTypeSig true "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "declsOf" ((PVar "origin") (PVar "src")) (EApp (EApp (EVar "declaredIn") (EVar "origin")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src")))))
+(DTypeSig true "moduleOrdinal" (TyCon "Int"))
+(DFunDef false "moduleOrdinal" () (ELit (LInt 1)))
+(DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
+(DFunDef false "envsOf" ((PVar "m") (PVar "ds")) (EApp (EApp (EVar "envsOfModules") (EVar "m")) (EListLit (ETuple (ELit (LString "m")) (EVar "ds")))))
+(DTypeSig true "envsOfModules" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
+(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
+(DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
+(DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))
 # MARK
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EvId" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true) (mem "Route" true) (mem "TabKey" false) (mem "Ty" true) (mem "TyConOrigin" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "pureRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tconBuiltin" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "buildImplEnvGo" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
+(DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "ValueScheme" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
 (DTypeSig true "pvar" (TyFun (TyCon "String") (TyCon "Pat")))
@@ -550,7 +635,7 @@ sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declaredIn" ((PVar "mid") (PVar "ds")) (EApp (EApp (EMethodRef "map") (EApp (EVar "declaredAs") (EVar "mid"))) (EVar "ds")))
 (DTypeSig false "declaredAs" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))
+(DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "supers" (PVar "ss"))) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "mid"))) (fa "supers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "sup")) (ERecordUpdate (EVar "sup") ((fa "superOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))) (EVar "ss"))))))
 (DFunDef false "declaredAs" ((PVar "mid") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EVar "OriginModule") (EVar "mid"))))))
 (DFunDef false "declaredAs" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig true "readerOfLib" (TyFun (TyCon "Unit") (TyCon "ModuleCtx")))
@@ -588,3 +673,15 @@ sizeScheme = Forall [1] [] [] [] pureRow (TFun (varM 1) pureRow intM)
 (DFunDef false "methodOccurrence" ((PVar "m") (PVar "name")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "EvId") (ELit (LString "probe"))) (ELit (LInt 0)))) (DoLet false false (PVar "cell") (ERecordCreate "EvCell" ((fa "ecId" (EVar "ev")) (fa "ecIface" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecArity" (EApp (EVar "Ref") (EVar "None"))) (fa "ecTag" (EApp (EVar "Ref") (EVar "RNone"))) (fa "ecImpl" (EApp (EVar "Ref") (EListLit))) (fa "ecMeth" (EApp (EVar "Ref") (EListLit))) (fa "ecLoc" (EApp (EVar "Ref") (EVar "None"))) (fa "ecName" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecInner" (EApp (EVar "Ref") (EVar "innerNone")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcGraph") "graphRun") "evCells")) (EApp (EApp (EVar "arrayMake") (ELit (LInt 1))) (EApp (EVar "Some") (EVar "cell"))))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (ELit (LString ""))) (EVar "ev")))))
 (DTypeSig true "sizeScheme" (TyCon "Scheme"))
 (DFunDef false "sizeScheme" () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit (ELit (LInt 1)))) (EListLit)) (EListLit)) (EListLit)) (EVar "pureRow")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "varM") (ELit (LInt 1)))) (EVar "pureRow")) (EVar "intM"))))
+(DTypeSig true "moduleDecls" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "moduleDecls" ((PVar "src")) (EApp (EApp (EVar "declsOf") (ELit (LString "m"))) (EVar "src")))
+(DTypeSig true "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "declsOf" ((PVar "origin") (PVar "src")) (EApp (EApp (EVar "declaredIn") (EVar "origin")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src")))))
+(DTypeSig true "moduleOrdinal" (TyCon "Int"))
+(DFunDef false "moduleOrdinal" () (ELit (LInt 1)))
+(DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
+(DFunDef false "envsOf" ((PVar "m") (PVar "ds")) (EApp (EApp (EVar "envsOfModules") (EVar "m")) (EListLit (ETuple (ELit (LString "m")) (EVar "ds")))))
+(DTypeSig true "envsOfModules" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
+(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
+(DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
+(DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))

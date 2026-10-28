@@ -22,7 +22,6 @@ dictAppsIn : List Obligation -> List PendingDictApp
 dictAppsSince : GraphCtx -> Int -> List PendingDictApp
 dropGoalsSince : GraphCtx -> Int -> List GoalKind -> Unit
 enclosingVarIds : Option Int -> List Mono -> List Int
-enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
 evCell : EvDest -> Ref Route
 exactReturnBlockers : List Mono -> List SolverBlocker
 exactReturnDefers : ModuleCtx -> Wanted -> List Mono -> Bool
@@ -52,13 +51,11 @@ improveGoal : DynCtx -> Map String Unit -> IfaceRef -> List Mono -> Unit
 improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
 improvementPool : ModuleCtx -> List Mono -> List ImplRow
 instanceSuperEvidence : GraphCtx -> IfaceRef -> List Mono -> List SuperEvidence
-isInterfaceDecl : Decl -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLocalAbsName : String -> Bool
 isSelection : AdmittedAnswer -> Bool
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isUndecided : AdmittedAnswer -> Bool
-liveLocsOf : ModuleCtx -> List Obligation -> List String
 localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
 localSourceName : String -> String
@@ -118,7 +115,6 @@ noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
 noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
 numAnchorObservationView : NumAnchorTestObservation -> (String, Bool, Bool, String, String)
 numericReturnRoute : Route -> List Route -> Route
-numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
 occurrenceDispatchMonos : List String -> Ty -> Mono -> List (String, Mono) -> List Mono
 openScope : ModuleCtx -> ScopeId -> Unit
 outerRigidIds : Option Int -> List Mono -> Map String Unit -> Map String Unit
@@ -128,7 +124,6 @@ publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodRetur
 pushDictApp : GraphCtx -> PendingDictApp -> Unit
 pushGoal : GraphCtx -> Obligation -> Unit
 pushLocalDictApp : ModuleCtx -> String -> EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
-realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
 recDictAppEntry : Obligation -> List RecDictApp
 recPredicateArgs : GraphCtx -> Mono -> PredicateSlot -> Option (List Mono)
 recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
@@ -138,17 +133,7 @@ refileGoals : GraphCtx -> GoalWindow -> List Int -> Unit
 repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 reqToObligation : ModuleCtx -> List (String, Mono) -> Require -> (IfaceRef, List Mono)
 residualSelectionStable : ModuleCtx -> List Int -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
-resolveAdmittedSite : SiteCtx -> String -> Ref String -> Ref Route -> Ref (List Route) -> Mono -> String -> ScopeId -> Unit
-resolveArgStamp : SiteCtx -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
-resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
-resolveArithSite : Ref Route -> Mono -> Unit
-resolveExactReturnSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
-resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
-resolveNumLitSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
-resolveOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> String -> ScopeId -> Unit
-resolvePredicateOpSite : SiteCtx -> Bool -> String -> Ref Route -> Mono -> Bool -> ClassPredicate -> String -> ScopeId -> Unit
 resolveRecMono : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> Route
-resolveSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
 returnPosMethod : List String -> IfaceMethod -> List String
 returnPosMethodNames : List Decl -> List String
 returnPosOfDecl : Decl -> List String
@@ -174,9 +159,6 @@ solveExactReturnInstance : SiteCtx -> MethodReturnRequest -> Wanted -> List Mono
 solveExactReturnOnce : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
 solvedCleanly : ModuleCtx -> (a -> List Mono) -> (Unit -> a) -> (Bool, a)
 solvedOnWalk : ModuleCtx -> ReqWalk -> IfaceRef -> List Mono -> (Unit -> List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono)
-spanKeys : List (Option Loc) -> List String
-stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
-stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 superGoalClosure : GraphCtx -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superGoalClosureGo : GraphCtx -> List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 topRouteV : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route

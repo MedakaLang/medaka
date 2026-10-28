@@ -54,6 +54,7 @@ leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
 localDeclaredConstraintFor : ModuleCtx -> String -> CDeclared
 methodCellLookup : GraphCtx -> EvId -> Result String EvCell
 methodCellOf : GraphCtx -> EvId -> EvCell
+methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 nameableIfaceMethodSet : GraphCtx -> List Decl -> Map String Unit
 nameableIfaceRows : GraphCtx -> List Decl -> List (String, List String)
