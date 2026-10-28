@@ -1,49 +1,28 @@
 abstractTypeWords : String -> List Decl -> List String
-addCellHead : Decl -> Map String Unit -> Map String Unit
 admittedIn : GraphCtx -> String -> List (String, String)
 aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasSchemeEntry : List (String, List (String, a)) -> String -> (String, a) -> (String, a)
 aliasSchemes : List (String, List (String, a)) -> String -> List (String, a) -> List (String, a)
-alignScopedSchemes : List ScopedMember -> List (String, Scheme) -> List ScopedScheme
 allModuleLines : List (String, List (String, PubScheme)) -> List String
 ambiguousImportBinding : ModuleCtx -> Unit -> ExportBinding
 ambiguousImports : List (String, (Option String, a)) -> Map String Unit
 ambiguousImportsGo : List (String, (Option String, a)) -> Map String String -> Map String Unit -> Map String Unit
-appendDataUniverse : ModuleCtx -> String -> List Decl -> Unit
-appendUniverseAccums : GraphCtx -> String -> List Decl -> Unit
 asyncDriverFindings : ModuleCtx -> Option String -> String -> List Decl -> Scheme -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List DrainFinding
 asyncDriverUse : ModuleCtx -> PubScheme -> Mono -> Unit
 attachCoherenceConflict : ModuleCtx -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 attachDrainFindings : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 attachEntryPayload : (a -> a) -> List (String, a) -> List (String, a)
-attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)
-attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
-attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List VecObl) -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
-attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 autoPrintEvidence : ModuleCtx -> String -> ScopeId -> IfaceRef -> Mono -> EvId
 autoPrintWanted : ModuleCtx -> Bool -> Option String -> List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List Decl -> List (String, List Decl) -> (List DrainFinding, Option EvId)
-beginModuleMarking : ModuleCtx -> String -> List Decl -> Map String Int -> ModuleSeed -> Unit
 bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
 bindsName : Option (Map String Unit) -> String -> Bool
 boundNames : UsePath -> Option (Map String Unit)
 buildDispositions : GraphCtx -> DeclEnvs -> DispositionTable
-cachedRecordRow : SpellingPop RecordInfo -> Ident -> String -> ConPayload -> Option (List (String, RecordInfo))
-cachedVariantRows : SpellingPop Scheme -> SpellingPop RecordInfo -> TyConOrigin -> List Variant -> Option (List (String, Scheme), List (String, RecordInfo))
 captureEntryTables : ModuleCtx -> Map String (List VecObl) -> List (String, List Decl) -> EntryTables
-captureTypeErrors : ModuleCtx -> (Unit -> Unit) -> List TcDiag
-cellHeadKey : String -> TyConOrigin -> String
-cellTypeHeads : List Decl -> Map String Unit
 chainArgs : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> DriveArgs
 chainFullKey : Int -> Int -> String -> String
-checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 checkCoreMemoized : ModuleCtx -> Option (Int, Int) -> List Decl -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
-checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
-checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
 checkGraphFinish : ModuleCtx -> List DrainFinding
-checkInterfaceCycles : ModuleCtx -> List Decl -> ClassEnv -> Int -> Unit
-checkModuleFull : ModuleCtx -> List (String, Scheme) -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
-checkModuleFullDiags : GraphCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, List TcDiag, List TcDiag, ModuleCtx)
-checkModuleFullImpl : GraphCtx -> CheckRunSeed -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 checkModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesAllLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesChainReportFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> (TcReport, DriveOutputs)
@@ -68,7 +47,6 @@ checkOneDiags : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> 
 checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
 checkOneDiagsK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneErrorsWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> Bool
-checkOneIfaceCycle : ModuleCtx -> List Decl -> ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
 checkOneReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
 checkOneReportKGraph : DriveArgs -> (TcReport, GraphCtx)
@@ -81,7 +59,6 @@ checkOneToLinesWithRuntimeK : DriveInputs -> Option (Int, Int) -> List Decl -> L
 checkedFfiExternTypeNames : List Decl -> List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNamesModule : Map String (Ty, List (String, Int)) -> DriveOutputs -> (String, List Decl) -> List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNamesModules : DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))
-clauseSpans : (Expr -> Option Loc) -> Map String (List (List Pat, Expr)) -> List String -> List Loc
 cmCheckWorker : ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 cmFold : List (String, Scheme) -> ModuleBindings -> ModuleCtx -> List (String, List Decl) -> (List (String, List (String, PubScheme)), ModuleCtx)
 cohHardOnto : Option String -> List TcDiag -> List TcDiag
@@ -90,40 +67,29 @@ cohSoftOnto : Option String -> List TcDiag -> List TcDiag
 collectAbstractRecordTypes : List Decl -> List String
 collectModules : (Bool -> String -> a -> b -> b) -> b -> List (String, a) -> b
 containsPair : (String, String) -> List (String, String) -> Bool
-containsRowKey : String -> List CeRow -> Bool
 continueFromInterface : GraphCtx -> GraphRun -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 coreAliasSchemes : UsePath -> List (String, a) -> List (String, a)
 coreOwnContexts : ModuleCtx -> Map String (List VecObl)
 coreQualScheme : String -> (String, a) -> (String, a)
 coreRenameScheme : List (String, a) -> UseMember -> List (String, a)
-cutRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
-cycleReportLoc : Map String (Map String Unit) -> List Decl -> Int -> CeRow -> Option Loc
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List (String, String) -> UseMember -> UseMember
 deAliasMethodMembers : List (String, String) -> Decl -> Decl
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
-declExternNames : List Decl -> List String
-declIsOwnedType : String -> String -> Decl -> Bool
 declMethodNames : List Decl -> List String
 declMethodNamesOf : Decl -> List String
-declOwnedBy : String -> String -> TyConOrigin -> Bool
 defaultDriveInputs : DriveInputs
-definerRowsOf : List (String, (String, String)) -> List (String, String)
-derivingTypeLoc : Decl -> Option Loc
-directExternSigs : List Decl -> List (String, Ty)
 dispositionRowsOfImpl : ImplEnv -> ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfImpls : ImplEnv -> List ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfMethods : InstId -> IfaceRef -> List String -> List String -> List String -> List MethodDisposition
 dispositionSlotsOfImpls : List ImplRow -> ClassEnv -> List (InstId, IfaceRef, String)
-drainStampQueue : ModuleCtx -> List DrainFinding
 driveArgs : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> DriveArgs
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : GraphOut -> DriveArgs -> GraphDrive
 driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
 dropModSchemes : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
 elabDriveResult : GraphDrive -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
-elabModuleStamp : ModuleCtx -> String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 elabTreesDrive : DriveArgs -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
 elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts)
 elaborateModulesChainReport : DriveInputs -> Bool -> (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
@@ -133,114 +99,41 @@ elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -
 elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
-enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
 entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryReportFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
 entrySplit : TcReport -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
-evEntriesOf : List Obligation -> List EvEntry
-evValueOf : EvDest -> EvVal
-evidenceObservationEntriesGo : Obligation -> List Route -> List (Option Mono) -> Int -> Int -> List EvidenceObservationEntry
-exportedRootCells : Map String Unit -> List (String, Scheme) -> Map Int Unit
-extendPropParams : TcEnv -> List PropParam -> TcEnv
 externSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
-externSchemesGo : ModuleCtx -> List Decl -> List (String, Scheme)
-failureMentions : Map Int Unit -> SummaryFailure ObligationSite -> Bool
-findOverlayDecl : String -> String -> Bool -> Int -> List DeclEnvModule -> Option Decl
 findingsOnto : List DrainFinding -> (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List (String, PubScheme), List TcDiag, List TcDiag))
-finishModuleMarking : ModuleMarking -> TcEnv -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 foldModules : Accumulate -> (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a, ModuleCtx)) -> Option (ModuleServe a) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> ModuleCtx -> List (String, List Decl) -> (b, Option (ModuleServe a), ModuleCtx)
 freezeFrom : Int -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphCtx -> GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView)) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView))
-graphMarksNow : GraphCtx -> Unit -> GraphMarks
 graphModuleWorker : Map String Unit -> GraphOut -> ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView), ModuleCtx)
 graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets, ModuleCtx)
 hadMatchWarnings : DriveOutputs -> Bool
 hadTypeErrors : DriveOutputs -> Bool
-holeDiags : String -> Option Loc -> Inner -> EvidenceRow -> List (String, TcDiag)
-holeKey : (String, TcDiag) -> String
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
-ifaceDfsCycle : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> CeRow -> List String
-ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> TyConOrigin -> String -> List String
-ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> List Super -> List String
-ifaceMethodSlotKeys : List Decl -> List String
-ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
 ifaceSuperCountOfRow : GraphCtx -> ImplRow -> (String, Int)
-importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
-importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : GraphCtx -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
 importSupplierKey : String -> Map String (String, String) -> Map String (List String) -> String -> String
 importedBindingWinners : ModuleCtx -> List (String, (Option String, ExportBinding)) -> Map String Unit -> Map String Unit -> List (String, ExportBinding)
-importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
-importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
-importedMethodBindingNames : GraphCtx -> List Decl -> List (String, String) -> List String
-importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
-inferMembers : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List ScopedMember -> Unit
-inferPropBodies : TcEnv -> List Decl -> Unit
-inferPropBodiesGo : TcEnv -> List Decl -> Unit
-inferTestBodies : TcEnv -> List Decl -> Unit
-inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
 ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
-isInterfaceDecl : Decl -> Bool
-isLiveSpan : Map String Unit -> Option Loc -> Bool
 isMangledExportOfAny : List (String, List (String, a)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 judgeAutoPrintUse : ModuleCtx -> IfaceRef -> Scheme -> Option Loc -> Mono
-judgeCells : Array (Option EvCell) -> Int -> Int -> List (String, TcDiag) -> List (String, TcDiag)
-judgeEvidence : GraphCtx -> List StampCtx -> List (String, TcDiag)
-judgeGoal : String -> Obligation -> List (String, TcDiag)
-judgeLiveGoal : ModuleCtx -> Map String StampCtx -> (List DrainFinding, Map String Unit) -> LiveGoal -> (List DrainFinding, Map String Unit)
-judgeLiveGoals : ModuleCtx -> List StampCtx -> List DrainFinding
 judgeMainUse : ModuleCtx -> (Mono -> Unit) -> Scheme -> Mono
-judgeQuiescentGoals : ModuleCtx -> Unit -> Unit
 lastInvocationOps : DriveOutputs -> InvocationOps
-liveGoalsOf : ModuleCtx -> List Mono -> List LiveGoal
-liveLocsOf : ModuleCtx -> List Obligation -> List String
-liveMemberIds : ModuleCtx -> List Mono -> Map String Unit
-liveVarIdsOf : ModuleCtx -> Mono -> List Int
-locatedImpls : Option Loc -> List Decl -> List (Option Loc, Decl)
 mainHasObligations : ModuleCtx -> Bool
-mapLocalSchemes : ModuleCtx -> List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
-materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
-materializeBinderTypes : GraphCtx -> Unit -> Unit
-memberDefinerRow : String -> List (String, (String, String)) -> (String, String) -> List (String, (String, String))
-memberOfIds : ModuleCtx -> List Mono -> Map Int Int
-memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
-memberPeelSource : ModuleCtx -> List (String, Ty) -> String -> Mono -> Option Mono
-membersSpanLoc : Map String (List (List Pat, Expr)) -> List String -> Option Loc
 methodMembersOf : List String -> Loc -> List UseMember
-methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
-methodReturnProbeStamp : ModuleCtx -> MethodSchemeRow -> MethodSchemeRow -> List Decl -> (String, String, String)
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 modDiagErrs : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 moduleImportSeed : ModuleCtx -> List (String, Scheme) -> List (String, (Option String, ExportBinding)) -> ModuleSeed
-moduleMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> Map String Scheme -> MarkCtx
-moduleRefNameSet : List Decl -> Map String Unit
 moduleSeedFor : ModuleCtx -> List (String, Scheme) -> List (String, ExportBinding) -> String -> List Decl -> List (String, List (String, ExportBinding)) -> ModuleSeed
-moduleStampOrder : List StampStep
 moduleUserFnNames : List (String, List Decl) -> List String
 noteBuiltinExternNames : GraphCtx -> List Decl -> Unit
-noteEvidenceObservation : GraphCtx -> Obligation -> Unit
-noteHighWater : GraphCtx -> Unit
-numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
-obligationPredicateMonos : Obligation -> List (Option Mono)
-obligationRoutes : Obligation -> List Route
-oracleImportDecls : GraphCtx -> List Decl -> Int -> List DeclEnvModule -> List Decl
-oracleImportDeclsOf : GraphCtx -> Int -> List DeclEnvModule -> Decl -> List Decl
-ordinalIsSentinel : Int -> Bool
-ordinalSentinelGuard : ModuleCtx -> Int -> Unit
-originRowsOf : List (String, (String, String)) -> List (String, String)
-overlayCachedRows : SpellingPop Scheme -> SpellingPop RecordInfo -> Decl -> Option (List (String, Scheme), List (String, RecordInfo))
-overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
-overlayHalf : Bool -> List Decl -> Int -> List DeclEnvModule -> List Decl
-overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
-overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
-overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
-overlayScanRows : String -> String -> Bool -> Int -> (Option Decl, Option Decl, Option Decl) -> List DeclEnvModule -> (Option Decl, Option Decl, Option Decl)
 ownContext : ModuleCtx -> String -> List VecObl
 pickSchemes : List String -> Map String Scheme -> List (String, Scheme)
-plainModuleSeed : List (String, Scheme) -> ModuleSeed
 preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludePreambleFor : GraphCtx -> Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
@@ -248,79 +141,21 @@ preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleOf : GraphCtx -> List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleStore : GraphCtx -> (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
-processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List String -> (TcEnv, List (String, Scheme), Map String (List (List Pat, Expr)))
-processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> (List (String, Scheme), Map String (List (List Pat, Expr)))
-processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> Map String Unit -> (List (String, Scheme), Map String (List (List Pat, Expr)))
-publicDataScopeDecls : List Decl -> List Decl
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
-publicValNames : List Decl -> List String
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
-raiseToHighWater : GraphCtx -> Unit
-recordEvidence : GraphCtx -> List Obligation -> Unit
-recordLiveRoots : ModuleCtx -> Unit -> Unit
-recordModuleStart : GraphCtx -> String -> Unit
-recordTopBinderTypes : GraphCtx -> Map String Scheme -> List Decl -> Unit
-recordTopDeclBinderTypes : GraphCtx -> Map String Scheme -> Map String Unit -> Decl -> Unit
-recordTopFunBinderType : GraphCtx -> Map String Scheme -> Map String Unit -> String -> BinderId -> Int -> Unit
-reexportSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 reexportSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
-reexportedCtorDecls : GraphCtx -> Int -> List DeclEnvModule -> String -> List Decl
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
-reexportedOwner : String -> (String, String, Ident) -> List (String, String)
-reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
-refileDeterminedRows : ModuleCtx -> Unit -> Unit
-regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
-registerCachedRecord : ModuleCtx -> String -> RecordInfo -> Unit
-registerCachedRows : TcEnv -> (List (String, Scheme), List (String, RecordInfo)) -> TcEnv
-registerImportOverlay : TcEnv -> List Decl -> List Decl -> TcEnv
 renameAliasedMethods : List Decl -> List (String, List Decl) -> (Map String (List (String, String)), List (String, List Decl))
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr
-renderRouteIdentity : Route -> String
-reportAmbiguousImports : ModuleCtx -> List Decl -> Unit
-reportUnsolvedExport : ModuleCtx -> Map String (List (List Pat, Expr)) -> Map Int Unit -> (String, Map Int Unit) -> Map Int Unit
 resolveAliasMethodSpellings : GraphCtx -> (String, List Decl) -> (String, List Decl)
-resolveArithSites : List (Ref Route, Mono) -> Unit
-resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
-resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
-resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
-resolveSites : SiteCtx -> Map String Unit -> List PendingEntry -> Unit
-rootCellsOf : Map String Unit -> List (String, Scheme) -> List (String, Map Int Unit)
-routeGivenBinder : Route -> Option String
-routeInstanceKey : Route -> Option String
-routeOutcomeKind : Route -> EvidenceOutcomeKind
-routePrerequisiteRoutes : Route -> List Route
-runFinalChecks : ModuleCtx -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Unit
-runStampCtx : ModuleCtx -> StampCtx -> List DrainFinding
-runStampCtxs : ModuleCtx -> List StampCtx -> List DrainFinding
-runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
-runStampSteps : ModuleCtx -> StampCtx -> List StampStep -> Unit
 schemeLines : List (String, PubScheme) -> List String
-scopeMembers : ModuleCtx -> ScopeId -> Map String (List (List Pat, Expr)) -> List (String, Mono) -> List ScopedMember
-scopedMemberBinding : ScopedMember -> (String, EnvBinding)
 seedAbstractRecordTypes : GraphCtx -> List Decl -> List (String, List Decl) -> Unit
-seedBuiltinClasses : GraphCtx -> String -> List Decl -> Unit
-seedCheckRun : List Decl -> CheckRunSeed
 seedContext : ModuleCtx -> Map String (List VecObl) -> String -> List VecObl
-selfNameRows : List Decl -> List (String, a) -> List (String, a)
 serveOps : ServeOps
 setDictEligible : GraphCtx -> List String -> Unit
 setMainSchemeIfEntry : GraphCtx -> Bool -> List (String, PubScheme) -> Unit
-setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
-settleClosedBody : ModuleCtx -> Mono -> Int -> Int -> Int -> Unit
-settleDeferredPatLits : ModuleCtx -> Unit -> Unit
-sigNamesToSet : List (String, Ty) -> Map String Unit -> Map String Unit
-signedTopNames : List Decl -> Map String Unit -> Map String Unit
-sigsOf : List Decl -> List (String, Ty)
-spanKeys : List (Option Loc) -> List String
-stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
-stampEach : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
-stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
-stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
-stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
-stampTailDecl : Map String Int -> Decl -> Decl
-stampTailDecls : Map String Int -> List Decl -> List Decl
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
@@ -329,12 +164,5 @@ tcConfigOf : List (String, Param) -> DriveInputs -> TcConfig
 treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
 treeArmHit : DriveInputs -> List Decl -> GraphCtx -> Option (PreludeElab, PreludeInterface)
 typeErrorLines : List String -> List String
-uOblIsDecidableNow : GraphCtx -> UObligation -> Bool
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
-unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
-useAdmittedRows : GraphCtx -> Bool -> List Decl -> List (String, (String, String))
-useDefinerRows : GraphCtx -> Bool -> UsePath -> List (String, (String, String))
-userExternSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
-verdictFinding : String -> Bool -> TcDiag -> DrainFinding
-wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 workModules : Accumulate -> (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a, ModuleCtx)) -> Option (ModuleServe a) -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, a) -> ModuleCtx -> List (String, List Decl) -> (List (String, a), Option (ModuleServe a), ModuleCtx)

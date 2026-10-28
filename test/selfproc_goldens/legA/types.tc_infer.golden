@@ -20,6 +20,8 @@ boolOp : DynCtx -> Mono -> Mono -> Mono
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
 checkBinderPat : TcEnv -> Mono -> Pat -> Unit
 checkBinderPats : TcEnv -> List Mono -> List Pat -> Unit
+checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
+checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
 checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit

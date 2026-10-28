@@ -1,12 +1,12 @@
 # META
-source_lines=2031
+source_lines=2052
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
 -- operator-to-method rewriting: tree-to-tree passes
 -- over evidence; and the realization of solved evidence into the tree's route cells, one recorded
--- site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `realizeRecDictApps`):
--- the cells `dictPass` reads.
+-- site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`,
+-- `realizeRecDictApps`): the cells `dictPass` reads.
 --
 -- Spec: DICT section 4 (translation), section 7; EFFECTS section 8.
 --
@@ -21,6 +21,7 @@ import types.tc_types.{
   GrantBinder(..),
   MethodGrantUse(..),
   MethodReturnTraceStage(..),
+  PendingDictApp(..),
   PredicateSlot(..),
   PredicateSlotArgs(..),
   SiteCtx(..),
@@ -72,6 +73,7 @@ import types.tc_solve.{
   numericReturnRoute,
   recRoutes,
   returnPosMethodNames,
+  routesOfMonosTopV,
   solveExactReturnOnce,
 }
 import types.tc_solve_check.{setFunPredicateSlots}
@@ -634,6 +636,25 @@ resolveMethodDicts sx (pending :: rest) =
   pending.pmdRoutesRef :=
     methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
   resolveMethodDicts sx rest
+
+-- fill each constrained-fn call site's routes: one route per constraint mono.  A
+-- mono pinned to a concrete head → RKey; still a constraint variable (a nested
+-- constrained call) → RDict; otherwise RNone.
+export
+resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
+resolveDictApps sx [] = ()
+resolveDictApps sx (app :: rest) =
+  let sx = { sx | sxSite = app.pdaLoc }
+  let routes =
+    routesOfMonosTopV
+      sx
+      app.pdaEncl
+      app.pdaScope
+      app.pdaMonos
+      app.pdaIfaces
+      app.pdaArgVecs
+  app.pdaRoutesRef := routes
+  resolveDictApps sx rest
 
 -- A deferred recursive call records one route per the CALLEE's constraint slot
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
@@ -2034,7 +2055,7 @@ sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
 sigPredicateSlot (iface, _) =
   PredicateSlot { psIface = iface, psArgs = PSArgsUnknown, psBoundIds = [] }
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedAnswer" true) (mem "BuiltinClass" true) (mem "EntailKind" true) (mem "GrantBinder" true) (mem "MethodGrantUse" true) (mem "MethodReturnTraceStage" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "GrantOcc" false) (mem "GrantState" false) (mem "grantTopKey" false) (mem "GraphCtx" false) (mem "LocalAbs" false) (mem "MethodGrant" false) (mem "MethodPredicateSlot" false) (mem "MethodReturnRequest" false) (mem "ModuleCtx" false) (mem "PassEvidence" false) (mem "PassMethod" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedAnswer" true) (mem "BuiltinClass" true) (mem "EntailKind" true) (mem "GrantBinder" true) (mem "MethodGrantUse" true) (mem "MethodReturnTraceStage" true) (mem "PendingDictApp" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "GrantOcc" false) (mem "GrantState" false) (mem "grantTopKey" false) (mem "GraphCtx" false) (mem "LocalAbs" false) (mem "MethodGrant" false) (mem "MethodPredicateSlot" false) (mem "MethodReturnRequest" false) (mem "ModuleCtx" false) (mem "PassEvidence" false) (mem "PassMethod" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "anyMember" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dictParamName" false) (mem "interners" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "builtinClassName" false) (mem "builtinClassOrigin" false) (mem "declTopFnNames" false) (mem "importerReachIndex" false) (mem "methodLevelConstraintVarNames" false) (mem "methodSlotKey" false) (mem "namesToSet" false))))
@@ -2043,7 +2064,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "methodDictArityOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "entail" false) (mem "implDictRoutesForRow" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "solveExactReturnOnce" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false) (mem "solveExactReturnOnce" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "setFunPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
@@ -2136,6 +2157,9 @@ sigPredicateSlot (iface, _) =
 (DTypeSig true "resolveMethodDicts" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingMethodDict")) (TyCon "Unit"))))
 (DFunDef false "resolveMethodDicts" ((PVar "sx") (PList)) (ELit LUnit))
 (DFunDef false "resolveMethodDicts" ((PVar "sx") (PCons (PVar "pending") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "pending") "pmdRoutesRef")) (EApp (EApp (EApp (EApp (EVar "methodPredicateRoutes") (EVar "sx")) (EFieldAccess (EVar "pending") "pmdEncl")) (EFieldAccess (EVar "pending") "pmdScope")) (EFieldAccess (EVar "pending") "pmdSlots")))) (DoExpr (EApp (EApp (EVar "resolveMethodDicts") (EVar "sx")) (EVar "rest")))))
+(DTypeSig true "resolveDictApps" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "Unit"))))
+(DFunDef false "resolveDictApps" ((PVar "sx") (PList)) (ELit LUnit))
+(DFunDef false "resolveDictApps" ((PVar "sx") (PCons (PVar "app") (PVar "rest"))) (EBlock (DoLet false false (PVar "sx") (ERecordUpdate (EVar "sx") ((fa "sxSite" (EFieldAccess (EVar "app") "pdaLoc"))))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTopV") (EVar "sx")) (EFieldAccess (EVar "app") "pdaEncl")) (EFieldAccess (EVar "app") "pdaScope")) (EFieldAccess (EVar "app") "pdaMonos")) (EFieldAccess (EVar "app") "pdaIfaces")) (EFieldAccess (EVar "app") "pdaArgVecs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "app") "pdaRoutesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "resolveDictApps") (EVar "sx")) (EVar "rest")))))
 (DTypeSig true "realizeRecDictApps" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "RecDictApp")) (TyCon "Unit"))))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PList)) (ELit LUnit))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PCons (PCon "RecDictApp" (PVar "routesRef") (PVar "callee") (PVar "encl") (PVar "mono") (PVar "scope") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "callee")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "recRoutes") (EVar "sx")) (EVar "encl")) (EVar "scope")) (EVar "mono")) (EVar "slots"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "realizeRecDictApps") (EVar "sx")) (EVar "rest")))))
@@ -2396,7 +2420,7 @@ sigPredicateSlot (iface, _) =
 (DTypeSig false "sigPredicateSlot" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "PredicateSlot")))
 (DFunDef false "sigPredicateSlot" ((PTuple (PVar "iface") PWild)) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit)))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedAnswer" true) (mem "BuiltinClass" true) (mem "EntailKind" true) (mem "GrantBinder" true) (mem "MethodGrantUse" true) (mem "MethodReturnTraceStage" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "GrantOcc" false) (mem "GrantState" false) (mem "grantTopKey" false) (mem "GraphCtx" false) (mem "LocalAbs" false) (mem "MethodGrant" false) (mem "MethodPredicateSlot" false) (mem "MethodReturnRequest" false) (mem "ModuleCtx" false) (mem "PassEvidence" false) (mem "PassMethod" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedAnswer" true) (mem "BuiltinClass" true) (mem "EntailKind" true) (mem "GrantBinder" true) (mem "MethodGrantUse" true) (mem "MethodReturnTraceStage" true) (mem "PendingDictApp" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "GrantOcc" false) (mem "GrantState" false) (mem "grantTopKey" false) (mem "GraphCtx" false) (mem "LocalAbs" false) (mem "MethodGrant" false) (mem "MethodPredicateSlot" false) (mem "MethodReturnRequest" false) (mem "ModuleCtx" false) (mem "PassEvidence" false) (mem "PassMethod" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "anyMember" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dictParamName" false) (mem "interners" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "builtinClassName" false) (mem "builtinClassOrigin" false) (mem "declTopFnNames" false) (mem "importerReachIndex" false) (mem "methodLevelConstraintVarNames" false) (mem "methodSlotKey" false) (mem "namesToSet" false))))
@@ -2405,7 +2429,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "methodDictArityOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "entail" false) (mem "implDictRoutesForRow" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "solveExactReturnOnce" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false) (mem "solveExactReturnOnce" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "setFunPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
@@ -2498,6 +2522,9 @@ sigPredicateSlot (iface, _) =
 (DTypeSig true "resolveMethodDicts" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingMethodDict")) (TyCon "Unit"))))
 (DFunDef false "resolveMethodDicts" ((PVar "sx") (PList)) (ELit LUnit))
 (DFunDef false "resolveMethodDicts" ((PVar "sx") (PCons (PVar "pending") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "pending") "pmdRoutesRef")) (EApp (EApp (EApp (EApp (EVar "methodPredicateRoutes") (EVar "sx")) (EFieldAccess (EVar "pending") "pmdEncl")) (EFieldAccess (EVar "pending") "pmdScope")) (EFieldAccess (EVar "pending") "pmdSlots")))) (DoExpr (EApp (EApp (EVar "resolveMethodDicts") (EVar "sx")) (EVar "rest")))))
+(DTypeSig true "resolveDictApps" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "Unit"))))
+(DFunDef false "resolveDictApps" ((PVar "sx") (PList)) (ELit LUnit))
+(DFunDef false "resolveDictApps" ((PVar "sx") (PCons (PVar "app") (PVar "rest"))) (EBlock (DoLet false false (PVar "sx") (ERecordUpdate (EVar "sx") ((fa "sxSite" (EFieldAccess (EVar "app") "pdaLoc"))))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTopV") (EVar "sx")) (EFieldAccess (EVar "app") "pdaEncl")) (EFieldAccess (EVar "app") "pdaScope")) (EFieldAccess (EVar "app") "pdaMonos")) (EFieldAccess (EVar "app") "pdaIfaces")) (EFieldAccess (EVar "app") "pdaArgVecs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "app") "pdaRoutesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "resolveDictApps") (EVar "sx")) (EVar "rest")))))
 (DTypeSig true "realizeRecDictApps" (TyFun (TyCon "SiteCtx") (TyFun (TyApp (TyCon "List") (TyCon "RecDictApp")) (TyCon "Unit"))))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PList)) (ELit LUnit))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PCons (PCon "RecDictApp" (PVar "routesRef") (PVar "callee") (PVar "encl") (PVar "mono") (PVar "scope") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "callee")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "recRoutes") (EVar "sx")) (EVar "encl")) (EVar "scope")) (EVar "mono")) (EVar "slots"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "realizeRecDictApps") (EVar "sx")) (EVar "rest")))))

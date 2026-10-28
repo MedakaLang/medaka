@@ -129,6 +129,7 @@ recPredicateArgs : GraphCtx -> Mono -> PredicateSlot -> Option (List Mono)
 recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
 recRoutes : SiteCtx -> String -> ScopeId -> Mono -> List PredicateSlot -> List Route
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
+refileDeterminedRows : ModuleCtx -> Unit -> Unit
 refileGoals : GraphCtx -> GoalWindow -> List Int -> Unit
 repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 reqToObligation : ModuleCtx -> List (String, Mono) -> Require -> (IfaceRef, List Mono)

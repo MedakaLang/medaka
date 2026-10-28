@@ -5,4 +5,3 @@ frontend.parser
 frontend.resolve
 tools.lint
 tools.test_cmd
-types.typecheck

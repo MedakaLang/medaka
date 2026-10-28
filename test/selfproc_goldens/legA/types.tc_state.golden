@@ -50,14 +50,18 @@ mintGraphCtx : DriveInputs -> Map String (List (String, String)) -> GraphCtx
 moduleCellsFrom : Bool -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells
 moduleCtxFrom : Bool -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
 moduleWindow : Int -> Int -> List a -> List a
+noteHighWater : GraphCtx -> Unit
 noteInterners : GraphCtx -> Unit
 offTraceSink : Unit -> TraceSink
+plainModuleSeed : List (String, Scheme) -> ModuleSeed
 probeGraphCtx : Unit -> GraphCtx
+raiseToHighWater : GraphCtx -> Unit
 refFrom : Bool -> Ref a -> Ref a
 renderEvidenceBinder : GraphCtx -> EvidenceBinderId -> String
 sameSpan : Option Loc -> Option Loc -> Bool
 scopeFrameStats : GraphCtx -> (Int, Int)
 scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
+seedCheckRun : List Decl -> CheckRunSeed
 wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
