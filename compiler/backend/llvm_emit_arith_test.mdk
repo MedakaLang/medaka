@@ -7,11 +7,12 @@ import types.capability_manifest.{ManifestRequirement(..)}
 -- Run it: medaka test --native compiler/backend/llvm_emit_arith_test.mdk
 
 import test.{expectAll, expectEqual, expectFalse, expectTextContainsAll}
-import string.{contains, countOccurrences}
+import string.{contains, countOccurrences, unlines}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import backend.emit_plan.{buildEmitPlan}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
+import backend.llvm_symbols.{defectMessage}
 import frontend.ast.{
   Addr(..), BinderId(..), Lit(..), Pat(..), Route(..), noDeclLoc
 }
@@ -117,10 +118,7 @@ arithProgram tag =
 arithLlvm : String -> String
 arithLlvm tag =
   let cp = arithProgram tag
-  emitProgram
-    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
-    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
-    cp
+  llvmText cp
 
 test "fst result selects Int arithmetic" =
   expectEqual 42 (fstPlusOne (41, True))
@@ -185,10 +183,20 @@ numericLlvm facts impls body =
             })
             [(1, "main"), (2, "raw"), (3, "intToFloat"), (4, "x")],
       }
-  emitProgram
-    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
-    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
-    cp
+  llvmText cp
+
+-- the module text; a module the emitter refuses aborts the test with its defects
+llvmText : CProgram -> String
+llvmText cp =
+  let emitted =
+    emitProgram
+      (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+      (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
+      cp
+  match emitted
+    Ok text => text
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map defectMessage defects))
 
 numericCall : String -> List CExpr -> CExpr
 numericCall key args = mkApp (CVar (runtimeExternSymbol key) AGlobal) args

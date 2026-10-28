@@ -54,7 +54,9 @@ declarations, positions, and immutable cue lists without exposing the context
 or retaining its source. Syntax-only formatting entry points keep their
 existing acceptance rules; strict entry points continue to run prescans.
 
-The full `SourceIndex` remains the authority for UTF-16 protocol coordinates.
+The `support/source_index.mdk` module owns UTF-16 protocol coordinates. Its full
+`SourceIndex` serves indexed queries; `sourceEndUtf16Position` scans in constant
+auxiliary space for recovery admission rejection, before an index can be built.
 Parser position projection needs only codepoint line starts, so the existing
 line-start helpers move from the lexer into `support/source_index.mdk` and the
 lexer retains compatibility exports. The parser engine may use the shared
@@ -70,6 +72,19 @@ this changes the channel's ownership and lifetime, not AST field placement.
 The sprint contract records the exact interfaces, rollback cases, consumer
 migration and full-parser performance and retention checks before the code
 changes land.
+
+Recovery may encounter several diagnostics in one source. Its strict-first
+attempt and prescans share an invocation-owned `SourceIndex` provider instead
+of rebuilding the full UTF-16 index for every diagnostic. Raw recovery keeps
+that provider lazy and memoizes it only for the invocation; a snapshot query
+uses the snapshot's existing index. Published recovery results retain neither
+the provider nor the index. Existing coordinate validation, including CRLF
+interior handling, remains unchanged. In the recovery prototype, eight
+independent errors after a 1 MiB comment allocated about 772 MB because each
+error built another full-source index; sharing eliminates that repeated work.
+This is a component measurement, not a claim about total end-to-end cost.
+
+The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
 
 ## Decisions (locked 2026-07-22 by Val)
 

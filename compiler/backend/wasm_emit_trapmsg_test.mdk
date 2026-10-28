@@ -17,7 +17,7 @@ import backend.wasm_emit.{inputCtorFloatFieldsW}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
-import string.{fromChars, lines, stripPrefix, toInt}
+import string.{fromChars, lines, stripPrefix, toInt, unlines}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -29,6 +29,7 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
+import backend.wasm_symbols.{defectMessage}
 import backend.emit_plan.{buildEmitPlan}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
@@ -40,8 +41,10 @@ watOf src =
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (plan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-  let (text, _) = emitProgramRecord input plan prepared
-  text
+  match emitProgramRecord input plan prepared
+    Ok (text, _) => text
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map defectMessage defects))
 
 -- the bytes one helper body writes: each `i32.const N` line contributes the byte N
 bodyChars : List String -> List Char

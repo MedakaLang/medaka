@@ -54,7 +54,7 @@ FIX="$ROOT/test/native_cli_fixtures"
 
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
-bound() { perl -e 'alarm 120; exec @ARGV' "$@"; }
+bound() { perl -e 'alarm 120; exec @ARGV or die qq(exec: $!)' "$@"; }
 
 # A Unit-returning `main` no longer auto-prints (gated in llvm_emit.mdk), so the
 # native CLI emits no trailing "0" line.  This delete-if-bare-"0" form is a no-op

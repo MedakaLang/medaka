@@ -51,7 +51,7 @@ check() {
 P6="$TMP/p6"
 mkdir -p "$P6"
 printf '[package]\nname = "p6"\nversion = "0.1.0"\n' > "$P6/medaka.toml"
-perl -e 'alarm 300; exec @ARGV' -- python3 - "$MEDAKA" "$ROOT" "$P6" <<'PY'
+perl -e 'alarm 300; exec @ARGV or die qq(exec: $!)' -- python3 - "$MEDAKA" "$ROOT" "$P6" <<'PY'
 import json, os, subprocess, sys
 
 MEDAKA, ROOT, P6 = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -205,7 +205,7 @@ mkdir -p "$P7"
 printf '[package]\nname = "p7"\n' > "$P7/medaka.toml"
 printf 'export\nbase = 7\n' > "$P7/sib.mdk"
 printf 'import sib.{base}\n\nshow = base\n\nmain = println show\n' > "$P7/main.mdk"
-perl -e 'alarm 300; exec @ARGV' -- python3 - "$MEDAKA" "$ROOT" "$P7" <<'PY'
+perl -e 'alarm 300; exec @ARGV or die qq(exec: $!)' -- python3 - "$MEDAKA" "$ROOT" "$P7" <<'PY'
 import json, os, subprocess, sys
 
 MEDAKA, ROOT, P7 = sys.argv[1], sys.argv[2], sys.argv[3]

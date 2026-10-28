@@ -18,6 +18,10 @@ locToLspRange index (Loc _ sl sc el ec) = do
   Some (jObject [("start", position a), ("end", position b)])
 
 export
+jRangeOfLoc : SourceIndex -> Loc -> Json
+jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
+
+export
 lspPositionToOffset : SourceIndex -> Json -> Option Int
 lspPositionToOffset index pos = match (get "line" pos, get "character" pos)
   (Some l, Some c) => match (asInt l, asInt c)

@@ -1,5 +1,5 @@
 # META
-source_lines=2297
+source_lines=2679
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{
@@ -1829,6 +1829,388 @@ helperOrder = [
   "siteRuntimeLines",
 ]
 
+-- What a helper block's text holds that another function can name: the
+-- functions it defines, each with the operand count a call of it supplies, and
+-- the functions outside the block it calls.  The emitter declares these before
+-- any body (`declarePlannedHelpers`, wasm_preamble.mdk); the sibling test
+-- `wasm_preamble_test.mdk` holds each row to the text the block renders.
+public export data HelperManifest =
+  HelperManifest (List (String, Int)) (List String)
+  deriving (Eq, Debug)
+
+-- [name]'s manifest as [plan] selects its text.
+export
+helperManifest : WasmDemandPlan -> String -> HelperManifest
+helperManifest _ "closApplyLines" =
+  HelperManifest [("mdk_pap", 2), ("__mdk_apply", 2)] []
+helperManifest _ "ioRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_unbox_int", 1),
+      ("mdk_box_int", 1),
+      ("mdk_write_digits", 1),
+      ("mdk_print_int", 1),
+      ("mdk_print_bool", 1),
+    ]
+    ["mdk_write_byte"]
+helperManifest _ "ioStrRuntimeLines" =
+  HelperManifest
+    [("mdk_print_str", 1), ("mdk_print_strln", 1), ("mdk_int_to_str", 1)]
+    ["mdk_write_byte"]
+helperManifest _ "strLeafRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_cp_count", 2),
+      ("mdk_byte_off", 3),
+      ("mdk_str_append", 2),
+      ("mdk_char_to_str", 1),
+      ("mdk_str_slice", 3),
+      ("mdk_str_cp_at_byte", 2),
+      ("mdk_str_slice_bytes", 3),
+      ("mdk_str_upper", 1),
+      ("mdk_str_lower", 1),
+      ("mdk_dbg_esc_byte", 4),
+      ("mdk_dbg_quote", 2),
+      ("mdk_debug_string_lit", 1),
+      ("mdk_debug_char_lit", 1),
+      ("mdk_bytes_match_at", 3),
+      ("mdk_str_starts_with", 2),
+      ("mdk_str_ends_with", 2),
+    ]
+    []
+helperManifest _ "strConcatRuntimeLines" =
+  HelperManifest [("mdk_str_concat", 1)] []
+helperManifest _ "appendRuntimeLines" =
+  HelperManifest [("mdk_append", 2)] ["mdk_str_append"]
+helperManifest _ "valueEqRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_value_eq", 2),
+      ("mdk_value_cmp", 2),
+      ("mdk_value_lt", 2),
+      ("mdk_value_le", 2),
+      ("mdk_value_gt", 2),
+      ("mdk_value_ge", 2),
+    ]
+    ["mdk_str_compare", "mdk_unbox_int"]
+helperManifest _ "valueAddRuntimeLines" =
+  valueArithManifest "add" ["mdk_int_add"]
+helperManifest _ "valueSubRuntimeLines" =
+  valueArithManifest "sub" ["mdk_int_sub"]
+helperManifest _ "valueMulRuntimeLines" =
+  valueArithManifest "mul" ["mdk_int_mul"]
+helperManifest plan "valueDivRuntimeLines" =
+  valueArithManifest
+    "div"
+    (["mdk_int_div", "mdk_write_err_byte"]
+      ++ (if hasWasmHelper plan "i64RuntimeLines" then ["mdk_i64_div"] else []))
+helperManifest _ "valueModRuntimeLines" =
+  valueArithManifest "mod" ["mdk_float_rem", "mdk_write_err_byte"]
+helperManifest _ "valueCmpNumRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_value_eq_num", 2),
+      ("mdk_value_cmp_num", 2),
+      ("mdk_value_lt_num", 2),
+      ("mdk_value_le_num", 2),
+      ("mdk_value_gt_num", 2),
+      ("mdk_value_ge_num", 2),
+    ]
+    ["mdk_unbox_int"]
+helperManifest _ "u64RuntimeLines" =
+  HelperManifest
+    [("mdk_u64_shl", 2), ("mdk_u64_shr", 2), ("mdk_u64_mulhi", 2)]
+    []
+helperManifest _ "i64RuntimeLines" = HelperManifest [("mdk_i64_div", 2)] []
+helperManifest _ "stderrRuntimeLines" =
+  HelperManifest
+    [("mdk_eprint_str", 1), ("mdk_eprint_strln", 1)]
+    ["mdk_write_err_byte"]
+helperManifest _ "rngRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_next_u64", 0),
+      ("mdk_random_int", 2),
+      ("mdk_random_bool", 0),
+      ("mdk_random_char", 0),
+    ]
+    []
+helperManifest _ "hashRuntimeLines" =
+  HelperManifest
+    [("mdk_hash_mix64", 1), ("mdk_hash_int", 1), ("mdk_hash_bool", 1)]
+    []
+helperManifest _ "hashStringRuntimeLines" =
+  HelperManifest [("mdk_hash_string", 1)] []
+helperManifest _ "floatRemRuntimeLines" =
+  HelperManifest [("mdk_float_rem", 2)] []
+helperManifest _ "floatRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_int_to_float", 1),
+      ("mdk_float_to_int", 1),
+      ("mdk_round", 1),
+      ("mdk_float_to_str", 1),
+    ]
+    ["mdk_float_fmt", "mdk_float_fmt_byte"]
+helperManifest _ "hashFloatRuntimeLines" =
+  HelperManifest [("mdk_hash_float", 1)] ["mdk_hash_mix64"]
+helperManifest _ "randomFloatRuntimeLines" =
+  HelperManifest [("mdk_random_float", 0)] ["mdk_next_u64"]
+helperManifest _ "strSearchRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_str_index_of", 2),
+      ("mdk_str_count_occ", 2),
+      ("mdk_str_last_index_of", 2),
+      ("mdk_str_compare", 2),
+    ]
+    ["mdk_cp_count", "mdk_bytes_match_at"]
+helperManifest _ "strToIntRuntimeLines" =
+  HelperManifest [("mdk_str_to_int", 1)] ["mdk_box_int"]
+helperManifest _ "strReverseRuntimeLines" =
+  HelperManifest [("mdk_str_reverse", 1)] []
+helperManifest _ "strJoinRuntimeLines" = HelperManifest [("mdk_str_join", 2)] []
+helperManifest _ "utf8LossyRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_utf8_step", 3),
+      ("mdk_utf8_valid_count", 1),
+      ("mdk_u8_to_str_lossy", 1),
+    ]
+    []
+helperManifest _ "strCodecRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_str_to_chars", 1),
+      ("mdk_utf8_nbytes", 1),
+      ("mdk_utf8_emit_at", 3),
+      ("mdk_chars_to_str", 1),
+      ("mdk_str_to_utf8_bytes", 1),
+      ("mdk_utf8_bytes_to_str", 1),
+    ]
+    ["mdk_u8_to_str_lossy"]
+helperManifest _ "byteBlockRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_bb_copy", 2),
+      ("mdk_bb_from_int_array", 1),
+      ("mdk_bb_to_int_array", 1),
+      ("mdk_bb_from_string", 1),
+      ("mdk_bb_to_string", 1),
+      ("mdk_bb_write_stdout", 1),
+      ("mdk_sha_get", 2),
+      ("mdk_sha_set", 3),
+      ("mdk_sha_k", 1),
+      ("mdk_sha_block", 4),
+      ("mdk_sha256", 1),
+    ]
+    ["mdk_unbox_int", "mdk_u8_to_str_lossy", "mdk_write_byte"]
+helperManifest _ "charFromCodeRuntimeLines" =
+  HelperManifest [("mdk_char_from_code", 1)] []
+helperManifest _ "charClassRuntimeLines" =
+  HelperManifest
+    [
+      ("mdk_char_is_alpha", 1),
+      ("mdk_char_is_space", 1),
+      ("mdk_char_is_upper", 1),
+      ("mdk_char_is_lower", 1),
+      ("mdk_char_is_punct", 1),
+      ("mdk_char_to_upper", 1),
+      ("mdk_char_to_lower", 1),
+    ]
+    []
+helperManifest _ "ioPushPathLines" =
+  HelperManifest [("mdk_push_path", 1)] ["mdk_path_reset", "mdk_path_push"]
+helperManifest _ "ioPushPathMoreLines" =
+  HelperManifest [("mdk_push_path_more", 1)] ["mdk_path_push"]
+helperManifest _ "ioPushGrantLines" =
+  HelperManifest [("mdk_push_grant", 1)] ["mdk_grant_reset", "mdk_grant_push"]
+helperManifest _ "ioPushGrantMoreLines" =
+  HelperManifest [("mdk_push_grant_more", 1)] ["mdk_grant_push"]
+helperManifest _ "ioResultLines" =
+  HelperManifest
+    [("mdk_io_result_bytes", 0), ("mdk_io_result_to_str", 0)]
+    ["mdk_result_len", "mdk_result_byte", "mdk_u8_to_str_lossy"]
+helperManifest _ "ioRefusedPanicLines" =
+  HelperManifest
+    [("mdk_refused_panic", 0), ("mdk_err_u8arr", 1)]
+    ["mdk_io_result_bytes", "mdk_write_err_byte"]
+helperManifest _ "ioReadFileLines" =
+  HelperManifest
+    [("mdk_str_not_utf8", 1), ("mdk_read_file_io", 2)]
+    (grantedPathCalls [
+      "mdk_read_file", "mdk_io_result_bytes", "mdk_utf8_valid_count"
+    ])
+helperManifest _ "ioFetchTextLines" =
+  HelperManifest
+    [("mdk_fetch_text_io", 1)]
+    ["mdk_push_path", "mdk_fetch_text", "mdk_io_result_to_str"]
+helperManifest _ "ioFileExistsLines" =
+  HelperManifest
+    [("mdk_file_exists_io", 2)]
+    ["mdk_push_grant", "mdk_push_path", "mdk_file_exists", "mdk_refused_panic"]
+helperManifest _ "ioCanonicalizeLines" =
+  HelperManifest
+    [("mdk_canonicalize_path_io", 2)]
+    (grantedPathCalls ["mdk_canonicalize_path", "mdk_refused_panic"])
+helperManifest _ "ioWriteFileLines" =
+  HelperManifest [("mdk_write_file_io", 3)] (writtenPathCalls "mdk_write_file")
+helperManifest _ "ioAppendFileLines" =
+  HelperManifest
+    [("mdk_append_file_io", 3)]
+    (writtenPathCalls "mdk_append_file")
+helperManifest _ "ioRenameLines" =
+  HelperManifest
+    [("mdk_rename_io", 4)]
+    (grantedPathCalls [
+      "mdk_grant_push", "mdk_push_grant_more", "mdk_push_path_more",
+      "mdk_rename"
+    ])
+helperManifest _ "ioListDirLines" =
+  HelperManifest
+    [("mdk_list_dir_io", 2)]
+    (grantedPathCalls [
+      "mdk_list_dir", "mdk_io_result_bytes", "mdk_u8_to_str_lossy"
+    ])
+helperManifest _ "ioStatFileLines" =
+  HelperManifest
+    [("mdk_stat_file_io", 2)]
+    (grantedPathCalls ["mdk_stat_file", "mdk_box_int", "mdk_stat_field"])
+helperManifest _ "ioMakeDirLines" =
+  HelperManifest [("mdk_make_dir_io", 2)] (grantedPathCalls ["mdk_make_dir"])
+helperManifest _ "ioRemoveFileLines" =
+  HelperManifest
+    [("mdk_remove_file_io", 2)]
+    (grantedPathCalls ["mdk_remove_file"])
+helperManifest _ "ioRemoveDirLines" =
+  HelperManifest
+    [("mdk_remove_dir_io", 2)]
+    (grantedPathCalls ["mdk_remove_dir"])
+helperManifest _ "ioFsyncLines" =
+  HelperManifest [("mdk_fsync_io", 2)] (grantedPathCalls ["mdk_fsync"])
+helperManifest _ "ioFileModeLines" =
+  HelperManifest
+    [("mdk_file_mode_io", 2)]
+    (grantedPathCalls ["mdk_file_mode", "mdk_box_int", "mdk_stat_field"])
+helperManifest _ "ioWriteFileModeLines" =
+  HelperManifest
+    [("mdk_write_file_mode_io", 4)]
+    ("mdk_unbox_int" :: writtenPathCalls "mdk_write_file_mode")
+helperManifest _ "ioGetEnvLines" =
+  HelperManifest
+    [("mdk_get_env_io", 1)]
+    ["mdk_push_path", "mdk_get_env", "mdk_io_result_to_str"]
+helperManifest _ "ioReadLineLines" =
+  HelperManifest
+    [("mdk_read_line_io", 0), ("mdk_read_line_opt_io", 0)]
+    ["mdk_read_line", "mdk_io_result_to_str"]
+helperManifest _ "ioReadAllLines" =
+  HelperManifest
+    [("mdk_read_all_io", 0)]
+    ["mdk_read_all", "mdk_io_result_to_str"]
+helperManifest _ "ioReadExactlyLines" =
+  HelperManifest
+    [("mdk_read_exactly_io", 1)]
+    ["mdk_read_exactly", "mdk_io_result_to_str"]
+helperManifest _ "ioExecutablePathLines" =
+  HelperManifest
+    [("mdk_executable_path_io", 0)]
+    ["mdk_executable_path", "mdk_io_result_to_str"]
+helperManifest _ "jsffiArrayLines" =
+  HelperManifest
+    [
+      ("mdk_jsffi_push_ints", 1),
+      ("mdk_jsffi_result_i64", 1),
+      ("mdk_jsffi_copy_back", 2),
+    ]
+    ["mdk_unbox_int", "mdk_path_push", "mdk_result_byte", "mdk_box_int"]
+helperManifest _ "jsffiResultStrLines" =
+  HelperManifest
+    [("mdk_jsffi_result_str", 1)]
+    ["mdk_result_len", "mdk_result_byte", "mdk_u8_to_str_lossy"]
+helperManifest _ "ioArgsLines" =
+  HelperManifest
+    [("mdk_arg_to_str", 1), ("mdk_args_io", 0)]
+    ["mdk_arg_len", "mdk_arg_byte", "mdk_u8_to_str_lossy", "mdk_args_count"]
+helperManifest _ "writeFileBytesLines" =
+  HelperManifest
+    [("mdk_write_file_bytes_io", 3)]
+    (writtenPathCalls "mdk_write_file_commit")
+helperManifest _ "osEntropyLines" =
+  HelperManifest
+    [("mdk_os_entropy_io", 1)]
+    ["mdk_os_entropy", "mdk_refused_panic", "mdk_result_len", "mdk_result_byte"]
+helperManifest _ "readFileBytesLines" =
+  HelperManifest
+    [("mdk_read_file_bytes_io", 2)]
+    (grantedPathCalls ["mdk_read_file", "mdk_result_len", "mdk_result_byte"])
+helperManifest _ "floatStrLines" =
+  HelperManifest
+    [("mdk_string_to_float", 1)]
+    [
+      "mdk_path_reset", "mdk_path_push", "mdk_str_to_float",
+      "mdk_str_to_float_ok"
+    ]
+helperManifest _ "trapIntRuntimeLines" =
+  HelperManifest
+    [("mdk_write_err_digits", 1), ("mdk_write_err_int", 1)]
+    ["mdk_write_err_byte"]
+helperManifest plan "intRuntimeLines" = intHelperManifest plan.intHelpers
+helperManifest plan "siteRuntimeLines" = HelperManifest ((
+    "mdk_write_err_loc",
+    1,
+  )
+  :: (if plan.nonexhaustiveRuntime then [("mdk_trap_nonexh", 1)] else [])) [
+  "mdk_write_err_byte", "mdk_write_err_int"
+]
+helperManifest _ _ = HelperManifest [] []
+
+-- a `$mdk_value_<op>` helper: the Int arm through the box seam and [more]
+valueArithManifest : String -> List String -> HelperManifest
+valueArithManifest op more =
+  HelperManifest
+    [("mdk_value_" ++ op, 2)]
+    (["mdk_box_int", "mdk_unbox_int"] ++ more)
+
+-- an IO helper that pushes its grant and path, calls [rest], and returns its
+-- result as a String
+grantedPathCalls : List String -> List String
+grantedPathCalls rest =
+  ["mdk_push_grant", "mdk_push_path", "mdk_io_result_to_str"] ++ rest
+
+-- an IO helper that also pushes the bytes it writes, then calls [commit]
+writtenPathCalls : String -> List String
+writtenPathCalls commit =
+  grantedPathCalls ["mdk_write_file_reset", "mdk_write_file_push", commit]
+
+-- `intRuntimeLines`' functions for the operators in [used]: the overflow writer
+-- every checked operator calls, then the operators and the shifts, each in its
+-- own fixed order.
+intHelperManifest : List String -> HelperManifest
+intHelperManifest used =
+  let arith =
+    filterList (op => contains op used) ["add", "sub", "mul", "div", "neg"]
+  let shifts = filterList (dir => contains dir used) ["left", "right"]
+  let core =
+    if isEmptyL arith then
+      []
+    else
+      [("mdk_int_operand", 1), ("mdk_int_overflow", 4)]
+  let traps =
+    if isEmptyL arith && isEmptyL shifts then
+      []
+    else
+      ["mdk_write_err_byte", "mdk_write_err_int"]
+  HelperManifest
+    (core
+      ++ map intOpFunc arith
+      ++ map (dir => ("mdk_shift_" ++ dir, 2)) shifts)
+    (traps ++ (if isEmptyL arith then [] else ["mdk_write_err_loc"]))
+
+intOpFunc : String -> (String, Int)
+intOpFunc "neg" = ("mdk_int_neg", 1)
+intOpFunc op = ("mdk_int_" ++ op, 3)
+
 helperDependencies : Bool -> String -> List String
 helperDependencies _ "appendRuntimeLines" = ["strLeafRuntimeLines"]
 helperDependencies _ "byteBlockRuntimeLines" =
@@ -2775,6 +3157,90 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "helperOrder" () (EListLit (ELit (LString "closApplyLines")) (ELit (LString "ioRuntimeLines")) (ELit (LString "ioStrRuntimeLines")) (ELit (LString "strLeafRuntimeLines")) (ELit (LString "strConcatRuntimeLines")) (ELit (LString "appendRuntimeLines")) (ELit (LString "valueEqRuntimeLines")) (ELit (LString "valueAddRuntimeLines")) (ELit (LString "valueSubRuntimeLines")) (ELit (LString "valueMulRuntimeLines")) (ELit (LString "valueDivRuntimeLines")) (ELit (LString "valueModRuntimeLines")) (ELit (LString "valueCmpNumRuntimeLines")) (ELit (LString "u64RuntimeLines")) (ELit (LString "i64RuntimeLines")) (ELit (LString "stderrRuntimeLines")) (ELit (LString "rngRuntimeLines")) (ELit (LString "hashRuntimeLines")) (ELit (LString "hashStringRuntimeLines")) (ELit (LString "floatRemRuntimeLines")) (ELit (LString "floatRuntimeLines")) (ELit (LString "hashFloatRuntimeLines")) (ELit (LString "randomFloatRuntimeLines")) (ELit (LString "strSearchRuntimeLines")) (ELit (LString "strToIntRuntimeLines")) (ELit (LString "strReverseRuntimeLines")) (ELit (LString "strJoinRuntimeLines")) (ELit (LString "utf8LossyRuntimeLines")) (ELit (LString "strCodecRuntimeLines")) (ELit (LString "byteBlockRuntimeLines")) (ELit (LString "charFromCodeRuntimeLines")) (ELit (LString "charClassRuntimeLines")) (ELit (LString "ioPushPathLines")) (ELit (LString "ioPushPathMoreLines")) (ELit (LString "ioPushGrantLines")) (ELit (LString "ioPushGrantMoreLines")) (ELit (LString "ioResultLines")) (ELit (LString "ioRefusedPanicLines")) (ELit (LString "ioReadFileLines")) (ELit (LString "ioFetchTextLines")) (ELit (LString "ioFileExistsLines")) (ELit (LString "ioCanonicalizeLines")) (ELit (LString "ioWriteFileLines")) (ELit (LString "ioAppendFileLines")) (ELit (LString "ioRenameLines")) (ELit (LString "ioListDirLines")) (ELit (LString "ioStatFileLines")) (ELit (LString "ioMakeDirLines")) (ELit (LString "ioRemoveFileLines")) (ELit (LString "ioRemoveDirLines")) (ELit (LString "ioFsyncLines")) (ELit (LString "ioFileModeLines")) (ELit (LString "ioWriteFileModeLines")) (ELit (LString "ioGetEnvLines")) (ELit (LString "ioReadLineLines")) (ELit (LString "ioReadAllLines")) (ELit (LString "ioReadExactlyLines")) (ELit (LString "ioExecutablePathLines")) (ELit (LString "jsffiArrayLines")) (ELit (LString "jsffiResultStrLines")) (ELit (LString "ioArgsLines")) (ELit (LString "writeFileBytesLines")) (ELit (LString "osEntropyLines")) (ELit (LString "readFileBytesLines")) (ELit (LString "floatStrLines")) (ELit (LString "trapIntRuntimeLines")) (ELit (LString "intRuntimeLines")) (ELit (LString "siteRuntimeLines"))))
+(DData Public "HelperManifest" () ((variant "HelperManifest" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DImpl true "Eq" ((TyCon "HelperManifest")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HelperManifest" (PVar "__a0") (PVar "__a1")) (PCon "HelperManifest" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "HelperManifest")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "HelperManifest" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "HelperManifest ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
+(DTypeSig true "helperManifest" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyCon "HelperManifest"))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "closApplyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_pap")) (ELit (LInt 2))) (ETuple (ELit (LString "__mdk_apply")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_unbox_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_box_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_write_digits")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_bool")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioStrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_print_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_strln")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_int_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strLeafRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_cp_count")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_byte_off")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_append")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_char_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_slice")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_cp_at_byte")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_slice_bytes")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_lower")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_dbg_esc_byte")) (ELit (LInt 4))) (ETuple (ELit (LString "mdk_dbg_quote")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_debug_string_lit")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_debug_char_lit")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bytes_match_at")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_starts_with")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_ends_with")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strConcatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_concat")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "appendRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_append")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_str_append")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueEqRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_value_eq")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_cmp")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_lt")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_le")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_gt")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_ge")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_str_compare")) (ELit (LString "mdk_unbox_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueAddRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "add"))) (EListLit (ELit (LString "mdk_int_add")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueSubRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "sub"))) (EListLit (ELit (LString "mdk_int_sub")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueMulRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "mul"))) (EListLit (ELit (LString "mdk_int_mul")))))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "valueDivRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "div"))) (EBinOp "++" (EListLit (ELit (LString "mdk_int_div")) (ELit (LString "mdk_write_err_byte"))) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))) (EListLit (ELit (LString "mdk_i64_div"))) (EListLit)))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueModRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "mod"))) (EListLit (ELit (LString "mdk_float_rem")) (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_value_eq_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_cmp_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_lt_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_le_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_gt_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_ge_num")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_unbox_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "u64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_u64_shl")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_shr")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_mulhi")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "i64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_i64_div")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "stderrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_eprint_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_eprint_strln")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_mix64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_bool")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashStringRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_string")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatRemRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_float_rem")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_int_to_float")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_float_to_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_round")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_float_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashFloatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_float")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_hash_mix64")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "randomFloatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_random_float")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_next_u64")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strSearchRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_index_of")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_count_occ")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_last_index_of")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_compare")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_cp_count")) (ELit (LString "mdk_bytes_match_at")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strToIntRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_to_int")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_box_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strReverseRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_reverse")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strJoinRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_join")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "utf8LossyRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_utf8_step")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_utf8_valid_count")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strCodecRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_to_chars")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_nbytes")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_emit_at")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_chars_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_to_utf8_bytes")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_bytes_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "byteBlockRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_bb_copy")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_bb_from_int_array")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_to_int_array")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_from_string")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_to_string")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_write_stdout")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_sha_get")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_sha_set")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_sha_k")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_sha_block")) (ELit (LInt 4))) (ETuple (ELit (LString "mdk_sha256")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_unbox_int")) (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "charFromCodeRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_char_from_code")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "charClassRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_char_is_alpha")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_space")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_lower")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_punct")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_to_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_to_lower")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushPathLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_path")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushPathMoreLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_path_more")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushGrantLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_grant")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_grant_reset")) (ELit (LString "mdk_grant_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushGrantMoreLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_grant_more")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_grant_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioResultLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_io_result_bytes")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_io_result_to_str")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRefusedPanicLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_refused_panic")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_err_u8arr")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_not_utf8")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_read_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_utf8_valid_count"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFetchTextLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_fetch_text_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_push_path")) (ELit (LString "mdk_fetch_text")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFileExistsLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_file_exists_io")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_push_grant")) (ELit (LString "mdk_push_path")) (ELit (LString "mdk_file_exists")) (ELit (LString "mdk_refused_panic")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioCanonicalizeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_canonicalize_path_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_canonicalize_path")) (ELit (LString "mdk_refused_panic"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioWriteFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioAppendFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_append_file_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_append_file")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRenameLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_rename_io")) (ELit (LInt 4))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_grant_push")) (ELit (LString "mdk_push_grant_more")) (ELit (LString "mdk_push_path_more")) (ELit (LString "mdk_rename"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioListDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_list_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_list_dir")) (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_u8_to_str_lossy"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioStatFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_stat_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_stat_file")) (ELit (LString "mdk_box_int")) (ELit (LString "mdk_stat_field"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioMakeDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_make_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_make_dir"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRemoveFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_remove_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_remove_file"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRemoveDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_remove_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_remove_dir"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFsyncLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_fsync_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_fsync"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFileModeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_file_mode_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_file_mode")) (ELit (LString "mdk_box_int")) (ELit (LString "mdk_stat_field"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioWriteFileModeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_mode_io")) (ELit (LInt 4))))) (EBinOp "::" (ELit (LString "mdk_unbox_int")) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file_mode"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioGetEnvLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_get_env_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_push_path")) (ELit (LString "mdk_get_env")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadLineLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_line_io")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_read_line_opt_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_read_line")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadAllLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_all_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_read_all")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadExactlyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_exactly_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_read_exactly")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioExecutablePathLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_executable_path_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_executable_path")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "jsffiArrayLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_jsffi_push_ints")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_jsffi_result_i64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_jsffi_copy_back")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_unbox_int")) (ELit (LString "mdk_path_push")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_box_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "jsffiResultStrLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_jsffi_result_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioArgsLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_arg_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_args_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_arg_len")) (ELit (LString "mdk_arg_byte")) (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LString "mdk_args_count")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "writeFileBytesLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_bytes_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file_commit")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "osEntropyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_os_entropy_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_os_entropy")) (ELit (LString "mdk_refused_panic")) (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "readFileBytesLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_file_bytes_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatStrLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_string_to_float")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push")) (ELit (LString "mdk_str_to_float")) (ELit (LString "mdk_str_to_float_ok")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "trapIntRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_err_digits")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_write_err_int")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intHelperManifest") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EBinOp "::" (ETuple (ELit (LString "mdk_write_err_loc")) (ELit (LInt 1))) (EIf (EFieldAccess (EVar "plan") "nonexhaustiveRuntime") (EListLit (ETuple (ELit (LString "mdk_trap_nonexh")) (ELit (LInt 1)))) (EListLit)))) (EListLit (ELit (LString "mdk_write_err_byte")) (ELit (LString "mdk_write_err_int")))))
+(DFunDef false "helperManifest" (PWild PWild) (EApp (EApp (EVar "HelperManifest") (EListLit)) (EListLit)))
+(DTypeSig false "valueArithManifest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "HelperManifest"))))
+(DFunDef false "valueArithManifest" ((PVar "op") (PVar "more")) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (EBinOp "++" (ELit (LString "mdk_value_")) (EVar "op")) (ELit (LInt 2))))) (EBinOp "++" (EListLit (ELit (LString "mdk_box_int")) (ELit (LString "mdk_unbox_int"))) (EVar "more"))))
+(DTypeSig false "grantedPathCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "grantedPathCalls" ((PVar "rest")) (EBinOp "++" (EListLit (ELit (LString "mdk_push_grant")) (ELit (LString "mdk_push_path")) (ELit (LString "mdk_io_result_to_str"))) (EVar "rest")))
+(DTypeSig false "writtenPathCalls" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "writtenPathCalls" ((PVar "commit")) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_write_file_reset")) (ELit (LString "mdk_write_file_push")) (EVar "commit"))))
+(DTypeSig false "intHelperManifest" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "HelperManifest")))
+(DFunDef false "intHelperManifest" ((PVar "used")) (EBlock (DoLet false false (PVar "arith") (EApp (EApp (EVar "filterList") (ELam ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EVar "used")))) (EListLit (ELit (LString "add")) (ELit (LString "sub")) (ELit (LString "mul")) (ELit (LString "div")) (ELit (LString "neg"))))) (DoLet false false (PVar "shifts") (EApp (EApp (EVar "filterList") (ELam ((PVar "dir")) (EApp (EApp (EVar "contains") (EVar "dir")) (EVar "used")))) (EListLit (ELit (LString "left")) (ELit (LString "right"))))) (DoLet false false (PVar "core") (EIf (EApp (EVar "isEmptyL") (EVar "arith")) (EListLit) (EListLit (ETuple (ELit (LString "mdk_int_operand")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_int_overflow")) (ELit (LInt 4)))))) (DoLet false false (PVar "traps") (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "arith")) (EApp (EVar "isEmptyL") (EVar "shifts"))) (EListLit) (EListLit (ELit (LString "mdk_write_err_byte")) (ELit (LString "mdk_write_err_int"))))) (DoExpr (EApp (EApp (EVar "HelperManifest") (EBinOp "++" (EBinOp "++" (EVar "core") (EApp (EApp (EVar "map") (EVar "intOpFunc")) (EVar "arith"))) (EApp (EApp (EVar "map") (ELam ((PVar "dir")) (ETuple (EBinOp "++" (ELit (LString "mdk_shift_")) (EVar "dir")) (ELit (LInt 2))))) (EVar "shifts")))) (EBinOp "++" (EVar "traps") (EIf (EApp (EVar "isEmptyL") (EVar "arith")) (EListLit) (EListLit (ELit (LString "mdk_write_err_loc")))))))))
+(DTypeSig false "intOpFunc" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "intOpFunc" ((PLit (LString "neg"))) (ETuple (ELit (LString "mdk_int_neg")) (ELit (LInt 1))))
+(DFunDef false "intOpFunc" ((PVar "op")) (ETuple (EBinOp "++" (ELit (LString "mdk_int_")) (EVar "op")) (ELit (LInt 3))))
 (DTypeSig false "helperDependencies" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "helperDependencies" (PWild (PLit (LString "appendRuntimeLines"))) (EListLit (ELit (LString "strLeafRuntimeLines"))))
 (DFunDef false "helperDependencies" (PWild (PLit (LString "byteBlockRuntimeLines"))) (EListLit (ELit (LString "ioByteImportLines")) (ELit (LString "ioRuntimeLines")) (ELit (LString "utf8LossyRuntimeLines"))))
@@ -3511,6 +3977,90 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "helperOrder" () (EListLit (ELit (LString "closApplyLines")) (ELit (LString "ioRuntimeLines")) (ELit (LString "ioStrRuntimeLines")) (ELit (LString "strLeafRuntimeLines")) (ELit (LString "strConcatRuntimeLines")) (ELit (LString "appendRuntimeLines")) (ELit (LString "valueEqRuntimeLines")) (ELit (LString "valueAddRuntimeLines")) (ELit (LString "valueSubRuntimeLines")) (ELit (LString "valueMulRuntimeLines")) (ELit (LString "valueDivRuntimeLines")) (ELit (LString "valueModRuntimeLines")) (ELit (LString "valueCmpNumRuntimeLines")) (ELit (LString "u64RuntimeLines")) (ELit (LString "i64RuntimeLines")) (ELit (LString "stderrRuntimeLines")) (ELit (LString "rngRuntimeLines")) (ELit (LString "hashRuntimeLines")) (ELit (LString "hashStringRuntimeLines")) (ELit (LString "floatRemRuntimeLines")) (ELit (LString "floatRuntimeLines")) (ELit (LString "hashFloatRuntimeLines")) (ELit (LString "randomFloatRuntimeLines")) (ELit (LString "strSearchRuntimeLines")) (ELit (LString "strToIntRuntimeLines")) (ELit (LString "strReverseRuntimeLines")) (ELit (LString "strJoinRuntimeLines")) (ELit (LString "utf8LossyRuntimeLines")) (ELit (LString "strCodecRuntimeLines")) (ELit (LString "byteBlockRuntimeLines")) (ELit (LString "charFromCodeRuntimeLines")) (ELit (LString "charClassRuntimeLines")) (ELit (LString "ioPushPathLines")) (ELit (LString "ioPushPathMoreLines")) (ELit (LString "ioPushGrantLines")) (ELit (LString "ioPushGrantMoreLines")) (ELit (LString "ioResultLines")) (ELit (LString "ioRefusedPanicLines")) (ELit (LString "ioReadFileLines")) (ELit (LString "ioFetchTextLines")) (ELit (LString "ioFileExistsLines")) (ELit (LString "ioCanonicalizeLines")) (ELit (LString "ioWriteFileLines")) (ELit (LString "ioAppendFileLines")) (ELit (LString "ioRenameLines")) (ELit (LString "ioListDirLines")) (ELit (LString "ioStatFileLines")) (ELit (LString "ioMakeDirLines")) (ELit (LString "ioRemoveFileLines")) (ELit (LString "ioRemoveDirLines")) (ELit (LString "ioFsyncLines")) (ELit (LString "ioFileModeLines")) (ELit (LString "ioWriteFileModeLines")) (ELit (LString "ioGetEnvLines")) (ELit (LString "ioReadLineLines")) (ELit (LString "ioReadAllLines")) (ELit (LString "ioReadExactlyLines")) (ELit (LString "ioExecutablePathLines")) (ELit (LString "jsffiArrayLines")) (ELit (LString "jsffiResultStrLines")) (ELit (LString "ioArgsLines")) (ELit (LString "writeFileBytesLines")) (ELit (LString "osEntropyLines")) (ELit (LString "readFileBytesLines")) (ELit (LString "floatStrLines")) (ELit (LString "trapIntRuntimeLines")) (ELit (LString "intRuntimeLines")) (ELit (LString "siteRuntimeLines"))))
+(DData Public "HelperManifest" () ((variant "HelperManifest" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DImpl true "Eq" ((TyCon "HelperManifest")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HelperManifest" (PVar "__a0") (PVar "__a1")) (PCon "HelperManifest" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "HelperManifest")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "HelperManifest" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "HelperManifest ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
+(DTypeSig true "helperManifest" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyCon "HelperManifest"))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "closApplyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_pap")) (ELit (LInt 2))) (ETuple (ELit (LString "__mdk_apply")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_unbox_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_box_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_write_digits")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_bool")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioStrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_print_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_print_strln")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_int_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strLeafRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_cp_count")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_byte_off")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_append")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_char_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_slice")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_cp_at_byte")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_slice_bytes")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_lower")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_dbg_esc_byte")) (ELit (LInt 4))) (ETuple (ELit (LString "mdk_dbg_quote")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_debug_string_lit")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_debug_char_lit")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bytes_match_at")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_str_starts_with")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_ends_with")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strConcatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_concat")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "appendRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_append")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_str_append")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueEqRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_value_eq")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_cmp")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_lt")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_le")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_gt")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_ge")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_str_compare")) (ELit (LString "mdk_unbox_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueAddRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "add"))) (EListLit (ELit (LString "mdk_int_add")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueSubRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "sub"))) (EListLit (ELit (LString "mdk_int_sub")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueMulRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "mul"))) (EListLit (ELit (LString "mdk_int_mul")))))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "valueDivRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "div"))) (EBinOp "++" (EListLit (ELit (LString "mdk_int_div")) (ELit (LString "mdk_write_err_byte"))) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))) (EListLit (ELit (LString "mdk_i64_div"))) (EListLit)))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueModRuntimeLines"))) (EApp (EApp (EVar "valueArithManifest") (ELit (LString "mod"))) (EListLit (ELit (LString "mdk_float_rem")) (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_value_eq_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_cmp_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_lt_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_le_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_gt_num")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_value_ge_num")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_unbox_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "u64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_u64_shl")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_shr")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_mulhi")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "i64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_i64_div")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "stderrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_eprint_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_eprint_strln")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_mix64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_bool")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashStringRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_string")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatRemRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_float_rem")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_int_to_float")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_float_to_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_round")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_float_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "hashFloatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_float")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_hash_mix64")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "randomFloatRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_random_float")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_next_u64")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strSearchRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_index_of")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_count_occ")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_last_index_of")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_str_compare")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_cp_count")) (ELit (LString "mdk_bytes_match_at")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strToIntRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_to_int")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_box_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strReverseRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_reverse")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strJoinRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_join")) (ELit (LInt 2))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "utf8LossyRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_utf8_step")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_utf8_valid_count")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "strCodecRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_to_chars")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_nbytes")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_emit_at")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_chars_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_str_to_utf8_bytes")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_utf8_bytes_to_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "byteBlockRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_bb_copy")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_bb_from_int_array")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_to_int_array")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_from_string")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_to_string")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_bb_write_stdout")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_sha_get")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_sha_set")) (ELit (LInt 3))) (ETuple (ELit (LString "mdk_sha_k")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_sha_block")) (ELit (LInt 4))) (ETuple (ELit (LString "mdk_sha256")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_unbox_int")) (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LString "mdk_write_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "charFromCodeRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_char_from_code")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "charClassRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_char_is_alpha")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_space")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_lower")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_is_punct")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_to_upper")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_char_to_lower")) (ELit (LInt 1))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushPathLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_path")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushPathMoreLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_path_more")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushGrantLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_grant")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_grant_reset")) (ELit (LString "mdk_grant_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioPushGrantMoreLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_push_grant_more")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_grant_push")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioResultLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_io_result_bytes")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_io_result_to_str")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRefusedPanicLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_refused_panic")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_err_u8arr")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_str_not_utf8")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_read_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_utf8_valid_count"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFetchTextLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_fetch_text_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_push_path")) (ELit (LString "mdk_fetch_text")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFileExistsLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_file_exists_io")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_push_grant")) (ELit (LString "mdk_push_path")) (ELit (LString "mdk_file_exists")) (ELit (LString "mdk_refused_panic")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioCanonicalizeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_canonicalize_path_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_canonicalize_path")) (ELit (LString "mdk_refused_panic"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioWriteFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioAppendFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_append_file_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_append_file")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRenameLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_rename_io")) (ELit (LInt 4))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_grant_push")) (ELit (LString "mdk_push_grant_more")) (ELit (LString "mdk_push_path_more")) (ELit (LString "mdk_rename"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioListDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_list_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_list_dir")) (ELit (LString "mdk_io_result_bytes")) (ELit (LString "mdk_u8_to_str_lossy"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioStatFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_stat_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_stat_file")) (ELit (LString "mdk_box_int")) (ELit (LString "mdk_stat_field"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioMakeDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_make_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_make_dir"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRemoveFileLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_remove_file_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_remove_file"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioRemoveDirLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_remove_dir_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_remove_dir"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFsyncLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_fsync_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_fsync"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioFileModeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_file_mode_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_file_mode")) (ELit (LString "mdk_box_int")) (ELit (LString "mdk_stat_field"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioWriteFileModeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_mode_io")) (ELit (LInt 4))))) (EBinOp "::" (ELit (LString "mdk_unbox_int")) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file_mode"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioGetEnvLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_get_env_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_push_path")) (ELit (LString "mdk_get_env")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadLineLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_line_io")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_read_line_opt_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_read_line")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadAllLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_all_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_read_all")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioReadExactlyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_exactly_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_read_exactly")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioExecutablePathLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_executable_path_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_executable_path")) (ELit (LString "mdk_io_result_to_str")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "jsffiArrayLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_jsffi_push_ints")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_jsffi_result_i64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_jsffi_copy_back")) (ELit (LInt 2))))) (EListLit (ELit (LString "mdk_unbox_int")) (ELit (LString "mdk_path_push")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_box_int")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "jsffiResultStrLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_jsffi_result_str")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_u8_to_str_lossy")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "ioArgsLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_arg_to_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_args_io")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_arg_len")) (ELit (LString "mdk_arg_byte")) (ELit (LString "mdk_u8_to_str_lossy")) (ELit (LString "mdk_args_count")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "writeFileBytesLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_file_bytes_io")) (ELit (LInt 3))))) (EApp (EVar "writtenPathCalls") (ELit (LString "mdk_write_file_commit")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "osEntropyLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_os_entropy_io")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_os_entropy")) (ELit (LString "mdk_refused_panic")) (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "readFileBytesLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_read_file_bytes_io")) (ELit (LInt 2))))) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte"))))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "floatStrLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_string_to_float")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push")) (ELit (LString "mdk_str_to_float")) (ELit (LString "mdk_str_to_float_ok")))))
+(DFunDef false "helperManifest" (PWild (PLit (LString "trapIntRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_write_err_digits")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_write_err_int")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intHelperManifest") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "helperManifest" ((PVar "plan") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EBinOp "::" (ETuple (ELit (LString "mdk_write_err_loc")) (ELit (LInt 1))) (EIf (EFieldAccess (EVar "plan") "nonexhaustiveRuntime") (EListLit (ETuple (ELit (LString "mdk_trap_nonexh")) (ELit (LInt 1)))) (EListLit)))) (EListLit (ELit (LString "mdk_write_err_byte")) (ELit (LString "mdk_write_err_int")))))
+(DFunDef false "helperManifest" (PWild PWild) (EApp (EApp (EVar "HelperManifest") (EListLit)) (EListLit)))
+(DTypeSig false "valueArithManifest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "HelperManifest"))))
+(DFunDef false "valueArithManifest" ((PVar "op") (PVar "more")) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (EBinOp "++" (ELit (LString "mdk_value_")) (EVar "op")) (ELit (LInt 2))))) (EBinOp "++" (EListLit (ELit (LString "mdk_box_int")) (ELit (LString "mdk_unbox_int"))) (EVar "more"))))
+(DTypeSig false "grantedPathCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "grantedPathCalls" ((PVar "rest")) (EBinOp "++" (EListLit (ELit (LString "mdk_push_grant")) (ELit (LString "mdk_push_path")) (ELit (LString "mdk_io_result_to_str"))) (EVar "rest")))
+(DTypeSig false "writtenPathCalls" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "writtenPathCalls" ((PVar "commit")) (EApp (EVar "grantedPathCalls") (EListLit (ELit (LString "mdk_write_file_reset")) (ELit (LString "mdk_write_file_push")) (EVar "commit"))))
+(DTypeSig false "intHelperManifest" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "HelperManifest")))
+(DFunDef false "intHelperManifest" ((PVar "used")) (EBlock (DoLet false false (PVar "arith") (EApp (EApp (EVar "filterList") (ELam ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EVar "used")))) (EListLit (ELit (LString "add")) (ELit (LString "sub")) (ELit (LString "mul")) (ELit (LString "div")) (ELit (LString "neg"))))) (DoLet false false (PVar "shifts") (EApp (EApp (EVar "filterList") (ELam ((PVar "dir")) (EApp (EApp (EVar "contains") (EVar "dir")) (EVar "used")))) (EListLit (ELit (LString "left")) (ELit (LString "right"))))) (DoLet false false (PVar "core") (EIf (EApp (EVar "isEmptyL") (EVar "arith")) (EListLit) (EListLit (ETuple (ELit (LString "mdk_int_operand")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_int_overflow")) (ELit (LInt 4)))))) (DoLet false false (PVar "traps") (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "arith")) (EApp (EVar "isEmptyL") (EVar "shifts"))) (EListLit) (EListLit (ELit (LString "mdk_write_err_byte")) (ELit (LString "mdk_write_err_int"))))) (DoExpr (EApp (EApp (EVar "HelperManifest") (EBinOp "++" (EBinOp "++" (EVar "core") (EApp (EApp (EMethodRef "map") (EVar "intOpFunc")) (EVar "arith"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "dir")) (ETuple (EBinOp "++" (ELit (LString "mdk_shift_")) (EVar "dir")) (ELit (LInt 2))))) (EVar "shifts")))) (EBinOp "++" (EVar "traps") (EIf (EApp (EVar "isEmptyL") (EVar "arith")) (EListLit) (EListLit (ELit (LString "mdk_write_err_loc")))))))))
+(DTypeSig false "intOpFunc" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "intOpFunc" ((PLit (LString "neg"))) (ETuple (ELit (LString "mdk_int_neg")) (ELit (LInt 1))))
+(DFunDef false "intOpFunc" ((PVar "op")) (ETuple (EBinOp "++" (ELit (LString "mdk_int_")) (EVar "op")) (ELit (LInt 3))))
 (DTypeSig false "helperDependencies" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "helperDependencies" (PWild (PLit (LString "appendRuntimeLines"))) (EListLit (ELit (LString "strLeafRuntimeLines"))))
 (DFunDef false "helperDependencies" (PWild (PLit (LString "byteBlockRuntimeLines"))) (EListLit (ELit (LString "ioByteImportLines")) (ELit (LString "ioRuntimeLines")) (ELit (LString "utf8LossyRuntimeLines"))))

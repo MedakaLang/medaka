@@ -680,7 +680,7 @@ Every delegated task prompt should contain, in order:
    `$TASK_BASE`, never `origin/main`/`main`: this box shares one `.git` across worktrees, so those refs
    advance under you the moment any sibling fetches, and a moving ref is not a fixed point (#519).
 3. **Environment rules:** how to build (`make -C <worktree> medaka`), the no-`eval`/PATH quirks, the
-   `perl -e 'alarm N; exec @ARGV'` timeout shim.
+   `perl -e 'alarm N; exec @ARGV or die qq(exec: $!)'` timeout shim.
 4. **Context (verified facts):** the root cause + `file:line` pointers you already confirmed, and the
    precedent to mirror. Hand the agent the map, not a treasure hunt — this is where your bounded
    scope-read pays off.

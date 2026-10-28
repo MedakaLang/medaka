@@ -53,7 +53,7 @@ SELF="$ROOT/test/diff_compiler_prelude_shadow_census.sh"
 [ -f "$CORE" ] || { echo "missing $CORE"; exit 2; }
 [ -f "$LEDGER" ] || { echo "missing ledger: $LEDGER"; exit 2; }
 
-bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
+bound() { perl -e 'alarm 60; exec @ARGV or die qq(exec: $!)' "$@"; }
 
 # worker_one N — the per-name probe for line N of $TMP/names. Writes the table row to
 # $TMP/r.N.line and the verdict (PASS|FAIL) to $TMP/r.N.res. Runs under xargs -P.

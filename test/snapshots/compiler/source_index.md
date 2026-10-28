@@ -1,10 +1,25 @@
 # META
-source_lines=181
+source_lines=196
 stages=DESUGAR,MARK
 # SOURCE
 import array.{fromList}
 import list.{reverse}
-import string.{toChars}
+import string.{toChars, StrCursor, startCursor, nextChar}
+
+sourceEndGo : StrCursor -> Int -> Int -> Bool -> (Int, Int)
+sourceEndGo cursor line col afterCR = match nextChar cursor
+  None => (line, col)
+  Some (c, next) =>
+    if c == '\r' then
+      sourceEndGo next (line + 1) 0 True
+    else if c == '\n' then
+      sourceEndGo next (if afterCR then line else line + 1) 0 False
+    else
+      sourceEndGo next line (col + (if charCode c > 65535 then 2 else 1)) False
+
+export
+sourceEndUtf16Position : String -> (Int, Int)
+sourceEndUtf16Position source = sourceEndGo (startCursor source) 0 0 False
 
 export data SourceIndex = SourceIndex (Array Int) (Array Int) (Array Int)
 
@@ -186,7 +201,11 @@ lineStartIndex lineStarts off =
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "toChars" false))))
+(DUse false (UseGroup ("string") ((mem "toChars" false) (mem "StrCursor" false) (mem "startCursor" false) (mem "nextChar" false))))
+(DTypeSig false "sourceEndGo" (TyFun (TyCon "StrCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "sourceEndGo" ((PVar "cursor") (PVar "line") (PVar "col") (PVar "afterCR")) (EMatch (EApp (EVar "nextChar") (EVar "cursor")) (arm (PCon "None") () (ETuple (EVar "line") (EVar "col"))) (arm (PCon "Some" (PTuple (PVar "c") (PVar "next"))) () (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EIf (EVar "afterCR") (EVar "line") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "False")) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EVar "line")) (EBinOp "+" (EVar "col") (EIf (EBinOp ">" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65535))) (ELit (LInt 2)) (ELit (LInt 1))))) (EVar "False")))))))
+(DTypeSig true "sourceEndUtf16Position" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "sourceEndUtf16Position" ((PVar "source")) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EApp (EVar "startCursor") (EVar "source"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")))
 (DData Abstract "SourceIndex" () ((variant "SourceIndex" (ConPos (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))) ())
 (DData Private "ScanState" () ((variant "ScanState" (ConNamed (field "offset" (TyCon "Int")) (field "lineStart" (TyCon "Int")) (field "units" (TyCon "Int"))))) ())
 (DTypeSig false "indexGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "ScanState") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "SourceIndex")))))))
@@ -218,7 +237,11 @@ lineStartIndex lineStarts off =
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "toChars" false))))
+(DUse false (UseGroup ("string") ((mem "toChars" false) (mem "StrCursor" false) (mem "startCursor" false) (mem "nextChar" false))))
+(DTypeSig false "sourceEndGo" (TyFun (TyCon "StrCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "sourceEndGo" ((PVar "cursor") (PVar "line") (PVar "col") (PVar "afterCR")) (EMatch (EApp (EVar "nextChar") (EVar "cursor")) (arm (PCon "None") () (ETuple (EVar "line") (EVar "col"))) (arm (PCon "Some" (PTuple (PVar "c") (PVar "next"))) () (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EIf (EVar "afterCR") (EVar "line") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "False")) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EVar "next")) (EVar "line")) (EBinOp "+" (EVar "col") (EIf (EBinOp ">" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65535))) (ELit (LInt 2)) (ELit (LInt 1))))) (EVar "False")))))))
+(DTypeSig true "sourceEndUtf16Position" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "sourceEndUtf16Position" ((PVar "source")) (EApp (EApp (EApp (EApp (EVar "sourceEndGo") (EApp (EVar "startCursor") (EVar "source"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")))
 (DData Abstract "SourceIndex" () ((variant "SourceIndex" (ConPos (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))) ())
 (DData Private "ScanState" () ((variant "ScanState" (ConNamed (field "offset" (TyCon "Int")) (field "lineStart" (TyCon "Int")) (field "units" (TyCon "Int"))))) ())
 (DTypeSig false "indexGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "ScanState") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "SourceIndex")))))))

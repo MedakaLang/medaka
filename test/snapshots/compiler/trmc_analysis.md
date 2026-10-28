@@ -1,5 +1,5 @@
 # META
-source_lines=1745
+source_lines=1734
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -26,13 +26,13 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
+import ir.core_ir_lower.{leadingDictParams}
 import support.util.{
   lenKey,
   contains,
   listLen,
   filterList,
   reverseL,
-  startsWith,
   anyList,
   isNonEmptyL,
   dedup,
@@ -872,11 +872,7 @@ dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x _ _) :: _) _) = dispIsDictParamName x
-dispClauseHasLeadingDict _ = False
-
-dispIsDictParamName : String -> Bool
-dispIsDictParamName x = startsWith "$dict" x
+dispClauseHasLeadingDict (CClause pats _) = leadingDictParams pats > 0
 
 -- ── Stage-1 / impl-path dict gate (F2(b), shape (a)) ─────────────────────────
 -- A dict-CARRYING self-recursive bind IS TMC-admissible: the self-call is a
@@ -893,24 +889,17 @@ export
 dictCountUniform : List (List Pat) -> Bool
 dictCountUniform [] = True
 dictCountUniform (pats :: rest) =
-  dictCountUniformGo (leadingDictCount pats) rest
+  dictCountUniformGo (leadingDictParams pats) rest
 
 dictCountUniformGo : Int -> List (List Pat) -> Bool
 dictCountUniformGo _ [] = True
 dictCountUniformGo n (pats :: rest) =
-  leadingDictCount pats == n && dictCountUniformGo n rest
+  leadingDictParams pats == n && dictCountUniformGo n rest
 
 -- the self-reference of a dispatched impl group, whose first clause binds [pats]
 export
 methodSelf : String -> String -> List Pat -> SelfRef
-methodSelf method key pats = SelfByMethod method key (leadingDictCount pats)
-
--- count of leading `$dict…` params in one clause's param list.
-export
-leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x _ _) :: rest) =
-  if dispIsDictParamName x then 1 + leadingDictCount rest else 0
-leadingDictCount _ = 0
+methodSelf method key pats = SelfByMethod method key (leadingDictParams pats)
 
 -- CClause-shaped wrapper (the wasm emitter's clause representation).
 export
@@ -1750,7 +1739,8 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "flattenApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))))))
@@ -2058,21 +2048,15 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "dispNonDict" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dispNonDict" ((PVar "clauses")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "dispClauseHasLeadingDict")) (EVar "clauses"))))
 (DTypeSig false "dispClauseHasLeadingDict" (TyFun (TyCon "CClause") (TyCon "Bool")))
-(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x") PWild PWild) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
-(DFunDef false "dispClauseHasLeadingDict" (PWild) (EVar "False"))
-(DTypeSig false "dispIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "dispIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
+(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PVar "pats") PWild)) (EBinOp ">" (EApp (EVar "leadingDictParams") (EVar "pats")) (ELit (LInt 0))))
 (DTypeSig true "dictCountUniform" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
 (DFunDef false "dictCountUniform" ((PList)) (EVar "True"))
-(DFunDef false "dictCountUniform" ((PCons (PVar "pats") (PVar "rest"))) (EApp (EApp (EVar "dictCountUniformGo") (EApp (EVar "leadingDictCount") (EVar "pats"))) (EVar "rest")))
+(DFunDef false "dictCountUniform" ((PCons (PVar "pats") (PVar "rest"))) (EApp (EApp (EVar "dictCountUniformGo") (EApp (EVar "leadingDictParams") (EVar "pats"))) (EVar "rest")))
 (DTypeSig false "dictCountUniformGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool"))))
 (DFunDef false "dictCountUniformGo" (PWild (PList)) (EVar "True"))
-(DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictCount") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
+(DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictParams") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "methodSelf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "SelfRef")))))
-(DFunDef false "methodSelf" ((PVar "method") (PVar "key") (PVar "pats")) (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (EApp (EVar "leadingDictCount") (EVar "pats"))))
-(DTypeSig true "leadingDictCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "leadingDictCount" (PWild) (ELit (LInt 0)))
+(DFunDef false "methodSelf" ((PVar "method") (PVar "key") (PVar "pats")) (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (EApp (EVar "leadingDictParams") (EVar "pats"))))
 (DTypeSig true "dictUniformClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dictUniformClauses" ((PVar "clauses")) (EApp (EVar "dictCountUniform") (EApp (EApp (EVar "map") (EVar "clausePatsOf")) (EVar "clauses"))))
 (DTypeSig false "clausePatsOf" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "Pat"))))
@@ -2218,7 +2202,8 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "flattenApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))))))
@@ -2526,21 +2511,15 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "dispNonDict" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dispNonDict" ((PVar "clauses")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "dispClauseHasLeadingDict")) (EVar "clauses"))))
 (DTypeSig false "dispClauseHasLeadingDict" (TyFun (TyCon "CClause") (TyCon "Bool")))
-(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x") PWild PWild) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
-(DFunDef false "dispClauseHasLeadingDict" (PWild) (EVar "False"))
-(DTypeSig false "dispIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "dispIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
+(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PVar "pats") PWild)) (EBinOp ">" (EApp (EVar "leadingDictParams") (EVar "pats")) (ELit (LInt 0))))
 (DTypeSig true "dictCountUniform" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
 (DFunDef false "dictCountUniform" ((PList)) (EVar "True"))
-(DFunDef false "dictCountUniform" ((PCons (PVar "pats") (PVar "rest"))) (EApp (EApp (EVar "dictCountUniformGo") (EApp (EVar "leadingDictCount") (EVar "pats"))) (EVar "rest")))
+(DFunDef false "dictCountUniform" ((PCons (PVar "pats") (PVar "rest"))) (EApp (EApp (EVar "dictCountUniformGo") (EApp (EVar "leadingDictParams") (EVar "pats"))) (EVar "rest")))
 (DTypeSig false "dictCountUniformGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool"))))
 (DFunDef false "dictCountUniformGo" (PWild (PList)) (EVar "True"))
-(DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictCount") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
+(DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictParams") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "methodSelf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "SelfRef")))))
-(DFunDef false "methodSelf" ((PVar "method") (PVar "key") (PVar "pats")) (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (EApp (EVar "leadingDictCount") (EVar "pats"))))
-(DTypeSig true "leadingDictCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "leadingDictCount" (PWild) (ELit (LInt 0)))
+(DFunDef false "methodSelf" ((PVar "method") (PVar "key") (PVar "pats")) (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (EApp (EVar "leadingDictParams") (EVar "pats"))))
 (DTypeSig true "dictUniformClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dictUniformClauses" ((PVar "clauses")) (EApp (EVar "dictCountUniform") (EApp (EApp (EMethodRef "map") (EVar "clausePatsOf")) (EVar "clauses"))))
 (DTypeSig false "clausePatsOf" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "Pat"))))

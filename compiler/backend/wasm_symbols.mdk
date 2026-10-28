@@ -1,0 +1,312 @@
+-- The physical identities of one WasmGC module under emission: each function,
+-- type, global, data segment and element-declared function reference the
+-- emitter writes, the shape it was given, and the binding whose emission wrote
+-- it.  A definition, call or reference that contradicts the registry is a
+-- `SymbolDefect`, which the emitter returns to its driver instead of a module
+-- text.
+--
+-- When an identity is judged depends on when its set is closed, not on its name.
+-- Types, globals and the planned runtime helpers are declared before any body is
+-- emitted, and a data segment when its literal is interned, so a use of an
+-- undeclared global, type or segment is a defect at the use.  A function may be
+-- called before it is defined (force functions and coded-trap helpers follow
+-- every body), so a call to a function not yet defined waits: it is judged
+-- against the definition when that arrives, and whatever still waits once the
+-- module is complete is `unresolved`.  An element reference (`ref.func`) waits
+-- the same way for the `(elem declare func …)` entry that makes it valid.
+--
+-- A WebAssembly module may not name one function, type, global or data segment
+-- twice, so a second declaration or definition of an identity is a defect
+-- whichever of the two declared it.  Only an element entry may repeat: the
+-- element list is a set.
+
+import support.ordmap.{
+  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
+}
+import support.symbol_origin.{SymbolOrigin, bindingOf, placeOf}
+import support.util.{reverseL}
+
+-- A physical name, without its `$`.
+public export data WasmSymbol =
+  | WasmFunc String
+  | WasmType String
+  | WasmGlobal String
+  | WasmData String
+  | WasmElem String
+  deriving (Eq, Debug)
+
+-- What a declaration or definition says the identity is.  A function's shape is
+-- the operand count a direct `call` must supply: written inline (`FuncParams`),
+-- or through a declared function type (`FuncOfType`, the type and its count).  An
+-- imported function's signature is the host plan's, so no count is recorded.
+public export data WasmShape =
+  | FuncParams Int
+  | FuncOfType String Int
+  | FuncImported
+  | TypeDecl
+  | GlobalDecl
+  | DataDecl
+  | ElemDecl
+  deriving (Eq, Debug)
+
+public export data SymbolDefect =
+  | DuplicateDefinition WasmSymbol SymbolOrigin SymbolOrigin  -- the identity, where it was written again, where it was first written
+  -- the function, its parameter count, the operands the call supplies, the
+  -- call, the definition
+  | ShapeMismatch String Int Int SymbolOrigin SymbolOrigin
+  -- a function some call or `ref.func` names, or a global some access names,
+  -- that nothing defined
+  | UndefinedReference WasmSymbol SymbolOrigin
+  -- the type, the identity whose declaration uses it, the use
+  | UndeclaredType String String SymbolOrigin
+  -- a function taken by `ref.func` that no element declaration lists
+  | UndeclaredFuncRef String SymbolOrigin
+  deriving (Eq, Debug)
+
+data Entry = Entry WasmShape SymbolOrigin
+
+-- a use still waiting for its identity: the operand count of a call, or None
+-- for a reference
+data Waiting = Waiting WasmSymbol (Option Int) SymbolOrigin
+
+export data SymbolRegistry = SymbolRegistry {
+  entries : OrdMap Entry,
+  waiting : OrdMap (List Waiting),
+  excused : OrdMap Unit,
+  elems : List String,
+}
+
+export
+emptyRegistry : SymbolRegistry
+emptyRegistry = SymbolRegistry {
+  entries = omEmpty,
+  waiting = omEmpty,
+  excused = omEmpty,
+  elems = [],
+}
+
+-- One key space per identity kind: a function and a global may share a name.
+symbolKey : WasmSymbol -> String
+symbolKey (WasmFunc n) = "f:" ++ n
+symbolKey (WasmType n) = "t:" ++ n
+symbolKey (WasmGlobal n) = "g:" ++ n
+symbolKey (WasmData n) = "d:" ++ n
+symbolKey (WasmElem n) = "e:" ++ n
+
+symbolName : WasmSymbol -> String
+symbolName (WasmFunc n) = n
+symbolName (WasmType n) = n
+symbolName (WasmGlobal n) = n
+symbolName (WasmData n) = n
+symbolName (WasmElem n) = n
+
+paramCount : WasmShape -> Option Int
+paramCount (FuncParams n) = Some n
+paramCount (FuncOfType _ n) = Some n
+paramCount _ = None
+
+-- An identity the module receives rather than generates: an import, a type, a
+-- global, or an element entry.
+export
+declareSymbol : WasmSymbol ->
+  WasmShape ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+declareSymbol sym shape origin reg = admit sym shape origin reg
+
+-- A function the emitter generates a body for.
+export
+defineSymbol : WasmSymbol ->
+  WasmShape ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+defineSymbol sym shape origin reg = admit sym shape origin reg
+
+admit : WasmSymbol ->
+  WasmShape ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+admit (WasmElem n) _ origin reg =
+  if omHasKey (symbolKey (WasmElem n)) reg.entries then
+    Ok reg
+  else
+    settle (WasmElem n) (Entry ElemDecl origin) { reg | elems = n :: reg.elems }
+admit sym shape origin reg = match omLookup (symbolKey sym) reg.entries
+  Some (Entry _ first) => Err (DuplicateDefinition sym origin first)
+  None => settle sym (Entry shape origin) reg
+
+-- record [entry] for [sym], then judge every use that waited for it
+settle : WasmSymbol ->
+  Entry ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+settle sym entry reg =
+  let key = symbolKey sym
+  let reg2 = { reg |
+    entries = omInsert key entry reg.entries,
+    waiting = omDelete key reg.waiting,
+  }
+  match omLookup key reg.waiting
+    None => Ok reg2
+    Some uses => judgeWaiting entry (reverseL uses) reg2
+
+judgeWaiting : Entry ->
+  List Waiting ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+judgeWaiting _ [] reg = Ok reg
+judgeWaiting entry ((Waiting sym operands at) :: rest) reg =
+  match callDefect sym operands at entry
+    Some d => Err d
+    None => judgeWaiting entry rest reg
+
+callDefect : WasmSymbol ->
+  Option Int ->
+  SymbolOrigin ->
+  Entry ->
+  Option SymbolDefect
+callDefect sym operands at (Entry shape defined) = match (
+  operands,
+  paramCount shape,
+)
+  (Some n, Some m) =>
+    if n == m then
+      None
+    else
+      Some (ShapeMismatch (symbolName sym) m n at defined)
+  _ => None
+
+-- A direct call of a function, supplying [operands] operands.
+export
+checkCall : WasmSymbol ->
+  Int ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkCall sym operands origin reg = match omLookup (symbolKey sym) reg.entries
+  Some entry => match callDefect sym (Some operands) origin entry
+    Some d => Err d
+    None => Ok reg
+  None => Ok (wait (Waiting sym (Some operands) origin) reg)
+
+-- A use of an identity by name alone: a type use, a global access, a data
+-- segment read, or a `ref.func` (whose function and element entry both have to
+-- exist).
+export
+checkRef : WasmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkRef (WasmType t) origin reg = checkTypeUse t t origin reg
+checkRef (WasmGlobal g) origin reg = checkDeclared (WasmGlobal g) origin reg
+checkRef (WasmData d) origin reg = checkDeclared (WasmData d) origin reg
+checkRef sym origin reg =
+  if omHasKey (symbolKey sym) reg.entries then
+    Ok reg
+  else
+    Ok (wait (Waiting sym None origin) reg)
+
+-- a use of an identity whose set closed before the use: it is there, or never
+-- will be
+checkDeclared : WasmSymbol ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkDeclared sym origin reg =
+  if omHasKey (symbolKey sym) reg.entries then
+    Ok reg
+  else
+    Err (UndefinedReference sym origin)
+
+-- [user]'s declaration says `(type $<t>)`; the type section must declare it.
+export
+checkTypeUse : String ->
+  String ->
+  SymbolOrigin ->
+  SymbolRegistry ->
+  Result SymbolDefect SymbolRegistry
+checkTypeUse t user origin reg =
+  if omHasKey (symbolKey (WasmType t)) reg.entries then
+    Ok reg
+  else
+    Err (UndeclaredType t user origin)
+
+wait : Waiting -> SymbolRegistry -> SymbolRegistry
+wait (w@(Waiting sym _ _)) reg =
+  let key = symbolKey sym
+  let earlier = optionOr [] (omLookup key reg.waiting)
+  { reg | waiting = omInsert key (w :: earlier) reg.waiting }
+
+-- [sym]'s definer recorded a gap instead of defining it, so a use of it is the
+-- gap's to report, not the registry's.
+export
+excuseSymbol : WasmSymbol -> SymbolRegistry -> SymbolRegistry
+excuseSymbol sym reg =
+  { reg | excused = omInsert (symbolKey sym) () reg.excused }
+
+-- Once the module is complete: one defect for each identity some use still
+-- waits for, at its first use, in key order.
+export
+unresolved : SymbolRegistry -> List SymbolDefect
+unresolved reg = flatMap (unresolvedAt reg) (omKeys reg.waiting)
+
+unresolvedAt : SymbolRegistry -> String -> List SymbolDefect
+unresolvedAt reg key =
+  if omHasKey key reg.excused then
+    []
+  else match omLookup key reg.waiting
+    None => []
+    Some uses => match reverseL uses
+      [] => []
+      (Waiting sym _ at) :: _ => [missingDefect sym at]
+
+missingDefect : WasmSymbol -> SymbolOrigin -> SymbolDefect
+missingDefect (WasmElem n) at = UndeclaredFuncRef n at
+missingDefect sym at = UndefinedReference sym at
+
+-- The element-declared functions, in the order they were first declared.
+export
+elemNames : SymbolRegistry -> List String
+elemNames reg = reverseL reg.elems
+
+-- ── rendering ───────────────────────────────────────────────────────────────
+
+export
+defectCode : SymbolDefect -> String
+defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
+defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
+defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
+defectCode (UndeclaredType _ _ _) = "E-PHYS-UNDECLARED-TYPE"
+defectCode (UndeclaredFuncRef _ _) = "E-PHYS-UNDECLARED-FUNCREF"
+
+-- The binding and position the defect is reported at.
+export
+defectOrigin : SymbolDefect -> SymbolOrigin
+defectOrigin (DuplicateDefinition _ at _) = at
+defectOrigin (ShapeMismatch _ _ _ at _) = at
+defectOrigin (UndefinedReference _ at) = at
+defectOrigin (UndeclaredType _ _ at) = at
+defectOrigin (UndeclaredFuncRef _ at) = at
+
+export
+defectMessage : SymbolDefect -> String
+defectMessage (DuplicateDefinition sym at first) =
+  "in \{bindingOf at}: the WebAssembly module would define \{describe sym} twice, here and in \{placeOf first}; a module may name it once"
+defectMessage (ShapeMismatch f params operands at defined) =
+  "in \{bindingOf at}: a call of function `$\{f}` supplies \{intToString operands} operand(s), but its definition in \{placeOf defined} takes \{intToString params}"
+defectMessage (UndefinedReference sym at) =
+  "in \{bindingOf at}: the WebAssembly module refers to \{describe sym}, which nothing in it defines"
+defectMessage (UndeclaredType t user at) =
+  "in \{bindingOf at}: `$\{user}` is declared with type `$\{t}`, which this module's type section does not declare"
+defectMessage (UndeclaredFuncRef f at) =
+  "in \{bindingOf at}: `ref.func $\{f}` names a function no element declaration lists"
+
+describe : WasmSymbol -> String
+describe (WasmFunc n) = "function `$\{n}`"
+describe (WasmType n) = "type `$\{n}`"
+describe (WasmGlobal n) = "global `$\{n}`"
+describe (WasmData n) = "data segment `$\{n}`"
+describe (WasmElem n) = "element entry `$\{n}`"

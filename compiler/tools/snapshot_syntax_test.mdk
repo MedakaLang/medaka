@@ -1,0 +1,52 @@
+import string.{repeat}
+import tools.source_snapshot.{SourceRevision(..)}
+import tools.snapshot_syntax.{
+  parseSnapshotSyntax, snapshotSyntaxMatches, snapshotSyntaxSnapshot,
+  snapshotSyntaxResult
+}
+import tools.syntax_queries.{symbolsFromRecovered}
+import frontend.recovery_result.{
+  recoveredCompleteness, RecoveryCompleteness(..), RecoveryStop(..)
+}
+import test.{expectAll, expectEqual, expectTrue, expectFalse}
+
+test "over-budget revisions retain metadata and provenance without an index" =
+  let text = repeat 8388609 "x"
+  let original = SourceRevision "file:///a" (Some 7) 1 text
+  let prepared = parseSnapshotSyntax original
+  expectAll [
+    expectTrue (isNone (snapshotSyntaxSnapshot prepared)),
+    expectEqual
+      "partial/exhaustedBudget"
+      (match recoveredCompleteness (snapshotSyntaxResult prepared)
+        Partial ExhaustedBudget => "partial/exhaustedBudget"
+        _ => "unexpected"),
+    expectTrue (snapshotSyntaxMatches original prepared),
+    expectTrue
+      (isErr
+        (symbolsFromRecovered
+          (SourceRevision "file:///b" (Some 7) 1 text)
+          prepared)),
+    expectTrue
+      (isErr
+        (symbolsFromRecovered
+          (SourceRevision "file:///a" (Some 7) 2 text)
+          prepared)),
+    expectTrue
+      (isErr
+        (symbolsFromRecovered
+          (SourceRevision "file:///a" (Some 8) 1 text)
+          prepared)),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///b" (Some 7) 1 text)
+        prepared),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///a" (Some 7) 2 text)
+        prepared),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///a" (Some 8) 1 text)
+        prepared),
+  ]

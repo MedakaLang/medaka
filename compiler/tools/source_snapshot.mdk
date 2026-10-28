@@ -17,3 +17,15 @@ export
 matchesSnapshot : SnapshotId -> SourceSnapshot -> Bool
 matchesSnapshot (SnapshotId uri generation) (SourceSnapshot u _ g _ _) =
   uri == u && generation == g
+
+public export data SourceRevision =
+  SourceRevision String (Option Int) Int String
+
+export
+revisionId : SourceRevision -> SnapshotId
+revisionId (SourceRevision uri _ generation _) = SnapshotId uri generation
+
+export
+snapshotFromRevision : SourceRevision -> SourceSnapshot
+snapshotFromRevision (SourceRevision uri version generation text) =
+  makeSnapshot uri version generation text

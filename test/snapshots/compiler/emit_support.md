@@ -1,5 +1,5 @@
 # META
-source_lines=706
+source_lines=700
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -23,7 +23,7 @@ import ir.core_ir.{
   CallSite(..),
   CImplEntry(..),
 }
-import frontend.ast.{Lit(..), Pat}
+import frontend.ast.{Lit(..), Loc(..), Pat}
 import backend.trmc_analysis.{patVars, bindNames, bindName}
 import support.util.{
   contains,
@@ -46,6 +46,7 @@ import support.ordmap.{
   omMapValues,
 }
 import support.scc.{tarjanSCCs}
+import support.symbol_origin.{SymbolOrigin(..)}
 
 -- ── eager free-var / strictness analysis ─────────────────────────────────────
 -- names referenced EAGERLY in `body`: like freeVars, but a `CLam` body is NOT
@@ -568,20 +569,6 @@ lazyGlobalNames binds =
   let tainted = foldTaintSCCs adj methodSet (tarjanSCCs allNames adj) omEmpty
   filterList (n => n /= "main" && omHasKey n tainted) (valGlobalNames binds)
 
--- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
--- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS
--- to a `=>`-constrained fn's source params.  Both backends must recognize one, for the
--- same reason: a synthesized dict param occupies an IR param slot but has NO entry in
--- the DECLARED signature, so any walk that lines declared types up against lowered
--- params must skip it WITHOUT consuming a declared type — otherwise every declared type
--- describes the param one slot to its LEFT.  llvm_emit's inferParamTysSeedD does this;
--- wasm_emit's numPolyPatsAt/floatPatsAt did NOT, which is what made an explicit
--- `Num a =>` signature *disable* the very runtime dispatch it should have guaranteed
--- (2026-07-14; fixture `test/wasm/fixtures/polynum_sq_sig_float.mdk`).
-export
-isDictParamName : String -> Bool
-isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
-
 -- ── clause fall-through labelling (shared by BOTH backends) ──────────────────
 -- `desugar.mdk` lowers a clause's guard chain to a nested `CIf`/`CDecision`
 -- terminated by the sentinel call `__fallthrough__ ()` — "no guard arm matched,
@@ -708,13 +695,21 @@ isTailCall _ = False
 export
 implEntryDeclaredArity : CImplEntry -> Int
 implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
+
+-- Where the binding [name] at [loc] is, as a symbol registry reports it: no
+-- position for the placeholder span of a binding without a source location.
+export
+bindingOrigin : String -> Loc -> SymbolOrigin
+bindingOrigin name (Loc f 1 0 1 0) = SymbolOrigin name f 0 0
+bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 # DESUGAR
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
@@ -906,8 +901,6 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
 (DFunDef false "ftPrefix" () (ELit (LString "__ft__")))
 (DTypeSig true "ftLabelOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -945,13 +938,17 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
+(DTypeSig true "bindingOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "SymbolOrigin"))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (ELit (LInt 0))) (ELit (LInt 0))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (EVar "line")) (EVar "col")))
 # MARK
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
+(DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
@@ -1143,8 +1140,6 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
 (DFunDef false "ftPrefix" () (ELit (LString "__ft__")))
 (DTypeSig true "ftLabelOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1182,3 +1177,6 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
+(DTypeSig true "bindingOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "SymbolOrigin"))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (ELit (LInt 0))) (ELit (LInt 0))))
+(DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (EVar "line")) (EVar "col")))

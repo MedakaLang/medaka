@@ -87,13 +87,10 @@ apiCheck = match readFile wasmEmitPath
     let ls = lines text
     check
       (exportDeclPresent "makeWasmEmitInput" "" ls
-        && exportDeclPresent
-          "emitProgram"
-          "emitProgram : WasmEmitInput -> EmitPlan -> CProgram -> String"
-          ls
+        && exportDeclPresent "emitProgram" "emitProgram : WasmEmitInput ->" ls
         && exportDeclPresent
           "emitProgramGaps"
-          "emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String"
+          "emitProgramGaps : WasmEmitInput ->"
           ls)
       "FAIL: WasmEmitInput API is incomplete"
 

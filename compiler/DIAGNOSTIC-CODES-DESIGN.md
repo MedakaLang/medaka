@@ -448,6 +448,44 @@ asserts) stay **bare** and carry no code.
 | `E-NOT-A-FUNCTION` | applied a non-function value (borderline) |
 | `E-MISSING-FIELD` | reserved — record-field miss (borderline; no live emit site on current tree, see design §5) |
 
+### Emitter / physical identity — `E-PHYS-*` (`compiler/backend/wasm_symbols.mdk`, `compiler/backend/llvm_symbols.mdk`)
+
+A module the emitter would write is refused when its physical identities do not
+close: every function, type, global and element entry it names has to be declared
+or defined exactly once, and every direct call has to supply the operand count the
+definition takes. The Wasm emitter keeps a per-emission registry
+(`SymbolRegistry`) and returns its defects to the emit driver instead of the module
+text, so nothing is written. The driver renders them with
+`renderSymbolDefects`/`refuseSymbolDefects` (`compiler/driver/diagnostics.mdk`) at
+the binding whose emission found the defect, with the code leading the message, and
+exits `emitDiagExitCode`, which `medaka build` forwards as a diagnostic. A binding
+with no source position (the prelude-free probe entries) is reported by name under
+`<unknown location>`. These are reachable on a well-typed program, as the runtime
+`E-*` codes are, but they are compile-time refusals: each one names a compiler
+defect, never a fault in the program. The gap census (`emitProgramGaps`) refuses
+only the duplicate and shape codes; it writes no module, so a use need not find its
+identity there. Record mode excuses only an identity whose definer recorded a gap.
+
+The LLVM emitter keeps the same kind of registry over its one namespace of
+functions and global variables (`emitProgram`, `emitProgramWithStats`,
+`emitProgramRecord`, `emitProgramGaps`), refused by `refuseLlvmSymbolDefects`.
+Every define, the declares it
+writes for the other half of a prelude-object build, the value globals, the user
+externs' and site traps' declares, and every direct call through `emitImplCall` or
+`emitDirectTailCall` are registered. A whole module (no prelude object) may not leave
+a generated symbol (`mdk_<fn>`, `mdk_impl_*`, `mdk_disp_*`, `mdk_force_*`) only
+declared; a module half declares the other half's. Of these defects clang already
+refuses a duplicate and an undefined call after the text is written; a call whose
+shape disagrees with the prototype it does not refuse at all.
+
+| Code | Meaning |
+|---|---|
+| `E-PHYS-DUPLICATE` | one function, type or global is declared or defined twice (for example `self` and `u__self`, which `gname` spells alike; in LLVM, the value global `@mdk_g_foo` and a function `g_foo`) |
+| `E-PHYS-SHAPE` | a direct call supplies a different operand count from the definition's parameter count; in LLVM, a call's return or operand types disagree with the prototype, or a second declaration gives the name another prototype |
+| `E-PHYS-UNDEFINED` | a call, `ref.func` or global access names an identity nothing in the module defines; in a whole LLVM module, also a generated symbol it only declares |
+| `E-PHYS-UNDECLARED-TYPE` | a function is declared `(type $T)` and the type section declares no `$T` (#4528) |
+| `E-PHYS-UNDECLARED-FUNCREF` | a `ref.func` in a body names a function no `(elem declare func …)` lists |
+
 ---
 
 ## 3. Diag ADT + threading mechanism

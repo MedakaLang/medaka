@@ -74,7 +74,7 @@ trap 'rm -rf "$TMP"' EXIT
 # on both platforms ([B-DUAL-PLATFORM]). This shim reports 142 (128+SIGALRM), which is not
 # any cell's pinned exit — a fuse-kill therefore reads as a DIVERGENCE (loud) rather than
 # as a match, which is the safe direction.
-bound() { perl -e 'alarm shift; exec @ARGV' 120 "$@"; }
+bound() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' 120 "$@"; }
 
 # Fold a captured stream into ONE line so a cell's pin is a single comparable string:
 # newlines become a literal backslash-n, an empty stream becomes <empty>, and two kinds of

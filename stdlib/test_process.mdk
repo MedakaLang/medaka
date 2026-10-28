@@ -104,7 +104,13 @@ boundedVerbSeconds : Int ->
 boundedVerbSeconds secs cmd args =
   runVerb
     "perl"
-    (["-e", "alarm \{intToString secs}; exec @ARGV", "env", cmd] ++ args)
+    ([
+        "-e",
+        "alarm \{intToString secs}; exec @ARGV or die qq(exec: $!)",
+        "env",
+        cmd,
+      ]
+      ++ args)
 
 {- | A fresh, empty directory for a test that has to write files.
 

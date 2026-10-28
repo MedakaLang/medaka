@@ -401,10 +401,31 @@ test "paired helper/type/import omissions cannot erase unchanged Core prerequisi
       })),
   ]
 
+intArith : String
+intArith = """
+f x y = shiftLeft (x + y) (x - y)
+main = f 3 1
+"""
+
+test "gateway refuses a checked Int helper or shift dropped from the plan" = expectAll
+  [
+    expectEqual ["add", "left", "sub"] (demandOf intArith).intHelpers,
+    expectErrContains
+      "missing-wasm-helper-prerequisite: physical branches"
+      (refusal intArith (d => { d |
+        intHelpers = without "add" (without "left" d.intHelpers),
+      })),
+    expectErrContains
+      "wasm-census-demand-mismatch"
+      (refusal intArith (d => { d |
+        censusIntHelpers = without "add" (without "left" d.censusIntHelpers),
+      })),
+  ]
+
 test "gap census preserves its forced reference walk without requiring main" =
   let (plan, cp) = prepared "f x y = x + y"
   expectEqual
-    []
+    (Ok [])
     (emitProgramGaps
       (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
       plan

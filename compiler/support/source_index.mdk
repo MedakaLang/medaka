@@ -1,6 +1,21 @@
 import array.{fromList}
 import list.{reverse}
-import string.{toChars}
+import string.{toChars, StrCursor, startCursor, nextChar}
+
+sourceEndGo : StrCursor -> Int -> Int -> Bool -> (Int, Int)
+sourceEndGo cursor line col afterCR = match nextChar cursor
+  None => (line, col)
+  Some (c, next) =>
+    if c == '\r' then
+      sourceEndGo next (line + 1) 0 True
+    else if c == '\n' then
+      sourceEndGo next (if afterCR then line else line + 1) 0 False
+    else
+      sourceEndGo next line (col + (if charCode c > 65535 then 2 else 1)) False
+
+export
+sourceEndUtf16Position : String -> (Int, Int)
+sourceEndUtf16Position source = sourceEndGo (startCursor source) 0 0 False
 
 export data SourceIndex = SourceIndex (Array Int) (Array Int) (Array Int)
 

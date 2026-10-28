@@ -101,7 +101,7 @@ correctness.
 - ⚠️ **[WT-TIMEOUT]** `timeout` (coreutils) doesn't exist on macOS. Use the shim from
   `test/lib_engines_differential.sh`:
   ```sh
-  run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+  run_t() { perl -e 'alarm shift; exec @ARGV or die qq(exec: $!)' "$@"; }
   ```
   Not a drop-in — reports **142**, `timeout` reports **124**. Verify: `run_t 1 sleep 5; echo $?`.
 

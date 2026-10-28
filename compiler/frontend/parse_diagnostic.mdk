@@ -265,7 +265,7 @@ locateParseProblem index start end kind =
   let (sl, sc) = optionOr (1, 0) (offsetToSourcePosition index start)
   let (el, ec) = optionOr (sl, sc) (offsetToSourcePosition index end)
   let loc = Loc "" sl sc el ec
-  ParseDiagnostic kind loc (problemEdits kind loc)
+  makeParseDiagnostic kind loc
 
 replacementEdit : Loc -> String -> String -> List ParseEdit
 replacementEdit loc old new = [ParseEdit loc old new MachineApplicable]
@@ -282,3 +282,7 @@ problemEdits (PublicDataOnly _) loc = replacementEdit loc "public" ""
 problemEdits MatchGuardBar loc = replacementEdit loc "|" "if"
 problemEdits EquationGuardIf loc = replacementEdit loc "if" "|"
 problemEdits _ _ = []
+
+export
+makeParseDiagnostic : ParseDiagnosticKind -> Loc -> ParseDiagnostic
+makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)

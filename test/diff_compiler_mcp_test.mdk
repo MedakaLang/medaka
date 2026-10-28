@@ -25,12 +25,12 @@
 import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, withScratchDir}
 import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectEqual, expectGolden,
-  expectTextContainsAll, fail, pass
+  expectTextContainsAll, expectFalse, fail, pass
 }
 import fs.{fixtureFiles}
 import path.{stem}
-import json.{Json(..), jObject, stringify, parse, get}
-import string.{split, endsWith, join}
+import json.{Json(..), jObject, jArray, stringify, parse, get, asString}
+import string.{split, endsWith, join, contains, repeat}
 import list.{reverse}
 
 corpus : <IO> String
@@ -227,12 +227,8 @@ coordinateCall id name args =
 coordinateFile : String -> Json
 coordinateFile path = jObject [("file", JString path)]
 
-coordinateResponse : String -> Option String
-coordinateResponse line = do
-  obj <- match parse line
-    Ok value => Some value
-    Err _ => None
-  result <- get "result" obj
+firstTextContent : Json -> Option String
+firstTextContent result = do
   content <- get "content" result
   first <- match content
     JArray items => match toList items
@@ -242,6 +238,14 @@ coordinateResponse line = do
   match get "text" first
     Some (JString text) => Some text
     _ => None
+
+coordinateResponse : String -> Option String
+coordinateResponse line = do
+  obj <- match parse line
+    Ok value => Some value
+    Err _ => None
+  result <- get "result" obj
+  firstTextContent result
 
 coordinateRun : String -> <Exec, IO, FileRead> Expectation
 coordinateRun dir =
@@ -352,11 +356,11 @@ bad = )
             ("type", expectEqual "value : Int" ty),
             (
               "first line",
-              expectTextContainsAll ["\"line\":0", "\"col\":0"] firstError,
+              expectEqual "[]" firstError,
             ),
             (
               "second line",
-              expectTextContainsAll ["\"line\":1", "\"col\":6"] secondError,
+              expectTextContainsAll ["value"] secondError,
             ),
             (
               "diagnostic",
@@ -701,3 +705,285 @@ main = 1
 
 test "mcp test gate retains warnings alongside errors" =
   withScratchDir mixedGateDiagnostics
+
+symbolPos : Int -> Int -> Json
+symbolPos line col = jObject [("line", JInt line), ("character", JInt col)]
+
+symbolRegion : Int -> Int -> Json
+symbolRegion start end = jObject [
+  ("start", symbolPos start 0),
+  ("end", symbolPos end 0),
+  ("reason", JString "invalidDeclaration"),
+]
+
+symbolRange : (Int, Int) -> (Int, Int) -> Json
+symbolRange (sl, sc) (el, ec) =
+  jObject [("start", symbolPos sl sc), ("end", symbolPos el ec)]
+
+symbolDiagnostic : Json -> String -> String -> Json
+symbolDiagnostic range code message = jObject [
+  ("range", range),
+  ("severity", JInt 1),
+  ("source", JString "medaka"),
+  ("message", JString message),
+  ("code", JString code),
+]
+
+symbolField : String -> Json -> Option String
+symbolField key obj = do
+  value <- get key obj
+  asString value
+
+outlineSymbols : Json -> Option (List Json)
+outlineSymbols result = do
+  text <- firstTextContent result
+  value <- match parse text
+    Ok v => Some v
+    Err _ => None
+  match value
+    JArray items => Some (toList items)
+    _ => None
+
+outlineNames : Json -> Option (List (Option String))
+outlineNames result = map (map (symbolField "name")) (outlineSymbols result)
+
+currentSymbolsChecks : String -> Int -> Json -> Json -> Expectation
+currentSymbolsChecks path code result metadata = expectEach [
+  ("exit", expectEqual 0 code),
+  (
+    "origin",
+    expectEqual
+      (Some
+        (jObject [
+          ("uri", JString ("file://" ++ path)),
+          ("version", JNull),
+          ("generation", JInt 0),
+        ]))
+      (get "origin" metadata),
+  ),
+  (
+    "completeness",
+    expectEqual (Some (JString "partial")) (get "completeness" metadata),
+  ),
+  (
+    "stop",
+    expectEqual (Some (JString "reachedEnd")) (get "stop" metadata),
+  ),
+  (
+    "regions",
+    expectEqual
+      (Some (jArray [symbolRegion 1 2, symbolRegion 3 4]))
+      (get "invalidRegions" metadata),
+  ),
+  (
+    "names",
+    expectEqual
+      (Some [Some "before", Some "middle", Some "after"])
+      (outlineNames result),
+  ),
+  (
+    "diagnostics",
+    expectEqual
+      (Some
+        (jArray [
+          symbolDiagnostic
+            (symbolRange (1, 6) (1, 7))
+            "P-PARSE"
+            "expected an expression",
+          symbolDiagnostic
+            (symbolRange (3, 8) (3, 9))
+            "P-PARSE"
+            "expected an expression",
+        ]))
+      (get "diagnostics" metadata),
+  ),
+]
+
+currentSymbolsResponse : String -> Int -> String -> Expectation
+currentSymbolsResponse path code out = match parse out
+  Err _ => fail "invalid MCP response"
+  Ok obj => match get "result" obj
+    None => fail "missing MCP result"
+    Some result => match get "structuredContent" result
+      None => fail "missing metadata"
+      Some metadata => currentSymbolsChecks path code result metadata
+
+currentSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+currentSymbolsWire dir =
+  let path = stringConcat [dir, "/current.mdk"]
+  let request = stringConcat [dir, "/current.jsonl"]
+  let source = stringJoin "\r\n" [
+    "before = (\"😀\", 1)", "bad = )", "middle = 2", "worse = )", "after = 3", ""
+  ]
+  match (
+    writeOk path source,
+    writeOk
+      request
+      (coordinateCall 1 "medaka_symbols" (coordinateFile path) ++ "\n"),
+  )
+    (Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => currentSymbolsResponse path code out
+    _ => fail "current fixture write failed"
+
+test "mcp symbols report current partial source and provenance" =
+  withScratchDir currentSymbolsWire
+
+terminalSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+terminalSymbolsWire dir =
+  let openPath = dir ++ "/open.mdk"
+  let lexPath = dir ++ "/lex.mdk"
+  let request = dir ++ "/terminal.jsonl"
+  let calls = stringConcat [
+    coordinateCall 1 "medaka_symbols" (coordinateFile openPath),
+    "\n",
+    coordinateCall 2 "medaka_symbols" (coordinateFile lexPath),
+    "\n",
+  ]
+  match (
+    writeOk openPath "before = 1\nbad = (\nhidden = 2\n",
+    writeOk lexPath "before = 1\nbad = \"unterminated\n",
+    writeOk request calls,
+  )
+    (Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => expectEach [
+        ("exit", expectEqual 0 code),
+        (
+          "unclosed",
+          expectTextContainsAll
+            ["stoppedDelimiter", "unclosedDelimiter", "before", "partial"]
+            out,
+        ),
+        (
+          "lexical",
+          expectTextContainsAll
+            ["stoppedLexically", "terminalLexError", "L-UNTERMINATED-STRING"]
+            out,
+        ),
+        ("hidden declaration", expectFalse (contains "hidden" out)),
+      ]
+    _ => fail "terminal fixture write failed"
+
+test "mcp symbols stop at delimiters and terminal lex errors" =
+  withScratchDir terminalSymbolsWire
+
+barrierSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+barrierSymbolsWire dir =
+  let broken = dir ++ "/broken.mdk"
+  let valid = dir ++ "/valid.mdk"
+  let request = dir ++ "/barrier.jsonl"
+  let calls = stringConcat [
+    coordinateCall 1 "medaka_symbols" (coordinateFile broken),
+    "\n",
+    coordinateCall 2 "medaka_symbols" (coordinateFile valid),
+    "\n",
+  ]
+  match (
+    writeOk broken "f : Int -> Int\nbroken = )\nf x = x\n",
+    writeOk valid "f : Int -> Int\nf x = x\n",
+    writeOk request calls,
+  )
+    (Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match split "\n" out
+        a :: b :: _ => match (parse a, parse b)
+          (Ok x, Ok y) =>
+            let brokenSymbols = do
+              result <- get "result" x
+              outlineSymbols result
+            let validSymbols = do
+              result <- get "result" y
+              outlineSymbols result
+            expectEach [
+              ("exit", expectEqual 0 code),
+              (
+                "broken names",
+                expectEqual
+                  (Some [Some "f", Some "f"])
+                  (map (map (symbolField "name")) brokenSymbols),
+              ),
+              (
+                "broken ranges",
+                expectEqual
+                  (Some [
+                    Some (symbolRange (0, 0) (1, 0)),
+                    Some (symbolRange (2, 0) (3, 0)),
+                  ])
+                  (map (map (get "range")) brokenSymbols),
+              ),
+              (
+                "valid names",
+                expectEqual
+                  (Some [Some "f"])
+                  (map (map (symbolField "name")) validSymbols),
+              ),
+              (
+                "valid range",
+                expectEqual
+                  (Some [Some (symbolRange (0, 0) (2, 0))])
+                  (map (map (get "range")) validSymbols),
+              ),
+            ]
+          _ => fail "invalid MCP response"
+        _ => fail "missing MCP responses"
+    _ => fail "barrier fixture write failed"
+
+test "mcp symbols keep invalid regions as barriers" =
+  withScratchDir barrierSymbolsWire
+
+budgetSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+budgetSymbolsWire dir =
+  let path = dir ++ "/budget.mdk"
+  let request = dir ++ "/budget.jsonl"
+  match (
+    writeOk path (repeat 8388608 "x" ++ "\r\n😀"),
+    writeOk
+      request
+      (coordinateCall 1 "medaka_symbols" (coordinateFile path) ++ "\n"),
+  )
+    (Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match parse out
+        Err _ => fail "invalid MCP response"
+        Ok obj => match get "result" obj
+          None => fail "missing MCP result"
+          Some result => match get "structuredContent" result
+            None => fail "missing metadata"
+            Some metadata => expectEach [
+              ("exit", expectEqual 0 code),
+              ("symbols", expectEqual (Some []) (outlineSymbols result)),
+              (
+                "completeness",
+                expectEqual
+                  (Some (JString "partial"))
+                  (get "completeness" metadata),
+              ),
+              (
+                "stop",
+                expectEqual
+                  (Some (JString "exhaustedBudget"))
+                  (get "stop" metadata),
+              ),
+              (
+                "region",
+                expectEqual
+                  (Some
+                    (jArray [
+                      jObject [
+                        ("start", symbolPos 0 0),
+                        ("end", symbolPos 1 2),
+                        ("reason", JString "recoveryBudget"),
+                      ],
+                    ]))
+                  (get "invalidRegions" metadata),
+              ),
+              (
+                "diagnostics",
+                expectEqual (Some (jArray [])) (get "diagnostics" metadata),
+              ),
+            ]
+    _ => fail "budget fixture write failed"
+
+test "mcp symbols budget endpoint uses UTF-16" =
+  withScratchDir budgetSymbolsWire

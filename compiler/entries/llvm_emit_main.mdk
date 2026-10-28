@@ -31,6 +31,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import driver.diagnostics.{refuseLlvmSymbolDefects}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -43,20 +44,25 @@ oracleMain () = match args ()
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
-    emitTarget (annotateProgram (grantWholeDomain (desugar (parse targetSrc))))
+    emitTarget
+      targetPath
+      (annotateProgram (grantWholeDomain (desugar (parse targetSrc))))
   Err msg => ePutStrLn msg
 
 -- The record field-order table comes from the SAME decl list that is lowered, so
 -- its ctor keys and the lowered program's `CRecord` names agree by construction
 -- (#1513 — the emitter no longer recovers that order by scanning for construction
 -- sites, which misses a record that is only ever projected).
-emitTarget : List Decl -> <IO> Unit
-emitTarget decls =
+emitTarget : String -> List Decl -> <IO> Unit
+emitTarget targetPath decls =
   let cp = lowerProgramEmitWith emptyFacts decls
-  putStr
-    (emitProgram
+  let emitted =
+    emitProgram
       (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
       (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
-      cp)
+      cp
+  match emitted
+    Ok text => putStr text
+    Err defects => refuseLlvmSymbolDefects targetPath defects
 
 main = oracleMain ()

@@ -57,6 +57,7 @@ import backend.extern_catalog.{
   wasmUses,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
+import backend.wasm_symbols.{defectCode}
 import backend.emit_plan.{buildEmitPlan}
 
 import eval.eval.{externBindings, ioExternBindings}
@@ -297,7 +298,9 @@ emitWat src =
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (plan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-  emitProgramRecord input plan prepared
+  match emitProgramRecord input plan prepared
+    Ok emitted => emitted
+    Err defects => ("", map defectCode defects)
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.

@@ -59,6 +59,7 @@ import entries.entry_support.{
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
+import driver.diagnostics.{refuseSymbolDefects}
 import types.program_facts.{ProgramFacts}
 import types.tc_occurrence.{constrainedSigNames}
 
@@ -119,4 +120,6 @@ emitTail mods requirement outputs facts runtimeDecls coreD modules1 =
         ("wasm-reach-kept-units", units.kept),
       ]
       None => ()
-  putStr wat
+  match wat
+    Ok text => putStr text
+    Err defects => refuseSymbolDefects "" defects

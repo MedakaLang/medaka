@@ -205,6 +205,8 @@ import backend.wasm_emit.{
   emitProgramRecord as wasmRecord,
   makeWasmEmitInput,
 }
+import backend.wasm_symbols.{defectCode, defectMessage}
+import backend.llvm_symbols as LlvmSymbols
 import support.util.{
   joinNl,
   joinWith,
@@ -665,12 +667,19 @@ llvmOf runtimeDecls allDecls cp =
       []
       []
       ""
-  let (text, gaps) =
+  let emitted =
     emitProgramRecord
       input
       (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
       cp
-  withGaps ";" text gaps
+  match emitted
+    Ok (text, gaps) => withGaps ";" text gaps
+    Err defects =>
+      blockOf
+        (map
+          (d =>
+            "; REFUSED: [\{LlvmSymbols.defectCode d}] \{LlvmSymbols.defectMessage d}")
+          defects)
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
@@ -684,8 +693,11 @@ wasmOf runtimeDecls allDecls cp =
       (runtimeDomain (externDecls runtimeDecls))
       (inputCtorFloatFieldsW input)
       cp
-  let (text, gaps) = wasmRecord input plan prepared
-  withGaps ";;" text gaps
+  match wasmRecord input plan prepared
+    Ok (text, gaps) => withGaps ";;" text gaps
+    Err defects =>
+      blockOf
+        (map (d => ";; REFUSED: [\{defectCode d}] \{defectMessage d}") defects)
 
 withGaps : String -> String -> List String -> String
 withGaps _ text [] = text
