@@ -1,0 +1,35 @@
+-- Tests of `types.runtime_ops`: the scalar tag a solved arithmetic operand carries.
+
+import test.{expectEqual}
+import frontend.ast.{TyConOrigin(..)}
+import types.repr.{Mono(..), Tyvar(..)}
+import types.runtime_ops.{arithmeticTag}
+
+test "arithmetic tags cover solved primitives and preserve a generic Num operand" =
+  let generic = TVar (Ref (Unbound 9001 0))
+  let linkedInt = TVar (Ref (Link (TCon "Int" OriginBuiltin)))
+  expectEqual
+    [
+      Some "Int",
+      Some "Float",
+      Some "U8",
+      Some "U16",
+      Some "U32",
+      Some "U64",
+      Some "I32",
+      Some "I64",
+      None,
+      Some "Int",
+    ]
+    (map arithmeticTag [
+      TCon "Int" OriginBuiltin,
+      TCon "Float" OriginBuiltin,
+      TCon "U8" OriginBuiltin,
+      TCon "U16" OriginBuiltin,
+      TCon "U32" OriginBuiltin,
+      TCon "U64" OriginBuiltin,
+      TCon "I32" OriginBuiltin,
+      TCon "I64" OriginBuiltin,
+      generic,
+      linkedInt,
+    ])

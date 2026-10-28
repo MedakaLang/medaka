@@ -2,9 +2,10 @@
 -- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import
 -- site it finds (`importLocFor`), the export and definer tables; their construction from
 -- declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and
--- references, `builtinClassName`, `builtinIfaceRef`), the
--- imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an
--- import makes visible is `tc_scope`.
+-- references, `builtinClassName`, `builtinIfaceRef`), the imported-binding rows
+-- (`importedBindings`, `boundNames`), the alias table's two ordinal projections
+-- (`aliasUniverseAt`, `aliasOwnAt`), and the term environment (`TcEnv` extension and lookup);
+-- which names an import makes visible is `tc_scope`.
 --
 -- Spec: DICT section 8 (identity-keyed tables).
 --
@@ -106,7 +107,9 @@ import types.tc_types.{
   MethodEntry,
 }
 import frontend.visibility.{useModId}
-import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
+import support.ordmap.{
+  omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
+}
 import list.{
   drop,
   findMap,
@@ -250,6 +253,17 @@ aliasUniverseAt cur ((key, ad) :: rest)
 aliasVisibleTo : Int -> AliasDecl -> Bool
 aliasVisibleTo cur ad =
   declEnvVisibleTo cur ad.adOrd ad.adPub && ad.adOrd /= cur
+
+-- The current module's aliases arrive in front of its imported alias universe in
+-- `checkBodyImpl`.  `DataEnv.deAliases` is already reverse declaration order, so
+-- this filter preserves the exact first-match lookup order without rebuilding a
+-- second registry.
+export
+aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasOwnAt _ [] = []
+aliasOwnAt cur ((key, ad) :: rest)
+  | ad.adOrd == cur = (key, (ad.adParams, ad.adRhs)) :: aliasOwnAt cur rest
+  | otherwise = aliasOwnAt cur rest
 
 -- The graph's interface-row index (`meIfaceExports`); `omEmpty` before a driver
 -- built `DeclEnvs`, which `nameableIfaceShadows` and its peers read as "no index".
@@ -3249,6 +3263,15 @@ importedBindings (UseName ns)
 -- A module alias enumerates the dependency's schemes, so it cannot be expressed as a
 -- fixed member list — importFormSchemes handles it directly.
 importedBindings (UseAlias _ _) = Some []
+
+-- The names an import form binds, as the resolver counts them
+-- (`importedNamesMM`): a member list binds its locals, a single dotted name its
+-- last component, an alias nothing bare, and a wildcard (`None`) every name it
+-- reaches.
+export
+boundNames : UsePath -> Option (OrdMap Unit)
+boundNames path =
+  map (rows => omFromNames (map snd rows) omEmpty) (importedBindings path)
 
 memberBinding : UseMember -> (String, String)
 memberBinding m = (useMemberOrigin m, useMemberLocal m)

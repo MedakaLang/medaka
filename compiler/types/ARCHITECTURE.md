@@ -1,6 +1,6 @@
 # types/ — type inference, interfaces, effects and the facts downstream stages read
 
-**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-15. When it drifts, re-derive; do not patch.
+**Status:** CURRENT. Phase 4 extraction is complete through sprint 9: the entry is `typecheck.mdk` and the rest of the typechecker is the 26 `tc_*` modules below. Derived from the module headers and the tree through the Phase 4 sprint 10 fix round (2026-10-28); the `tc_types` row and the Cell lifetimes section were corrected by hand after the records slice. When it drifts, re-derive.
 
 ## What this directory is
 Stage five of the pipeline (`ARCHITECTURE.md` section 1), layer `types` in A1: above `frontend/`,
@@ -11,10 +11,10 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 ## Parts
 | Module | Owns | Entry points |
 |---|---|---|
-| `tc_types.mdk` | The typechecker's data declarations and state records (`ModuleCtx`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `DynCtx`, `SiteCtx`), with the key format of the grant records (`grantTopKey`, `methodGrantKey`, `setGrantIds`) | none |
+| `tc_types.mdk` | The typechecker's data declarations and state records (`ModuleCtx`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `DynCtx`, `SiteCtx`; the result records `ElabResult` and `GraphPreamble` and the fold plan `FoldPlan`), with the key format of the grant records (`grantTopKey`, `methodGrantKey`, `setGrantIds`) | none |
 | `tc_mono.mdk` | Operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the graph-run counter: head inspection, variable ids (including the live tail ids of effect variables), substitution, one-way matching and overlap, the builtin tycons, the `Scheme` projections (`schemeIds`, `schemeMono`, `schemeBodyOf`, `schemeAuthIds`), and the signature-slot and obligation-argument readings of a `Mono` (`unrigidSig`, `abstractSlotIds`, `declaredOblArgOk`, `oblArgKey`). Spec: HM-CORE section 2 (owed, #2555); DICT section 3 | `headTyconMono`, `monoScheme`, `schemeMono`, `cohOverlap`, `matchTyMono`, `tconBuiltin` |
 | `tc_state.mdk` | Mints, copies and carries of the state records (including `emptyShadowDicts`, the check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the `Windowed` channel ops, and the test-only trace-sink probes that only build or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`, `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`, `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`). Spec: TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md | `initialGraphCtx`, `mintGraphCtx`, `freshModuleCtx`, `interners`, `wPush`, `mctxAt`, `envAt` |
-| `tc_env.mdk` | Construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import site it finds (`importLocFor`), the export and definer tables; their construction from declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and references, `builtinClassName`, `builtinIfaceRef`), the imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an import makes visible is `tc_scope`. Spec: DICT section 8 | `lookupVar`, `lookupCtor`, `extendVar`, `buildImplEnvGo`, `buildClassEnvGo`, `methodEnvGo`, `publicDataDecls` |
+| `tc_env.mdk` | Construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import site it finds (`importLocFor`), the export and definer tables; their construction from declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and references, `builtinClassName`, `builtinIfaceRef`), the imported-binding rows (`importedBindings`, `boundNames`), the alias table's two ordinal projections (`aliasUniverseAt`, `aliasOwnAt`), and the term environment (`TcEnv` extension and lookup); which names an import makes visible is `tc_scope`. Spec: DICT section 8 | `lookupVar`, `lookupCtor`, `extendVar`, `buildImplEnvGo`, `buildClassEnvGo`, `methodEnvGo`, `publicDataDecls` |
 | `tc_diag_text.mdk` | The context-free message text of the typechecker: every message, help and fix builder, diagnostic key and text rewrite (`locKey`, `msgAtKey`, `writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds, `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the AST and the effect leaves (`kindName`, `backticked`, `quotedNames`, `renderKindArrow`, the renderers of the checks above); no row takes a context record, an environment or a cell (D3). Spec: ERROR-QUALITY.md; A5 | `backticked`, `quotedNames`, `renderKindArrow`, `unboundVarMsg`, `noImplFoundMsg` |
 | `tc_diag.mdk` | The emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, ambiguity replacement), the detection counter, and the context-needing builders beside their emitters (`noImplHint`); the context-free message text is `tc_diag_text`'s. Spec: ERROR-QUALITY.md; DIAGNOSTIC-CODES-DESIGN.md; A5 | `recordTypeError`, `pushTypeError`, `pushTypeErrorOnce`, `erredDuring` |
 | `tc_scope.mdk` | Name visibility across imports, read off the envelopes: the method-scope ladder (the own, imported and undecided rungs, admission, the method scheme rows it selects (`pickSchemesByDecl`, `admittedRowFor`, `admittedSchemeFor`, `undecidedSchemeFor`, `annotateImportedMethodRows`), the dispatch-index and impl-existence reads scoped by it), the ctor and record scoped views (candidates, overrides, scoped entries), the interface rows an import makes visible (`importedIfaceRows`), and the alias-qualified supply (`import m as A` rows, keys, spellings, ambiguity message, dictionary names and constraint entries). Spec: SHADOW section 1.0, S1-NS, S2-DECL; language-design Module System and Import Details; SYNTAX Import aliasing | `methodScopeAt`, `resolveMemberRows`, `aliasQualifiedMethodEntries`, `aliasAmbiguityMsg`, `sortIfaceRefs` |
@@ -36,8 +36,8 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 | `tc_infer.mdk` | The expression inference recursion (variables, application, lambda, let and rec-let, match and arms, blocks, the shadow-application arms, the record arms, and the operator arms with their typing rules (`inferBinop`, `inferUnop`)), signature pre-unification, exhaustiveness and wide-literal checks at their sites, with their module-end steps beside them (`checkDeferredMatches`, `checkFixedWidthLiterals`); the record arms' helpers are `tc_infer_records`. Spec: DICT section 4 (the elaboration judgment); HM-CORE section 3-section 5 (owed, #2555); SHADOW section 1 (S2, S4-S7), section 1.1; S2-DECL (d); EFFECTS section 3 | `infer`, `preunifySigsEx`, `checkWideLiterals` |
 | `tc_elab.mdk` | Dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`), operator-to-method rewriting: tree-to-tree passes over evidence; and the realization of solved evidence into the tree's route cells, one recorded site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`, `realizeRecDictApps`): the cells `dictPass` reads. Spec: DICT section 4 (translation), section 7; EFFECTS section 8 | `dictPassModulesIfEnabled`, `grantWholeDomain`, `resolveSite` |
 | `tc_global.mdk` | The whole-graph and declaration-level checks that need inference: the coherence scan, impl head, super-context and completeness checks, impl and default method bodies (including the windowed driver over a module's own impls, `inferUserImplBodies`, with `locatedImpls`, `derivingTypeLoc` and `uOblIsDecidableNow`), survivor call obligations. Spec: DICT section 5.1 M1, M3, section 6 C1, C2, C4 | `checkCoherence`, `checkSuperImpls`, `inferImplBodies`, `inferUserImplBodies`, `numCallObls` |
-| `tc_module.mdk` | The per-module check in one order: declarations, top-level groups, test and prop bodies, final checks, the stamp queue and its drain (`enqueueStampCtx`, `stampCtxOf`, `stampNoting`, `stampEach`), the binding-id stamping of a module's clauses and tail declarations (`stampGroupClauses`, `stampTailDecls`), the plural site resolution (`resolveSites`, `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the evidence-observation writer (`noteEvidenceObservation` and its entry builders), binder-type materialization, and the registration of imported declarations (the import-overlay rows: `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band (2,874 of 3,000), and a `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val). Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE section 5 (owed, #2555) | `checkModuleFull`, `enqueueStampCtx`, `drainStampQueue` |
-| `typecheck.mdk` | The entry module: the graph drive, the chain and core memos and interface continuation, serving, import seeding, publication, value-main judgment, configuration, the verb-facing API; the pre-inference alias rewrite, a driver step (`aliasSchemes`, `aliasSchemeEntry`, `coreAliasSchemes`, `renameAliasedMethods*`, `deAliasMethod*`, `resolveAliasMethodSpellings`); the `export import types.publish` facade. Spec: TYPECHECK-CONTRACTS section 4, section 5; DICT section 7.1, section 8 | `elaborateOne`, `elaborateOneFacts` |
+| `tc_module.mdk` | The per-module check in one order: declarations, top-level groups, test and prop bodies, final checks, the stamp queue and its drain (`enqueueStampCtx`, `stampCtxOf`, `stampNoting`, `stampEach`, `checkGraphFinish`), the binding-id stamping of a module's clauses and tail declarations (`stampGroupClauses`, `stampTailDecls`), the plural site resolution (`resolveSites`, `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the evidence-observation writer (`noteEvidenceObservation` and its entry builders), binder-type materialization, and the registration of imported declarations (the import-overlay rows: `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band when extracted, and a `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val). Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE section 5 (owed, #2555) | `checkModuleFull`, `enqueueStampCtx`, `drainStampQueue` |
+| `typecheck.mdk` | The entry module: the graph drive, the chain and core memos and interface continuation, serving, import seeding, publication, value-main judgment, configuration, the verb-facing API; the pre-inference alias rewrite, a driver step (`aliasSchemes`, `aliasSchemeEntry`, `coreAliasSchemes`, `renameAliasedMethods*`, `deAliasMethod*`, `resolveAliasMethodSpellings`); the `export import types.publish` facade. Spec: TYPECHECK-CONTRACTS section 4, section 5; DICT section 7.1, section 8 | `checkModules`, `checkModulesChainReportForGraph`, `elaborateModules`, `elaborateOneFacts`, `driveInputsFor` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
 | `entry_outcome.mdk` | The checked `main` shape facts and `EntryOutcome` construction published at graph-drive completion | `entryOutcomeNow`, `mainIsUnitNow` |
 | `prelude_interface.mdk` | The prelude interface value (`PreludeInterface`: what a drive needs from the prelude's core pass), its process cache (`preludeCacheRef`, one entry per compiler generation), freeze and thaw, and the on-disk key (`InterfaceKey`) | `seedPreludeInterface`, `currentPreludeInterface`, `preludeCacheHit`, `freezeInterface`, `thawInterface`, `interfaceKeyOf` |
@@ -73,11 +73,104 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 | `effect_solver.mdk` | Binding-owned effect equations solved by worklist | effect solver |
 | `effect_invocation.mdk` | The effects a host can make an entry perform | invocation summary |
 | `effect_policy.mdk` | Does an entry's invocation summary fit a policy | `policyRefusals`, `viaChain` |
+| `capability_manifest.mdk` | Checked capability data: `EntryKey`, `ManifestRequest`, `CapabilityManifest` with its frozen atoms and authorities, and manifest validation and lookup; contains no inference cells or query functions | `lookupManifest`, `requestEqual`, `ManifestDefect` |
+| `capability_policy.mdk` | Policy admission: compares a frozen demand with constant grants and never solves cells | `manifestAllowed`, `permitFrozen`, `PolicyVerdict` |
+| `manifest_publish.mdk` | The only bridge from checked authority cells to capability data | `publishManifests`, `freezeAtoms` |
+| `invocation_basis.mdk` | The invocation view recorded for a module (`InvocationView`), its freeze and publication, and the polarity and constructor readings the invocation summary needs | `recordInvocationView`, `publishInvocationView`, `readInvocationView`, `invocationResolver` |
+| `effect_param_decode.mdk` | Written effect parameters decoded against declared domains, without inference state | `decodeWrittenParam`, `writtenParam`, `effectParamProblems` |
+| `ffi_bindings.mdk` | The declaration rules for a user `extern`'s host bindings and declared row, and the messages of every `T-FFI-*` rule; pure over the declaration record, returning diagnostics as data | `ffiDeclarationDiags`, `FfiDiag` |
+| `extern_source.mdk` | Extern bindings with catalog identity (`ExternBindingKind`, `ExternProvenance`, `ExternSource`): runtime bindings carry catalog identity, foreign bindings use host declarations | `sourceExterns`, `runtimeExternSymbol`, `externSourceHeadRows` |
+| `runtime_abi.mdk` | The runtime ABI index over the catalog rows and the source-signature shape of an extern | `runtimeAbi`, `sourceShape`, `renderRuntimeAbi` |
+| `runtime_abi_data.mdk` | The runtime ABI rows: one `CallableShape` per catalog extern | `runtimeAbiRows` |
+| `runtime_abi_types.mdk` | The `CallableShape` record: written and lowered arity, parameter and result heads, canonical signature | `CallableShape` |
+| `runtime_grants.mdk` | Path-argument counts of the file-grant externs | `runtimePathCount`, `fileGrantExterns` |
+| `runtime_ops.mdk` | Runtime facts for primitive operators, read from the solved type representation only: no graph, evidence or backend state | `arithmeticTag` |
+| `value_main.mdk` | What the auto-print judgment of a value `main` reads off the entry module's declarations: another binding's use of `main`, and whether a diagnostic lies inside `main`'s binding; pure over the AST | `mainUseSite`, `inMainBinding`, `mainUsedMsg` |
+
+## Module-to-spec map
+One row per module in the Parts table. The `tc_*` and `typecheck` rows are the `-- Spec:` line of the module header; the other rows cite what the header or a spec section that names the module governs, and say "unsourced here" where neither does. `DICT`, `EFFECTS`, `HM-CORE` and `SHADOW` are `docs/spec/*-SEMANTICS.md`; `FFI-ABI`, `TYPECHECK-CONTRACTS` and `EFFECTS-ARCHITECTURE` are `compiler/*.md`. HM-CORE sections 2 to 6 are owed (#2555).
+
+| Module | Spec sections that govern it |
+|---|---|
+| `tc_decls.mdk` | DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.1 (kinds), section 6.2 (kind annotations bind parameters at declaration heads), section 6.4 (kind consistency and indices of a declared head); DICT section 8 I4 (the alias normal form keeps resolved identity); language-design Data Types. |
+| `tc_decls_types.mdk` | DICT section 1 (the type and predicate forms the conversion lowers); EFFECTS section 2.1 (the domain family a label declares: `Unit`, `Prefix`, `Set`, `Product`), section 4.1 (named authorities and scoped constraints), section 6.1-section 6.5 (kinds, declaration sites, partial annotations, kind consistency, requires chains), including section 6.4 (alias expansion invents no qualifier); SYNTAX Declared parameter kinds. |
+| `tc_decls_variance.mdk` | EFFECTS section 6.4 (inferred variance, invariant indices), section 6.8 (covariant joins), section 5 (the covariant-position check); HM-CORE section 3 (owed, #2555: unification parameterized on the declaration environment's variance). |
+| `tc_diag.mdk` | DIAGNOSTIC-CODES-DESIGN.md; ERROR-QUALITY.md; A5. |
+| `tc_diag_text.mdk` | ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (unsourced here: a leaf that imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data type, so a diagnostic's code is still passed at each emit site. |
+| `tc_effects.mdk` | EFFECTS section 2.3, section 5, section 6.2-6.9, section 8. |
+| `tc_elab.mdk` | DICT section 4 (translation), section 7; EFFECTS section 8. |
+| `tc_env.mdk` | DICT section 8 (identity-keyed tables). |
+| `tc_foreign.mdk` | FFI-ABI section 1 (the crossable set) and its preamble rules (T-FFI-UNLABELLED, -BUILTIN-SHADOW, -CATALOG-NARROW, -NULLARY); EFFECTS section 2.3 (the `FFI` parameter grammar at a declaration). |
+| `tc_global.mdk` | DICT section 5.1 M1, M3, section 6 C1, C2, C4. |
+| `tc_groups.mdk` | HM-CORE section 1 (gen-value), section 4, section 5 (owed, #2555); DICT section 4.1 G2, section 6.3 at binders. |
+| `tc_infer.mdk` | DICT section 4 (the elaboration judgment); HM-CORE section 3-section 5 (owed, #2555); SHADOW section 1 (S2, S4-S7), section 1.1; S2-DECL (d); EFFECTS section 3. |
+| `tc_infer_records.mdk` | language-design Data Types, Sum Types (Variants with Named Fields), Product Types (record construction, access, update). |
+| `tc_module.mdk` | TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE section 5 (owed, #2555). |
+| `tc_mono.mdk` | HM-CORE section 2 (owed, #2555); DICT section 3 (specificity is matching). |
+| `tc_occurrence.mdk` | DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL. |
+| `tc_pat.mdk` | HM-CORE has no section on pattern typing yet (owed, #2555); language-design Data Types; EFFECTS section 4.1. |
+| `tc_scope.mdk` | SHADOW section 1.0, S1-NS, S2-DECL; language-design Module System, Import Details; SYNTAX Import aliasing. |
+| `tc_shadow.mdk` | SHADOW-SEMANTICS section 1 S1-S9, section 1.1; S2-DECL (d). |
+| `tc_solve.mdk` | DICT section 3, section 4.2, section 5; TYPECHECK-CONTRACTS section 3. |
+| `tc_solve_check.mdk` | DICT section 3 (the residual walk), section 4 `gen`/`gen-sig` (the point of evidence abstraction; inferred-constraint promotion: the inferred P' becomes the scheme's context), section 4.1 G1 (its local reading: one dictionary parameter per predicate, arity and order keyed by binder identity), section 4.2 (discharge, OD2), section 5 (the element dictionary of a return- or argument-position method), section 6.2 (scheduling), section 6.3 (defaulting), section 8 I1 (evidence abstraction keyed by binding identity); HM-CORE section 6 (owed, #2555). |
+| `tc_solve_entail.mdk` | DICT section 3 (the entailment judgment, specificity, determination, W2 the termination measure of the route walk), section 5 (return-position dispatch through the dictionary), section 6.1 (the per-goal unique minimum), section 6.2 T3 (the closed goal), section 8 I2 (qualified instance identity). |
+| `tc_solve_givens.mdk` | DICT section 3 (assumptions); TYPECHECK-CONTRACTS section 3 (givens). |
+| `tc_state.mdk` | TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md. |
+| `tc_types.mdk` | none cited (data declarations and state records; the header cites no section) |
+| `tc_unify.mdk` | HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section 6.6-6.8. |
+| `typecheck.mdk` | TYPECHECK-CONTRACTS section 4, section 5; DICT section 7.1, section 8. |
+| `publish.mdk` | unsourced here (the header cites no spec) |
+| `entry_outcome.mdk` | unsourced here (the header cites no spec) |
+| `prelude_interface.mdk` | unsourced here (the header cites no spec) |
+| `prelude_elab.mdk` | unsourced here (the header cites no spec) |
+| `prelude_decls.mdk` | unsourced here (the header cites no spec) |
+| `interface_sexp.mdk` | unsourced here (the header cites no spec) |
+| `interface_frame.mdk` | unsourced here (the header cites no spec) |
+| `module_interface.mdk` | unsourced here (the header cites no spec) |
+| `module_interface_sexp.mdk` | unsourced here (the header cites no spec) |
+| `evidence_coverage.mdk` | unsourced here (the header cites no spec) |
+| `repr.mdk` | unsourced here (the header cites no spec) |
+| `registry.mdk` | TYPECHECK-TARGET-ARCHITECTURE section 2 K (header cite; a design ledger, not a spec) |
+| `evidence.mdk` | unsourced here (the header cites no spec) |
+| `scopes.mdk` | unsourced here (the header cites no spec) |
+| `solver_contract.mdk` | unsourced here (the header cites no spec) |
+| `superclass.mdk` | DICT section 3 (the superclass relation is acyclic; W2, termination) |
+| `evidence_complete.mdk` | unsourced here (the header cites no spec) |
+| `disposition.mdk` | unsourced here (the header cites no spec) |
+| `route_key.mdk` | unsourced here (the header cites no spec) |
+| `program_facts.mdk` | unsourced here (the header cites no spec) |
+| `serve_policy.mdk` | unsourced here (the header cites no spec) |
+| `chain_key.mdk` | unsourced here (the header cites no spec) |
+| `runtime_types.mdk` | unsourced here (the header cites no spec) |
+| `annotate.mdk` | STAGE2-DESIGN section 2.0 (header cite; an archived design) |
+| `private_mangle.mdk` | EMITTER-SEMANTICS section 7 (M1 injective mangling, M3 private is invisible) |
+| `target_profile.mdk` | TARGETS-DESIGN section 8.1 (header cite; the profile table) |
+| `effect_domain.mdk` | EFFECTS section 2.1 (domains); EFFECTS-ARCHITECTURE "Module ownership and dependency direction" |
+| `effect_authority.mdk` | EFFECTS section 4.1 (named authorities and scoped constraints); EFFECTS-ARCHITECTURE "Module ownership and dependency direction" |
+| `effect_rows.mdk` | EFFECTS section 2.2 (rows as domain-indexed maps); EFFECTS-ARCHITECTURE "Module ownership and dependency direction" |
+| `effect_values.mdk` | EFFECTS-ARCHITECTURE "Module ownership and dependency direction"; EFFECTS section: unsourced here |
+| `effect_bindings.mdk` | EFFECTS-ARCHITECTURE "Module ownership and dependency direction"; EFFECTS section: unsourced here |
+| `effect_infer.mdk` | EFFECTS-ARCHITECTURE "Module ownership and dependency direction"; EFFECTS section: unsourced here |
+| `effect_solver.mdk` | EFFECTS-ARCHITECTURE "Module ownership and dependency direction"; EFFECTS section: unsourced here |
+| `effect_invocation.mdk` | EFFECTS section 7 (the invocation summary); EFFECTS-ARCHITECTURE "Module ownership and dependency direction" |
+| `effect_policy.mdk` | EFFECTS section 7 (the capability semantics, policy check) |
+| `capability_manifest.mdk` | EFFECTS section 7 (effects as a verified manifest) |
+| `capability_policy.mdk` | EFFECTS section 7 (effects as a verified manifest) |
+| `manifest_publish.mdk` | EFFECTS section 7 (effects as a verified manifest) |
+| `invocation_basis.mdk` | EFFECTS section 7 (the invocation summary) |
+| `effect_param_decode.mdk` | unsourced here (the header cites no spec) |
+| `ffi_bindings.mdk` | FFI-ABI (the `T-FFI-*` declaration rules) |
+| `extern_source.mdk` | unsourced here (the header cites no spec) |
+| `runtime_abi.mdk` | unsourced here (the header cites no spec) |
+| `runtime_abi_data.mdk` | unsourced here (the header cites no spec) |
+| `runtime_abi_types.mdk` | unsourced here (the header cites no spec) |
+| `runtime_grants.mdk` | unsourced here (the header cites no spec) |
+| `runtime_ops.mdk` | unsourced here (the header cites no spec) |
+| `value_main.mdk` | unsourced here (the header cites no spec) |
 
 ## Cell lifetimes
-`CELL-LIFETIMES.md` lists every typechecker cell (the 2 module-level cells: `interners` in `types.tc_state` and `preludePreambleMemoRef` in `types.typecheck`, and the 197 fields of
-`ModuleCtx` 3 (`mcCells`, `mcGraph`, `mcLoc`), `ModuleCells` 91, `GroupCtx` 2, `GraphCtx` 19, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 7, `TraceSink` 8, `DynCtx` 10, `SiteCtx` 3) with its measured lifetime, target home and whether
-an interface load would have to fill it. Lifetimes (208 rows, the 200 in the first table and the 8 outside it): process 18, config 16, graph 65, module 83, group 3, run 23. The prelude interface cache (`preludeCacheRef`, `types.prelude_interface`) is one of the eight outside rows, as are `preludeElabCacheRef` (`types.prelude_elab`) and the evidence segment `preludeEvidenceRef` (`types.route_key`); each is process-lifetime and reset never. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
+`CELL-LIFETIMES.md` lists every typechecker cell (the 2 module-level cells: `interners` in `types.tc_state` and `preludePreambleMemoRef` in `types.typecheck`, and the fields of the bundle records `ModuleCtx`, `ModuleCells`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `Interners`, `Lineage`, `TcConfig`, `DriveInputs`, `TraceSink`, `DynCtx` and `SiteCtx`) with its measured lifetime, target home and whether
+an interface load would have to fill it; its opening paragraph carries the per-record and per-lifetime counts, so none is restated here. The prelude interface cache (`preludeCacheRef`, `types.prelude_interface`), `preludeElabCacheRef` (`types.prelude_elab`) and the evidence segment `preludeEvidenceRef` (`types.route_key`) are among its rows outside the bundle records; each is process-lifetime and reset never. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## The prelude interface
@@ -88,7 +181,7 @@ The tree arm (`GOutTrees`; `run`, the emitter child, `medaka test`'s eval drives
 
 ## Laws that bind it
 - **A1** — types imports `frontend/` and `support/`; `ir/` and `eval/` must reach its facts through `disposition`, `runtime_types` and `route_key`, not `typecheck.mdk`.
-- **A2, A3** — `typecheck.mdk` still writes routes into cells and keeps module-level state; extracted modules should publish values and own no global cell.
+- **A2, A3** — route cells are written by `tc_elab` and `tc_module`; module-level cells are `interners` in `tc_state` and `preludePreambleMemoRef` in `typecheck.mdk`; the other modules publish values and own no global cell.
 - **A5** — diagnostics are data; errors accumulate and inference does not read the accumulator as control.
 - **A6** — `support.hooks` is never imported inside inference; `test/arch_boundaries_test.mdk` holds an allowlist.
 - **A8 and D1** — a new concern is a new module here. `typecheck.mdk` may not grow in any PR, unless a commit carries the trailer `Arch-Growth-Override:`. The current floor is informational, read from the ratchet, not a law.
@@ -101,7 +194,7 @@ The tree arm (`GOutTrees`; `run`, the emitter child, `medaka test`'s eval drives
 - `test/stage_counts_test.mdk`: per-stage work counts.
 
 ## Where the design lives
-- `compiler/TYPECHECK-ARCHITECTURE.md` (current shape), `TYPECHECK-TARGET-ARCHITECTURE.md` and `TYPECHECK-CONTRACTS.md` (destination), `TYPECHECK-ARCH-BUG-FIT.md`.
+- `archive/design/TYPECHECK-ARCHITECTURE.md` (the pre-split shape, archived), `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` and `TYPECHECK-CONTRACTS.md` (destination), `TYPECHECK-ARCH-BUG-FIT.md`.
 - `EFFECTS-ARCHITECTURE.md` for the effect modules; `docs/design/TARGETS-DESIGN.md` for profiles.
 - `ARCHITECTURE-PLAYBOOK.md` §6 for the split: the twenty-seven-row layer table (twenty-six `tc_*` modules and `typecheck.mdk`) ruled 2026-10-25/26 (P4-D1 to D12 on #4206), executed by milestone 42; issue #2586 sequences it.
 

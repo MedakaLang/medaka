@@ -84,7 +84,7 @@ collisions), and for each unit renames ITS module-PRIVATE (`pub = False`)
 colliding functions to a unique `<mid>__<name>` symbol (mid sanitized to
 `[A-Za-z0-9_]`), rewriting every in-module reference SCOPE-AWARELY (a reference is
 renamed only where the name is the free top-level name, never where a local
-binder shadows it — mirrors typecheck.mdk's `rewriteArgScoped` binder threading).
+binder shadows it — mirrors `tc_occurrence.mdk`'s `rewriteArgScoped` binder threading).
 Exported functions keep their bare name (cross-module-referenced). Private ⇒ not
 importable ⇒ references are self-contained, so no cross-module fixup is needed.
 Wired into BOTH flat-emit drivers (`llvm_bootstrap_lex_main.mdk` and
@@ -405,7 +405,7 @@ The `++` lowering's unknown-operand fallback emits the runtime-dispatched
 list→list append) but tagged its result `LTStr`. A CHAINED `++`
 (`a ++ b ++ c` = `(a ++ b) ++ c`) then saw the inner result's static `LTStr` and
 emitted a DIRECT `@mdk_string_append` for the outer — which reads a list cell as
-a String header and segfaults. `typecheck.mdk`'s `freeEffvars` builds a
+a String header and segfaults. `tc_unify.mdk`'s `freeEffvars` builds a
 `List Int` exactly this way (`freeEffvars a ++ rowFreeEffvars r ++ freeEffvars
 b`), so EVERY polymorphic scheme (whose generalization walks effvars) crashed.
 Fix: a new `LTUnknown` LTy tags the runtime-dispatched-append result. A `++` over

@@ -1,14 +1,15 @@
 # META
-source_lines=4480
+source_lines=4503
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
 -- envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import
 -- site it finds (`importLocFor`), the export and definer tables; their construction from
 -- declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and
--- references, `builtinClassName`, `builtinIfaceRef`), the
--- imported-binding rows, and the term environment (`TcEnv` extension and lookup); which names an
--- import makes visible is `tc_scope`.
+-- references, `builtinClassName`, `builtinIfaceRef`), the imported-binding rows
+-- (`importedBindings`, `boundNames`), the alias table's two ordinal projections
+-- (`aliasUniverseAt`, `aliasOwnAt`), and the term environment (`TcEnv` extension and lookup);
+-- which names an import makes visible is `tc_scope`.
 --
 -- Spec: DICT section 8 (identity-keyed tables).
 --
@@ -110,7 +111,9 @@ import types.tc_types.{
   MethodEntry,
 }
 import frontend.visibility.{useModId}
-import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
+import support.ordmap.{
+  omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
+}
 import list.{
   drop,
   findMap,
@@ -254,6 +257,17 @@ aliasUniverseAt cur ((key, ad) :: rest)
 aliasVisibleTo : Int -> AliasDecl -> Bool
 aliasVisibleTo cur ad =
   declEnvVisibleTo cur ad.adOrd ad.adPub && ad.adOrd /= cur
+
+-- The current module's aliases arrive in front of its imported alias universe in
+-- `checkBodyImpl`.  `DataEnv.deAliases` is already reverse declaration order, so
+-- this filter preserves the exact first-match lookup order without rebuilding a
+-- second registry.
+export
+aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasOwnAt _ [] = []
+aliasOwnAt cur ((key, ad) :: rest)
+  | ad.adOrd == cur = (key, (ad.adParams, ad.adRhs)) :: aliasOwnAt cur rest
+  | otherwise = aliasOwnAt cur rest
 
 -- The graph's interface-row index (`meIfaceExports`); `omEmpty` before a driver
 -- built `DeclEnvs`, which `nameableIfaceShadows` and its peers read as "no index".
@@ -3254,6 +3268,15 @@ importedBindings (UseName ns)
 -- fixed member list — importFormSchemes handles it directly.
 importedBindings (UseAlias _ _) = Some []
 
+-- The names an import form binds, as the resolver counts them
+-- (`importedNamesMM`): a member list binds its locals, a single dotted name its
+-- last component, an alias nothing bare, and a wildcard (`None`) every name it
+-- reaches.
+export
+boundNames : UsePath -> Option (OrdMap Unit)
+boundNames path =
+  map (rows => omFromNames (map snd rows) omEmpty) (importedBindings path)
+
 memberBinding : UseMember -> (String, String)
 memberBinding m = (useMemberOrigin m, useMemberLocal m)
 
@@ -4494,7 +4517,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
@@ -4505,6 +4528,9 @@ methodRowSameNameView rows =
 (DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EApp (EApp (EVar "aliasVisibleTo") (EVar "cur")) (EVar "ad")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
 (DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "/=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))))
+(DTypeSig true "aliasOwnAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
+(DFunDef false "aliasOwnAt" (PWild (PList)) (EListLit))
+(DFunDef false "aliasOwnAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceExportsIndex" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ifaceExportsIndex" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig true "bindingDeclared" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CDeclared")))))
@@ -5050,6 +5076,8 @@ methodRowSameNameView rows =
 (DFunDef false "importedBindings" ((PCon "UseWild" PWild)) (EVar "None"))
 (DFunDef false "importedBindings" ((PCon "UseName" (PVar "ns"))) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EVar "Some") (EListLit (EApp (EVar "selfBinding") (EApp (EVar "lastComponent") (EVar "ns"))))) (EIf (EVar "otherwise") (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
+(DTypeSig true "boundNames" (TyFun (TyCon "UsePath") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundNames" ((PVar "path")) (EApp (EApp (EVar "map") (ELam ((PVar "rows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty")))) (EApp (EVar "importedBindings") (EVar "path"))))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))
@@ -5266,7 +5294,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
@@ -5277,6 +5305,9 @@ methodRowSameNameView rows =
 (DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EApp (EApp (EVar "aliasVisibleTo") (EVar "cur")) (EVar "ad")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
 (DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "/=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))))
+(DTypeSig true "aliasOwnAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
+(DFunDef false "aliasOwnAt" (PWild (PList)) (EListLit))
+(DFunDef false "aliasOwnAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceExportsIndex" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ifaceExportsIndex" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig true "bindingDeclared" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CDeclared")))))
@@ -5822,6 +5853,8 @@ methodRowSameNameView rows =
 (DFunDef false "importedBindings" ((PCon "UseWild" PWild)) (EVar "None"))
 (DFunDef false "importedBindings" ((PCon "UseName" (PVar "ns"))) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EVar "Some") (EListLit (EApp (EVar "selfBinding") (EApp (EVar "lastComponent") (EVar "ns"))))) (EIf (EVar "otherwise") (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
+(DTypeSig true "boundNames" (TyFun (TyCon "UsePath") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundNames" ((PVar "path")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "rows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty")))) (EApp (EVar "importedBindings") (EVar "path"))))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))

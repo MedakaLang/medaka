@@ -9,7 +9,7 @@ time.
 
 ⚠️ **The lowering exists as of 2026-08-27** (`ffi-lower-and-link`, S-ffi-lowering,
 #2074): `emitFfiCall` and friends in `compiler/backend/llvm_emit.mdk` implement §2
-below, and `ffiCrossableTy` (`compiler/types/typecheck.mdk`) rejects everything
+below, and `ffiCrossableTy` (`compiler/types/tc_foreign.mdk`) rejects everything
 outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi_test.mdk`. One thing
 this doc specifies is still NOT done, deliberately:
 

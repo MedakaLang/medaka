@@ -17,7 +17,7 @@ import frontend.parser.{parse, parseLocated}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.ast.{BinderId(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
-import types.tc_types.{ElabFacts(..)}
+import types.tc_types.{ElabFacts(..), ElabResult(..)}
 import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
@@ -38,7 +38,7 @@ rowsOf : List (String, List String) ->
 rowsOf modules = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
-  let (_, _, _, _, _, _, facts) =
+  let ElabResult { erFacts = facts, ... } =
     elaborateModules
       defaultDriveInputs
       (desugar (parse rsrc))

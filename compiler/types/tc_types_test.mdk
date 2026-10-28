@@ -1,0 +1,192 @@
+-- Sibling tests for `tc_types.mdk`: the grant-key formats, the grant-id table writer,
+-- the manifest driver choice and the empty drive outputs, then the records the module
+-- owns built by hand so no drive has to run.
+
+import test.{expectEqual, expectNone}
+import support.ordmap.{omEmpty, omInsert, omLookup, omSize}
+import types.capability_manifest.{
+  EntryKey(..),
+  InvocationProtocol(..),
+  ManifestRequest(..),
+}
+import types.disposition.{emptyDispositionTable}
+import types.publish.{TcDiag(..), EntryOutcome(..), noEntryOutcome}
+import types.runtime_types.{emptyBinderTypes}
+import types.tc_types.{
+  Accumulate(..),
+  DriveInputs(..),
+  DriveOutputs(..),
+  ElabFacts(..),
+  ElabResult(..),
+  FoldPlan(..),
+  ModuleBindings(..),
+  ModulePlace(..),
+  emptyDriveOutputs,
+  grantTopKey,
+  manifestDriverFor,
+  methodGrantKey,
+  setGrantIds,
+  withPublishedManifests,
+}
+
+sampleFacts : ElabFacts
+sampleFacts = ElabFacts {
+  efManifests = [],
+  efBinders = emptyBinderTypes,
+  efEntryOutcome = noEntryOutcome,
+}
+
+sampleDiag : TcDiag
+sampleDiag = TcDiag "E1" 0 None "boom" None None
+
+sampleElab : ElabResult
+sampleElab = ElabResult {
+  erCore = [],
+  erModules = [("m", []), ("n", [])],
+  erPerModule = [("m", ([sampleDiag], []))],
+  erResidual = [("m", sampleDiag)],
+  erEvidence = [],
+  erDispositions = emptyDispositionTable,
+  erFacts = sampleFacts,
+}
+
+sampleInputs : Option EntryKey -> DriveInputs
+sampleInputs driver = DriveInputs {
+  diExecutedMainDriver = driver,
+  diManifestRequests = [],
+  diStdlibOwned = omEmpty,
+  diFlatEntryIsStdlib = False,
+  diTrace = None,
+  diIoJoinGrants = [],
+  diProfileName = "default",
+  diPreludeKey = None,
+}
+
+keyPair : Option EntryKey -> Option (String, String)
+keyPair key = map ((EntryKey m b) => (m, b)) key
+
+placeName : ModulePlace -> String
+placeName LastModule = "last"
+placeName NotLastModule = "not-last"
+
+samplePlan : FoldPlan Int (List String)
+samplePlan = FoldPlan {
+  fpAccumulate = AccumulateBoth,
+  fpWorker =
+    prev _ _ _ _ _ => (
+      ModuleBindings { mbSchemes = [], mbStandaloneSchemes = omEmpty },
+      0,
+      prev,
+    ),
+  fpCollect = place mid _ rest => "\{mid}:\{placeName place}" :: rest,
+  fpBaseSeed = [],
+  fpCoreV = [],
+}
+
+test "grantTopKey: a top-level binder's key is its module id, a bar, then its name" =
+  expectEqual "m|f" (grantTopKey "m" "f")
+
+test "grantTopKey: the same name in two modules gets two keys" =
+  expectEqual ["a|f", "b|f"] [grantTopKey "a" "f", grantTopKey "b" "f"]
+
+test "methodGrantKey: a method's key is its interface word, a hash, then its name" =
+  expectEqual "Eq#eq" (methodGrantKey "Eq" "eq")
+
+test "methodGrantKey: differs from grantTopKey on the same two words" =
+  expectEqual ["m|f", "m#f"] [grantTopKey "m" "f", methodGrantKey "m" "f"]
+
+test "setGrantIds: a nonempty id list is recorded under its key" =
+  let table = Ref omEmpty
+  setGrantIds table ("m|f", [3, 4])
+  expectEqual (Some [3, 4]) (omLookup "m|f" table.value)
+
+test "setGrantIds: an empty id list deletes the row the key held" =
+  let table = Ref (omInsert "m|f" [3] omEmpty)
+  setGrantIds table ("m|f", [])
+  expectEqual (None, 0) (omLookup "m|f" table.value, omSize table.value)
+
+test "setGrantIds: an empty id list leaves no row where there was none" =
+  let table = Ref omEmpty
+  setGrantIds table ("m|g", [])
+  expectEqual 0 (omSize table.value)
+
+test "setGrantIds: a later nonempty list replaces the earlier one" =
+  let table = Ref omEmpty
+  setGrantIds table ("m|f", [1])
+  setGrantIds table ("m|f", [2, 5])
+  expectEqual (Some [2, 5]) (omLookup "m|f" table.value)
+
+test "manifestDriverFor: a named driver is the async module's binding" =
+  expectEqual
+    (Some ("async", "run"))
+    (keyPair (manifestDriverFor (sampleInputs None) (Some "run")))
+
+test "manifestDriverFor: no name falls back to the inputs' executed-main driver" =
+  expectEqual
+    (Some ("m", "main"))
+    (keyPair
+      (manifestDriverFor
+        (sampleInputs (Some EntryKey { moduleId = "m", binding = "main" }))
+        None))
+
+test "manifestDriverFor: no name and no executed-main driver is none" =
+  expectNone (keyPair (manifestDriverFor (sampleInputs None) None))
+
+test "emptyDriveOutputs: no errors, no served modules, no diagnostics" =
+  let outputs = emptyDriveOutputs ()
+  expectEqual
+    (False, 0, 0)
+    (
+      outputs.doHadTypeErrors,
+      outputs.doServedModules,
+      length outputs.doStickyDiags,
+    )
+
+test "withPublishedManifests: sets the requests and leaves the other outputs" =
+  let request = ManifestRequest {
+    entry = EntryKey { moduleId = "m", binding = "main" },
+    protocol = ExecutedMain,
+  }
+  let outputs = withPublishedManifests [request] [] (emptyDriveOutputs ())
+  expectEqual
+    (1, 0, False)
+    (
+      length outputs.doManifestRequests,
+      length outputs.doManifests,
+      outputs.doHadTypeErrors,
+    )
+
+test "ElabResult: erResidual and erPerModule are separate channels" =
+  expectEqual
+    (1, 1)
+    (length sampleElab.erResidual, length sampleElab.erPerModule)
+
+test "ElabResult: an update changes only the named field" =
+  let updated = { sampleElab | erResidual = [] }
+  expectEqual
+    (0, 2, 1)
+    (
+      length updated.erResidual,
+      length updated.erModules,
+      length updated.erPerModule,
+    )
+
+test "ElabFacts: an update of the entry outcome leaves the manifests alone" =
+  let facts = { sampleFacts |
+    efEntryOutcome = { noEntryOutcome | eoMainIsUnit = True },
+  }
+  expectEqual
+    (True, 0)
+    (facts.efEntryOutcome.eoMainIsUnit, length facts.efManifests)
+
+test "FoldPlan: fpCollect receives the place it is handed" =
+  expectEqual
+    ["a:last", "b:not-last"]
+    (samplePlan.fpCollect
+      LastModule
+      "a"
+      0
+      (samplePlan.fpCollect NotLastModule "b" 0 []))
+
+test "ModulePlace: the two constructors are told apart by a match" =
+  expectEqual ["last", "not-last"] (map placeName [LastModule, NotLastModule])

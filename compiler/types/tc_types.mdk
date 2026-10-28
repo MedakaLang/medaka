@@ -2048,7 +2048,7 @@ public export data ModuleCells = ModuleCells {
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- every variable a closed binder declares, which `matchEqPairs` and determination hold rigid: a top-level signature's and a generalized local's quantified variables (an annotated local's included); `declareRigidVars` adds them. A method signature's and an expression annotation's variables are held only at their own close (`checkSigVarGoals`)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
-  numlitVarLocs : Ref (List (Mono, Loc)),
+  numlitVarLocs : Ref (List (Mono, Loc)),  -- keeps every literal: `numlitReframeLoc` and `tagLitLocsWithRoot` need the complete list, and only the `numlitUntainted` worklist drops tainted ones
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
   patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
   matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
@@ -3298,40 +3298,48 @@ public export data GraphDrive = GraphDrive {
 }
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
--- `ElabResult` is what a multi-module elaboration returns: the core decls, the
--- elaborated modules, and three diagnostic/evidence views over the same run.
--- The first component is the elaborated CORE decls (prelude, post dict-pass).
--- The second is the elaborated user MODULES, in load order, trees refs filled.
--- The third is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
--- module in load order, with the whole-graph coherence verdict attached to the
--- entry module — the same list `driveGraphK GOutDiags` returns, produced by the same
--- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
--- `recordTypeError` writes both channels, so every per-module error is in the
--- residual too; the residual additionally holds what the graph-end drain raised
--- (after every module closed), and this list additionally holds the coherence
--- verdict, which `globalCoherenceConflict` pushes to neither channel.  A consumer
--- renders ONE of them for errors — this one to report as `check` does, the
--- residual to gate on `hadTypeErrors` — never both.
--- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
--- elaboration recorded and left standing, tagged with its module id, per goal with
--- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
--- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
--- same list the sticky channel holds, cut to this call.
--- #2549 M2: the fifth component is the EVIDENCE TABLE — the whole table this
--- elaboration produced, keyed by `EvId`: every goal it solved, every method
--- occurrence and every minted site.  It is the table before `mangleUnitsEv`
--- renames the trees, so a caller that lowers mangled trees lowers against the
--- table that call returns.
--- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`).  The seventh bundles the BINDER-TYPE
--- table and selected entry outcome the elaboration produced.
+-- The BINDER-TYPE table and selected entry outcome an elaboration produced (#1112 A-3).
 public export data ElabFacts = ElabFacts {
   efManifests : List CapabilityManifest,
   efBinders : BinderTypeTable,
   efEntryOutcome : EntryOutcome,
 }
 
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, ElabFacts)
+-- `ElabResult` is what a multi-module elaboration returns: the core decls, the
+-- elaborated modules, and three diagnostic/evidence views over the same run.
+-- `erCore` is the elaborated CORE decls (prelude, post dict-pass).
+-- `erModules` is the elaborated user MODULES, in load order, trees refs filled.
+-- `erPerModule` is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
+-- module in load order, with the whole-graph coherence verdict attached to the
+-- entry module: the same list `driveGraphK GOutDiags` returns, produced by the same
+-- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
+-- `recordTypeError` writes both channels, so every per-module error is in the
+-- residual too; the residual additionally holds what the graph-end drain raised
+-- (after every module closed), and this list additionally holds the coherence
+-- verdict, which `globalCoherenceConflict` pushes to neither channel.  A consumer
+-- renders ONE of them for errors, this one to report as `check` does, the
+-- residual to gate on `hadTypeErrors`, never both.
+-- `erResidual` is the RESIDUAL: every diagnostic this elaboration recorded and left
+-- standing, tagged with its module id, per goal with its own `Loc`, in push order.
+-- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
+-- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
+-- to this call.
+-- `erEvidence` is the EVIDENCE TABLE: the whole table this elaboration produced, keyed
+-- by `EvId`: every goal it solved, every method occurrence and every minted site.  It
+-- is the table before `mangleUnitsEv` renames the trees, so a caller that lowers
+-- mangled trees lowers against the table that call returns.
+-- `erDispositions` is the whole-graph per-method DISPOSITION TABLE
+-- (`compiler/types/disposition.mdk`).  `erFacts` bundles the binder-type table and the
+-- selected entry outcome (`ElabFacts`).
+public export data ElabResult = ElabResult {
+  erCore : List Decl,
+  erModules : List (String, List Decl),
+  erPerModule : List (String, (List TcDiag, List TcDiag)),
+  erResidual : List (String, TcDiag),
+  erEvidence : EvTable,
+  erDispositions : DispositionTable,
+  erFacts : ElabFacts,
+}
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both
@@ -3505,6 +3513,20 @@ public export data MarkSets = MarkSets {
   msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
 }
 
+-- What `graphPreamble` returns: the runtime seed rows, the prelude's schemes, its
+-- published rows (present only when the pass closed core), its contexts, its
+-- shipped trees (empty on the diags arm), the mark sets, and the record the core
+-- pass leaves current, which the drive's first module starts from.
+public export data GraphPreamble = GraphPreamble {
+  gpRuntimeSeed : List (String, Scheme),
+  gpCoreSchemes : ModuleBindings,
+  gpCorePub : Option (List (String, PubScheme)),
+  gpCoreContexts : OrdMap (List VecObl),
+  gpCoreTree : List Decl,
+  gpMarkSets : MarkSets,
+  gpCoreCtx : ModuleCtx,
+}
+
 -- The prelude-only half of `markSetsOf`'s inputs.  Every field is a pure value
 -- of `coreDecls` alone, holding only `String`/`Int`/`IfaceRef` rows -- see
 -- `PreludePreamble` for why nothing decl-shaped may live here.
@@ -3572,9 +3594,9 @@ public export data PassMethod = PassMethod String Route (List Route)
 --               next depEnv) plus its driver-specific payload `extra`.  [prev] is the
 --               record current before the module; [mctx] the one it was checked in,
 --               which the next module starts from and the fold returns last.
---   * collect : isLast mid extra restResult -> result — a foldr combiner, where
+--   * collect : place mid extra restResult -> result — a foldr combiner, where
 --               restResult is the fold over the REMAINING modules (`base` for []).
---               `isLast` is True only for the terminal (entry) module — the one
+--               `place` is `LastModule` only for the terminal (entry) module — the one
 --               place checkModulesEntryFull keeps the module's OWN schemes/warns
 --               rather than the recursion's.
 --   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
@@ -3592,3 +3614,18 @@ public export data PassMethod = PassMethod String Route (List Route)
 -- each is extended (`accData ++ publicDataDecls prog`, `accAll ++ prog`).  No
 -- worker reads one accumulator without the other.
 public export data Accumulate = AccumulateNone | AccumulateBoth
+
+-- Where a module sits in the fold's right-to-left `collect`: the terminal (entry)
+-- module, or any earlier one.
+public export data ModulePlace = LastModule | NotLastModule
+
+-- What `foldModules` and `workModules` take unchanged for every module: the
+-- accumulator policy, the per-module worker, the combiner `collect` applies to the
+-- payloads, the base seed rows, and the prelude's export bindings (`coreV`).
+public export data FoldPlan e acc = FoldPlan {
+  fpAccumulate : Accumulate,
+  fpWorker : ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx),
+  fpCollect : ModulePlace -> String -> e -> acc -> acc,
+  fpBaseSeed : List (String, Scheme),
+  fpCoreV : List (String, ExportBinding),
+}

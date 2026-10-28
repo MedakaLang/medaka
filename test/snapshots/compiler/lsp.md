@@ -1,5 +1,5 @@
 # META
-source_lines=2348
+source_lines=2347
 stages=DESUGAR,MARK
 # SOURCE
 import tools.syntax_queries.{
@@ -103,10 +103,9 @@ import types.publish.{
   TcReport(..),
   pubSchemes,
   ppPubScheme,
+  publishedEntrySchemes,
 }
-import types.typecheck.{
-  driveInputsFor, checkOneReportK, entrySplit, entryOwnSchemes
-}
+import types.typecheck.{driveInputsFor, checkOneReportK, entrySplit}
 import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
@@ -706,7 +705,7 @@ projectEntryEnv runtimeSrc coreSrc uri src docs =
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   map
-    (pa => hoverEnvOf (entryOwnSchemes pa.paSchemes) pa)
+    (pa => hoverEnvOf (publishedEntrySchemes pa.paSchemes) pa)
     (projectEntryAnalysisOr
       (keptGraph uri src docs)
       projectCache
@@ -2375,8 +2374,8 @@ unit = ()
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
@@ -2489,7 +2488,7 @@ unit = ()
 (DTypeSig false "hoverEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
 (DFunDef false "hoverEnvFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EIf (EApp (EVar "bufferHasImports") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryEnv") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "docEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "projectEntryEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
-(DFunDef false "projectEntryEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EApp (EVar "hoverEnvOf") (EApp (EVar "entryOwnSchemes") (EFieldAccess (EVar "pa") "paSchemes"))) (EVar "pa")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (EApp (EApp (EApp (EVar "keptGraph") (EVar "uri")) (EVar "src")) (EVar "docs"))) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))))))
+(DFunDef false "projectEntryEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EApp (EVar "hoverEnvOf") (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes"))) (EVar "pa")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (EApp (EApp (EApp (EVar "keptGraph") (EVar "uri")) (EVar "src")) (EVar "docs"))) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))))))
 (DTypeSig false "keptGraph" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))
 (DFunDef false "keptGraph" ((PVar "uri") (PVar "src") (PVar "docs") (PVar "current")) (EMatch (EApp (EApp (EVar "docsKept") (EVar "uri")) (EVar "docs")) (arm (PCon "Some" (PCon "KeptGraph" (PVar "keptSrc") (PVar "keptId") (PVar "pa"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "keptSrc") (EVar "src")) (EApp (EApp (EVar "graphIdSame") (EVar "keptId")) (EVar "current"))) (EApp (EVar "Some") (EVar "pa")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DData Private "HoverHit" () ((variant "EnvHit" (ConPos (TyCon "PubScheme"))) (variant "LocalHit" (ConPos (TyCon "PubScheme"))) (variant "SeedHit" (ConPos (TyCon "PubScheme")))) ())
@@ -2836,8 +2835,8 @@ unit = ()
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
@@ -2950,7 +2949,7 @@ unit = ()
 (DTypeSig false "hoverEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
 (DFunDef false "hoverEnvFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EIf (EApp (EVar "bufferHasImports") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryEnv") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "docEnvFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "docs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "projectEntryEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "HoverEnv")))))))))
-(DFunDef false "projectEntryEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EApp (EVar "hoverEnvOf") (EApp (EVar "entryOwnSchemes") (EFieldAccess (EVar "pa") "paSchemes"))) (EVar "pa")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (EApp (EApp (EApp (EVar "keptGraph") (EVar "uri")) (EVar "src")) (EVar "docs"))) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))))))
+(DFunDef false "projectEntryEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EApp (EVar "hoverEnvOf") (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes"))) (EVar "pa")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (EApp (EApp (EApp (EVar "keptGraph") (EVar "uri")) (EVar "src")) (EVar "docs"))) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))))))
 (DTypeSig false "keptGraph" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))
 (DFunDef false "keptGraph" ((PVar "uri") (PVar "src") (PVar "docs") (PVar "current")) (EMatch (EApp (EApp (EVar "docsKept") (EVar "uri")) (EVar "docs")) (arm (PCon "Some" (PCon "KeptGraph" (PVar "keptSrc") (PVar "keptId") (PVar "pa"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "keptSrc") (EVar "src")) (EApp (EApp (EVar "graphIdSame") (EVar "keptId")) (EVar "current"))) (EApp (EVar "Some") (EVar "pa")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DData Private "HoverHit" () ((variant "EnvHit" (ConPos (TyCon "PubScheme"))) (variant "LocalHit" (ConPos (TyCon "PubScheme"))) (variant "SeedHit" (ConPos (TyCon "PubScheme")))) ())

@@ -619,7 +619,7 @@ operand type.
 3. **Rewrite pass.** The stamped node becomes a method application via the existing
    Phase-69 dispatch node: `lib/dict_pass.ml` `rewrite_binops` (wired into `Dict_pass.run`
    AND `Eval.eval_modules` — the loader path uses `run_decl` directly, not `run`) →
-   `EMethodRef`-based app; `compiler/types/typecheck.mdk` `dictPass`→`rewriteBinopExpr` →
+   `EMethodRef`-based app; `compiler/types/tc_elab.mdk` `dictPass`→`rewriteBinopExpr` →
    `EMethodAt`-based app. `<`→`lt a b`, `>`→`gt`, `<=`→`lte`, `>=`→`gte`, `==`→`eq a b`,
    `/=`→`not (eq a b)`. Backends need NO new comparison logic — the rewritten node is an
    ordinary method app they already dispatch (arg-tag selects the impl).

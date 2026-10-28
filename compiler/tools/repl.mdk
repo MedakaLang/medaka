@@ -258,7 +258,9 @@ runPipeline combined =
           [])) False runtimeDecls livePrelude [
         ("__repl__", combined),
       ]
-      let (coreE, modulesE, diagsE, _, _, _, _) = elab
+      let coreE = elab.erCore
+      let modulesE = elab.erModules
+      let diagsE = elab.erPerModule
       let tcErrs = flatMap (d => fst (snd d)) diagsE
       match tcErrs
         e :: _ => (map tcMsg tcErrs, [], [], emptyFacts)

@@ -544,7 +544,7 @@ main = 6.0
             ++ (if shadow then "println _ = ()\n" else ""))),
     ),
   ]
-  let (_, _, _, _, _, _, facts) = elab
+  let facts = elab.erFacts
   expectEach [
     ("checked", expectTrue (isSome report.trChecked)),
     (

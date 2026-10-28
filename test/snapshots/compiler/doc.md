@@ -750,7 +750,7 @@ derivingEntries bare decl line schemes tbl (tyName, params, kinds, derives, shap
 -- (`useMemberLocal` — its alias if written `a as b`).
 --
 -- THE RULE, decided after measuring rather than assuming: `docSchemesFor`
--- returns `entryOwnSchemes`, the importing module's OWN top-level schemes, and
+-- returns `publishedEntrySchemes`, the importing module's OWN top-level schemes, and
 -- a re-export is not a top-level binding there — so a re-exported name has no
 -- LOCAL scheme to render (measured: `medaka check --types stdlib/list.mdk`
 -- lists none of `Filterable`/`filter`/`filterMap`).  The local lookup is still

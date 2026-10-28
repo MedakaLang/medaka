@@ -145,7 +145,7 @@ diagnostic names the fix.
 | Desugar | `compiler/frontend/desugar.mdk` | `deriving`, record puns, `EGuards`/`ESection`/`EStringInterp`/`EDo`, default-method specialization |
 | Resolve | `compiler/frontend/resolve.mdk` | Name binding, single/multi-module |
 | Mark | `compiler/frontend/marker.mdk` | ⚠️ **[P-NO-MARK-PASS]** NOT on `check`/`run`/`build`. `markWithPrelude` — the `EVar`→`EMethodRef` pass — is reached only from `tools/snapshot.mdk` and two `entries/` probes, so **no production verb ever sees an `EMethodRef`**. Every Module-arm driver (`check`, `run`, `build`, the LSP) marks inside typecheck itself, per binding group on the inference schedule (`checkBodyImpl` → `processSCC` → `markGroupClauses`, minting `EMethodAt`/`EDictAt`; ARCH §E), so there is no whole-tree mark pass and no promotion fixpoint, and no driver pre-marks a whole program before inference. The FILE is still live, for `preludeStandaloneShadows` (`driver/diagnostics.mdk`), `declRefs` (`ir/dce.mdk`) and `localBoundNames` (typecheck) |
-| Typecheck | `compiler/types/typecheck.mdk` | Hindley-Milner + interfaces + effects; invokes Exhaust per `EMatch` |
+| Typecheck | `compiler/types/` (entry `typecheck.mdk`, the rest `tc_*`) | Hindley-Milner + interfaces + effects; invokes Exhaust per `EMatch` |
 | Exhaust | `compiler/frontend/exhaust.mdk` | Maranget pattern-matrix; called *from* typecheck |
 | Eval | `compiler/eval/eval.mdk` | Tree-walking interpreter; dict-passing dispatch |
 

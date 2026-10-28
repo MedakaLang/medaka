@@ -2981,7 +2981,7 @@ runRunCmd argv =
           let diags = flatMap snd front.foDiags
           match (filter diagIsError diags, front.foDriven)
             ([], Some analysis) =>
-              let (_, _, _, residual, _, _, _) = analysis.eaElab
+              let residual = analysis.eaElab.erResidual
               match isNone report.trChecked
                 -- Belt-and-braces, as on the multi-module arm: anything only
                 -- the graph-end drain can see still aborts before eval.
@@ -3043,7 +3043,7 @@ runRunCmd argv =
           -- the real located `No impl of Display for Foo` for
           -- `println "\{Foo 1}"` with no Display impl.
           Some analysis =>
-            let (_, _, _, residual, _, _, _) = analysis.eaElab
+            let residual = analysis.eaElab.erResidual
             match locatedProjectDiags front.foDiags
               (Some errText, _, _) => match jsonMode
                 True =>
@@ -3747,7 +3747,7 @@ analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
   match front.foDriven
     None => Err (ppDiagBuckets front.foDiags)
     Some analysis =>
-      let (_, _, _, residual, _, _, _) = analysis.eaElab
+      let residual = analysis.eaElab.erResidual
       match locatedProjectDiags front.foDiags
         (Some errText, _, _) => Err errText
         (None, _, _) =>

@@ -31,7 +31,7 @@ mini-stdlib), `entries/` (per-stage probes), `seed/` (LLVM IR seed for cold boot
 
 Order (`compiler/driver/medaka_cli.mdk`): `lexer → parser → ast → desugar → resolve →
 typecheck (calls exhaust per EMatch) → eval`. All in `compiler/frontend/` except
-`types/typecheck.mdk` and `eval/eval.mdk`.
+`types/` (entry `typecheck.mdk`, the rest `tc_*`) and `eval/eval.mdk`.
 
 - ⚠️ **[P-DESUGAR-FIRST]** `desugar.mdk` runs before resolve/typecheck. Sugar-shape checks must
   run on the raw AST (`checkGuardExhaustiveness`, `compiler/frontend/exhaust.mdk`).
@@ -39,7 +39,7 @@ typecheck (calls exhaust per EMatch) → eval`. All in `compiler/frontend/` exce
   `compiler/types/tc_infer.mdk`, once per `EMatch`; it sees only core patterns.
 - ⚠️ **[P-NO-MARK-PASS]** `markWithPrelude` (`compiler/frontend/marker.mdk`) is NOT on
   `check`/`run`/`build`/LSP — those mark inside typecheck per binding group
-  (`markGroupClauses`), so no production verb sees an `EMethodRef`. The file stays live for
+  (`markGroupClauses`, `tc_occurrence.mdk`), so no production verb sees an `EMethodRef`. The file stays live for
   `preludeStandaloneShadows`, `declRefs`, `localBoundNames`.
 - **[P-DOCTEST-RESIDUAL]** #1223 (doctest module identity) is still OPEN for import-bearing
   doctests. It is unpinned and listed in `test/MUST-FAIL-NOT-PINNABLE.txt`.
@@ -334,8 +334,7 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - ⚠️ **[T-SNAPSHOT-SELF]** Compiler source is in the snapshot corpus; bless it in the same PR
   with `sh test/snapshot_bless.sh --bless <path>`.
 - ⚠️ **[T-LEGA-GOLDEN]** A top-level-binding change in a LEG A module
-  (`frontend.{ast,desugar,exhaust,lexer,marker,parser,resolve}`, `types.{annotate,typecheck}`,
-  `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check`) moves
+  (the `MODULES` list in `test/capture_goldens.sh`) moves
   `test/selfproc_goldens/legA/<module>.golden`. Re-capture with
   `sh test/capture_goldens.sh --frozen selfproc_legA`; the diff must be additive-only.
 - 🚨 **[T-LEGA-REBASE]** A rebase silently blends the LEG A golden. Never hand-resolve; re-derive:

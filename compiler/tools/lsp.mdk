@@ -99,10 +99,9 @@ import types.publish.{
   TcReport(..),
   pubSchemes,
   ppPubScheme,
+  publishedEntrySchemes,
 }
-import types.typecheck.{
-  driveInputsFor, checkOneReportK, entrySplit, entryOwnSchemes
-}
+import types.typecheck.{driveInputsFor, checkOneReportK, entrySplit}
 import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
@@ -702,7 +701,7 @@ projectEntryEnv runtimeSrc coreSrc uri src docs =
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   map
-    (pa => hoverEnvOf (entryOwnSchemes pa.paSchemes) pa)
+    (pa => hoverEnvOf (publishedEntrySchemes pa.paSchemes) pa)
     (projectEntryAnalysisOr
       (keptGraph uri src docs)
       projectCache

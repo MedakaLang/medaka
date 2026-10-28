@@ -1,18 +1,19 @@
 # META
-source_lines=4452
+source_lines=4475
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
 -- bodies, final checks, the stamp queue and its drain (`enqueueStampCtx`, `stampCtxOf`,
--- `stampNoting`, `stampEach`), the binding-id stamping of a module's clauses and tail declarations
--- (`stampGroupClauses`, `stampTailDecls`), the plural site resolution (`resolveSites`,
--- `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the evidence-observation writer
--- (`noteEvidenceObservation` and its entry builders), binder-type materialization, and the
--- registration of imported declarations (the import-overlay rows: `registerImportOverlay`,
--- `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`,
--- `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`,
--- `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band (2,874 of 3,000), and
--- a `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val).
+-- `stampNoting`, `stampEach`, `checkGraphFinish`), the binding-id stamping of a module's clauses
+-- and tail declarations (`stampGroupClauses`, `stampTailDecls`), the plural site resolution
+-- (`resolveSites`, `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the
+-- evidence-observation writer (`noteEvidenceObservation` and its entry builders), binder-type
+-- materialization, and the registration of imported declarations (the import-overlay rows:
+-- `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`,
+-- `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows
+-- (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8
+-- band when extracted, and a `tc_mark` module would hold them with `methodMarkCtx` and
+-- `moduleMarkCtx` (owed, Val).
 --
 -- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
 -- section 5 (owed, #2555).
@@ -3933,6 +3934,8 @@ elabModuleStamp prev mid seedVars accData implDecls prog =
     prog
 
 -- THE stamper order, run once per module by `drainStampQueue`.
+-- `SSRLocalSites` must stay after `SSReturnSites` and `SSArgStamps`: it overwrites the route
+-- they stamp on the same ref with the receiver-grounded RLocal/RNone a standalone-shadow site needs.
 moduleStampOrder : List StampStep
 moduleStampOrder = [
   SSNumlitFloats,
@@ -4133,6 +4136,26 @@ drainStampQueue saved =
   materializeBinderTypes saved.mcGraph ()
   saved.mcGraph.graphRun.stampCtxs := []
   held ++ verdicts ++ holes
+
+-- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
+-- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is
+-- published: a check driver has no reader of the evidence table.
+--
+-- The sticky type-error cells are saved before the drain and restored after it, so
+-- a recorded interface never carries a drain's diagnostics.  An unkeyed drive
+-- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
+-- an accepted program.  The drain's evidence holes are returned, not recorded: a
+-- per-module diagnostics list is closed before any drain, so the caller attaches
+-- them to it (`attachDrainFindings`).
+export
+checkGraphFinish : ModuleCtx -> List DrainFinding
+checkGraphFinish mctx =
+  let savedSticky = mctx.mcGraph.typeErrorsSticky.value
+  let savedStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value
+  let holes = drainStampQueue mctx
+  mctx.mcGraph.typeErrorsSticky := savedSticky
+  mctx.mcGraph.typeErrorsStickyDiags := savedStickyDiags
+  holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
 -- drain finished: every method cell minted since the last drain, and the goals of
@@ -4870,6 +4893,8 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "captureTypeErrors" ((PVar "mctx") (PVar "act")) (EBlock (DoLet false false (PVar "w") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors")) (DoLet false false (PVar "items") (EFieldAccess (EFieldAccess (EVar "w") "items") "value")) (DoLet false false (PVar "mark") (EApp (EVar "wMark") (EVar "w"))) (DoLet false false (PVar "sticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "stickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoExpr (EApp (EVar "act") (ELit LUnit))) (DoLet false false (PVar "added") (EApp (EApp (EVar "wWindow") (EVar "w")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "sticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "stickyDiags"))) (DoExpr (EApp (EVar "reverseL") (EVar "added")))))
 (DTypeSig true "drainStampQueue" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "drainStampQueue" ((PVar "saved")) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "saved") "mcGraph") "graphRun") "stampCtxs") "value"))) (DoExpr (EApp (EVar "defaultLiveNumRoots") (EVar "saved"))) (DoLet false false (PVar "held") (EApp (EApp (EVar "judgeLiveGoals") (EVar "saved")) (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EApp (EVar "runStampCtxs") (EVar "saved")) (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EApp (EVar "judgeEvidence") (EFieldAccess (EVar "saved") "mcGraph")) (EVar "ctxs")))) (DoExpr (EApp (EApp (EVar "materializeBinderTypes") (EFieldAccess (EVar "saved") "mcGraph")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "saved") "mcGraph") "graphRun") "stampCtxs")) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
+(DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
+(DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
 (DTypeSig false "judgeEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampCtx")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))
 (DFunDef false "judgeEvidence" ((PVar "gctx") (PVar "ctxs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "lo") (EFieldAccess (EFieldAccess (EVar "g") "evJudged") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evJudged")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value"))) (DoLet false false (PVar "base") (EFieldAccess (EVar "g") "evBase")) (DoLet false false (PVar "cellHoles") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "judgeCells") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (EBinOp "-" (EVar "a") (EVar "base"))) (EBinOp "-" (EVar "b") (EVar "base"))) (EListLit)))) (EApp (EApp (EApp (EVar "unjudgedRanges") (EVar "lo")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value")) (EFieldAccess (EFieldAccess (EVar "g") "evScopedJudged") "value")))) (DoLet false false (PVar "goalHoles") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "flatMap") (EApp (EVar "judgeGoal") (EFieldAccess (EVar "c") "scModule"))) (EFieldAccess (EVar "c") "scGoals")))) (EVar "ctxs"))) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "holeKey")) (EBinOp "++" (EVar "cellHoles") (EVar "goalHoles"))))))
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
@@ -5339,6 +5364,8 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "captureTypeErrors" ((PVar "mctx") (PVar "act")) (EBlock (DoLet false false (PVar "w") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors")) (DoLet false false (PVar "items") (EFieldAccess (EFieldAccess (EVar "w") "items") "value")) (DoLet false false (PVar "mark") (EApp (EVar "wMark") (EVar "w"))) (DoLet false false (PVar "sticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "stickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoExpr (EApp (EVar "act") (ELit LUnit))) (DoLet false false (PVar "added") (EApp (EApp (EVar "wWindow") (EVar "w")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "sticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "stickyDiags"))) (DoExpr (EApp (EVar "reverseL") (EVar "added")))))
 (DTypeSig true "drainStampQueue" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "drainStampQueue" ((PVar "saved")) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "saved") "mcGraph") "graphRun") "stampCtxs") "value"))) (DoExpr (EApp (EVar "defaultLiveNumRoots") (EVar "saved"))) (DoLet false false (PVar "held") (EApp (EApp (EVar "judgeLiveGoals") (EVar "saved")) (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EApp (EVar "runStampCtxs") (EVar "saved")) (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EApp (EVar "judgeEvidence") (EFieldAccess (EVar "saved") "mcGraph")) (EVar "ctxs")))) (DoExpr (EApp (EApp (EVar "materializeBinderTypes") (EFieldAccess (EVar "saved") "mcGraph")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "saved") "mcGraph") "graphRun") "stampCtxs")) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
+(DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
+(DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
 (DTypeSig false "judgeEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampCtx")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))
 (DFunDef false "judgeEvidence" ((PVar "gctx") (PVar "ctxs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "lo") (EFieldAccess (EFieldAccess (EVar "g") "evJudged") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evJudged")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value"))) (DoLet false false (PVar "base") (EFieldAccess (EVar "g") "evBase")) (DoLet false false (PVar "cellHoles") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "judgeCells") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (EBinOp "-" (EVar "a") (EVar "base"))) (EBinOp "-" (EVar "b") (EVar "base"))) (EListLit)))) (EApp (EApp (EApp (EVar "unjudgedRanges") (EVar "lo")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value")) (EFieldAccess (EFieldAccess (EVar "g") "evScopedJudged") "value")))) (DoLet false false (PVar "goalHoles") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "judgeGoal") (EFieldAccess (EVar "c") "scModule"))) (EFieldAccess (EVar "c") "scGoals")))) (EVar "ctxs"))) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "holeKey")) (EBinOp "++" (EVar "cellHoles") (EVar "goalHoles"))))))
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))

@@ -1,6 +1,5 @@
 abstractTypeWords : String -> List Decl -> List String
 admittedIn : GraphCtx -> String -> List (String, String)
-aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasSchemeEntry : List (String, List (String, a)) -> String -> (String, a) -> (String, a)
 aliasSchemes : List (String, List (String, a)) -> String -> List (String, a) -> List (String, a)
 allModuleLines : List (String, List (String, PubScheme)) -> List String
@@ -16,13 +15,11 @@ autoPrintEvidence : ModuleCtx -> String -> ScopeId -> IfaceRef -> Mono -> EvId
 autoPrintWanted : ModuleCtx -> Bool -> Option String -> List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List Decl -> List (String, List Decl) -> (List DrainFinding, Option EvId)
 bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
 bindsName : Option (Map String Unit) -> String -> Bool
-boundNames : UsePath -> Option (Map String Unit)
 buildDispositions : GraphCtx -> DeclEnvs -> DispositionTable
 captureEntryTables : ModuleCtx -> Map String (List VecObl) -> List (String, List Decl) -> EntryTables
 chainArgs : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> DriveArgs
 chainFullKey : Int -> Int -> String -> String
 checkCoreMemoized : ModuleCtx -> Option (Int, Int) -> List Decl -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
-checkGraphFinish : ModuleCtx -> List DrainFinding
 checkModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesAllLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesChainReportFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> (TcReport, DriveOutputs)
@@ -65,7 +62,7 @@ cohHardOnto : Option String -> List TcDiag -> List TcDiag
 cohOntoFull : Option String -> Option String -> (List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, PubScheme), List TcDiag, List TcDiag)
 cohSoftOnto : Option String -> List TcDiag -> List TcDiag
 collectAbstractRecordTypes : List Decl -> List String
-collectModules : (Bool -> String -> a -> b -> b) -> b -> List (String, a) -> b
+collectModules : (ModulePlace -> String -> a -> b -> b) -> b -> List (String, a) -> b
 containsPair : (String, String) -> List (String, String) -> Bool
 continueFromInterface : GraphCtx -> GraphRun -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 coreAliasSchemes : UsePath -> List (String, a) -> List (String, a)
@@ -89,27 +86,26 @@ driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List T
 driveGraphK : GraphOut -> DriveArgs -> GraphDrive
 driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
 dropModSchemes : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
-elabDriveResult : GraphDrive -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
-elabTreesDrive : DriveArgs -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
-elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts)
-elaborateModulesChainReport : DriveInputs -> Bool -> (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
-elaborateModulesGraph : DriveArgs -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), GraphCtx)
+elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
+elabTreesDrive : DriveArgs -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
+elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> ElabResult
+elaborateModulesChainReport : DriveInputs -> Bool -> (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)
+elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
 elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
-elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), List (String, PubScheme), List (String, PubScheme))
+elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)
+elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, List (String, PubScheme), List (String, PubScheme))
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
-entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryReportFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
 entrySplit : TcReport -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 externSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 findingsOnto : List DrainFinding -> (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List (String, PubScheme), List TcDiag, List TcDiag))
-foldModules : Accumulate -> (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a, ModuleCtx)) -> Option (ModuleServe a) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> ModuleCtx -> List (String, List Decl) -> (b, Option (ModuleServe a), ModuleCtx)
+foldModules : FoldPlan a b -> Option (ModuleServe a) -> b -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> ModuleCtx -> List (String, List Decl) -> (b, Option (ModuleServe a), ModuleCtx)
 freezeFrom : Int -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
-graphCollect : GraphCtx -> GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView)) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView))
+graphCollect : GraphCtx -> GraphOut -> ModulePlace -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView)) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView))
 graphModuleWorker : Map String Unit -> GraphOut -> ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView), ModuleCtx)
-graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets, ModuleCtx)
+graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphPreamble
 hadMatchWarnings : DriveOutputs -> Bool
 hadTypeErrors : DriveOutputs -> Bool
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
@@ -155,7 +151,7 @@ seedAbstractRecordTypes : GraphCtx -> List Decl -> List (String, List Decl) -> U
 seedContext : ModuleCtx -> Map String (List VecObl) -> String -> List VecObl
 serveOps : ServeOps
 setDictEligible : GraphCtx -> List String -> Unit
-setMainSchemeIfEntry : GraphCtx -> Bool -> List (String, PubScheme) -> Unit
+setMainSchemeIfEntry : GraphCtx -> ModulePlace -> List (String, PubScheme) -> Unit
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
@@ -165,4 +161,4 @@ treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
 treeArmHit : DriveInputs -> List Decl -> GraphCtx -> Option (PreludeElab, PreludeInterface)
 typeErrorLines : List String -> List String
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
-workModules : Accumulate -> (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a, ModuleCtx)) -> Option (ModuleServe a) -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, a) -> ModuleCtx -> List (String, List Decl) -> (List (String, a), Option (ModuleServe a), ModuleCtx)
+workModules : FoldPlan a b -> Option (ModuleServe a) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, a) -> ModuleCtx -> List (String, List Decl) -> (List (String, a), Option (ModuleServe a), ModuleCtx)

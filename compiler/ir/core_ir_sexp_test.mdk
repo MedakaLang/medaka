@@ -25,7 +25,8 @@ import types.typecheck.{defaultDriveInputs, elaborateOneFacts}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{
-  BinderId(..), Decl, Lit(..), Pat(..), Addr(..), noDeclLoc, noBinderId
+  BinderId(..), Decl, Lit(..), Pat(..), Addr(..), Route(..), noDeclLoc,
+  noBinderId
 }
 import ir.core_ir.{
   CBind(..),
@@ -36,6 +37,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   DeclFacts(..),
+  MethodEvidence(..),
   MethodResultFact(..),
   noDeclFacts,
   programBinderIds,
@@ -474,7 +476,9 @@ loweredEntry runtimeDecls coreDecls entry roots =
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
-      let (coreE, modulesE, _, _, evTable, _, _) = elab
+      let coreE = elab.erCore
+      let modulesE = elab.erModules
+      let evTable = elab.erEvidence
       let externFacts =
         factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
       let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
@@ -588,3 +592,23 @@ test "every engine fixture's lowered program round-trips through its dump" =
   match corpusRoundTrip
     Ok verdict => verdict
     Err e => fail e
+
+test "Core IR round-trip preserves method occurrence arity" =
+  let original =
+    CProgram
+      [
+        CBind
+          "main"
+          [CClause [] (CMethod "probe" (MethodEvidence "" 7 RNone [] []))]
+          noDeclLoc
+          noBinderId,
+      ]
+      []
+      []
+      []
+      []
+      noDeclFacts
+  match parseCProgram (cprogramToSexp original)
+    CProgram [CBind "main" [CClause [] (CMethod "probe" (MethodEvidence "" arity RNone [] []))] _ _] _ _ _ _ _ =>
+      expectEqual 7 arity
+    _ => fail "expected the round-tripped CProgram to keep the same shape"
