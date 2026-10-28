@@ -1,6 +1,7 @@
 frontend.ast
 frontend.ast_codec
 frontend.exhaust
+support.diag_codes
 support.opcount
 support.ordmap
 support.path
