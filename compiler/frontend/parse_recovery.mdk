@@ -31,23 +31,31 @@ export
 defaultRecoveryLimits : RecoveryLimits
 defaultRecoveryLimits = RecoveryLimits 8388608 500000 4096 32
 
-openKind : Token -> Int
-openKind TLParen = 1
-openKind TLBracket = 2
-openKind TLBracketTight = 2
-openKind TLArray = 3
-openKind TLBrace = 4
-openKind TDotLBrace = 4
-openKind (TInterpOpen _) = 5
-openKind _ = 0
+data DelimiterKind =
+  | Paren
+  | Bracket
+  | ArrayDelimiter
+  | Brace
+  | Interpolation
+  deriving (Eq)
 
-closeKind : Token -> Int
-closeKind TRParen = 1
-closeKind TRBracket = 2
-closeKind TRArray = 3
-closeKind TRBrace = 4
-closeKind (TInterpEnd _) = 5
-closeKind _ = 0
+openKind : Token -> Option DelimiterKind
+openKind TLParen = Some Paren
+openKind TLBracket = Some Bracket
+openKind TLBracketTight = Some Bracket
+openKind TLArray = Some ArrayDelimiter
+openKind TLBrace = Some Brace
+openKind TDotLBrace = Some Brace
+openKind (TInterpOpen _) = Some Interpolation
+openKind _ = None
+
+closeKind : Token -> Option DelimiterKind
+closeKind TRParen = Some Paren
+closeKind TRBracket = Some Bracket
+closeKind TRArray = Some ArrayDelimiter
+closeKind TRBrace = Some Brace
+closeKind (TInterpEnd _) = Some Interpolation
+closeKind _ = None
 
 fences : ParseContext -> (Array Bool, Option InvalidReason)
 fences ctx =
@@ -57,7 +65,7 @@ fences ctx =
 walkFence : ParseContext ->
   Int ->
   Int ->
-  List Int ->
+  List DelimiterKind ->
   Bool ->
   List Bool ->
   (List Bool, Option InvalidReason)
@@ -85,16 +93,14 @@ walkFence ctx p depth stack poison acc
       TIndent => depth + 1
       TDedent => max 0 (depth - 1)
       _ => depth
-    let o = openKind t
-    let c = closeKind t
-    if o > 0 then
-      walkFence ctx (p + 1) d (o :: stack) poison (allowed :: acc)
-    else if c > 0 then match stack
-      [] => walkFence ctx (p + 1) d [] poison (allowed :: acc)
-      k :: rest =>
-        walkFence ctx (p + 1) d rest (poison || k /= c) (allowed :: acc)
-    else
-      walkFence ctx (p + 1) d stack poison (allowed :: acc)
+    match openKind t
+      Some o => walkFence ctx (p + 1) d (o :: stack) poison (allowed :: acc)
+      None => match closeKind t
+        Some c => match stack
+          [] => walkFence ctx (p + 1) d [] poison (allowed :: acc)
+          k :: rest =>
+            walkFence ctx (p + 1) d rest (poison || k /= c) (allowed :: acc)
+        None => walkFence ctx (p + 1) d stack poison (allowed :: acc)
 
 noiseEnd : ParseContext -> Int -> Int
 noiseEnd ctx p
@@ -102,11 +108,15 @@ noiseEnd ctx p
   | otherwise = p
 
 nextFence : ParseContext -> Array Bool -> Int -> Int
-nextFence ctx fs p
-  | p >= arrayLength fs = p
-  | isEofTok (peekTok (contextTokens ctx) p) = p
-  | arrayGetUnsafe p fs = p
-  | otherwise = nextFence ctx fs (p + 1)
+nextFence ctx fs start =
+  let go p =
+    if p >= arrayLength fs
+      || isEofTok (peekTok (contextTokens ctx) p)
+      || arrayGetUnsafe p fs then
+      p
+    else
+      go (p + 1)
+  go start
 
 offAt : ParseContext -> Int -> Int -> Int
 offAt ctx size p
@@ -118,15 +128,28 @@ offAt ctx size p
 sliceList : Array a -> Int -> Int -> List a
 sliceList xs s e = toList (sliceClamped s e xs)
 
-publish : ParseContext ->
-  List (Decl, Int, Int) ->
-  List ParseDiagnostic ->
-  List (Int, Int, InvalidReason) ->
-  RecoveryStop ->
-  Int ->
-  RecoveredSource
-publish ctx revSpans ds rs stop attempts =
-  let spans = reverse revSpans
+data RecoveryContext = {
+  limits : RecoveryLimits,
+  source : String,
+  index : Unit -> SourceIndex,
+  parser : ParseContext,
+  fences : Array Bool,
+  damage : Option InvalidReason,
+  size : Int,
+}
+
+data RecoveryState = {
+  position : Int,
+  spans : List (Decl, Int, Int),
+  diagnostics : List ParseDiagnostic,
+  regions : List (Int, Int, InvalidReason),
+  attempts : Int,
+}
+
+publish : RecoveryContext -> RecoveryState -> RecoveryStop -> RecoveredSource
+publish run state stop =
+  let ctx = run.parser
+  let spans = reverse state.spans
   makeRecoveredSource
     (map ((d, _s, _e) => d) spans)
     (positionsFromSpans
@@ -134,12 +157,15 @@ publish ctx revSpans ds rs stop attempts =
       (contextTokens ctx)
       (contextOffsets ctx)
       spans)
-    (reverse ds)
+    (reverse state.diagnostics)
     (map
       ((s, e, reason) => makeInvalidRegion (SourceExtent s e) reason)
-      (reverse rs))
+      (reverse state.regions))
     (Partial stop)
-    (RecoveryStats (arrayLength (contextTokens ctx)) attempts (length ds))
+    (RecoveryStats
+      (arrayLength (contextTokens ctx))
+      state.attempts
+      (length state.diagnostics))
 
 failureDiag : ParseContext ->
   Int ->
@@ -158,49 +184,44 @@ failureDiag ctx size p problem =
       locOfSpan ctx p (p + 1)
   makeParseDiagnostic problem loc
 
-recoverLoop : RecoveryLimits ->
-  String ->
-  (Unit -> SourceIndex) ->
-  ParseContext ->
-  Array Bool ->
-  Option InvalidReason ->
-  Int ->
-  Int ->
-  List (Decl, Int, Int) ->
-  List ParseDiagnostic ->
-  List (Int, Int, InvalidReason) ->
-  Int ->
-  RecoveredSource
-recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src index ctx fs damage size p spans ds rs attempts
-  | isEofTok (peekTok (contextTokens ctx) p) =
-    publish ctx spans ds rs ReachedEnd attempts
-  | attempts >= maxAttempts || length ds >= maxDiagnostics =
+recoverLoop : RecoveryContext -> RecoveryState -> RecoveredSource
+recoverLoop run state =
+  let ctx = run.parser
+  let fs = run.fences
+  let size = run.size
+  let p = state.position
+  let (RecoveryLimits _ _ maxAttempts maxDiagnostics) = run.limits
+  if isEofTok (peekTok (contextTokens ctx) p) then
+    publish run state ReachedEnd
+  else if state.attempts >= maxAttempts
+    || length state.diagnostics >= maxDiagnostics then
     publish
-      ctx
-      spans
-      ds
-      ((offAt ctx size p, size, RecoveryBudget) :: rs)
+      run
+      { state |
+        regions = (offAt ctx size p, size, RecoveryBudget) :: state.regions,
+      }
       ExhaustedBudget
-      attempts
-  | p >= arrayLength fs || not (arrayGetUnsafe p fs) =
+  else if p >= arrayLength fs || not (arrayGetUnsafe p fs) then
     publish
-      ctx
-      spans
-      ds
-      ((offAt ctx size p, size, UntrustedBoundary) :: rs)
+      run
+      { state |
+        regions = (offAt ctx size p, size, UntrustedBoundary) :: state.regions,
+      }
       StoppedBoundary
-      attempts
-  | otherwise = match peekTok (contextTokens ctx) p
+  else match peekTok (contextTokens ctx) p
     TLexError kind =>
       publish
-        ctx
-        spans
-        (failureDiag ctx size p kind :: ds)
-        ((offAt ctx size p, size, TerminalLexError) :: rs)
+        run
+        { state |
+          diagnostics = failureDiag ctx size p kind :: state.diagnostics,
+          regions = (offAt ctx size p, size, TerminalLexError) :: state.regions,
+          attempts = state.attempts + 1,
+        }
         StoppedLexically
-        (attempts + 1)
     _ =>
       let saved = mark ctx
+      let rejectFailure f q =
+        reject run state (failureDiag ctx size q (failProblem f))
       match P.parseDeclAt ctx p
         POk d q =>
           let end = noiseEnd ctx q
@@ -211,159 +232,90 @@ recoverLoop (limits@(RecoveryLimits _ _ maxAttempts maxDiagnostics)) src index c
             let ts = sliceList (contextTokens ctx) p q
             let os = sliceList (contextOffsets ctx) p q
             match (P.prescanErrorPairsWithIndex
-              src
+              run.source
               (ts ++ [TEof])
               (os ++ [(offAt ctx size q, offAt ctx size q)])
-              index)
-              None =>
-                recoverLoop
-                  limits
-                  src
-                  index
-                  ctx
-                  fs
-                  damage
-                  size
-                  end
-                  ((d, p, q) :: spans)
-                  ds
-                  rs
-                  (attempts + 1)
+              run.index)
+              None => recoverLoop run { state |
+                position = end,
+                spans = (d, p, q) :: state.spans,
+                attempts = state.attempts + 1,
+              }
               Some err =>
                 rewind saved
-                reject
-                  limits
-                  src
-                  index
-                  ctx
-                  fs
-                  damage
-                  size
-                  p
-                  spans
-                  ds
-                  rs
-                  attempts
-                  (parseErrorDiagnostic err)
+                reject run state (parseErrorDiagnostic err)
           else
             rewind saved
             reject
-              limits
-              src
-              index
-              ctx
-              fs
-              damage
-              size
-              p
-              spans
-              ds
-              rs
-              attempts
+              run
+              state
               (failureDiag
                 ctx
                 size
                 q
                 (GenericParse "declaration did not end at a safe boundary"))
-        PErr f q =>
-          reject
-            limits
-            src
-            index
-            ctx
-            fs
-            damage
-            size
-            p
-            spans
-            ds
-            rs
-            attempts
-            (failureDiag ctx size q (failProblem f))
-        PFatal f q =>
-          reject
-            limits
-            src
-            index
-            ctx
-            fs
-            damage
-            size
-            p
-            spans
-            ds
-            rs
-            attempts
-            (failureDiag ctx size q (failProblem f))
+        PErr f q => rejectFailure f q
+        PFatal f q => rejectFailure f q
 
-reject : RecoveryLimits ->
-  String ->
-  (Unit -> SourceIndex) ->
-  ParseContext ->
-  Array Bool ->
-  Option InvalidReason ->
-  Int ->
-  Int ->
-  List (Decl, Int, Int) ->
-  List ParseDiagnostic ->
-  List (Int, Int, InvalidReason) ->
-  Int ->
-  ParseDiagnostic ->
-  RecoveredSource
-reject limits src index ctx fs damage size p spans ds rs attempts diagnostic =
-  let next = nextFence ctx fs (p + 1)
-  let terminal = findLex ctx p (min (arrayLength fs) (next + 1))
-  if terminal >= 0 then
-    let kind = match peekTok (contextTokens ctx) terminal
-      TLexError k => k
-      _ => GenericParse "unreachable"
-    publish
-      ctx
-      spans
-      (failureDiag ctx size terminal kind :: ds)
-      ((offAt ctx size p, size, TerminalLexError) :: rs)
-      StoppedLexically
-      (attempts + 1)
-  else
-    let ts = sliceList (contextTokens ctx) p next
-    let os = sliceList (contextOffsets ctx) p next
-    let checked =
-      match (P.prescanErrorPairsWithIndex
-        src
-        (ts ++ [TEof])
-        (os ++ [(size, size)])
-        index)
-        Some err => parseErrorDiagnostic err
-        None => diagnostic
-    if isEofTok (peekTok (contextTokens ctx) next) && isSome damage then
+reject : RecoveryContext -> RecoveryState -> ParseDiagnostic -> RecoveredSource
+reject run state diagnostic =
+  let ctx = run.parser
+  let size = run.size
+  let p = state.position
+  let next = nextFence ctx run.fences (p + 1)
+  let terminal = findLex ctx p (min (arrayLength run.fences) (next + 1))
+  match terminal
+    Some terminal =>
+      let kind = match peekTok (contextTokens ctx) terminal
+        TLexError k => k
+        _ => GenericParse "unreachable"
       publish
-        ctx
-        spans
-        (checked :: ds)
-        ((offAt ctx size p, size, optionOr UnclosedDelimiter damage) :: rs)
-        StoppedDelimiter
-        (attempts + 1)
-    else
-      recoverLoop
-        limits
-        src
-        index
-        ctx
-        fs
-        damage
-        size
-        next
-        spans
-        (checked :: ds)
-        ((offAt ctx size p, offAt ctx size next, InvalidDeclaration) :: rs)
-        (attempts + 1)
+        run
+        { state |
+          diagnostics = failureDiag ctx size terminal kind :: state.diagnostics,
+          regions = (offAt ctx size p, size, TerminalLexError) :: state.regions,
+          attempts = state.attempts + 1,
+        }
+        StoppedLexically
+    None =>
+      let ts = sliceList (contextTokens ctx) p next
+      let os = sliceList (contextOffsets ctx) p next
+      let checked =
+        match (P.prescanErrorPairsWithIndex
+          run.source
+          (ts ++ [TEof])
+          (os ++ [(size, size)])
+          run.index)
+          Some err => parseErrorDiagnostic err
+          None => diagnostic
+      let updated = { state |
+        diagnostics = checked :: state.diagnostics,
+        attempts = state.attempts + 1,
+      }
+      match (isEofTok (peekTok (contextTokens ctx) next), run.damage)
+        (True, Some reason) =>
+          publish
+            run
+            { updated |
+              regions = (offAt ctx size p, size, reason) :: state.regions,
+            }
+            StoppedDelimiter
+        _ => recoverLoop run { updated |
+          position = next,
+          regions =
+            (offAt ctx size p, offAt ctx size next, InvalidDeclaration)
+              :: state.regions,
+        }
 
-findLex : ParseContext -> Int -> Int -> Int
-findLex ctx p end
-  | p >= end = -1
-  | otherwise = match peekTok (contextTokens ctx) p
-    TLexError _ => p
-    _ => findLex ctx (p + 1) end
+findLex : ParseContext -> Int -> Int -> Option Int
+findLex ctx start end =
+  let go p =
+    if p >= end then
+      None
+    else match peekTok (contextTokens ctx) p
+      TLexError _ => Some p
+      _ => go (p + 1)
+  go start
 
 export
 parseRecovering : String -> RecoveredSource
@@ -429,22 +381,23 @@ recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src index =
     Err firstDiagnostic =>
       let ctx = newParseContext src (arrayFromList ts) (arrayFromList os)
       let (fs, damage) = fences ctx
-      ensureDiagnostic
-        limits
-        firstDiagnostic
-        (recoverLoop
-          limits
-          src
-          index
-          ctx
-          fs
-          damage
-          (stringLength src)
-          (noiseEnd ctx 0)
-          []
-          []
-          []
-          0)
+      let run = RecoveryContext {
+        limits = limits,
+        source = src,
+        index = index,
+        parser = ctx,
+        fences = fs,
+        damage = damage,
+        size = stringLength src,
+      }
+      let state = RecoveryState {
+        position = noiseEnd ctx 0,
+        spans = [],
+        diagnostics = [],
+        regions = [],
+        attempts = 0,
+      }
+      ensureDiagnostic limits firstDiagnostic (recoverLoop run state)
 
 ensureDiagnostic : RecoveryLimits ->
   ParseDiagnostic ->
