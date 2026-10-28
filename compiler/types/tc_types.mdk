@@ -2048,7 +2048,7 @@ public export data ModuleCells = ModuleCells {
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- every variable a closed binder declares, which `matchEqPairs` and determination hold rigid: a top-level signature's and a generalized local's quantified variables (an annotated local's included); `declareRigidVars` adds them. A method signature's and an expression annotation's variables are held only at their own close (`checkSigVarGoals`)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
-  numlitVarLocs : Ref (List (Mono, Loc)),
+  numlitVarLocs : Ref (List (Mono, Loc)),  -- keeps every literal: `numlitReframeLoc` and `tagLitLocsWithRoot` need the complete list, and only the `numlitUntainted` worklist drops tainted ones
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
   patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
   matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
@@ -3298,39 +3298,39 @@ public export data GraphDrive = GraphDrive {
 }
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
--- `ElabResult` is what a multi-module elaboration returns: the core decls, the
--- elaborated modules, and three diagnostic/evidence views over the same run.
--- The first component is the elaborated CORE decls (prelude, post dict-pass).
--- The second is the elaborated user MODULES, in load order, trees refs filled.
--- The third is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
--- module in load order, with the whole-graph coherence verdict attached to the
--- entry module — the same list `driveGraphK GOutDiags` returns, produced by the same
--- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
--- `recordTypeError` writes both channels, so every per-module error is in the
--- residual too; the residual additionally holds what the graph-end drain raised
--- (after every module closed), and this list additionally holds the coherence
--- verdict, which `globalCoherenceConflict` pushes to neither channel.  A consumer
--- renders ONE of them for errors — this one to report as `check` does, the
--- residual to gate on `hadTypeErrors` — never both.
--- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
--- elaboration recorded and left standing, tagged with its module id, per goal with
--- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
--- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
--- same list the sticky channel holds, cut to this call.
--- #2549 M2: the fifth component is the EVIDENCE TABLE — the whole table this
--- elaboration produced, keyed by `EvId`: every goal it solved, every method
--- occurrence and every minted site.  It is the table before `mangleUnitsEv`
--- renames the trees, so a caller that lowers mangled trees lowers against the
--- table that call returns.
--- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`).  The seventh bundles the BINDER-TYPE
--- table and selected entry outcome the elaboration produced.
+-- The BINDER-TYPE table and selected entry outcome an elaboration produced (#1112 A-3).
 public export data ElabFacts = ElabFacts {
   efManifests : List CapabilityManifest,
   efBinders : BinderTypeTable,
   efEntryOutcome : EntryOutcome,
 }
 
+-- `ElabResult` is what a multi-module elaboration returns: the core decls, the
+-- elaborated modules, and three diagnostic/evidence views over the same run.
+-- `erCore` is the elaborated CORE decls (prelude, post dict-pass).
+-- `erModules` is the elaborated user MODULES, in load order, trees refs filled.
+-- `erPerModule` is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
+-- module in load order, with the whole-graph coherence verdict attached to the
+-- entry module: the same list `driveGraphK GOutDiags` returns, produced by the same
+-- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
+-- `recordTypeError` writes both channels, so every per-module error is in the
+-- residual too; the residual additionally holds what the graph-end drain raised
+-- (after every module closed), and this list additionally holds the coherence
+-- verdict, which `globalCoherenceConflict` pushes to neither channel.  A consumer
+-- renders ONE of them for errors, this one to report as `check` does, the
+-- residual to gate on `hadTypeErrors`, never both.
+-- `erResidual` is the RESIDUAL: every diagnostic this elaboration recorded and left
+-- standing, tagged with its module id, per goal with its own `Loc`, in push order.
+-- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
+-- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
+-- to this call.
+-- `erEvidence` is the EVIDENCE TABLE: the whole table this elaboration produced, keyed
+-- by `EvId`: every goal it solved, every method occurrence and every minted site.  It
+-- is the table before `mangleUnitsEv` renames the trees, so a caller that lowers
+-- mangled trees lowers against the table that call returns.
+-- `erDispositions` is the whole-graph per-method DISPOSITION TABLE
+-- (`compiler/types/disposition.mdk`).  `erFacts` bundles the binder-type table and the
+-- selected entry outcome (`ElabFacts`).
 public export data ElabResult = ElabResult {
   erCore : List Decl,
   erModules : List (String, List Decl),

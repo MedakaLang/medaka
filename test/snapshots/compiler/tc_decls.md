@@ -1,5 +1,5 @@
 # META
-source_lines=3248
+source_lines=3250
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -2264,6 +2264,8 @@ loadDataUniverse mctx cur =
 -- property: the one Module-mode driver entry (`graphPreamble`) overwrites the envelope
 -- whole and nothing resets it in between.  The emitter child builds it the same way,
 -- because it runs that same entry; resolve's `ModuleExports` is not available there.
+-- This family and the method-namespace export index are mirrors until #1288 consolidates them:
+-- a fix to the scope ladder, the witness or the export index on one side is absent from the other.
 -- An empty index makes every candidate miss, the override declines everywhere, and the
 -- ladder silently does nothing.
 --

@@ -8,7 +8,7 @@
 -- `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`,
 -- `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows
 -- (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8
--- band (2,874 of 3,000), and a `tc_mark` module would hold them with `methodMarkCtx` and
+-- band when extracted, and a `tc_mark` module would hold them with `methodMarkCtx` and
 -- `moduleMarkCtx` (owed, Val).
 --
 -- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
@@ -3930,6 +3930,8 @@ elabModuleStamp prev mid seedVars accData implDecls prog =
     prog
 
 -- THE stamper order, run once per module by `drainStampQueue`.
+-- `SSRLocalSites` must stay after `SSReturnSites` and `SSArgStamps`: it overwrites the route
+-- they stamp on the same ref with the receiver-grounded RLocal/RNone a standalone-shadow site needs.
 moduleStampOrder : List StampStep
 moduleStampOrder = [
   SSNumlitFloats,

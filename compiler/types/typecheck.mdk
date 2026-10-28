@@ -16,18 +16,20 @@
 -- Placement: this is the entry module (P4-D4); declarations are placed by R1-R6 of the Phase 4
 -- module table, compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module imports the `tc_*` modules and no `tc_*` module imports it.
--- `preludeMarkFactsOf` stays here: its home is `tc_occurrence`, which is at the A8 band (2,874 of
--- 3,000), and a `tc_mark` module would hold it (owed, Val).
+-- `preludeMarkFactsOf` stays here: its home is `tc_occurrence`, which was at the A8 band when
+-- extracted, and a `tc_mark` module would hold it (owed, Val).
 --
--- ONE GRAPH DRIVER, TWO OUTPUT SELECTIONS.  `driveGraphK` is the single whole-graph
--- driver: `GOutDiags` (per-module diagnostics and schemes) is what `medaka check`,
+-- One solving graph driver, two output selections.  `driveGraphK` is the single whole-graph
+-- solving driver: `GOutDiags` (per-module diagnostics and schemes) is what `medaka check`,
 -- `check --json`, the LSP, MCP, the playground and `medaka test`'s gate consume, and
 -- `GOutTrees` (the same diagnostics plus the elaborated, dict-passed trees, the
 -- residual and the evidence table) is what `run`, `build`'s child, `medaka test`'s
 -- phases and the emit entries consume.  They share one preamble, one per-module
 -- worker and one graph-end drain, so a module is checked against the same universe,
--- the same seed and the same mark sets on both.  Every whole-graph entry point in this
--- file is a projection of that function.  A keyed diagnostics drive
+-- the same seed and the same mark sets on both.  `checkModulesK`, `checkModulesPartialK` and
+-- `checkModulesPartialLast` (LSP hover and completion reach the second through
+-- `driver/diagnostics.mdk`) are a second fold, `cmFold`: it marks but does not solve or drain,
+-- so its types are not the drive's by construction.  A keyed diagnostics drive
 -- (`checkModulesDiagsChain (Some …)`) hands the one fold a serve policy (`diagsServe`),
 -- which serves each unchanged module before the entry from its recorded interface
 -- (`types/module_interface.mdk`) instead of checking it.
@@ -44,7 +46,7 @@
 -- permuted accepting twin).
 --
 -- Single-file consumers are one-module projections of the same graph driver. There
--- is no second checking mode or second stamper order; `checkOne*` and `elaborateOne`
+-- is no second stamper order; `checkOne*` and `elaborateOne`
 -- supply the one-module entry surface.
 
 import types.invocation_basis.{
@@ -816,8 +818,8 @@ externSchemes : ModuleCtx ->
   List (String, Scheme)
 externSchemes mctx scope decls =
   let ds = externDecls decls
-  -- #2074: THIS function is the stdlib extern CATALOG builder — its eight call
-  -- sites all pass `runtimeDecls`, and `userExternSchemes` (`types/tc_module.mdk`) is the
+  -- #2074: THIS function is the stdlib extern CATALOG builder — its one call
+  -- site passes `runtimeDecls`, and `userExternSchemes` (`types/tc_module.mdk`) is the
   -- declaration-site sibling that handles the program under check.  So this is
   -- the one seam where the set of names the emitter's `isAnyExtern` ladder will
   -- answer for is known, and it is recorded here rather than re-derived.  See
@@ -3143,7 +3145,7 @@ checkModulesEntryFullK inputs preludeKey runtimeDecls coreDecls modules =
 -- component, so every existing caller is byte-identical.
 --
 -- 🚨 The two lists are returned SEPARATE, and in this order — `(coreSchemes,
--- entryOwnSchemes, …)` — precisely so a caller CANNOT accidentally get #2054's
+-- ownSchemes, …)` — precisely so a caller CANNOT accidentally get #2054's
 -- shape.  A consumer that wants one flat env for a first-match lookup
 -- (`lookupSchemeL`, `lookupAssoc`) must concat OWN FIRST: `own ++ core`.  With
 -- the prelude first, a user top-level binding that shadows a prelude name
@@ -3403,9 +3405,9 @@ checkOneReportKGraph args =
   let ((report, _), gctx) = checkModulesEntryFullReportKGraph args
   (report, gctx)
 
--- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers of the
--- (runtimeDecls, coreProg, userProg) shape, so `compiler/tools/check.mdk`'s two
--- rendering/bool call sites swap targets with no shape change.  They delegate to the
+-- Thin ONE-MODULE String/Bool wrappers of the (runtimeDecls, coreProg, userProg) shape,
+-- called by `compiler/tools/snapshot.mdk` and `compiler/tools/check.mdk`, so the call sites
+-- swap targets with no shape change.  They delegate to the
 -- entry-report/-hasErrors functions above over a singleton module list rather than
 -- duplicating the rendering (`joinNl (schemeLines ++ warns)` on success,
 -- `typeErrorLines` on error).  `"__user__"` mirrors `elaborateOne`'s own

@@ -97,8 +97,8 @@ namedArgPositions _ _ = []
 --
 -- The second conjunct is not an ownership test — it is a "does this run know
 -- what a foreign declaration IS" test.  `builtinExternNamesRef` is seeded ONLY by
--- `noteBuiltinExternNames`, inside `externSchemes … runtimeDecls`; the eight call
--- sites that build the catalog all pass `runtimeDecls` (138 rows), so for every
+-- `noteBuiltinExternNames`, inside `externSchemes … runtimeDecls`; the one call
+-- site that builds the catalog passes `runtimeDecls` (138 rows), so for every
 -- REAL entry point — `medaka check`/`build`/`test`/`lint`/`mcp`, the LSP, and
 -- every graph driver — this map is non-empty and the guards fire exactly as before.
 -- It is empty only when a compiler-internal one-module entry explicitly supplies no
