@@ -800,6 +800,7 @@ patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
 patBoundNames (PTuple ps) = flatMap patBoundNames ps
 patBoundNames (PList ps) = flatMap patBoundNames ps
 patBoundNames (PAs x _ _ p) = x :: patBoundNames p
+patBoundNames (POr (p :: _)) = patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
 patBoundNames _ = []
 
@@ -818,6 +819,8 @@ patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
 patBindings (PAs x _ _ p) = x :: patBindings p
+patBindings (POr []) = []
+patBindings (POr (p :: _)) = patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
@@ -1480,6 +1483,10 @@ public export data Pat =
   | PTuple (List Pat)
   | PList (List Pat)
   | PAs String Loc BinderId Pat
+  -- alternatives, left to right: at least two, none of them itself a POr.
+  -- Every alternative binds the same names; binders and bound names read the
+  -- first alternative.
+  | POr (List Pat)
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
 
@@ -1621,6 +1628,9 @@ public export data Expr =
   -- which exprToPat lowers to PAs.  Elsewhere resolve would reject it, so it
   -- never survives into a typed program (the reference's `EAsPat`).
   | EAsPat String Expr
+  -- `(e1 | e2 | ...)` in a binding LHS; exprToPat lowers it to POr.  Produced
+  -- only inside parentheses, so a bare `|` stays a guard.
+  | EOrPat (List Expr)
   -- Method_marker output (the parser never produces these; the typecheck-filled
   -- ref the reference carries is irrelevant pre-typecheck, so just the name).
   | EMethodRef String
@@ -2667,6 +2677,9 @@ mapTyInExpr f (ESetLit n es) =
 mapTyInExpr f (EAsPat n e0) =
   let (e0b, c) = mapTyInExpr f e0
   (EAsPat n e0b, c)
+mapTyInExpr f (EOrPat es) =
+  let (es2, c) = mapExprsB f es
+  (EOrPat es2, c)
 mapTyInExpr _ (EMethodRef n) = (EMethodRef n, False)
 mapTyInExpr _ (EDictApp n) = (EDictApp n, False)
 mapTyInExpr _ (EVarAt n a) = (EVarAt n a, False)

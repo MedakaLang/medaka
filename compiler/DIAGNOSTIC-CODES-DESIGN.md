@@ -166,6 +166,8 @@ module both ways. The tables below stay as narrative.
 | `R-NEWTYPE-CTOR-PRIVATE` | live | resolve error `NewtypeCtorNotExported` |
 | `R-NO-EXPORTED-CTORS` | live | resolve error `NoExportedConstructors` |
 | `R-NONREC-VALUE-LET` | live | resolve error `NonRecursiveValueLet` |
+| `R-OR-PATTERN-BINDERS` | live | resolve error `OrPatternBinders`: the alternatives of an or-pattern do not bind the same names |
+| `R-OR-PATTERN-MISPLACED` | live | resolve error `OrPatternMisplaced`: `(a \| b)` outside a binding LHS |
 | `R-ORPHAN-SIGNATURE` | live | resolve error `OrphanSignature` |
 | `R-PRIVATE-NAME` | live | resolve error `PrivateNameAccess` |
 | `R-UNBOUND` | live | resolve error `UnboundVariable` |
@@ -243,6 +245,7 @@ module both ways. The tables below stay as narrative.
 | `T-NO-IMPL` | live | no impl (class) |
 | `T-NONREC-VALUE-LET` | live | non-recursive value let |
 | `T-NOT-A-FUNCTION` | live | not a function |
+| `T-OR-PATTERN-UNSUPPORTED` | live | an or-pattern reached typecheck, which does not yet infer them |
 | `T-PHANTOM-METHOD` | live | an interface method whose type never mentions the interface variable |
 | `T-RECURSIVE-ALIAS` | live | recursive alias |
 | `T-REQUIRES-CYCLE` | live | `requires` chain repeats a goal |
@@ -537,6 +540,8 @@ kebab-case; never renumber (append only).
 | `R-ABSTRACT-FIELD` | `AbstractFieldAccess` |
 | `R-UNKNOWN-MODULE` | `UnknownModule` |
 | `R-AS-PATTERN-MISPLACED` | `AsPatternMisplaced` |
+| `R-OR-PATTERN-BINDERS` | `OrPatternBinders` — every alternative of an or-pattern must bind the same names. When an alternative is a bare lowercase identifier (`n \| otherwise => ...`), the message adds the steer that a match-arm guard uses `if`, not `\|` |
+| `R-OR-PATTERN-MISPLACED` | `OrPatternMisplaced` |
 | `R-NONREC-VALUE-LET` | `NonRecursiveValueLet` |
 | `R-DUPLICATE-BINDING` | `DuplicateBinding` |
 | `R-DUP-BINDING` | `DuplicateValueBinding` |

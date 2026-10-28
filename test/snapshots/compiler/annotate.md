@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -148,6 +148,7 @@ annotateExpr fr (EVariantUpdate con e0 fs) =
 annotateExpr fr (EMapLit n kvs) = EMapLit n (map (annotateKv fr) kvs)
 annotateExpr fr (ESetLit n es) = ESetLit n (map (annotateExpr fr) es)
 annotateExpr fr (EAsPat x e0) = EAsPat x (annotateExpr fr e0)
+annotateExpr fr (EOrPat es) = EOrPat (map (annotateExpr fr) es)
 annotateExpr fr (ESection s) = ESection (annotateSection fr s)
 -- ELoc is transparent: preserve the loc, annotate the wrapped expr.
 annotateExpr fr (ELoc l e) = ELoc l (annotateExpr fr e)
@@ -350,6 +351,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "annotateKv") (EVar "fr"))) (EVar "kvs"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAsPat" (PVar "x") (PVar "e0"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "annotateSection") (EVar "fr")) (EVar "s"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
@@ -456,6 +458,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateKv") (EVar "fr"))) (EVar "kvs"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAsPat" (PVar "x") (PVar "e0"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "annotateSection") (EVar "fr")) (EVar "s"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))

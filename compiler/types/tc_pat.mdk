@@ -155,7 +155,26 @@ inferPat env (PList pats) = inferPatList env pats
 inferPat env (PAs x xloc bid p) = inferPatAs env x xloc bid p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
+inferPat env (POr alts) = inferOrPatRefused env alts
 inferPat env _ = panic "typecheck: unsupported pattern"
+
+-- Typecheck does not infer or-patterns yet: one located refusal per or-pattern.
+-- The first alternative is still inferred, so its binders stay in scope and the
+-- refusal does not cascade into unbound-variable errors.
+inferOrPatRefused : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferOrPatRefused env alts =
+  recordTypeError
+    env.teDyn.dcModule
+    (TcDiag
+      TOrPatternUnsupported
+      1
+      env.teDyn.dcModule.mcLoc
+      "or-patterns are not supported by the typechecker yet"
+      (Some "write one match arm per alternative")
+      None)
+  match alts
+    [] => (freshVar env.teDyn.dcModule (), [])
+    first :: _ => inferPat env first
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
 -- binds no variables

@@ -107,6 +107,8 @@ public export data DiagCode =
   | RNewtypeCtorPrivate
   | RNoExportedCtors
   | RNonrecValueLet
+  | ROrPatternBinders
+  | ROrPatternMisplaced
   | ROrphanSignature
   | RPrivateName
   | RUnbound
@@ -184,6 +186,7 @@ public export data DiagCode =
   | TNoImpl
   | TNonrecValueLet
   | TNotAFunction
+  | TOrPatternUnsupported
   | TPhantomMethod
   | TRecursiveAlias
   | TRequiresCycle
@@ -298,6 +301,8 @@ codeText RModuleLoad = "R-MODULE-LOAD"
 codeText RNewtypeCtorPrivate = "R-NEWTYPE-CTOR-PRIVATE"
 codeText RNoExportedCtors = "R-NO-EXPORTED-CTORS"
 codeText RNonrecValueLet = "R-NONREC-VALUE-LET"
+codeText ROrPatternBinders = "R-OR-PATTERN-BINDERS"
+codeText ROrPatternMisplaced = "R-OR-PATTERN-MISPLACED"
 codeText ROrphanSignature = "R-ORPHAN-SIGNATURE"
 codeText RPrivateName = "R-PRIVATE-NAME"
 codeText RUnbound = "R-UNBOUND"
@@ -375,6 +380,7 @@ codeText TMissingSuperImpl = "T-MISSING-SUPER-IMPL"
 codeText TNoImpl = "T-NO-IMPL"
 codeText TNonrecValueLet = "T-NONREC-VALUE-LET"
 codeText TNotAFunction = "T-NOT-A-FUNCTION"
+codeText TOrPatternUnsupported = "T-OR-PATTERN-UNSUPPORTED"
 codeText TPhantomMethod = "T-PHANTOM-METHOD"
 codeText TRecursiveAlias = "T-RECURSIVE-ALIAS"
 codeText TRequiresCycle = "T-REQUIRES-CYCLE"
@@ -450,33 +456,33 @@ allDiagCodes = [
   REffectLabelNoMembers, RExternWithBody, RFieldNotInRecord, RFileNotFound,
   RFileNotUtf8, RImmutableAssign, RInternalExtern, RMethodNotInInterface,
   RMisplacedAuthorityBinder, RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors,
-  RNonrecValueLet, ROrphanSignature, RPrivateName, RUnbound, RUnboundAuthority,
-  RUnknownCtor, RUnknownEffect, RUnknownField, RUnknownInterface,
-  RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
-  TAmbiguousAliasMethod, TAmbiguousField, TAmbiguousInstance, TAmbiguousMethod,
-  TAmbiguousReexport, TAmbiguousShadowDecl, TAuthority, TAuthorityBinder,
-  TAuthorityDomain, TAuthorityEscape, TAuthorityExistentialScope,
-  TAuthorityIndexMismatch, TAuthorityKind, TAuthorityPattern,
-  TAuthorityPhantomExport, TBangOnBool, TBindOutsideDo, TConflictingImpl,
-  TCyclicSuperinterface, TDiscardedValue, TDoNotMonad, TEffectArgUncovered,
-  TEffectIndexEager, TEffectIndexMismatch, TEffectKindMismatch, TEffectLaunder,
-  TEffectLeak, TEffectParam, TEffectParamVariance, TEffectUndetermined,
-  TExportUnsolvedAuthority, TFfiBuiltinBind, TFfiBuiltinShadow,
-  TFfiCatalogNarrow, TFfiCSymbol, TFfiDuplicateHost, TFfiJsName, TFfiNoHost,
-  TFfiNoncrossable, TFfiNullary, TFfiReservedName, TFfiUnboundHost,
-  TFfiUnknownHost, TFfiUnlabelled, TFieldNotInAllCtors, TFieldPositionDiffers,
-  TFieldTypeDiffers, TFileBoundValue, TImplKindMismatch, TImplMissingRequires,
-  TImplTooSpecific, TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed,
-  TManifestEntry, TManifestInvalid, TManifestWrapper, TMethodMismatch,
-  TMissingConstraint, TMissingField, TMissingSuperImpl, TNoImpl,
-  TNonrecValueLet, TNotAFunction, TPhantomMethod, TRecursiveAlias,
-  TRequiresCycle, TRequiresDepth, TRequiresUnrouted, TResidual,
-  TSigOverExpansive, TTargetCapability, TTargetNoBinding, TTargetNotProvided,
-  TTypeMismatch, TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField,
-  TUnknownRecord, TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive,
-  WImportMethodShadow, WIncomparableImpls, WKeepIrFailed, WMainMissing,
-  WMainShape, WNonexhaustive, WNonexhaustiveClauses, WPreludeMethodShadow,
-  WUnreachableArm
+  RNonrecValueLet, ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature,
+  RPrivateName, RUnbound, RUnboundAuthority, RUnknownCtor, RUnknownEffect,
+  RUnknownField, RUnknownInterface, RUnknownModule, RUnknownType,
+  TAbstractField, TAliasArity, TAmbiguousAliasMethod, TAmbiguousField,
+  TAmbiguousInstance, TAmbiguousMethod, TAmbiguousReexport,
+  TAmbiguousShadowDecl, TAuthority, TAuthorityBinder, TAuthorityDomain,
+  TAuthorityEscape, TAuthorityExistentialScope, TAuthorityIndexMismatch,
+  TAuthorityKind, TAuthorityPattern, TAuthorityPhantomExport, TBangOnBool,
+  TBindOutsideDo, TConflictingImpl, TCyclicSuperinterface, TDiscardedValue,
+  TDoNotMonad, TEffectArgUncovered, TEffectIndexEager, TEffectIndexMismatch,
+  TEffectKindMismatch, TEffectLaunder, TEffectLeak, TEffectParam,
+  TEffectParamVariance, TEffectUndetermined, TExportUnsolvedAuthority,
+  TFfiBuiltinBind, TFfiBuiltinShadow, TFfiCatalogNarrow, TFfiCSymbol,
+  TFfiDuplicateHost, TFfiJsName, TFfiNoHost, TFfiNoncrossable, TFfiNullary,
+  TFfiReservedName, TFfiUnboundHost, TFfiUnknownHost, TFfiUnlabelled,
+  TFieldNotInAllCtors, TFieldPositionDiffers, TFieldTypeDiffers,
+  TFileBoundValue, TImplKindMismatch, TImplMissingRequires, TImplTooSpecific,
+  TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
+  TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
+  TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
+  TOrPatternUnsupported, TPhantomMethod, TRecursiveAlias, TRequiresCycle,
+  TRequiresDepth, TRequiresUnrouted, TResidual, TSigOverExpansive,
+  TTargetCapability, TTargetNoBinding, TTargetNotProvided, TTypeMismatch,
+  TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord,
+  TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow,
+  WIncomparableImpls, WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
+  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.

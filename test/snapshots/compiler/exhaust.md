@@ -1,5 +1,5 @@
 # META
-source_lines=1206
+source_lines=1209
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -382,6 +382,9 @@ desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng _ _ _) = PWild
+-- Typecheck refuses an or-pattern before exhaustiveness is meaningful; a wildcard
+-- keeps this total and warning-free until exhaustiveness reads alternatives.
+desugarPat _ (POr _) = PWild
 
 desugarRecPat : Oracle -> String -> List RecPatField -> Pat
 desugarRecPat oracle name fields = match oGetCtorFields oracle name
@@ -1310,6 +1313,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "desugarPat" (PWild (PCon "POr" PWild)) (EVar "PWild"))
 (DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
 (DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
 (DTypeSig false "oracleCtorName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "String"))))
@@ -1725,6 +1729,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "desugarPat" (PWild (PCon "POr" PWild)) (EVar "PWild"))
 (DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
 (DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
 (DTypeSig false "oracleCtorName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "String"))))

@@ -4,7 +4,10 @@
    binary-operator ladder: precedence, associativity, and an operator whose
    right operand fails. -}
 
-import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..), Section(..)}
+import frontend.ast.{
+  Expr(..), Decl(..), Attr(..), Loc(..), Section(..), Pat(..), Arm(..), Lit(..),
+  Guard(..), DoStmt(..), FunClause(..), stripLocE
+}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parse_engine.{
   PR(..),
@@ -29,7 +32,7 @@ import frontend.parser.{
 }
 import test.{
   expectEqual, expectEach, expectAll, expectSome, expectNone, expectTrue,
-  expectOkThen, expectErrContains, Expectation
+  expectOkThen, expectErrContains, Expectation, expectTextContainsAll
 }
 import frontend.parser as P
 import frontend.parse_engine as E
@@ -37,7 +40,7 @@ import frontend.parse_result as R
 import support.util.{joinWith}
 import frontend.parse_diagnostic.{renderParseDiagnostic}
 import string as S
-import tools.fmt.{formatParsed}
+import tools.fmt.{formatParsed, formatSource}
 import tools.codemod.{codemodSource}
 
 -- The rendered message of a recoverable failure, or the marker text for any
@@ -773,3 +776,129 @@ main = match Some 1
   Some n if n > 0 => R { a = n }.a
   _ => 0
 """))
+
+-- ── or-patterns ──────────────────────────────────────────────────────────
+
+patShape : Pat -> String
+patShape (POr ps) = "(or \{joinWith " " (map patShape ps)})"
+patShape (PCon c []) = c
+patShape (PCon c ps) = "(\{c} \{joinWith " " (map patShape ps)})"
+patShape (PVar x _ _) = x
+patShape PWild = "_"
+patShape (PLit (LInt n)) = intToString n
+patShape (PTuple ps) = "(tuple \{joinWith " " (map patShape ps)})"
+patShape (PAs x _ _ p) = "\{x}@\{patShape p}"
+patShape (PCons h t) = "(\{patShape h} :: \{patShape t})"
+patShape _ = "?"
+
+armShape : Arm -> String
+armShape (Arm p gs _) = match gs
+  [] => patShape p
+  _ => "\{patShape p} if"
+
+declBody : String -> Result String Expr
+declBody src = match parseResult src
+  Ok [DFunDef _ _ _ e _ _] => Ok (stripLocE e)
+  Ok _ => Err "not one definition"
+  Err e => Err "error: \{parseErrorMessage e}"
+
+matchArmShapes : String -> List String
+matchArmShapes src = match declBody src
+  Ok (EMatch _ arms) => map armShape arms
+  Ok _ => ["not a match"]
+  Err m => [m]
+
+test "a match arm joins alternatives with a bare bar" =
+  expectEqual
+    ["(or 1 2)", "_"]
+    (matchArmShapes """x = match n
+  1 | 2 => 10
+  _ => 0
+""")
+
+test "alternatives nest in parentheses, tuples and as-patterns" =
+  expectEqual
+    [
+      "(Some (or Red Green))", "(tuple (or 1 2) _)", "q@(or 1 2)",
+      "(or (A x) (B x)) if"
+    ]
+    (matchArmShapes
+      """x = match n
+  Some (Red | Green) => 1
+  (1 | 2, _) => 2
+  q@(1 | 2) => 3
+  A x | B x if x > 0 => 4
+""")
+
+test "a nested or-pattern flattens into its parent" =
+  expectEqual
+    ["(or 1 2 3)"]
+    (matchArmShapes """x = match n
+  (1 | 2) | 3 => 1
+""")
+
+test "a bar after a parenthesized clause parameter stays a guard" =
+  expectEqual "ok" (parseStatus """f (1 | 2) = 5
+f n | n > 0 = 6
+f _ = 0
+""")
+
+parseStatus : String -> String
+parseStatus src = match parseResult src
+  Ok _ => "ok"
+  Err e => "error: \{parseErrorMessage e}"
+
+test "let, lambda, do-bind and guard-bind take parenthesized alternatives" = expectEach
+  [
+    ("let", expectEqual "ok" (parseStatus """x =
+  let (A y | B y) = t
+  y
+""")),
+    ("lambda", expectEqual "ok" (parseStatus "x = (A y | B y) => y\n")),
+    (
+      "do-bind",
+      expectEqual "ok" (parseStatus """x = do
+  (A y | B y) <- t
+  pure y
+"""),
+    ),
+    (
+      "guard-bind",
+      expectEqual
+        "ok"
+        (parseStatus """x = match t
+  _ if (A y | B y) <- u => y
+"""),
+    ),
+  ]
+
+test "a bar followed by a non-pattern keeps the if steer" = expectEach [
+  (
+    "guard",
+    expectTextContainsAll
+      ["guard uses `if`"]
+      (parseStatus """x = match n
+  m | m > 0 => 1
+"""),
+  ),
+  (
+    "trailing",
+    expectTextContainsAll
+      ["guard uses `if`"]
+      (parseStatus """x = match n
+  1 | => 1
+"""),
+  ),
+]
+
+test "formatting an or-pattern is stable and keeps parentheses where needed" =
+  let src =
+    """x = match n
+  Some (Red | Green) => 1
+  A x | B x => 2
+  (1 | 2, q@(3 | 4)) => 3
+"""
+  expectAll [
+    expectEqual src (formatSource src),
+    expectEqual (formatSource src) (formatSource (formatSource src)),
+  ]

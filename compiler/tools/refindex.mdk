@@ -259,6 +259,7 @@ patBinders fb (PCons a b) = patBinders fb a ++ patBinders fb b
 patBinders fb (PTuple ps) = flatMap (patBinders fb) ps
 patBinders fb (PList ps) = flatMap (patBinders fb) ps
 patBinders fb (PAs x l _ p) = (x, l) :: patBinders fb p
+patBinders fb (POr ps) = flatMap (patBinders fb) ps
 patBinders _ (PRng _ _ _) = []
 patBinders fb (PRec _ fields _) = flatMap (recFieldBinders fb) fields
 
@@ -573,6 +574,7 @@ walkExpr w scope curLoc (EVariantUpdate con e0 fs) =
 walkExpr w scope curLoc (EMapLit _ kvs) = walkKvs w scope curLoc kvs
 walkExpr w scope curLoc (ESetLit _ es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (EAsPat _ e0) = walkExpr w scope curLoc e0
+walkExpr w scope curLoc (EOrPat es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (ESection s) = walkSection w scope curLoc s
 walkExpr _ _ _ _ = ()
 

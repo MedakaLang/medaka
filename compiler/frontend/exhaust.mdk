@@ -378,6 +378,9 @@ desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng _ _ _) = PWild
+-- Typecheck refuses an or-pattern before exhaustiveness is meaningful; a wildcard
+-- keeps this total and warning-free until exhaustiveness reads alternatives.
+desugarPat _ (POr _) = PWild
 
 desugarRecPat : Oracle -> String -> List RecPatField -> Pat
 desugarRecPat oracle name fields = match oGetCtorFields oracle name

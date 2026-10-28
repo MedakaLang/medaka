@@ -381,6 +381,7 @@ collectVars (EDictAt x _) = [x]
 -- still carry them).  Missing one risks dropping a reachable binding.
 collectVars (EHeadAnnot e0 _) = collectVars e0
 collectVars (EAsPat _ e0) = collectVars e0
+collectVars (EOrPat es) = flatMap collectVars es
 collectVars (EMapLit _ kvs) = flatMap mapLitPairVars kvs
 collectVars (ESetLit _ es) = flatMap collectVars es
 collectVars (ELoc _ e) = collectVars e
@@ -475,6 +476,7 @@ localBoundExpr (ESection (SecRight _ e0)) = localBoundExpr e0
 localBoundExpr (ESection (SecLeft e0 _)) = localBoundExpr e0
 localBoundExpr (EHeadAnnot e0 _) = localBoundExpr e0
 localBoundExpr (EAsPat _ e0) = localBoundExpr e0
+localBoundExpr (EOrPat es) = flatMap localBoundExpr es
 localBoundExpr (EMapLit _ kvs) = flatMap mapLitPairBound kvs
 localBoundExpr (ESetLit _ es) = flatMap localBoundExpr es
 localBoundExpr (ELoc _ e) = localBoundExpr e

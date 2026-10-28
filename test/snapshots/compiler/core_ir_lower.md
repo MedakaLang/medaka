@@ -1,5 +1,5 @@
 # META
-source_lines=3904
+source_lines=3905
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -3903,6 +3903,7 @@ nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"
 nodeTag (ESetLit _ _) = "ESetLit"
 nodeTag (EAsPat _ _) = "EAsPat"
+nodeTag (EOrPat _) = "EOrPat"
 nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
@@ -5199,6 +5200,7 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))
 (DFunDef false "nodeTag" ((PCon "ESetLit" PWild PWild)) (ELit (LString "ESetLit")))
 (DFunDef false "nodeTag" ((PCon "EAsPat" PWild PWild)) (ELit (LString "EAsPat")))
+(DFunDef false "nodeTag" ((PCon "EOrPat" PWild)) (ELit (LString "EOrPat")))
 (DFunDef false "nodeTag" ((PCon "EMethodRef" PWild)) (ELit (LString "EMethodRef")))
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
@@ -6495,6 +6497,7 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))
 (DFunDef false "nodeTag" ((PCon "ESetLit" PWild PWild)) (ELit (LString "ESetLit")))
 (DFunDef false "nodeTag" ((PCon "EAsPat" PWild PWild)) (ELit (LString "EAsPat")))
+(DFunDef false "nodeTag" ((PCon "EOrPat" PWild)) (ELit (LString "EOrPat")))
 (DFunDef false "nodeTag" ((PCon "EMethodRef" PWild)) (ELit (LString "EMethodRef")))
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))

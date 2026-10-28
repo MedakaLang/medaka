@@ -2756,6 +2756,8 @@ rewriteArgScoped mctx rw bound (ESetLit n es) =
   ESetLit n (map (rewriteArgScoped mctx rw bound) es)
 rewriteArgScoped mctx rw bound (EAsPat x sub) =
   EAsPat x (rewriteArgScoped mctx rw bound sub)
+rewriteArgScoped mctx rw bound (EOrPat es) =
+  EOrPat (map (rewriteArgScoped mctx rw bound) es)
 -- Numeric literals carry a site id that is minted here, like operators.
 rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
   ENumLit n (mintedOr (mintLitSite mctx) ev) lx
