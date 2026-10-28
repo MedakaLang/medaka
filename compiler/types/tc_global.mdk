@@ -276,18 +276,15 @@ import support.util.{
   anyList,
   contains,
   dedup,
-  eqStr,
   filterList,
   isEmptyL,
   isNonEmptyL,
   isSome,
-  joinWith,
   listLen,
   lookupAssoc,
-  reverseL,
-  zipL,
 }
-import list.{drop, get, range}
+import list.{drop, get, range, reverse, zip}
+import string.{join}
 import types.effect_rows.{effrowNorm}
 import frontend.desugar.{exprSpanLoc}
 import frontend.resolve.{firstExprLoc}
@@ -486,7 +483,7 @@ registerMethodBodyGrants gctx iface mname heads inst (ScopeId sid) =
       let own =
         filterList
           (i => not (containsI i headIds))
-          (reverseL
+          (reverse
             (authOrderRow
               inst.mbiContractForce
               (authOrderIn inst.mbiExpected [])))
@@ -556,7 +553,7 @@ cohFreshTys mctx tys = snd (implHeadMonos mctx tys)
 -- variable.
 implHeadMonos : ModuleCtx -> List Ty -> (List (String, Mono), List Mono)
 implHeadMonos mctx tys =
-  fold (_ ty => checkImplHeadIndices mctx ty) () tys
+  each (checkImplHeadIndices mctx) tys
   let auths = dedupBinders (flatMap (authArgBindersIn mctx) tys) []
   let pats = flatMap (patternSlotNamesIn mctx) tys
   let tvMap =
@@ -587,7 +584,7 @@ checkImplHeadIndices mctx (TyApp a b) = match tyAppSpine (TyApp a b)
                 (implHeadIndexMsg n (ppTy (TyAuth ps loc)))
             _ => ())
           ()
-          (zipL kinds args)
+          (zip kinds args)
       _ => ()
   _ => ()
 checkImplHeadIndices mctx _ = ()
@@ -651,7 +648,7 @@ cohRowsOwnedBy cur env
 cohSubsumes : List Mono -> List Mono -> Bool
 cohSubsumes general specific
   | listLen general == listLen specific =
-    isSome (matchOneSided cohStep eqInt cohEqMono (zipL general specific) [])
+    isSome (matchOneSided cohStep (==) cohEqMono (zip general specific) [])
   | otherwise = False
 
 -- Mono-space step: normalize BOTH sides (chasing links), then classify the general
@@ -688,9 +685,6 @@ cohStep g0 s0 =
     TAuth _ => match s
       TAuth _ => MOk
       _ => MFail
-
-eqInt : Int -> Int -> Bool
-eqInt a b = a == b
 
 -- [a] strictly more specific than [b]: b subsumes a but not a subsumes b
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
@@ -826,30 +820,18 @@ cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
 -- way, and that is PRE-EXISTING — it did so as a `T-CONFLICTING-IMPL` error before
 -- F-3d, on these same two paths — so narrowing it here would be an unrelated
 -- behaviour change riding this one, and one that moves error goldens.
--- #1559 A-3.7: sweep-scoped, not mid-shape-scoped, and the difference is a
--- loud→silent regression this function used to be one commit away from.
--- The body was:
---     cohSoftInScope "" ""   = True
---     cohSoftInScope m1 m2   = cohIsCrossModule m1 m2
--- i.e. it asked "are both mids empty?" as a stand-in for "am I the per-module
--- sweep?".  That proxy held only because the per-module sweep's input came from
--- `cohImplsOf`, which had no module id to stamp and so stamped `""`.  Pointing that
--- sweep at `IE` gives every row a REAL id (`instRefMid`), so an intra-module pair
--- arrives as `(m, m)` with `m /= ""` — the first arm stops matching, `cohIsCrossModule
--- m m` is `False`, and EVERY intra-module `W-INCOMPARABLE-IMPLS` silently stops being
--- reported.  Diagnostic-only, so no value golden in this tree could see it.
+-- The answer depends on the sweep, not on the shape of the module ids: the
+-- per-module sweep's rows carry real module ids, so an intra-module pair arrives
+-- as `(m, m)` with `m /= ""`, and a blank-id test would drop every intra-module
+-- `W-INCOMPARABLE-IMPLS` (a diagnostic-only loss no value golden can see).
 --
 -- The sweep tag says outright what the mid shapes were being read to infer:
 --   * `CohSweepOwn` — the per-module sweep.  Its input is ONE module's own rows, so
 --     every pair it sees is intra-module BY CONSTRUCTION and it owns all of them.
---     Answering `True` unconditionally is exactly what the old `"" ""` arm did for
---     the only input that sweep ever had.
+--     It answers `True` unconditionally.
 --   * `CohSweepGlobal` — the whole-graph sweep.  It owns only the pair that SPANS two
 --     modules; the intra-module ones already belong to the sweep above.  The `"" ""`
---     arm is retained HERE (and only here) because it is behaviour-preserving for a
---     degenerate global input in which both ids are blank — a shape this function
---     answered `True` for before A-3.7, and one this bite deliberately does not
---     re-adjudicate.
+--     arm answers `True` for a degenerate global input in which both ids are blank.
 cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftInScope CohSweepOwn _ _ = True
 cohSoftInScope CohSweepGlobal "" "" = True
@@ -930,9 +912,9 @@ cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
 -- the structured `--json` form.  ERROR-QUALITY: it states the rule that was violated
 -- in the user's own vocabulary (these two heads, this interface), says the acceptance
 -- consequence rather than asserting the program is wrong — because under (c) it may
--- not be — and puts the SPEC's remedy first.  The old error's advice ("make them
--- disjoint, or wrap one type in a newtype") is #614's S2: it is the wrong fix here
--- and, as that issue's own control shows, adding the ranking impl changed nothing.
+-- not be — and puts the SPEC's remedy first.  It does not advise making the heads
+-- disjoint or wrapping one type in a newtype: that is the wrong fix here (#614), and
+-- adding the ranking impl changes nothing.
 -- A pair with the prelude names the prelude's impl as such rather than by module id,
 -- as `cohPreludeOverlapMsg` does: the program's own module id differs between verbs.
 cohIncomparableMsg : String ->
@@ -995,22 +977,15 @@ pushCoherenceWarning mctx loc msg =
 -- [cur] is the reading module's ordinal.  Its own rows are paired with each other and
 -- with the prelude's rows (`cohPreludeRows`), never prelude with prelude.
 --
--- POPULATION EQUALITY, derived rather than assumed (it is the one thing that could
--- silently change what gets checked).  The Module caller used to pass `prog`, the
--- module's own desugared decls as `foldModules` holds them.  `ieRowsOwnedBy ordHere`
--- returns the rows `implRowsOf` built from `demDecls` at that ordinal.  Those are the
--- same list VALUE: `driveGraphK` stamps once (`stampGraphDecls`) and hands
--- the SAME `modules` to `graphPreamble` → `buildDeclEnvs` and to `foldModules`,
--- and `foldModules` passes each `(mid, prog)` pair's `prog` to the worker verbatim —
--- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
--- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
--- everything else) and both are a `flatMap` in decl order.
+-- The rows are exactly the module's own desugared decls' impls: `ieRowsOwnedBy
+-- ordHere` returns the rows `implRowsOf` built from `demDecls` at that ordinal,
+-- in decl order, with no transform between the driver's stamp and this scan.
 export
 checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
 checkCoherence mctx env cur =
   match (cohScan
     CohSweepOwn
-    (reverseL (map (cohImplOfRow mctx) (cohRowsOwnedBy cur env)))
+    (reverse (map (cohImplOfRow mctx) (cohRowsOwnedBy cur env)))
     (map (cohImplOfRow mctx) (cohPreludeRows env)))
     CohScan hard soft =>
       cohPushHard mctx hard
@@ -1040,7 +1015,7 @@ export
 checkSuperImpls : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls mctx userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
-  foreachUnit (checkImplSuperContexts mctx userDecls ce cur rows) userDecls
+  each (checkImplSuperContexts mctx userDecls ce cur rows) userDecls
 
 -- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
 -- one for each direct super `D` of `C` at the same arguments, built by the instance
@@ -1080,8 +1055,8 @@ checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOri
           ++ flatMap
             (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
             declared
-      let subject = "impl \{iface} \{joinWith " " (map ppTyAtom tys)}"
-      let subst = zipL (ceRowTyparams r) tys
+      let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+      let subst = zip (ceRowTyparams r) tys
       let argsOf =
         sup =>
           mapAll
@@ -1182,7 +1157,7 @@ reportMissingSuperImpl : ModuleCtx ->
   Unit
 reportMissingSuperImpl mctx subject roots loc derived sup supArgs =
   let named = Ref (map (p => (snd p, fst p)) roots)
-  let goal = "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let goal = "\{sup.irName} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
   let missing = "requires the superinterface `\{goal}`, which no impl covers"
   pushTypeErrorOnceAt mctx "T-MISSING-SUPER-IMPL" loc (if not derived then
     "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
@@ -1237,9 +1212,9 @@ reportSuperContextLeaf : ModuleCtx ->
 reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) =
   let ids = flatMap monoUnboundIds args
   let named = Ref (map (p => (snd p, fst p)) roots)
-  let argsText = joinWith " " (ppEach named (Ref 0) 3 args)
+  let argsText = join " " (ppEach named (Ref 0) 3 args)
   let superGoal =
-    "\{qualifiedIfaceLabel sup} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+    "\{qualifiedIfaceLabel sup} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
   let pred = "\{qualifiedIfaceLabel iface} \{argsText}"
   let predBare = "\{iface.irName} \{argsText}"
   if isEmptyL ids then
@@ -1255,16 +1230,9 @@ reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) 
       loc
       (superContextUndeclaredMsg subject derived superGoal pred predBare)
 
-export
-foreachUnit : (a -> Unit) -> List a -> Unit
-foreachUnit _ [] = ()
-foreachUnit f (x :: xs) =
-  f x
-  foreachUnit f xs
-
 -- ── P0-17: impl-completeness check ─────────────────────────────────────────
--- Beta finding P0-17 (qa-beta-2026-07-07): an `impl Iface Ty…` that defines only
--- SOME of the interface's methods used to `check` clean, then PANIC at runtime
+-- An `impl Iface Ty…` that defines only SOME of the interface's methods would
+-- `check` clean, then PANIC at runtime
 -- (`E-PANIC: unbound identifier: <method>`) when a missing method is dispatched —
 -- a run≠check hole.  For each impl, verify every REQUIRED interface method (one
 -- declared WITHOUT a default body) is defined by the impl body; each missing one
@@ -1287,16 +1255,10 @@ foreachUnit f (x :: xs) =
 -- interface (not in scope) → skip (a distinct error is reported elsewhere), as
 -- `checkImplSuperContexts` skips one.
 --
--- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
--- two — `checkImplCompleteness`, whose retired arm looked the interface up by a bare
--- first-match scan over the decl list, and `checkImplCompletenessMap` below.  The
--- retired arm's deletion was the unit's only genuine re-key (owner ruling on #1557 owed
--- 1, 2026-08-12: re-key, accept the acceptance delta, no bare-spelling compatibility
--- leg on CE).  Its one observable consequence: on a flat program where a USER
--- interface shadows a prelude one by spelling, the bare scan walked
--- `coreProg ++ userProg` head-first and returned the PRELUDE's required set for a
--- user impl; under identity the impl's own `implOrigin` decides, which is the
--- correct answer.
+-- One checker serves both driver modes.  It looks the interface up by the impl's own
+-- `implOrigin`, never by a bare first-match scan over the decl list, so where a USER
+-- interface shadows a prelude one by spelling, a user impl is checked against the
+-- user interface's required set.
 pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
 pushIncompleteImpl mctx (loc, msg) =
   pushTypeErrorOnceAt mctx "T-INCOMPLETE-IMPL" loc msg
@@ -1313,13 +1275,10 @@ firstImplMethodLoc [] = None
 firstImplMethodLoc ((ImplMethod _ _ body) :: _) =
   orElseLoc (exprLoc body) (appArgLoc body)
 
--- The `Map` suffix is retained because it is cited from
--- compiler/frontend/resolve.mdk, compiler/TYPECHECK-TARGET-ARCHITECTURE.md, and
--- other comments in this file (see TYPECHECK-TARGET-ARCHITECTURE.md § "9.6 The
--- subsumption enumeration — derived by SHAPE, not by prefix", the
--- `implCompletenessMsgsOf` row, for the #1258 bug and the #1111/#1557 migration
--- history). Since A-3.5a there is no non-`Map` sibling; this is the ONE
--- impl-completeness checker, for both driver modes.
+-- The `Map` suffix is cited from compiler/frontend/resolve.mdk,
+-- compiler/TYPECHECK-TARGET-ARCHITECTURE.md (§ "9.6 The subsumption enumeration —
+-- derived by SHAPE, not by prefix", the `implCompletenessMsgsOf` row) and other
+-- comments in this file; this is the one impl-completeness checker.
 --
 -- Required-ness is prePass-INVARIANT: `requiredMethodNames` reads only the presence
 -- of `IfaceMethod`'s third position, and the prePass rewrite touches only a
@@ -1328,7 +1287,7 @@ firstImplMethodLoc ((ImplMethod _ _ body) :: _) =
 export
 checkImplCompletenessMap : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
 checkImplCompletenessMap mctx ce cur iterDecls =
-  foreachUnit
+  each
     (pushIncompleteImpl mctx)
     (flatMap (implCompletenessMsgsOfMap ce cur) iterDecls)
 
@@ -1357,13 +1316,12 @@ implCompletenessMsgsOfMap _ _ _ = []
 -- not once per importer.  See `ceRowsVisibleAt`/`ceRowsOwnedBy` for why the two
 -- populations are kept apart.
 --
--- Reading `CE` rather than re-destructuring `DInterface` also drops the
--- `DAttrib` unwrapping this check used to open with: `classEnvDeclFact` already
--- peels it, so an attributed interface reaches `CE` as a row like any other.
+-- `classEnvDeclFact` peels `DAttrib`, so an attributed interface reaches `CE` as a
+-- row like any other.
 export
 checkPhantomMethods : ModuleCtx -> ClassEnv -> Int -> Unit
 checkPhantomMethods mctx ce cur =
-  foreachUnit
+  each
     ((loc, msg) => pushTypeError (mctxAtIfSome loc mctx) "T-PHANTOM-METHOD" msg)
     (flatMap phantomMethodMsgs (ceRowsOwnedBy cur ce))
 
@@ -1391,7 +1349,7 @@ phantomMethodMsg ifaceName typarams (mname, mty, _) =
     [
       (
         firstTyLoc mty,
-        "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{joinWith ", " (map (t => "'" ++ backticked t ++ "'") typarams)}, so it cannot be dispatched",
+        "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{join ", " (map (t => "'" ++ backticked t ++ "'") typarams)}, so it cannot be dispatched",
       ),
     ]
 
@@ -1438,7 +1396,7 @@ implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _ _) =
 -- sides.  Type constructors compare by identity (`tyStep`), as at the use site.
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadCovers pats goal =
-  isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
+  isSome (matchOneSided superHeadStep (==) tyStructEq (zip pats goal) [])
 
 superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superHeadStep pat t = tyStep pat (stripTyWrap t)
@@ -1483,20 +1441,20 @@ superHeadStep pat t = tyStep pat (stripTyWrap t)
 -- per-module decl pairs.
 --
 -- Order is the thing this bite could move, because `cohScanInner` keeps the FIRST pair
--- per class over a `reverseL`-ed list and the wording names `e1` first.  The two orders
+-- per class over a `reverse`-ed list and the wording names `e1` first.  The two orders
 -- agree, term by term: the old list was `flatMap (cohImplsOfMid mid) prog` over the
 -- driver's `modules` in dependency-first order; `ieRows` is built by `buildImplEnvGo`
 -- over the same modules in ORDINAL order (which is that same order, offset by the
 -- prelude at 0) and within a module by `implDeclFacts = flatMap implDeclFact prog`, in
 -- decl order.  The one difference is the prelude, which `cohRowsOf` removes
--- BEFORE the `reverseL` below — so the filtered list's head is the first user module,
+-- BEFORE the `reverse` below — so the filtered list's head is the first user module,
 -- which is exactly what the old list's head was.
 export
 globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
 globalCoherenceConflict mctx env =
   match (cohScan
     CohSweepGlobal
-    (reverseL (map (cohImplOfRow mctx) (cohRowsOf env)))
+    (reverse (map (cohImplOfRow mctx) (cohRowsOf env)))
     [])
     CohScan hard soft => (map fst hard, map fst soft)
 
@@ -1527,9 +1485,6 @@ implHeadParametric _ = False
 -- for the emit/dict path); the unconstrained branch only type-checks — safe on
 -- the plain-check path (activeDictVars mutation is harmless; reset by `freshModuleCtx`).
 export
-inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
-inferDefaultBodiesIfEnabled env prog = inferDefaultBodies env prog
-
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodies env [] = ()
 inferDefaultBodies env (d :: rest) =
@@ -1672,7 +1627,7 @@ followRequireLevel : ModuleCtx ->
   List (List (UObligation, ReqWalk)) ->
   (List UObligation, List (UObligation, ReqWalk))
 followRequireLevel mctx _ _ [] kept derived =
-  (reverseL kept, flatMap identity (reverseL derived))
+  (reverse kept, flatMap identity (reverse derived))
 followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
   if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
     followRequireLevel mctx rigidIds liveIds rest kept derived
@@ -1751,14 +1706,11 @@ implDeclLoc _ = None
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
 inferOneImpl env rpNames ce cur (DAttrib _ d) =
   inferOneImpl env rpNames ce cur d
--- #1647 (S1): [implOrigin] is bound here, NOT dropped by the `...`.  The impl-body
--- signature lookup below used to receive the interface's
--- bare SPELLING, so two modules each declaring an interface spelled `Speak` sent
--- every impl body of either one to whichever `DInterface` the joint decl list
--- happened to list FIRST — attributing module B's body to module A's declared
--- method type, per import order.  DICT-SEMANTICS §8 I4: an interface is a
--- (module, name) pair, so the lookup takes the IDENTITY the `impl` head already
--- carries.  Same construction as `implDeclFact`, from the same two fields.
+-- [implOrigin] is bound here, not dropped by the `...`: the impl-body signature
+-- lookup takes the interface's IDENTITY, not its bare spelling, so two modules each
+-- declaring an interface spelled `Speak` cannot attribute one module's impl body
+-- to the other's declared method type.  DICT-SEMANTICS §8 I4: an interface is a
+-- (module, name) pair.  Same construction as `implDeclFact`, from the same two fields.
 inferOneImpl env rpNames ce cur (DImpl { iface, tys, reqs, methods, implOrigin, ... }) =
   let iref = IfaceRef { irName = iface, irOrigin = implOrigin }
   match reqs
@@ -2234,7 +2186,7 @@ instantiateMethodBody : ModuleCtx ->
 -- expectedMethodType, which hides it) so the method's OWN method-level constraint
 -- vars (`Thenable m => …`) can be registered after the body.
 instantiateMethodBody mctx (ImplBody site) ifaceParams mty gscope =
-  let baseMap = zipL ifaceParams site.ibHeadMonos
+  let baseMap = zip ifaceParams site.ibHeadMonos
   -- #822: subtract rowArgNames too — the same split sigToSchemeTvs and
   -- astTypeFreshTbl already make.  A name sitting in a KRow type-app slot (`f e a`
   -- under a graded interface) is an EFFECT variable: it belongs to [effMap] below,
@@ -2301,7 +2253,7 @@ instantiateMethodBody mctx DefaultBody typarams mty dscope =
     mbiContractForce = descriptor.mtiForce,
     mbiCheckedForce = _ => effrowNorm descriptor.mtiForce,
     mbiEffVars =
-      zipL
+      zip
         (dedup (effTailNames mty ++ rowArgNamesIn mctx dscope mty))
         (map snd descriptor.mtiSubstitution.misEffectSubst),
     mbiSurvivors = defaultSurvivorMap (snd st) subst,
@@ -2767,9 +2719,7 @@ checkImplHeadRigidity mctx subject iface site before loc =
 narrowedImplHead : String -> ImplBodySite -> String
 narrowedImplHead iface site =
   let named = map (p => (snd p, fst p)) (implHeadTypeVarRoots site.ibImplTvMap)
-  joinWith
-    " "
-    ("impl" :: iface :: ppEach (Ref named) (Ref 0) 3 site.ibHeadMonos)
+  join " " ("impl" :: iface :: ppEach (Ref named) (Ref 0) 3 site.ibHeadMonos)
 
 -- The constraint axis of W3-inst: every predicate this body leaves on head variables
 -- must be given by the impl.  Each goal mentioning a head variable is reduced through
@@ -2888,7 +2838,7 @@ reportImplHeadResidual mctx subject roots loc (iface, args) =
   let headIds = map snd roots
   let named = map (p => (snd p, fst p)) roots
   let rendered = ppEach (Ref named) (Ref 0) 3 args
-  let pred = "\{iface.irName} \{joinWith " " rendered}"
+  let pred = "\{iface.irName} \{join " " rendered}"
   if isEmptyL ids || not (anyList (i => containsI i headIds) ids) then
     ()
   else if allList (i => containsI i headIds) ids then
@@ -3047,5 +2997,5 @@ numDictObls gctx (app :: rest) =
           ]
         else
           [])
-      (zipL (map (i => i.irName) app.pdaIfaces) app.pdaMonos)
+      (zip (map (i => i.irName) app.pdaIfaces) app.pdaMonos)
     ++ numDictObls gctx rest

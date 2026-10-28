@@ -756,12 +756,11 @@ import types.tc_global.{
   checkImplCompletenessMap,
   checkPhantomMethods,
   checkSuperImpls,
-  foreachUnit,
   globalCoherenceConflict,
   implDeclLoc,
   implHeadGround,
   implHeadParametric,
-  inferDefaultBodiesIfEnabled,
+  inferDefaultBodies,
   inferImplBodies,
   nestedRequireGoals,
   numCallObls,
@@ -2288,9 +2287,7 @@ checkInterfaceCycles mctx prog ce cur =
   -- cycle messages are driven by `path`/the root list.  A-3.5c keeps the shape and only
   -- changes the KEY from a bare name to `regKeyRender`.
   let done = Ref omEmpty
-  foreachUnit
-    (checkOneIfaceCycle mctx prog ce cur done)
-    (ceRowsVisibleAt cur ce)
+  each (checkOneIfaceCycle mctx prog ce cur done) (ceRowsVisibleAt cur ce)
 
 -- #152: the whole-program final-checks tail, shared by all five entry points
 -- (the `checkOne*` projections and `checkModuleFullDiags`). [cohDecls] feeds coherence and
@@ -2391,7 +2388,7 @@ checkOneIfaceCycle : ModuleCtx ->
   Unit
 checkOneIfaceCycle mctx prog ce cur done row =
   if not (omHasKey (ceRowDoneKey row) !done) then
-    foreachUnit
+    each
       (pushTypeError
         (mctxAt
           (cycleReportLoc mctx.mcGraph.declEnvsRef.value.deReach prog cur row)
@@ -3060,7 +3057,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       (fst classEnvHere)
       (snd classEnvHere)
       progT
-  let _ = inferDefaultBodiesIfEnabled tailEnv progT
+  let _ = inferDefaultBodies tailEnv progT
   let _ = inferPropBodies tailEnv progT
   let _ = inferTestBodies tailEnv progT
   ()
@@ -4841,7 +4838,7 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
 -- it records stay in pendingArgStamps/pendingSites for elabModuleStamp to resolve.
 
 -- C8(b): also infer THIS module's interface DEFAULT bodies (gated identically to
--- the single-file path's inferDefaultBodiesIfEnabled) so a default body's type
+-- the single-file path's inferDefaultBodies) so a default body's type
 -- error is caught on every path.
 
 -- Phase 4.55: infer this

@@ -3,12 +3,12 @@
 -- that collects the diagnostics.  `checkCoherence` and `globalCoherenceConflict` (overlapping
 -- impl heads), `checkImplCompletenessMap`, `checkPhantomMethods`, `checkSuperImpls`,
 -- `checkGradedImplHeads`, the impl-head projections and `implDeclLoc`, the bodies of interface
--- defaults and of impls without a requirement (`inferDefaultBodiesIfEnabled`,
+-- defaults and of impls without a requirement (`inferDefaultBodies`,
 -- `inferImplBodies`), and the Num-obligation synthesis of the call window (`numCallObls`,
 -- `calleeNumObls`).  Not driven here: `nestedRequireGoals` (its goals come from occurrences the
 -- mark pass mints), the bodies of an impl with a requirement (they read marked sites, and
 -- inference stops on an unminted one), the dictionary-application half of `calleeNumObls`, and
--- `foreachUnit`'s callers beyond the checks above.  What a whole check rejects is observed
+-- the remaining callers of each check.  What a whole check rejects is observed
 -- through `types.typecheck` in `typecheck_test`.
 
 import test.{expectAll, expectEqual}
@@ -25,7 +25,7 @@ import types.tc_global.{
   implHeadParametric,
   calleeNumObls,
   numCallObls,
-  inferDefaultBodiesIfEnabled,
+  inferDefaultBodies,
   inferImplBodies,
 }
 import list.{range, take, zip}
@@ -472,7 +472,7 @@ test "an impl head with no recorded kinds is not judged" =
 test "a saturated tuple heading an impl of a graded interface is rejected, there being no row to give it" =
   expectEqual ["T-IMPL-KIND-MISMATCH"] (codesOver (gradedWith []) gradedTuple)
 
--- ── inferDefaultBodiesIfEnabled and inferImplBodies ───────────────────────
+-- ── inferDefaultBodies and inferImplBodies ───────────────────────
 
 mismatchedDefault : String
 mismatchedDefault = """
@@ -494,7 +494,7 @@ defaultCodes : String -> List String
 defaultCodes src =
   let m = scopedWith src
   let ds = moduleDecls src
-  inferDefaultBodiesIfEnabled (envWithData m src) ds
+  inferDefaultBodies (envWithData m src) ds
   codesOf m
 
 -- Each impl of [ds] with the span of its interface name, as the impl-body driver takes them.

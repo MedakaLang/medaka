@@ -615,11 +615,6 @@ class = "history"
 count = 1
 
 [[entry]]
-file = "compiler/types/tc_elab.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
 file = "compiler/types/tc_env.mdk"
 class = "history"
 count = 11
@@ -638,11 +633,6 @@ count = 3
 file = "compiler/types/tc_env.mdk"
 class = "draft"
 count = 3
-
-[[entry]]
-file = "compiler/types/tc_global.mdk"
-class = "history"
-count = 7
 
 [[entry]]
 file = "compiler/types/tc_scope.mdk"

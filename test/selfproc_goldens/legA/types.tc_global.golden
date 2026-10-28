@@ -55,11 +55,9 @@ constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
 declNameLocs : String -> Decl -> List Loc
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
-eqInt : Int -> Int -> Bool
 firstImplMethodLoc : List ImplMethod -> Option Loc
 followRequireGoal : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 followRequireLevel : ModuleCtx -> Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation -> List (List (UObligation, ReqWalk)) -> (List UObligation, List (UObligation, ReqWalk))
-foreachUnit : (a -> Unit) -> List a -> Unit
 gatesBodyCascade : MethodBodyKind -> Bool
 globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
 headRemainingKinds : ModuleCtx -> TyConOrigin -> String -> Int -> Option (List Kind)
@@ -77,7 +75,6 @@ implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implRequiresRoot : ModuleCtx -> String -> Int -> List (String, Mono) -> List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
 inferDefaultBodies : TcEnv -> List Decl -> Unit
-inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
 inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
 inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit

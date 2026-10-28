@@ -1,5 +1,5 @@
 # META
-source_lines=2141
+source_lines=2137
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -172,10 +172,9 @@ import support.util.{
   isNonEmptyL,
   isSome,
   listLen,
-  reverseL,
   splitOnChar,
 }
-import list.{drop, elemIndex, head, range, replicate, take}
+import list.{drop, elemIndex, head, range, replicate, reverse, take}
 import types.runtime_grants.{fileGrantExterns}
 import types.chain_key.{isConstrainedTy}
 import frontend.desugar.{mapChildren, mapProg}
@@ -1079,7 +1078,7 @@ saturateGrants st head arity grants args =
           (snd b)
           body)
       (ELam (map (x => PVar x (Loc "" 0 0 0 0) noBinderId) missing) call)
-      (reverseL bound)
+      (reverse bound)
 
 freshGrantName : GrantState -> Unit -> String
 freshGrantName st _ =
@@ -1200,7 +1199,7 @@ grantVarParams : GraphCtx ->
   List (Ref Authvar) ->
   List String ->
   Option (List String)
-grantVarParams gctx _ [] acc = Some (reverseL acc)
+grantVarParams gctx _ [] acc = Some (reverse acc)
 grantVarParams gctx chain (v :: rest) acc =
   match grantParamFor gctx chain (authvarId v)
     Some p => grantVarParams gctx chain rest (p :: acc)
@@ -2086,15 +2085,12 @@ methodMarkCtx gctx ms _ prog
     -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
     -- different predicates at the two sites non-conformant whichever way they differ.
     --
-    -- The invariant is about inputs to dispatch, not about sets or selectors, and
-    -- counting the wrong thing shipped an S0.  An earlier revision of this comment said
-    -- "there is exactly ONE predicate here … the two sets are EQUAL … the gap is
-    -- unrepresentable" — and was false four lines above itself, because `rpNames` was
-    -- concatenated RAW into the first argument while the other three lists were filtered.
-    -- `rewriteArgScoped` dispatches on `rp`, `an` AND `sm`, so dispatch-eligibility was
-    -- `rpNames ∪ filtered(…)` — a strict superset of shadow-hood, which is S1-NS's own
-    -- "Newly NON-CONFORMANT (1)".  Measured: a return-position method of a non-nameable
-    -- interface gave `run` 777 against a built binary of 42, both exit 0, no diagnostic.
+    -- The invariant is about inputs to dispatch, not about sets or selectors.
+    -- `rewriteArgScoped` dispatches on `rp`, `an` AND `sm`, so every one of those
+    -- inputs must be filtered, `rpNames` included: an unfiltered `rpNames` makes
+    -- dispatch-eligibility a strict superset of shadow-hood, and a return-position
+    -- method of a non-nameable interface then runs with no diagnostic (`run` gave 777
+    -- against a built binary of 42, both exit 0).
     --
     -- THE ENUMERATION, so the next reader checks the SET rather than trusting a sentence.
     -- Every input `rewriteArgScoped` can turn into an `EMethodAt` is filtered here:
@@ -2170,8 +2166,8 @@ methodMarkCtx gctx ms _ prog
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "take" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapProg" false))))
@@ -2332,7 +2328,7 @@ methodMarkCtx gctx ms _ prog
 (DTypeSig false "applyExprs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
 (DFunDef false "applyExprs" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "EApp") (EVar "acc")) (EVar "a")))) (EVar "f")) (EVar "args")))
 (DTypeSig false "saturateGrants" (TyFun (TyCon "GrantState") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr")))))))
-(DFunDef false "saturateGrants" ((PVar "st") (PVar "head") (PVar "arity") (PVar "grants") (PVar "args")) (EBlock (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EVar "arity")) (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EApp (EApp (EVar "take") (EVar "arity")) (EVar "args")) (EVar "grants")))) (EApp (EApp (EVar "drop") (EVar "arity")) (EVar "args"))) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (ETuple (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)))) (EApp (EApp (EVar "range") (EVar "given")) (EVar "arity")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "EVar") (EApp (EVar "fst") (EVar "b"))))) (EVar "bound")) (EApp (EApp (EVar "map") (EVar "EVar")) (EVar "missing"))) (EVar "grants")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "body") (PVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "fst") (EVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EVar "snd") (EVar "b"))) (EVar "body")))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "call"))) (EApp (EVar "reverseL") (EVar "bound")))))))))
+(DFunDef false "saturateGrants" ((PVar "st") (PVar "head") (PVar "arity") (PVar "grants") (PVar "args")) (EBlock (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EVar "arity")) (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EApp (EApp (EVar "take") (EVar "arity")) (EVar "args")) (EVar "grants")))) (EApp (EApp (EVar "drop") (EVar "arity")) (EVar "args"))) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (ETuple (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)))) (EApp (EApp (EVar "range") (EVar "given")) (EVar "arity")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "EVar") (EApp (EVar "fst") (EVar "b"))))) (EVar "bound")) (EApp (EApp (EVar "map") (EVar "EVar")) (EVar "missing"))) (EVar "grants")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "body") (PVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "fst") (EVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EVar "snd") (EVar "b"))) (EVar "body")))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "call"))) (EApp (EVar "reverse") (EVar "bound")))))))))
 (DTypeSig false "freshGrantName" (TyFun (TyCon "GrantState") (TyFun (TyCon "Unit") (TyCon "String"))))
 (DFunDef false "freshGrantName" ((PVar "st") PWild) (EBlock (DoLet false false (PVar "k") (EFieldAccess (EFieldAccess (EVar "st") "gsFresh") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsFresh")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "$grant_arg_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))))
 (DTypeSig false "fileBoundValue" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
@@ -2346,7 +2342,7 @@ methodMarkCtx gctx ms _ prog
 (DTypeSig false "grantTerm" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Authority") (TyCon "Expr")))))
 (DFunDef false "grantTerm" ((PVar "gctx") (PVar "chain") (PVar "a")) (EMatch (EApp (EVar "authGrantShape") (EVar "a")) (arm (PCon "GrantTop") () (EApp (EVar "EListLit") (EListLit))) (arm (PCon "GrantBottom") () (EVar "bottomGrant")) (arm (PCon "GrantParts" (PVar "elems") (PVar "vars")) () (EMatch (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "vars")) (EListLit)) (arm (PCon "None") () (EApp (EVar "EListLit") (EListLit))) (arm (PCon "Some" (PVar "params")) () (EBlock (DoLet false false (PVar "parts") (EBinOp "++" (EIf (EApp (EVar "isEmptyL") (EVar "elems")) (EListLit) (EListLit (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EApp (EVar "ELit") (EApp (EVar "LString") (EVar "s"))))) (EVar "elems"))))) (EApp (EApp (EVar "map") (EVar "EVar")) (EApp (EVar "dedup") (EVar "params"))))) (DoExpr (EMatch (EVar "parts") (arm (PList) () (EVar "bottomGrant")) (arm (PList (PVar "p")) () (EVar "p")) (arm (PCons (PVar "p") (PVar "rest")) () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "param")) (EApp (EApp (EVar "topAbsorbs") (EVar "param")) (EVar "acc")))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "q")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "++"))) (EVar "acc")) (EVar "q")) (EVar "unminted")))) (EApp (EVar "EListLit") (EListLit))) (EBinOp "::" (EVar "p") (EVar "rest")))) (EApp (EVar "dedup") (EVar "params"))))))))))))
 (DTypeSig false "grantVarParams" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "grantVarParams" ((PVar "gctx") PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "grantVarParams" ((PVar "gctx") PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverse") (EVar "acc"))))
 (DFunDef false "grantVarParams" ((PVar "gctx") (PVar "chain") (PCons (PVar "v") (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "grantParamFor") (EVar "gctx")) (EVar "chain")) (EApp (EVar "authvarId") (EVar "v"))) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "acc")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "isSourceless") (EVar "gctx")) (EApp (EVar "authvarId") (EVar "v"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "rest")) (EVar "acc"))))))
 (DTypeSig false "topAbsorbs" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "topAbsorbs" ((PVar "param") (PVar "join")) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "param"))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EApp (EVar "PList") (EListLit))) (EListLit)) (EApp (EVar "EListLit") (EListLit))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "join")))))
@@ -2535,8 +2531,8 @@ methodMarkCtx gctx ms _ prog
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "take" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapProg" false))))
@@ -2697,7 +2693,7 @@ methodMarkCtx gctx ms _ prog
 (DTypeSig false "applyExprs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
 (DFunDef false "applyExprs" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "EApp") (EVar "acc")) (EVar "a")))) (EVar "f")) (EVar "args")))
 (DTypeSig false "saturateGrants" (TyFun (TyCon "GrantState") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr")))))))
-(DFunDef false "saturateGrants" ((PVar "st") (PVar "head") (PVar "arity") (PVar "grants") (PVar "args")) (EBlock (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EVar "arity")) (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EApp (EApp (EVar "take") (EVar "arity")) (EVar "args")) (EVar "grants")))) (EApp (EApp (EVar "drop") (EVar "arity")) (EVar "args"))) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (ETuple (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "missing") (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)))) (EApp (EApp (EVar "range") (EVar "given")) (EVar "arity")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "EVar") (EApp (EVar "fst") (EVar "b"))))) (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "EVar")) (EVar "missing"))) (EVar "grants")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "body") (PVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "fst") (EVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EVar "snd") (EVar "b"))) (EVar "body")))) (EApp (EApp (EVar "ELam") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "call"))) (EApp (EVar "reverseL") (EVar "bound")))))))))
+(DFunDef false "saturateGrants" ((PVar "st") (PVar "head") (PVar "arity") (PVar "grants") (PVar "args")) (EBlock (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EVar "arity")) (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EApp (EApp (EVar "take") (EVar "arity")) (EVar "args")) (EVar "grants")))) (EApp (EApp (EVar "drop") (EVar "arity")) (EVar "args"))) (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (ETuple (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "missing") (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EVar "st")) (ELit LUnit)))) (EApp (EApp (EVar "range") (EVar "given")) (EVar "arity")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "applyExprs") (EVar "head")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "EVar") (EApp (EVar "fst") (EVar "b"))))) (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "EVar")) (EVar "missing"))) (EVar "grants")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "body") (PVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "fst") (EVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EVar "snd") (EVar "b"))) (EVar "body")))) (EApp (EApp (EVar "ELam") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "call"))) (EApp (EVar "reverse") (EVar "bound")))))))))
 (DTypeSig false "freshGrantName" (TyFun (TyCon "GrantState") (TyFun (TyCon "Unit") (TyCon "String"))))
 (DFunDef false "freshGrantName" ((PVar "st") PWild) (EBlock (DoLet false false (PVar "k") (EFieldAccess (EFieldAccess (EVar "st") "gsFresh") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsFresh")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "$grant_arg_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))))
 (DTypeSig false "fileBoundValue" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
@@ -2711,7 +2707,7 @@ methodMarkCtx gctx ms _ prog
 (DTypeSig false "grantTerm" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Authority") (TyCon "Expr")))))
 (DFunDef false "grantTerm" ((PVar "gctx") (PVar "chain") (PVar "a")) (EMatch (EApp (EVar "authGrantShape") (EVar "a")) (arm (PCon "GrantTop") () (EApp (EVar "EListLit") (EListLit))) (arm (PCon "GrantBottom") () (EVar "bottomGrant")) (arm (PCon "GrantParts" (PVar "elems") (PVar "vars")) () (EMatch (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "vars")) (EListLit)) (arm (PCon "None") () (EApp (EVar "EListLit") (EListLit))) (arm (PCon "Some" (PVar "params")) () (EBlock (DoLet false false (PVar "parts") (EBinOp "++" (EIf (EApp (EVar "isEmptyL") (EVar "elems")) (EListLit) (EListLit (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EApp (EVar "ELit") (EApp (EVar "LString") (EVar "s"))))) (EVar "elems"))))) (EApp (EApp (EMethodRef "map") (EVar "EVar")) (EApp (EVar "dedup") (EVar "params"))))) (DoExpr (EMatch (EVar "parts") (arm (PList) () (EVar "bottomGrant")) (arm (PList (PVar "p")) () (EVar "p")) (arm (PCons (PVar "p") (PVar "rest")) () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "param")) (EApp (EApp (EVar "topAbsorbs") (EVar "param")) (EVar "acc")))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "q")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "++"))) (EVar "acc")) (EVar "q")) (EVar "unminted")))) (EApp (EVar "EListLit") (EListLit))) (EBinOp "::" (EVar "p") (EVar "rest")))) (EApp (EVar "dedup") (EVar "params"))))))))))))
 (DTypeSig false "grantVarParams" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "grantVarParams" ((PVar "gctx") PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "grantVarParams" ((PVar "gctx") PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverse") (EVar "acc"))))
 (DFunDef false "grantVarParams" ((PVar "gctx") (PVar "chain") (PCons (PVar "v") (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "grantParamFor") (EVar "gctx")) (EVar "chain")) (EApp (EVar "authvarId") (EVar "v"))) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "acc")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "isSourceless") (EVar "gctx")) (EApp (EVar "authvarId") (EVar "v"))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "grantVarParams") (EVar "gctx")) (EVar "chain")) (EVar "rest")) (EVar "acc"))))))
 (DTypeSig false "topAbsorbs" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "topAbsorbs" ((PVar "param") (PVar "join")) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "param"))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EApp (EVar "PList") (EListLit))) (EListLit)) (EApp (EVar "EListLit") (EListLit))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "join")))))
