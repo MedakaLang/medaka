@@ -15,7 +15,7 @@ import frontend.recovery_result.{
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
 }
-import tools.lsp_positions.{locToLspRange}
+import tools.lsp_positions.{jRangeOfLoc}
 import tools.source_snapshot.{SourceRevision, SourceSnapshot(..), revisionId}
 import tools.snapshot_syntax.{
   SnapshotMismatch(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxMatches,
@@ -29,8 +29,6 @@ export
 jRange : Int -> Int -> Int -> Int -> Json
 jRange sl sc el ec =
   jObject [("start", jPosition sl sc), ("end", jPosition el ec)]
-jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 export
 innerDecl : Decl -> Decl
 innerDecl (DAttrib _ d) = innerDecl d

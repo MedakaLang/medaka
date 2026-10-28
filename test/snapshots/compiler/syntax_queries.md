@@ -1,5 +1,5 @@
 # META
-source_lines=298
+source_lines=296
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
@@ -19,7 +19,7 @@ import frontend.recovery_result.{
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
 }
-import tools.lsp_positions.{locToLspRange}
+import tools.lsp_positions.{jRangeOfLoc}
 import tools.source_snapshot.{SourceRevision, SourceSnapshot(..), revisionId}
 import tools.snapshot_syntax.{
   SnapshotMismatch(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxMatches,
@@ -33,8 +33,6 @@ export
 jRange : Int -> Int -> Int -> Int -> Json
 jRange sl sc el ec =
   jObject [("start", jPosition sl sc), ("end", jPosition el ec)]
-jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 export
 innerDecl : Decl -> Decl
 innerDecl (DAttrib _ d) = innerDecl d
@@ -307,15 +305,13 @@ symbolsFromRecovered revision syntax =
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false) (mem "parseWithPositionsOpt" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "invalidRegions" false) (mem "invalidExtent" false) (mem "SourceExtent" true) (mem "InvalidRegion" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
+(DUse false (UseGroup ("tools" "lsp_positions") ((mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" false) (mem "SourceSnapshot" true) (mem "revisionId" false))))
 (DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "SnapshotMismatch" true) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
 (DTypeSig true "jPosition" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "jPosition" ((PVar "line") (PVar "ch")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "ch"))))))
 (DTypeSig true "jRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "jRange" ((PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "jPosition") (EVar "sl")) (EVar "sc"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "jPosition") (EVar "el")) (EVar "ec"))))))
-(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
 (DTypeSig true "innerDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "innerDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "innerDecl") (EVar "d")))
 (DFunDef false "innerDecl" ((PVar "d")) (EVar "d"))
@@ -364,15 +360,13 @@ symbolsFromRecovered revision syntax =
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false) (mem "parseWithPositionsOpt" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "invalidRegions" false) (mem "invalidExtent" false) (mem "SourceExtent" true) (mem "InvalidRegion" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
+(DUse false (UseGroup ("tools" "lsp_positions") ((mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" false) (mem "SourceSnapshot" true) (mem "revisionId" false))))
 (DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "SnapshotMismatch" true) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
 (DTypeSig true "jPosition" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "jPosition" ((PVar "line") (PVar "ch")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "ch"))))))
 (DTypeSig true "jRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "jRange" ((PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "jPosition") (EVar "sl")) (EVar "sc"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "jPosition") (EVar "el")) (EVar "ec"))))))
-(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))
 (DTypeSig true "innerDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "innerDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "innerDecl") (EVar "d")))
 (DFunDef false "innerDecl" ((PVar "d")) (EVar "d"))

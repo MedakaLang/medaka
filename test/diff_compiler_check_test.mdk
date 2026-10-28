@@ -689,7 +689,7 @@ cycleSiteRun = match cycleSiteScratch
             "b.mdk:1:0: cyclic dependency: a → b → a",
             "1 | import a.{foo}",
           ]
-      let _ = runVerb "rm" ["-rf", dir]
+      let _ = cleanupScratchBestEffort dir
       result
 
 test "a two-module import cycle is located at the import that closes it" =
@@ -728,7 +728,7 @@ cycleTreeRun tag files args needles = match scratchDir
               (a => if startsWith "@" a then "\{dir}/\{drop 1 a}" else a)
               args)
             needles
-        let _ = runVerb "rm" ["-rf", dir]
+        let _ = cleanupScratchBestEffort dir
         result
 
 test "a cycle located by check --json names the importer file with a range" =
@@ -985,7 +985,7 @@ selfNamedRun = match selfNamedScratch
           medakaBin
           ["check", "\{dir}/use_nt.mdk"]
           ["unbound variable `NT`"]
-      let _ = runVerb "rm" ["-rf", dir]
+      let _ = cleanupScratchBestEffort dir
       result
 
 test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
@@ -1358,6 +1358,11 @@ stringEofCases = [
   ("triple_interp.mdk", "main = \"\"\"a\\{1}tail\nafter = 2\n"),
 ]
 
+cleanupScratchBestEffort : String -> <Exec, IO> Unit
+cleanupScratchBestEffort dir =
+  let _ = runVerb "rm" ["-rf", dir]
+  ()
+
 stringEofRun : <Exec, FileWrite, IO> Expectation
 stringEofRun = match scratchDir
   Err e => fail "could not make scratch directory: \{e}"
@@ -1378,7 +1383,7 @@ stringEofRun = match scratchDir
                 ))
                 [("check", []), ("run", []), ("build", [])])
             stringEofCases)
-      let _ = runVerb "rm" ["-rf", dir]
+      let _ = cleanupScratchBestEffort dir
       result
 
 test "unterminated string EOF fails strict CLI verbs" = stringEofRun
@@ -1402,7 +1407,7 @@ recoveryStrictRun = match scratchDir
                   ["expected an expression"],
               ))
               ["check", "run", "build"])
-        let _ = runVerb "rm" ["-rf", dir]
+        let _ = cleanupScratchBestEffort dir
         result
 
 test "recovered declarations never enter strict CLI verbs" = recoveryStrictRun

@@ -15,7 +15,10 @@ querySymbols revision syntax = match symbolsFromRecovered revision syntax
   Err _ => Err "snapshot mismatch"
 
 test "projection uses recovered current declarations" =
-  let source = "before = 1\nbroken = )\nafter = 2\n"
+  let source = """before = 1
+broken = )
+after = 2
+"""
   let snapshot = SourceRevision "file:///a" (Some 2) 2 source
   expectOkThen
     (symbols =>
@@ -23,15 +26,18 @@ test "projection uses recovered current declarations" =
     (querySymbols snapshot (parseSnapshotSyntax snapshot))
 
 test "projection rejects stale identity or version" =
-  let snapshot = SourceRevision "file:///a" (Some 1) 1 "before = 1\n"
+  let snapshot = SourceRevision "file:///a" (Some 1) 1 """before = 1
+"""
   let syntax = parseSnapshotSyntax snapshot
   let stale =
     symbolsFromRecovered
-      (SourceRevision "file:///a" (Some 1) 2 "after = 1\n")
+      (SourceRevision "file:///a" (Some 1) 2 """after = 1
+""")
       syntax
   let wrongVersion =
     symbolsFromRecovered
-      (SourceRevision "file:///a" (Some 2) 1 "after = 1\n")
+      (SourceRevision "file:///a" (Some 2) 1 """after = 1
+""")
       syntax
   expectAll [
     expectTrue (isErr stale),
@@ -39,15 +45,21 @@ test "projection rejects stale identity or version" =
     expectOkThen
       (symbols =>
         expectEqual
-          (map symbolName (strictDocumentSymbols "before = 1\n"))
+          (map symbolName (strictDocumentSymbols """before = 1
+"""))
           (map symbolName symbols))
       (querySymbols snapshot syntax),
   ]
 
 test "discarded declarations separate same-name clauses" =
   let broken =
-    SourceRevision "file:///a" None 1 "f : Int -> Int\nbroken = )\nf x = x\n"
-  let valid = SourceRevision "file:///a" None 1 "f : Int -> Int\nf x = x\n"
+    SourceRevision "file:///a" None 1 """f : Int -> Int
+broken = )
+f x = x
+"""
+  let valid = SourceRevision "file:///a" None 1 """f : Int -> Int
+f x = x
+"""
   expectAll [
     expectOkThen
       (symbols => expectAll [

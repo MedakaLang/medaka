@@ -5,9 +5,10 @@ import frontend.parse_recovery.{
   RecoveryLimits(..)
 }
 import frontend.recovery_result.{
-  recoveredDecls, recoveredDiagnostics, invalidRegions, invalidExtent,
-  recoveredCompleteness, recoveredStats, RecoveryCompleteness(..),
-  RecoveryStop(..), RecoveryStats(..), SourceExtent(..)
+  InvalidRegion, recoveredDecls, recoveredDiagnostics, invalidRegions,
+  invalidExtent, recoveredCompleteness, recoveredStats,
+  RecoveryCompleteness(..), RecoveryStop(..), RecoveryStats(..),
+  SourceExtent(..)
 }
 import frontend.parse_diagnostic.{
   ParseDiagnostic, diagnosticCode, diagnosticLoc, diagnosticEdits,
@@ -27,18 +28,29 @@ name _ = "other"
 extent : SourceExtent -> (Int, Int)
 extent (SourceExtent start end) = (start, end)
 
+withoutFinalLf : String -> String
+withoutFinalLf source = stringSlice 0 (stringLength source - 1) source
+
+regionExtents : List InvalidRegion -> List (Int, Int)
+regionExtents regions = map (region => extent (invalidExtent region)) regions
+
 test "recovery retains declarations on both sides of damage" =
-  let r = parseRecovering "before = 1\nbroken = )\nafter = 2\n"
+  let r = parseRecovering """before = 1
+broken = )
+after = 2
+"""
   expectAll [
     expectEqual ["before", "after"] (map name (recoveredDecls r)),
     expectEqual ["P-PARSE"] (map diagnosticCode (recoveredDiagnostics r)),
-    expectEqual
-      [(11, 22)]
-      (map (region => extent (invalidExtent region)) (invalidRegions r)),
+    expectEqual [(11, 22)] (regionExtents (invalidRegions r)),
   ]
 
 test "unclosed delimiters do not promote nested declarations" =
-  let r = parseRecovering "before = 1\nbroken = (\nhidden = 9\nafter = 2\n"
+  let r = parseRecovering """before = 1
+broken = (
+hidden = 9
+after = 2
+"""
   expectEqual ["before"] (map name (recoveredDecls r))
 
 test "recovery matrix retains the expected current declarations" =
@@ -51,193 +63,409 @@ test "recovery matrix retains the expected current declarations" =
       [
         (
           "valid",
-          "before = 1\nmiddle = 3\nafter = 2\n",
+          """before = 1
+middle = 3
+after = 2
+""",
           ["before", "middle", "after"],
         ),
         (
           "rhs-close",
-          "before = 1\nbroken = )\nafter = 2\n",
+          """before = 1
+broken = )
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "deleted-equal",
-          "before = 1\nbroken 3\nafter = 2\n",
+          """before = 1
+broken 3
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "missing-rhs",
-          "before = 1\nbroken =\nafter = 2\n",
+          """before = 1
+broken =
+after = 2
+""",
           ["before", "after"],
         ),
-        ("missing-close", "before = 1\nbroken = (3\nafter = 2\n", ["before"]),
+        ("missing-close", """before = 1
+broken = (3
+after = 2
+""", ["before"]),
         (
           "missing-list-close",
-          "before = 1\nbroken = [3,\nafter = 2\n",
+          """before = 1
+broken = [3,
+after = 2
+""",
           ["before"],
         ),
         (
           "missing-record-close",
-          "before = 1\nbroken = { field = 3\nafter = 2\n",
+          """before = 1
+broken = { field = 3
+after = 2
+""",
           ["before"],
         ),
         (
           "missing-projection-close",
-          "before = 1\nbroken = value.{field\nafter = 2\n",
+          """before = 1
+broken = value.{field
+after = 2
+""",
           ["before"],
         ),
         (
           "mismatched-close",
-          "before = 1\nbroken = ([3)\nafter = 2\n",
+          """before = 1
+broken = ([3)
+after = 2
+""",
           ["before"],
         ),
         (
           "extra-close",
-          "before = 1\nbroken = 3 )\nafter = 2\n",
+          """before = 1
+broken = 3 )
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "indent-nested",
-          "before = 1\nbroken = do\n  local = )\n  hidden = 9\n  local\nafter = 2\n",
+          """before = 1
+broken = do
+  local = )
+  hidden = 9
+  local
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "dedent",
-          "before = 1\nbroken = do\n  local = )\n hidden = 9\nafter = 2\n",
+          """before = 1
+broken = do
+  local = )
+ hidden = 9
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "continuation",
-          "before = 1\nbroken = 1 +\n  hidden = 9\nafter = 2\n",
+          """before = 1
+broken = 1 +
+  hidden = 9
+after = 2
+""",
           ["before", "after"],
         ),
-        ("top-level-indent", "  before = 1\n  broken = )\n  after = 2\n", []),
+        ("top-level-indent", """  before = 1
+  broken = )
+  after = 2
+""", []),
         (
           "nested-col-zero",
-          "before = 1\nbroken = (\nhidden = 9\n)\nafter = 2\n",
+          """before = 1
+broken = (
+hidden = 9
+)
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "nested-unclosed-zero",
-          "before = 1\nbroken = (\nhidden = 9\nafter = 2\n",
+          """before = 1
+broken = (
+hidden = 9
+after = 2
+""",
           ["before"],
         ),
         (
           "nested-brace-zero",
-          "before = 1\nbroken = {\nhidden = 9\n}\nafter = 2\n",
+          """before = 1
+broken = {
+hidden = 9
+}
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "nested-interpolation",
-          "before = 1\nbroken = \"\\{\nhidden = 9\n}\"\nafter = 2\n",
+          """before = 1
+broken = \"\\{
+hidden = 9
+}\"
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "closed-string-control",
-          "before = 1\ntext = \"fake = 9\"\nnope = )\nafter = 2\n",
+          """before = 1
+text = \"fake = 9\"
+nope = )
+after = 2
+""",
           ["before", "text", "after"],
         ),
         (
           "closed-comment-control",
-          "before = 1\n{-\nfake = 9\n-}\nbroken = )\nafter = 2\n",
+          """before = 1
+{-
+fake = 9
+-}
+broken = )
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "line-comment-control",
-          "before = 1\n-- fake = 9\nbroken = )\nafter = 2\n",
+          """before = 1
+-- fake = 9
+broken = )
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "unterminated-string-middle",
-          "before = 1\nbroken = \"oops\nafter = 2\n",
+          """before = 1
+broken = \"oops
+after = 2
+""",
           ["before"],
         ),
-        ("unterminated-string-eof", "before = 1\nbroken = \"oops", ["before"]),
+        (
+          "unterminated-string-eof",
+          withoutFinalLf """before = 1
+broken = \"oops
+""",
+          ["before"],
+        ),
         (
           "unterminated-comment",
-          "before = 1\n{- oops\nafter = 2\n",
+          """before = 1
+{- oops
+after = 2
+""",
           ["before"],
         ),
         (
           "unterminated-char",
-          "before = 1\nbroken = 'x\nafter = 2\n",
+          """before = 1
+broken = 'x
+after = 2
+""",
           ["before"],
         ),
         (
           "bad-character-middle",
-          "before = 1\nbroken = $\nafter = 2\n",
+          """before = 1
+broken = $
+after = 2
+""",
           ["before"],
         ),
-        ("bad-character-eof", "before = 1\nbroken = $", ["before"]),
-        ("bad-escape", "before = 1\nbroken = \"\\q\"\nafter = 2\n", ["before"]),
+        (
+          "bad-character-eof",
+          withoutFinalLf """before = 1
+broken = $
+""",
+          ["before"],
+        ),
+        ("bad-escape", """before = 1
+broken = \"\\q\"
+after = 2
+""", ["before"]),
         (
           "two-errors",
-          "before = 1\nbroken = )\nmiddle = 3\nother = ]\nafter = 2\n",
+          """before = 1
+broken = )
+middle = 3
+other = ]
+after = 2
+""",
           ["before", "middle", "after"],
         ),
         (
           "removed-prescan",
-          "before = 1\nbroken = 1 != 2\nafter = 2\n",
+          """before = 1
+broken = 1 != 2
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "prefix-export",
-          "before = 1\nexport\nkept = 4\nbroken = )\nafter = 2\n",
+          """before = 1
+export
+kept = 4
+broken = )
+after = 2
+""",
           ["before", "kept", "after"],
         ),
         (
           "missing-equal-next-line",
-          "before = 1\nbroken\n= 3\nafter = 2\n",
+          """before = 1
+broken
+= 3
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "unicode-locations",
-          "-- 😀\nbefore = 1\nbroken = )\nafter = 2\n",
+          """-- 😀
+before = 1
+broken = )
+after = 2
+""",
           ["before", "after"],
         ),
         (
           "crlf",
-          "before = 1\r\nbroken = )\r\nafter = 2\r\n",
+          stringJoin "\r\n" ["before = 1", "broken = )", "after = 2", ""],
           ["before", "after"],
         ),
         (
           "long-errors",
-          "before = 1\nb0 = )\nb1 = )\nb2 = )\nb3 = )\nb4 = )\nb5 = )\nb6 = )\nb7 = )\nb8 = )\nb9 = )\nb10 = )\nb11 = )\nb12 = )\nb13 = )\nb14 = )\nb15 = )\nb16 = )\nb17 = )\nb18 = )\nb19 = )\nb20 = )\nb21 = )\nb22 = )\nb23 = )\nb24 = )\nb25 = )\nb26 = )\nb27 = )\nb28 = )\nb29 = )\nb30 = )\nb31 = )\nb32 = )\nb33 = )\nb34 = )\nb35 = )\nb36 = )\nb37 = )\nb38 = )\nb39 = )\nb40 = )\nb41 = )\nb42 = )\nb43 = )\nb44 = )\nb45 = )\nb46 = )\nb47 = )\nb48 = )\nb49 = )\nb50 = )\nb51 = )\nb52 = )\nb53 = )\nb54 = )\nb55 = )\nb56 = )\nb57 = )\nb58 = )\nb59 = )\nb60 = )\nb61 = )\nb62 = )\nb63 = )\nb64 = )\nb65 = )\nb66 = )\nb67 = )\nb68 = )\nb69 = )\nb70 = )\nb71 = )\nb72 = )\nb73 = )\nb74 = )\nb75 = )\nb76 = )\nb77 = )\nb78 = )\nb79 = )\nb80 = )\nb81 = )\nb82 = )\nb83 = )\nb84 = )\nb85 = )\nb86 = )\nb87 = )\nb88 = )\nb89 = )\nb90 = )\nb91 = )\nb92 = )\nb93 = )\nb94 = )\nb95 = )\nb96 = )\nb97 = )\nb98 = )\nb99 = )\nb100 = )\nb101 = )\nb102 = )\nb103 = )\nb104 = )\nb105 = )\nb106 = )\nb107 = )\nb108 = )\nb109 = )\nb110 = )\nb111 = )\nb112 = )\nb113 = )\nb114 = )\nb115 = )\nb116 = )\nb117 = )\nb118 = )\nb119 = )\nb120 = )\nb121 = )\nb122 = )\nb123 = )\nb124 = )\nb125 = )\nb126 = )\nb127 = )\nb128 = )\nb129 = )\nb130 = )\nb131 = )\nb132 = )\nb133 = )\nb134 = )\nb135 = )\nb136 = )\nb137 = )\nb138 = )\nb139 = )\nb140 = )\nb141 = )\nb142 = )\nb143 = )\nb144 = )\nb145 = )\nb146 = )\nb147 = )\nb148 = )\nb149 = )\nb150 = )\nb151 = )\nb152 = )\nb153 = )\nb154 = )\nb155 = )\nb156 = )\nb157 = )\nb158 = )\nb159 = )\nb160 = )\nb161 = )\nb162 = )\nb163 = )\nb164 = )\nb165 = )\nb166 = )\nb167 = )\nb168 = )\nb169 = )\nb170 = )\nb171 = )\nb172 = )\nb173 = )\nb174 = )\nb175 = )\nb176 = )\nb177 = )\nb178 = )\nb179 = )\nb180 = )\nb181 = )\nb182 = )\nb183 = )\nb184 = )\nb185 = )\nb186 = )\nb187 = )\nb188 = )\nb189 = )\nb190 = )\nb191 = )\nb192 = )\nb193 = )\nb194 = )\nb195 = )\nb196 = )\nb197 = )\nb198 = )\nb199 = )\nb200 = )\nb201 = )\nb202 = )\nb203 = )\nb204 = )\nb205 = )\nb206 = )\nb207 = )\nb208 = )\nb209 = )\nb210 = )\nb211 = )\nb212 = )\nb213 = )\nb214 = )\nb215 = )\nb216 = )\nb217 = )\nb218 = )\nb219 = )\nb220 = )\nb221 = )\nb222 = )\nb223 = )\nb224 = )\nb225 = )\nb226 = )\nb227 = )\nb228 = )\nb229 = )\nb230 = )\nb231 = )\nb232 = )\nb233 = )\nb234 = )\nb235 = )\nb236 = )\nb237 = )\nb238 = )\nb239 = )\nb240 = )\nb241 = )\nb242 = )\nb243 = )\nb244 = )\nb245 = )\nb246 = )\nb247 = )\nb248 = )\nb249 = )\nb250 = )\nb251 = )\nb252 = )\nb253 = )\nb254 = )\nb255 = )\nb256 = )\nb257 = )\nb258 = )\nb259 = )\nb260 = )\nb261 = )\nb262 = )\nb263 = )\nb264 = )\nb265 = )\nb266 = )\nb267 = )\nb268 = )\nb269 = )\nb270 = )\nb271 = )\nb272 = )\nb273 = )\nb274 = )\nb275 = )\nb276 = )\nb277 = )\nb278 = )\nb279 = )\nb280 = )\nb281 = )\nb282 = )\nb283 = )\nb284 = )\nb285 = )\nb286 = )\nb287 = )\nb288 = )\nb289 = )\nb290 = )\nb291 = )\nb292 = )\nb293 = )\nb294 = )\nb295 = )\nb296 = )\nb297 = )\nb298 = )\nb299 = )\nb300 = )\nb301 = )\nb302 = )\nb303 = )\nb304 = )\nb305 = )\nb306 = )\nb307 = )\nb308 = )\nb309 = )\nb310 = )\nb311 = )\nb312 = )\nb313 = )\nb314 = )\nb315 = )\nb316 = )\nb317 = )\nb318 = )\nb319 = )\nb320 = )\nb321 = )\nb322 = )\nb323 = )\nb324 = )\nb325 = )\nb326 = )\nb327 = )\nb328 = )\nb329 = )\nb330 = )\nb331 = )\nb332 = )\nb333 = )\nb334 = )\nb335 = )\nb336 = )\nb337 = )\nb338 = )\nb339 = )\nb340 = )\nb341 = )\nb342 = )\nb343 = )\nb344 = )\nb345 = )\nb346 = )\nb347 = )\nb348 = )\nb349 = )\nb350 = )\nb351 = )\nb352 = )\nb353 = )\nb354 = )\nb355 = )\nb356 = )\nb357 = )\nb358 = )\nb359 = )\nb360 = )\nb361 = )\nb362 = )\nb363 = )\nb364 = )\nb365 = )\nb366 = )\nb367 = )\nb368 = )\nb369 = )\nb370 = )\nb371 = )\nb372 = )\nb373 = )\nb374 = )\nb375 = )\nb376 = )\nb377 = )\nb378 = )\nb379 = )\nb380 = )\nb381 = )\nb382 = )\nb383 = )\nb384 = )\nb385 = )\nb386 = )\nb387 = )\nb388 = )\nb389 = )\nb390 = )\nb391 = )\nb392 = )\nb393 = )\nb394 = )\nb395 = )\nb396 = )\nb397 = )\nb398 = )\nb399 = )\nb400 = )\nb401 = )\nb402 = )\nb403 = )\nb404 = )\nb405 = )\nb406 = )\nb407 = )\nb408 = )\nb409 = )\nb410 = )\nb411 = )\nb412 = )\nb413 = )\nb414 = )\nb415 = )\nb416 = )\nb417 = )\nb418 = )\nb419 = )\nb420 = )\nb421 = )\nb422 = )\nb423 = )\nb424 = )\nb425 = )\nb426 = )\nb427 = )\nb428 = )\nb429 = )\nb430 = )\nb431 = )\nb432 = )\nb433 = )\nb434 = )\nb435 = )\nb436 = )\nb437 = )\nb438 = )\nb439 = )\nb440 = )\nb441 = )\nb442 = )\nb443 = )\nb444 = )\nb445 = )\nb446 = )\nb447 = )\nb448 = )\nb449 = )\nb450 = )\nb451 = )\nb452 = )\nb453 = )\nb454 = )\nb455 = )\nb456 = )\nb457 = )\nb458 = )\nb459 = )\nb460 = )\nb461 = )\nb462 = )\nb463 = )\nb464 = )\nb465 = )\nb466 = )\nb467 = )\nb468 = )\nb469 = )\nb470 = )\nb471 = )\nb472 = )\nb473 = )\nb474 = )\nb475 = )\nb476 = )\nb477 = )\nb478 = )\nb479 = )\nb480 = )\nb481 = )\nb482 = )\nb483 = )\nb484 = )\nb485 = )\nb486 = )\nb487 = )\nb488 = )\nb489 = )\nb490 = )\nb491 = )\nb492 = )\nb493 = )\nb494 = )\nb495 = )\nb496 = )\nb497 = )\nb498 = )\nb499 = )\nb500 = )\nb501 = )\nb502 = )\nb503 = )\nb504 = )\nb505 = )\nb506 = )\nb507 = )\nb508 = )\nb509 = )\nb510 = )\nb511 = )\nb512 = )\nb513 = )\nb514 = )\nb515 = )\nb516 = )\nb517 = )\nb518 = )\nb519 = )\nb520 = )\nb521 = )\nb522 = )\nb523 = )\nb524 = )\nb525 = )\nb526 = )\nb527 = )\nb528 = )\nb529 = )\nb530 = )\nb531 = )\nb532 = )\nb533 = )\nb534 = )\nb535 = )\nb536 = )\nb537 = )\nb538 = )\nb539 = )\nb540 = )\nb541 = )\nb542 = )\nb543 = )\nb544 = )\nb545 = )\nb546 = )\nb547 = )\nb548 = )\nb549 = )\nb550 = )\nb551 = )\nb552 = )\nb553 = )\nb554 = )\nb555 = )\nb556 = )\nb557 = )\nb558 = )\nb559 = )\nb560 = )\nb561 = )\nb562 = )\nb563 = )\nb564 = )\nb565 = )\nb566 = )\nb567 = )\nb568 = )\nb569 = )\nb570 = )\nb571 = )\nb572 = )\nb573 = )\nb574 = )\nb575 = )\nb576 = )\nb577 = )\nb578 = )\nb579 = )\nb580 = )\nb581 = )\nb582 = )\nb583 = )\nb584 = )\nb585 = )\nb586 = )\nb587 = )\nb588 = )\nb589 = )\nb590 = )\nb591 = )\nb592 = )\nb593 = )\nb594 = )\nb595 = )\nb596 = )\nb597 = )\nb598 = )\nb599 = )\nb600 = )\nb601 = )\nb602 = )\nb603 = )\nb604 = )\nb605 = )\nb606 = )\nb607 = )\nb608 = )\nb609 = )\nb610 = )\nb611 = )\nb612 = )\nb613 = )\nb614 = )\nb615 = )\nb616 = )\nb617 = )\nb618 = )\nb619 = )\nb620 = )\nb621 = )\nb622 = )\nb623 = )\nb624 = )\nb625 = )\nb626 = )\nb627 = )\nb628 = )\nb629 = )\nb630 = )\nb631 = )\nb632 = )\nb633 = )\nb634 = )\nb635 = )\nb636 = )\nb637 = )\nb638 = )\nb639 = )\nb640 = )\nb641 = )\nb642 = )\nb643 = )\nb644 = )\nb645 = )\nb646 = )\nb647 = )\nb648 = )\nb649 = )\nb650 = )\nb651 = )\nb652 = )\nb653 = )\nb654 = )\nb655 = )\nb656 = )\nb657 = )\nb658 = )\nb659 = )\nb660 = )\nb661 = )\nb662 = )\nb663 = )\nb664 = )\nb665 = )\nb666 = )\nb667 = )\nb668 = )\nb669 = )\nb670 = )\nb671 = )\nb672 = )\nb673 = )\nb674 = )\nb675 = )\nb676 = )\nb677 = )\nb678 = )\nb679 = )\nb680 = )\nb681 = )\nb682 = )\nb683 = )\nb684 = )\nb685 = )\nb686 = )\nb687 = )\nb688 = )\nb689 = )\nb690 = )\nb691 = )\nb692 = )\nb693 = )\nb694 = )\nb695 = )\nb696 = )\nb697 = )\nb698 = )\nb699 = )\nb700 = )\nb701 = )\nb702 = )\nb703 = )\nb704 = )\nb705 = )\nb706 = )\nb707 = )\nb708 = )\nb709 = )\nb710 = )\nb711 = )\nb712 = )\nb713 = )\nb714 = )\nb715 = )\nb716 = )\nb717 = )\nb718 = )\nb719 = )\nb720 = )\nb721 = )\nb722 = )\nb723 = )\nb724 = )\nb725 = )\nb726 = )\nb727 = )\nb728 = )\nb729 = )\nb730 = )\nb731 = )\nb732 = )\nb733 = )\nb734 = )\nb735 = )\nb736 = )\nb737 = )\nb738 = )\nb739 = )\nb740 = )\nb741 = )\nb742 = )\nb743 = )\nb744 = )\nb745 = )\nb746 = )\nb747 = )\nb748 = )\nb749 = )\nb750 = )\nb751 = )\nb752 = )\nb753 = )\nb754 = )\nb755 = )\nb756 = )\nb757 = )\nb758 = )\nb759 = )\nb760 = )\nb761 = )\nb762 = )\nb763 = )\nb764 = )\nb765 = )\nb766 = )\nb767 = )\nb768 = )\nb769 = )\nb770 = )\nb771 = )\nb772 = )\nb773 = )\nb774 = )\nb775 = )\nb776 = )\nb777 = )\nb778 = )\nb779 = )\nb780 = )\nb781 = )\nb782 = )\nb783 = )\nb784 = )\nb785 = )\nb786 = )\nb787 = )\nb788 = )\nb789 = )\nb790 = )\nb791 = )\nb792 = )\nb793 = )\nb794 = )\nb795 = )\nb796 = )\nb797 = )\nb798 = )\nb799 = )\nb800 = )\nb801 = )\nb802 = )\nb803 = )\nb804 = )\nb805 = )\nb806 = )\nb807 = )\nb808 = )\nb809 = )\nb810 = )\nb811 = )\nb812 = )\nb813 = )\nb814 = )\nb815 = )\nb816 = )\nb817 = )\nb818 = )\nb819 = )\nb820 = )\nb821 = )\nb822 = )\nb823 = )\nb824 = )\nb825 = )\nb826 = )\nb827 = )\nb828 = )\nb829 = )\nb830 = )\nb831 = )\nb832 = )\nb833 = )\nb834 = )\nb835 = )\nb836 = )\nb837 = )\nb838 = )\nb839 = )\nb840 = )\nb841 = )\nb842 = )\nb843 = )\nb844 = )\nb845 = )\nb846 = )\nb847 = )\nb848 = )\nb849 = )\nb850 = )\nb851 = )\nb852 = )\nb853 = )\nb854 = )\nb855 = )\nb856 = )\nb857 = )\nb858 = )\nb859 = )\nb860 = )\nb861 = )\nb862 = )\nb863 = )\nb864 = )\nb865 = )\nb866 = )\nb867 = )\nb868 = )\nb869 = )\nb870 = )\nb871 = )\nb872 = )\nb873 = )\nb874 = )\nb875 = )\nb876 = )\nb877 = )\nb878 = )\nb879 = )\nb880 = )\nb881 = )\nb882 = )\nb883 = )\nb884 = )\nb885 = )\nb886 = )\nb887 = )\nb888 = )\nb889 = )\nb890 = )\nb891 = )\nb892 = )\nb893 = )\nb894 = )\nb895 = )\nb896 = )\nb897 = )\nb898 = )\nb899 = )\nb900 = )\nb901 = )\nb902 = )\nb903 = )\nb904 = )\nb905 = )\nb906 = )\nb907 = )\nb908 = )\nb909 = )\nb910 = )\nb911 = )\nb912 = )\nb913 = )\nb914 = )\nb915 = )\nb916 = )\nb917 = )\nb918 = )\nb919 = )\nb920 = )\nb921 = )\nb922 = )\nb923 = )\nb924 = )\nb925 = )\nb926 = )\nb927 = )\nb928 = )\nb929 = )\nb930 = )\nb931 = )\nb932 = )\nb933 = )\nb934 = )\nb935 = )\nb936 = )\nb937 = )\nb938 = )\nb939 = )\nb940 = )\nb941 = )\nb942 = )\nb943 = )\nb944 = )\nb945 = )\nb946 = )\nb947 = )\nb948 = )\nb949 = )\nb950 = )\nb951 = )\nb952 = )\nb953 = )\nb954 = )\nb955 = )\nb956 = )\nb957 = )\nb958 = )\nb959 = )\nb960 = )\nb961 = )\nb962 = )\nb963 = )\nb964 = )\nb965 = )\nb966 = )\nb967 = )\nb968 = )\nb969 = )\nb970 = )\nb971 = )\nb972 = )\nb973 = )\nb974 = )\nb975 = )\nb976 = )\nb977 = )\nb978 = )\nb979 = )\nb980 = )\nb981 = )\nb982 = )\nb983 = )\nb984 = )\nb985 = )\nb986 = )\nb987 = )\nb988 = )\nb989 = )\nb990 = )\nb991 = )\nb992 = )\nb993 = )\nb994 = )\nb995 = )\nb996 = )\nb997 = )\nb998 = )\nb999 = )\nafter = 2\n",
+          """before = 1
+"""
+            ++ stringConcat
+              (map (i => "b" ++ intToString i ++ """ = )
+""") [0..=999])
+            ++ """after = 2
+""",
           ["before"],
         ),
         (
           "deep-unmatched",
-          "before = 1\nbroken = ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((\nafter = 2\n",
+          "before = 1\nbroken = " ++ repeat 5000 "(" ++ "\nafter = 2\n",
           ["before"],
         ),
-        ("eof-missing-close", "before = 1\nbroken = (3", ["before"]),
-        ("eof-missing-rhs", "before = 1\nbroken =", ["before"]),
-        ("unicode-eof", "before = 1\nbroken = (\"😀\"", ["before"]),
+        (
+          "eof-missing-close",
+          withoutFinalLf """before = 1
+broken = (3
+""",
+          ["before"],
+        ),
+        (
+          "eof-missing-rhs",
+          withoutFinalLf """before = 1
+broken =
+""",
+          ["before"],
+        ),
+        (
+          "unicode-eof",
+          withoutFinalLf """before = 1
+broken = (\"😀\"
+""",
+          ["before"],
+        ),
         (
           "edit-0",
-          "before = 1\nmiddle = (3 + 4)\nafter = 2\n",
+          """before = 1
+middle = (3 + 4)
+after = 2
+""",
           ["before", "middle", "after"],
         ),
-        ("edit-1", "before = 1\nmiddle = (3 + 4\nafter = 2\n", ["before"]),
+        ("edit-1", """before = 1
+middle = (3 + 4
+after = 2
+""", ["before"]),
         (
           "edit-2",
-          "before = 1\nmiddle = 3 + 4\nafter = 2\n",
+          """before = 1
+middle = 3 + 4
+after = 2
+""",
           ["before", "middle", "after"],
         ),
         (
           "edit-3",
-          "before = 1\nmiddle 3 + 4\nafter = 2\n",
+          """before = 1
+middle 3 + 4
+after = 2
+""",
           ["before", "after"],
         ),
-        ("edit-4", "before = 1\nmiddle = )\nafter = 2\n", ["before", "after"]),
-        ("edit-5", "before = 1\nmiddle = \"bad\nafter = 2\n", ["before"]),
+        ("edit-4", """before = 1
+middle = )
+after = 2
+""", ["before", "after"]),
+        ("edit-5", """before = 1
+middle = \"bad
+after = 2
+""", ["before"]),
         (
           "edit-6",
-          "before = 1\nmiddle = 3 + 4\nafter = 2\n",
+          """before = 1
+middle = 3 + 4
+after = 2
+""",
           ["before", "middle", "after"],
         ),
         (
           "real-edit-0",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point = { px : Int, py : Int, pz : Int }\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = 2.0\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           [
             "interface:Shape", "Color", "Point", "impl:Shape", "other",
             "interface:Wrap", "Box", "impl:Wrap", "interface:Access",
@@ -246,7 +474,49 @@ test "recovery matrix retains the expected current declarations" =
         ),
         (
           "real-edit-1",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point { px : Int, py : Int, pz : Int }\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = 2.0\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           [
             "interface:Shape", "Color", "impl:Shape", "other", "interface:Wrap",
             "Box", "impl:Wrap", "interface:Access", "impl:Access"
@@ -254,12 +524,96 @@ test "recovery matrix retains the expected current declarations" =
         ),
         (
           "real-edit-2",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point = { px : Int, py : Int, pz : Int\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = 2.0\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           ["interface:Shape", "Color"],
         ),
         (
           "real-edit-3",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point = { px : Int, py : Int, pz : Int }\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = )\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = )
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           [
             "interface:Shape", "Color", "Point", "other", "interface:Wrap",
             "Box", "impl:Wrap", "interface:Access", "impl:Access"
@@ -267,7 +621,49 @@ test "recovery matrix retains the expected current declarations" =
         ),
         (
           "real-edit-4",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point = )\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = 2.0\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = )
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           [
             "interface:Shape", "Color", "impl:Shape", "other", "interface:Wrap",
             "Box", "impl:Wrap", "interface:Access", "impl:Access"
@@ -275,7 +671,49 @@ test "recovery matrix retains the expected current declarations" =
         ),
         (
           "real-edit-5",
-          "-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every\n-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp\n-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong\n-- name-column. Columns are 0-based; hand-verified in child_spans.golden.\ninterface Shape a where\n  area : a -> Float\n  perim : a -> Float\n  describe a = \"a shape\"\n\ndata Color =\n  | Red\n  | Green\n  | Blue\n\ndata Point = { px : Int, py : Int, pz : Int }\n\nimpl Shape Color where\n  area c = 1.0\n  perim c = 2.0\n  describe c = \"color\"\n\nlet rec spin n = spin n\n\n-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must\n-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a\n-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`\n-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,\n-- land on a later BARE type argument (a depth-0-only scan matches `Int`\n-- instead of the parenthesized `Box`). Columns hand-verified below.\ninterface Wrap a where\n  unwrap : a -> Int\n\ndata Box a = Box a\n\nimpl Wrap (Box a) where\n  unwrap b = 0\n\ninterface Access a b where\n  get2 : a -> b -> Int\n\nimpl Access (Box a) Int where\n  get2 b i = i\n",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
           [
             "interface:Shape", "Color", "Point", "impl:Shape", "other",
             "interface:Wrap", "Box", "impl:Wrap", "interface:Access",
@@ -297,8 +735,12 @@ counts (RecoveryStats tokens attempts diagnostics) =
   (tokens, attempts, diagnostics)
 
 test "budgets bound diagnostics and declaration attempts" =
-  let errors = parseRecovering ("before = 1\n" ++ repeat 1000 "bad = )\n")
-  let many = parseRecovering ("bad = )\n" ++ repeat 5000 "ok = 1\n")
+  let errors = parseRecovering ("""before = 1
+""" ++ repeat 1000 """bad = )
+""")
+  let many = parseRecovering ("""bad = )
+""" ++ repeat 5000 """ok = 1
+""")
   let (_, errorAttempts, diagnostics) = counts (recoveredStats errors)
   let (_, attempts, _) = counts (recoveredStats many)
   expectAll [
@@ -316,7 +758,8 @@ test "budgets bound diagnostics and declaration attempts" =
 
 test "source and token admission stop before parsing" =
   let source = parseRecovering ("-- " ++ repeat 8388608 "x")
-  let tokens = parseRecovering (repeat 125001 "a = 1\n")
+  let tokens = parseRecovering (repeat 125001 """a = 1
+""")
   let (_, sourceAttempts, _) = counts (recoveredStats source)
   let (_, tokenAttempts, _) = counts (recoveredStats tokens)
   expectEqual
@@ -338,40 +781,52 @@ test "zero diagnostic limit does not publish a diagnostic" =
     )
 
 test "independent recovery results do not share invocation state" =
-  let p = "before = 1\nbroken = )\nafter = 2\n"
+  let p = """before = 1
+broken = )
+after = 2
+"""
   let first = parseRecovering p
-  let other = parseRecovering "other = 3\n"
+  let other = parseRecovering """other = 3
+"""
   let again = parseRecovering p
   expectAll [
     expectEqual ["other"] (map name (recoveredDecls other)),
     expectEqual
       (
         map name (recoveredDecls first),
-        map (region => extent (invalidExtent region)) (invalidRegions first),
+        regionExtents (invalidRegions first),
       )
       (
         map name (recoveredDecls again),
-        map (region => extent (invalidExtent region)) (invalidRegions again),
+        regionExtents (invalidRegions again),
       ),
   ]
 
-span : Loc -> (Int, Int, Int, Int)
-span (Loc _ sl sc el ec) = (sl, sc, el, ec)
+data ExpectedSpan = ExpectedSpan Int Int Int Int deriving (Eq, Debug)
+
+span : Loc -> ExpectedSpan
+span (Loc _ sl sc el ec) = ExpectedSpan sl sc el ec
+
+neqSpan : Int -> ExpectedSpan
+neqSpan line = ExpectedSpan line 8 line 10
 
 test "synthetic tail diagnostic uses real emoji EOF" =
-  let result = parseRecovering "before = 1\nbroken = (\"😀\""
+  let result = parseRecovering (withoutFinalLf """before = 1
+broken = (\"😀\"
+""")
   expectAll [
     expectEqual ["before"] (map name (recoveredDecls result)),
     expectEqual
-      [(2, 13, 2, 13)]
+      [ExpectedSpan 2 13 2 13]
       (map (d => span (diagnosticLoc d)) (recoveredDiagnostics result)),
-    expectEqual
-      [(11, 24)]
-      (map (region => extent (invalidExtent region)) (invalidRegions result)),
+    expectEqual [(11, 24)] (regionExtents (invalidRegions result)),
   ]
 
 test "terminal string errors and deep delimiters stop the suffix" =
-  let literal = parseRecovering "before = 1\nbroken = \"oops\nafter = 2\n"
+  let literal = parseRecovering """before = 1
+broken = \"oops
+after = 2
+"""
   let deep =
     parseRecovering
       ("before = 1\nbroken = " ++ repeat 5000 "(" ++ "\nafter = 2\n")
@@ -400,7 +855,12 @@ test "strict string EOF prerequisite is reflected in recovery" =
 
 test "separate islands preserve typed diagnostics and original extents" =
   let result =
-    parseRecovering "before = 1\nbroken = )\nmiddle = 3\nother = ]\nafter = 2\n"
+    parseRecovering """before = 1
+broken = )
+middle = 3
+other = ]
+after = 2
+"""
   expectAll [
     expectEqual
       ["before", "middle", "after"]
@@ -408,27 +868,28 @@ test "separate islands preserve typed diagnostics and original extents" =
     expectEqual
       ["P-PARSE", "P-PARSE"]
       (map diagnosticCode (recoveredDiagnostics result)),
-    expectEqual
-      [(11, 22), (33, 43)]
-      (map (region => extent (invalidExtent region)) (invalidRegions result)),
+    expectEqual [(11, 22), (33, 43)] (regionExtents (invalidRegions result)),
   ]
 
 test "prescan diagnostic remains typed on a rejected island" =
-  let result = parseRecovering "before = 1\nbroken = 1 != 2\nafter = 2\n"
+  let result = parseRecovering """before = 1
+broken = 1 != 2
+after = 2
+"""
   expectEqual
     (["before", "after"], ["P-BAD-NEQ"], [(11, 27)])
     (
       map name (recoveredDecls result),
       map diagnosticCode (recoveredDiagnostics result),
-      map (region => extent (invalidExtent region)) (invalidRegions result),
+      regionExtents (invalidRegions result),
     )
 
-editRow : ParseEdit -> ((Int, Int, Int, Int), String, String, Bool)
+editRow : ParseEdit -> (ExpectedSpan, String, String, Bool)
 editRow (ParseEdit loc old replacement applicability) =
   (span loc, old, replacement, applicability == MachineApplicable)
 
 diagnosticRow : ParseDiagnostic ->
-  (String, (Int, Int, Int, Int), List ((Int, Int, Int, Int), String, String, Bool))
+  (String, ExpectedSpan, List (ExpectedSpan, String, String, Bool))
 diagnosticRow diagnostic = (
   diagnosticCode diagnostic,
   span (diagnosticLoc diagnostic),
@@ -437,7 +898,7 @@ diagnosticRow diagnostic = (
 
 indexedCoordinateCase : String ->
   Int ->
-  List (Int, Int, Int, Int) ->
+  List ExpectedSpan ->
   (String, Expectation)
 indexedCoordinateCase newline count spans =
   let src =
@@ -455,22 +916,22 @@ indexedCoordinateCase newline count spans =
   )
 
 test "shared diagnostic index preserves coordinates and edits" = expectEach [
-  indexedCoordinateCase "\n" 1 [(2, 8, 2, 10)],
-  indexedCoordinateCase "\r\n" 2 [(2, 8, 2, 10), (3, 8, 3, 10)],
+  indexedCoordinateCase "\n" 1 [neqSpan 2],
+  indexedCoordinateCase "\r\n" 2 [neqSpan 2, neqSpan 3],
   indexedCoordinateCase "\r" 4 [
-    (2, 8, 2, 10),
-    (3, 8, 3, 10),
-    (4, 8, 4, 10),
-    (5, 8, 5, 10),
+    neqSpan 2,
+    neqSpan 3,
+    neqSpan 4,
+    neqSpan 5,
   ],
   indexedCoordinateCase "\n" 8 [
-    (2, 8, 2, 10),
-    (3, 8, 3, 10),
-    (4, 8, 4, 10),
-    (5, 8, 5, 10),
-    (6, 8, 6, 10),
-    (7, 8, 7, 10),
-    (8, 8, 8, 10),
-    (9, 8, 9, 10),
+    neqSpan 2,
+    neqSpan 3,
+    neqSpan 4,
+    neqSpan 5,
+    neqSpan 6,
+    neqSpan 7,
+    neqSpan 8,
+    neqSpan 9,
   ],
 ]

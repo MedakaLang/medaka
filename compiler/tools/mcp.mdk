@@ -2,7 +2,7 @@ import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
 import tools.snapshot_syntax.{
   parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
-import tools.syntax_queries.{symbolsFromRecovered}
+import tools.syntax_queries.{symbolsFromRecovered, jPosition}
 import tools.lsp_diagnostics.{diagnosticJsonOr}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import frontend.recovery_result.{
@@ -463,7 +463,10 @@ syntheticSourceName = "<source>"
 
 -- Wrap a text payload as an MCP tool result: { content:[{type:text,text}], isError }.
 toolTextResult : String -> Bool -> Json
-toolTextResult text isErr = jObject [
+toolTextResult text isErr = jObject (toolTextFields text isErr)
+
+toolTextFields : String -> Bool -> List (String, Json)
+toolTextFields text isErr = [
   (
     "content",
     jArray [jObject [("type", JString "text"), ("text", JString text)]],
@@ -837,7 +840,7 @@ stopName ExhaustedBudget = "exhaustedBudget"
 
 regionPosition : SourceIndex -> Int -> Json
 regionPosition index off = match offsetToUtf16Position index off
-  Some (line, col) => jObject [("line", JInt line), ("character", JInt col)]
+  Some (line, col) => jPosition line col
   None => JNull
 
 symbolsResult : String -> String -> Json
@@ -890,19 +893,10 @@ symbolsResult path src =
   ]
   match symbolsFromRecovered revision syntax
     Err _ => toolArgError "medaka_symbols: snapshot mismatch"
-    Ok symbols => jObject [
-      (
-        "content",
-        jArray [
-          jObject [
-            ("type", JString "text"),
-            ("text", JString (stringify (jArray symbols))),
-          ],
-        ],
-      ),
-      ("isError", JBool False),
-      ("structuredContent", metadata),
-    ]
+    Ok symbols =>
+      jObject
+        (toolTextFields (stringify (jArray symbols)) False
+          ++ [("structuredContent", metadata)])
 
 runSymbolsTool : String -> String -> String -> Json -> <IO> Json
 runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args

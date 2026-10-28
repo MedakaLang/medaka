@@ -227,12 +227,8 @@ coordinateCall id name args =
 coordinateFile : String -> Json
 coordinateFile path = jObject [("file", JString path)]
 
-coordinateResponse : String -> Option String
-coordinateResponse line = do
-  obj <- match parse line
-    Ok value => Some value
-    Err _ => None
-  result <- get "result" obj
+firstTextContent : Json -> Option String
+firstTextContent result = do
   content <- get "content" result
   first <- match content
     JArray items => match toList items
@@ -242,6 +238,14 @@ coordinateResponse line = do
   match get "text" first
     Some (JString text) => Some text
     _ => None
+
+coordinateResponse : String -> Option String
+coordinateResponse line = do
+  obj <- match parse line
+    Ok value => Some value
+    Err _ => None
+  result <- get "result" obj
+  firstTextContent result
 
 coordinateRun : String -> <Exec, IO, FileRead> Expectation
 coordinateRun dir =
@@ -712,13 +716,13 @@ symbolRegion start end = jObject [
   ("reason", JString "invalidDeclaration"),
 ]
 
-symbolRange : Int -> Int -> Int -> Int -> Json
-symbolRange sl sc el ec =
+symbolRange : (Int, Int) -> (Int, Int) -> Json
+symbolRange (sl, sc) (el, ec) =
   jObject [("start", symbolPos sl sc), ("end", symbolPos el ec)]
 
-symbolDiagnostic : Int -> Int -> Int -> Int -> String -> String -> Json
-symbolDiagnostic sl sc el ec code message = jObject [
-  ("range", symbolRange sl sc el ec),
+symbolDiagnostic : Json -> String -> String -> Json
+symbolDiagnostic range code message = jObject [
+  ("range", range),
   ("severity", JInt 1),
   ("source", JString "medaka"),
   ("message", JString message),
@@ -732,13 +736,7 @@ symbolField key obj = do
 
 outlineSymbols : Json -> Option (List Json)
 outlineSymbols result = do
-  content <- get "content" result
-  first <- match content
-    JArray items => match toList items
-      item :: _ => Some item
-      [] => None
-    _ => None
-  text <- symbolField "text" first
+  text <- firstTextContent result
   value <- match parse text
     Ok v => Some v
     Err _ => None
@@ -749,12 +747,74 @@ outlineSymbols result = do
 outlineNames : Json -> Option (List (Option String))
 outlineNames result = map (map (symbolField "name")) (outlineSymbols result)
 
+currentSymbolsChecks : String -> Int -> Json -> Json -> Expectation
+currentSymbolsChecks path code result metadata = expectEach [
+  ("exit", expectEqual 0 code),
+  (
+    "origin",
+    expectEqual
+      (Some
+        (jObject [
+          ("uri", JString ("file://" ++ path)),
+          ("version", JNull),
+          ("generation", JInt 0),
+        ]))
+      (get "origin" metadata),
+  ),
+  (
+    "completeness",
+    expectEqual (Some (JString "partial")) (get "completeness" metadata),
+  ),
+  (
+    "stop",
+    expectEqual (Some (JString "reachedEnd")) (get "stop" metadata),
+  ),
+  (
+    "regions",
+    expectEqual
+      (Some (jArray [symbolRegion 1 2, symbolRegion 3 4]))
+      (get "invalidRegions" metadata),
+  ),
+  (
+    "names",
+    expectEqual
+      (Some [Some "before", Some "middle", Some "after"])
+      (outlineNames result),
+  ),
+  (
+    "diagnostics",
+    expectEqual
+      (Some
+        (jArray [
+          symbolDiagnostic
+            (symbolRange (1, 6) (1, 7))
+            "P-PARSE"
+            "expected an expression",
+          symbolDiagnostic
+            (symbolRange (3, 8) (3, 9))
+            "P-PARSE"
+            "expected an expression",
+        ]))
+      (get "diagnostics" metadata),
+  ),
+]
+
+currentSymbolsResponse : String -> Int -> String -> Expectation
+currentSymbolsResponse path code out = match parse out
+  Err _ => fail "invalid MCP response"
+  Ok obj => match get "result" obj
+    None => fail "missing MCP result"
+    Some result => match get "structuredContent" result
+      None => fail "missing metadata"
+      Some metadata => currentSymbolsChecks path code result metadata
+
 currentSymbolsWire : String -> <Exec, IO, FileRead> Expectation
 currentSymbolsWire dir =
   let path = stringConcat [dir, "/current.mdk"]
   let request = stringConcat [dir, "/current.jsonl"]
-  let source =
-    "before = (\"😀\", 1)\r\nbad = )\r\nmiddle = 2\r\nworse = )\r\nafter = 3\r\n"
+  let source = stringJoin "\r\n" [
+    "before = (\"😀\", 1)", "bad = )", "middle = 2", "worse = )", "after = 3", ""
+  ]
   match (
     writeOk path source,
     writeOk
@@ -763,70 +823,7 @@ currentSymbolsWire dir =
   )
     (Ok _, Ok _) => match mcpRun 30 request "" []
       Err e => fail e
-      Ok (code, out, _) => match parse out
-        Err _ => fail "invalid MCP response"
-        Ok obj => match get "result" obj
-          None => fail "missing MCP result"
-          Some result => match get "structuredContent" result
-            None => fail "missing metadata"
-            Some metadata => expectEach [
-              ("exit", expectEqual 0 code),
-              (
-                "origin",
-                expectEqual
-                  (Some
-                    (jObject [
-                      ("uri", JString ("file://" ++ path)),
-                      ("version", JNull),
-                      ("generation", JInt 0),
-                    ]))
-                  (get "origin" metadata),
-              ),
-              (
-                "completeness",
-                expectEqual
-                  (Some (JString "partial"))
-                  (get "completeness" metadata),
-              ),
-              (
-                "stop",
-                expectEqual (Some (JString "reachedEnd")) (get "stop" metadata),
-              ),
-              (
-                "regions",
-                expectEqual
-                  (Some (jArray [symbolRegion 1 2, symbolRegion 3 4]))
-                  (get "invalidRegions" metadata),
-              ),
-              (
-                "names",
-                expectEqual
-                  (Some [Some "before", Some "middle", Some "after"])
-                  (outlineNames result),
-              ),
-              (
-                "diagnostics",
-                expectEqual
-                  (Some
-                    (jArray [
-                      symbolDiagnostic
-                        1
-                        6
-                        1
-                        7
-                        "P-PARSE"
-                        "expected an expression",
-                      symbolDiagnostic
-                        3
-                        8
-                        3
-                        9
-                        "P-PARSE"
-                        "expected an expression",
-                    ]))
-                  (get "diagnostics" metadata),
-              ),
-            ]
+      Ok (code, out, _) => currentSymbolsResponse path code out
     _ => fail "current fixture write failed"
 
 test "mcp symbols report current partial source and provenance" =
@@ -910,8 +907,8 @@ barrierSymbolsWire dir =
                 "broken ranges",
                 expectEqual
                   (Some [
-                    Some (symbolRange 0 0 1 0),
-                    Some (symbolRange 2 0 3 0),
+                    Some (symbolRange (0, 0) (1, 0)),
+                    Some (symbolRange (2, 0) (3, 0)),
                   ])
                   (map (map (get "range")) brokenSymbols),
               ),
@@ -924,7 +921,7 @@ barrierSymbolsWire dir =
               (
                 "valid range",
                 expectEqual
-                  (Some [Some (symbolRange 0 0 2 0)])
+                  (Some [Some (symbolRange (0, 0) (2, 0))])
                   (map (map (get "range")) validSymbols),
               ),
             ]

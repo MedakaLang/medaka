@@ -68,7 +68,7 @@ import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
   offsetToUtf16Position
 }
-import tools.lsp_positions.{locToLspRange, lspPositionToOffset}
+import tools.lsp_positions.{locToLspRange, lspPositionToOffset, jRangeOfLoc}
 import driver.profile_select.{carryProjectProfile, manifestPathOf}
 import frontend.parser.{
   ParseError,
@@ -211,9 +211,6 @@ wholeDocRange src =
   match offsetToUtf16Position (indexSource src) (stringLength src)
     Some (line, _) => jRange 0 0 line 0
     None => JNull
-
-jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =

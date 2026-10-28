@@ -1,5 +1,5 @@
 # META
-source_lines=2351
+source_lines=2348
 stages=DESUGAR,MARK
 # SOURCE
 import tools.syntax_queries.{
@@ -72,7 +72,7 @@ import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
   offsetToUtf16Position
 }
-import tools.lsp_positions.{locToLspRange, lspPositionToOffset}
+import tools.lsp_positions.{locToLspRange, lspPositionToOffset, jRangeOfLoc}
 import driver.profile_select.{carryProjectProfile, manifestPathOf}
 import frontend.parser.{
   ParseError,
@@ -215,9 +215,6 @@ wholeDocRange src =
   match offsetToUtf16Position (indexSource src) (stringLength src)
     Some (line, _) => jRange 0 0 line 0
     None => JNull
-
-jRangeOfLoc : SourceIndex -> Loc -> Json
-jRangeOfLoc index loc = optionOr JNull (locToLspRange index loc)
 
 diagsToJson : String -> List Diag -> List Json
 diagsToJson src diags =
@@ -2367,7 +2364,7 @@ unit = ()
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
+(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false) (mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
@@ -2406,8 +2403,6 @@ unit = ()
 (DFunDef false "docsSnapshot" ((PVar "uri") (PVar "docs")) (EMatch (EVar "docs") (arm (PCon "Docs" PWild PWild PWild PWild (PVar "generations") PWild) () (EMatch (EApp (EApp (EVar "docsLookup") (EVar "uri")) (EVar "generations")) (arm (PCon "Some" (PVar "generation")) () (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "uri")) (EApp (EApp (EVar "docsVersion") (EVar "uri")) (EVar "docs"))) (EVar "generation"))) (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
-(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))))
 (DTypeSig false "diagsToJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "diagsToJson" ((PVar "src") (PVar "diags")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EApp (EVar "wholeDocRange") (EVar "src")))) (EVar "diags")))))
 (DTypeSig false "docsGet" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -2830,7 +2825,7 @@ unit = ()
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
-(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false))))
+(DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false) (mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
@@ -2869,8 +2864,6 @@ unit = ()
 (DFunDef false "docsSnapshot" ((PVar "uri") (PVar "docs")) (EMatch (EVar "docs") (arm (PCon "Docs" PWild PWild PWild PWild (PVar "generations") PWild) () (EMatch (EApp (EApp (EVar "docsLookup") (EVar "uri")) (EVar "generations")) (arm (PCon "Some" (PVar "generation")) () (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "uri")) (EApp (EApp (EVar "docsVersion") (EVar "uri")) (EVar "docs"))) (EVar "generation"))) (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "wholeDocRange" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "wholeDocRange" ((PVar "src")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EApp (EVar "indexSource") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (ELit (LInt 0)))) (arm (PCon "None") () (EVar "JNull"))))
-(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "jRangeOfLoc" ((PVar "index") (PVar "loc")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))))
 (DTypeSig false "diagsToJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "diagsToJson" ((PVar "src") (PVar "diags")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EApp (EVar "wholeDocRange") (EVar "src")))) (EVar "diags")))))
 (DTypeSig false "docsGet" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "String")))))

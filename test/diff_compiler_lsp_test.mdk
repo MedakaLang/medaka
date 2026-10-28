@@ -2196,8 +2196,13 @@ test "unfixable parse diagnostic has no snapshot identity" =
 
 test "document symbols follow broken and restored current source" =
   let uri = "file:///current-symbols.mdk"
-  let valid = "before = 1\nafter = 2\n"
-  let broken = "before = 1\nbad = )\nafter = 2\n"
+  let valid = """before = 1
+after = 2
+"""
+  let broken = """before = 1
+bad = )
+after = 2
+"""
   let (errors, out) = drive [
     didOpenMsg uri valid,
     rpc 21 "textDocument/documentSymbol" (docParams uri),
@@ -2225,11 +2230,19 @@ test "current outlines stop at untrusted and terminal source" =
   let (errors, out) = drive [
     didOpenMsg
       uri
-      "before = (\"😀\", 1)\r\nbad = )\r\nmiddle = 2\r\nworse = )\r\nafter = 3\r\n",
+      (stringJoin "\r\n" [
+        "before = (\"😀\", 1)", "bad = )", "middle = 2", "worse = )",
+        "after = 3", ""
+      ]),
     rpc 31 "textDocument/documentSymbol" (docParams uri),
-    didChangeMsg uri "before = 1\nbad = (\nhidden = 2\n",
+    didChangeMsg uri """before = 1
+bad = (
+hidden = 2
+""",
     rpc 32 "textDocument/documentSymbol" (docParams uri),
-    didChangeMsg uri "before = 1\nbad = \"unterminated\n",
+    didChangeMsg uri """before = 1
+bad = \"unterminated
+""",
     rpc 33 "textDocument/documentSymbol" (docParams uri),
     bye,
   ]
@@ -2259,7 +2272,8 @@ test "current outlines stop at untrusted and terminal source" =
 
 test "reopening with a reused version rejects old edits" =
   let uri = "file:///reopened.mdk"
-  let source = "main = 1 != 2\n"
+  let source = """main = 1 != 2
+"""
   let diagnostic = jObject [
     ("code", JString "P-BAD-NEQ"),
     ("range", coordRange 0 9 11),
@@ -2286,9 +2300,14 @@ test "reopening with a reused version rejects old edits" =
 test "discarded source separates outline clauses" =
   let uri = "file:///barrier.mdk"
   let (errors, out) = drive [
-    didOpenMsg uri "f : Int -> Int\nbroken = )\nf x = x\n",
+    didOpenMsg uri """f : Int -> Int
+broken = )
+f x = x
+""",
     rpc 91 "textDocument/documentSymbol" (docParams uri),
-    didChangeMsg uri "f : Int -> Int\nf x = x\n",
+    didChangeMsg uri """f : Int -> Int
+f x = x
+""",
     rpc 92 "textDocument/documentSymbol" (docParams uri),
     bye,
   ]

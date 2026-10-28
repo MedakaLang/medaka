@@ -3,7 +3,12 @@ import tools.snapshot_syntax.{
 }
 import tools.source_snapshot.{SourceRevision(..)}
 import frontend.recovery_result.{recoveredDecls}
+import frontend.ast.{Decl(..)}
 import test.{expectAll, expectEqual, expectTrue, expectFalse}
+
+declName : Decl -> Option String
+declName (DFunDef _ n _ _ _ _) = Some n
+declName _ = None
 
 test "snapshot syntax keeps its binding across edits" =
   let original = SourceRevision "file:///a" (Some 7) 1 "before = 1\n"
@@ -24,7 +29,9 @@ test "snapshot syntax keeps its binding across edits" =
       (snapshotSyntaxMatches
         (SourceRevision "file:///a" None 1 "before = 1\n")
         syntax),
-    expectEqual 1 (length (recoveredDecls (snapshotSyntaxResult syntax))),
+    expectEqual
+      [Some "before"]
+      (map declName (recoveredDecls (snapshotSyntaxResult syntax))),
   ]
 
 test "versionless and reused versions still require generation" =
