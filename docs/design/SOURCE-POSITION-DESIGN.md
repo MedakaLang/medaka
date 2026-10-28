@@ -82,6 +82,18 @@ independent errors after a 1 MiB comment allocated about 772 MB because each
 error built another full-source index; sharing eliminates that repeated work.
 This is a component measurement, not a claim about total end-to-end cost.
 
+The broken-source sprint extends the earlier source-only snapshot boundary:
+`tools/source_snapshot.mdk` may invoke frontend recovery when it creates a
+private `SnapshotSyntax`. This binds the recovered declarations to the URI,
+session generation and document version that produced them. The wrapper holds
+only that identity, version and immutable recovery result; it does not retain
+the source, index, parser context or callback. The shared structural projection
+moves from LSP into `tools/syntax_queries.mdk`, while the existing strict
+symbol entry remains a delegate. Frontend code does not depend on tools.
+Creating the snapshot still builds its existing UTF-16 index; recovery shares
+it for diagnostics rather than rebuilding it per error. The sprint measures the
+remaining full source-to-query cost and retains weak-root controls.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;
