@@ -470,7 +470,7 @@ These need a human call before implementation; do not decide unilaterally.
 1. ~~**Error-code scheme.**~~ **DECIDED + SHIPPED** — readable, per-stage-prefixed
    kebab tags (`L-*`/`P-*`/`R-*`/`T-*`/`W-*`). See `compiler/DIAGNOSTIC-CODES-DESIGN.md`
    ("Decided upstream") and live source (`pushIncompleteImpl` emits
-   `"T-INCOMPLETE-IMPL"`, etc.).
+   `TIncompleteImpl`, whose `codeText` is `"T-INCOMPLETE-IMPL"`, etc.).
 
 2. **`help:` line format.** Single `help:` line (Rust-like, chosen in the
    exemplars) vs. multiple `help:`/`note:` lines. Whether `help:` is part of the

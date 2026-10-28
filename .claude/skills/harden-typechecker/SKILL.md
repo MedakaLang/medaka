@@ -84,15 +84,15 @@ its *first* argument. Before you write the message:
 The real API (`compiler/types/tc_diag.mdk`):
 
 ```
-pushTypeError          : ModuleCtx -> String -> String -> Unit
-pushTypeErrorAt        : ModuleCtx -> String -> Option Loc -> String -> Unit
-pushTypeErrorOnce      : ModuleCtx -> String -> String -> Unit                      -- dedups
-pushTypeErrorOnceAt    : ModuleCtx -> String -> Option Loc -> String -> Unit        -- dedups
-pushTypeErrorHelpFixAt : ModuleCtx -> String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
+pushTypeError          : ModuleCtx -> DiagCode -> String -> Unit
+pushTypeErrorAt        : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
+pushTypeErrorOnce      : ModuleCtx -> DiagCode -> String -> Unit                    -- dedups
+pushTypeErrorOnceAt    : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit      -- dedups
+pushTypeErrorHelpFixAt : ModuleCtx -> DiagCode -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 ```
 
-Real call sites read `pushTypeErrorAt mctx "T-EFFECT-LEAK" loc msg` (`tc_effects.mdk`)
-and `pushTypeErrorAt mctx "T-CONFLICTING-IMPL" loc msg` (`tc_global.mdk`).
+Real call sites read `pushTypeErrorAt mctx TEffectLeak loc msg` (`tc_effects.mdk`)
+and `pushTypeErrorAt mctx TConflictingImpl loc msg` (`tc_global.mdk`).
 
 - **`pushTypeError` does NOT dedup** — it plain-conses. `pushTypeErrorOnce` is the
   deduping variant.
@@ -117,8 +117,9 @@ The mechanical loop:
    naming context — `ppMonosShared : List Mono -> <Mut> String` (`repr.mdk`) — not
    separate `ppMono` calls, or two distinct tyvars can both print as `a`.
    (`ppMono` / `ppScheme`, `repr.mdk`, render a single type/scheme.)
-2. **Raise site** — `pushTypeError mctx "T-YOUR-CODE" (yourMsg …)` from the phase that
-   detects it.
+2. **Raise site** — `pushTypeError mctx TYourCode (yourMsg …)` from the phase that
+   detects it. The new code is a constructor of `DiagCode` (`support/diag_codes.mdk`: the
+   type, `codeText`, `allDiagCodes`) plus a `live` row in the registry of `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
 3. **Test** — add a fixture to `test/diff_compiler_check_test.mdk`'s corpus.
    **Watch for prelude name collisions:** a fixture that reuses a stdlib interface
    name (e.g. `Monoid`) may pass on a *duplicate-interface* error rather than the

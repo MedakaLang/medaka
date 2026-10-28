@@ -1,0 +1,146 @@
+{- | The registry table in `compiler/DIAGNOSTIC-CODES-DESIGN.md` against
+   `compiler/support/diag_codes.mdk`, in both directions.
+
+   The table sits between `<!-- registry:begin -->` and `<!-- registry:end -->`,
+   one row per code: `` | `CODE` | live|retired|reserved|runtime | meaning | ``.
+   The `live` rows are exactly the codes `allDiagCodes` lists. A `retired`,
+   `reserved` or `runtime` text is never a live code. The constructor names in
+   the `data DiagCode` block follow the naming rule (prefix letter, then the
+   CamelCase of the dash segments) and match `allDiagCodes` one for one. Every
+   `runtime error [E-...]` banner in `runtime/medaka_rt.c` is a `runtime` or
+   `live` row. -}
+import list.{drop, dropWhile, filter, filterMap, nub, sort, takeWhile}
+import string.{
+  capitalize, contains, lines, split, startsWith, stripPrefix, stripSuffix,
+  toLower, trim
+}
+import support.diag_codes.{allDiagCodes, codeOfText, codeText}
+import test.{expectAll, expectEqual, fail}
+import test_process.{underRoot}
+
+-- (code text, status) for each registry row, in document order.
+registryRows : List String -> List (String, String)
+registryRows ls =
+  let inside =
+    takeWhile
+      (l => trim l /= "<!-- registry:end -->")
+      (dropWhile (l => trim l /= "<!-- registry:begin -->") ls)
+  filterMap rowOf inside
+
+rowOf : String -> Option (String, String)
+rowOf l
+  | startsWith "| `" l = match split "|" l
+    _ :: code :: status :: _ =>
+      map
+        (c => (fromMaybe c (stripSuffix "`" c), trim status))
+        (stripPrefix "`" (trim code))
+    _ => None
+  | otherwise = None
+
+fromMaybe : a -> Option a -> a
+fromMaybe d None = d
+fromMaybe _ (Some x) = x
+
+textsWith : String -> List (String, String) -> List String
+textsWith status rows = sort (map fst (filter (r => snd r == status) rows))
+
+-- The constructor name the naming rule derives from a code text.
+camel : String -> String
+camel text = match split "-" text
+  [] => ""
+  prefix :: segments =>
+    fold (acc seg => acc ++ capitalize (toLower seg)) prefix segments
+
+-- The constructor names inside the `data DiagCode` block of the module source.
+declaredCtors : List String -> List String
+declaredCtors ls =
+  let block =
+    takeWhile
+      (l => startsWith "  | " l)
+      (dropWhile (l => not (startsWith "public export data DiagCode =" l)) ls
+        |> drop 1)
+  map (l => trim (fromMaybe l (stripPrefix "  | " l))) block
+
+-- Every code named in a `runtime error [E-...]` banner of the C runtime.
+bannerCodes : List String -> List String
+bannerCodes ls = nub (sort (flatMap bannersOf ls))
+
+bannersOf : String -> List String
+bannersOf l = match split "runtime error [E-" l
+  [] => []
+  _ :: tails => filterMap bannerOf tails
+
+bannerOf : String -> Option String
+bannerOf tail = match split "]" tail
+  [] => None
+  name :: rest => if isEmpty rest then None else Some ("E-" ++ name)
+
+missingFrom : List String -> List String -> List String
+missingFrom have want = filter (t => not (elem t have)) want
+
+docLines : <Env "MEDAKA_ROOT", IO> Result String (List String)
+docLines = match readFile (underRoot "compiler/DIAGNOSTIC-CODES-DESIGN.md")
+  Ok text => Ok (lines text)
+  Err e => Err "could not read DIAGNOSTIC-CODES-DESIGN.md: \{e}"
+
+test "diag_codes_doc: the live rows are exactly allDiagCodes" = match docLines
+  Err e => fail e
+  Ok ls =>
+    let rows = registryRows ls
+    let live = textsWith "live" rows
+    let codes = sort (map codeText allDiagCodes)
+    expectAll [
+      expectEqual 186 (length codes),
+      expectEqual [] (missingFrom live codes),
+      expectEqual [] (missingFrom codes live),
+      expectEqual (length live) (length (nub live)),
+    ]
+
+test "diag_codes_doc: retired, reserved and runtime rows are not live codes" =
+  match docLines
+    Err e => fail e
+    Ok ls =>
+      let rows = registryRows ls
+      let live = map codeText allDiagCodes
+      let others = filter (r => snd r /= "live") rows
+      expectAll [
+        expectEqual [] (filter (r => elem (fst r) live) others),
+        expectEqual
+          []
+          (filter
+            (r => not (elem (snd r) ["live", "retired", "reserved", "runtime"]))
+            rows),
+        expectEqual (length rows) (length (nub (map fst rows))),
+      ]
+
+test "diag_codes_doc: codeOfText inverts codeText for every code" =
+  expectAll
+    (map (c => expectEqual (Some c) (codeOfText (codeText c))) allDiagCodes)
+
+test "diag_codes_doc: constructor names follow the naming rule" =
+  match readFile (underRoot "compiler/support/diag_codes.mdk")
+    Err e => fail "could not read diag_codes.mdk: \{e}"
+    Ok text =>
+      let declared = sort (declaredCtors (lines text))
+      let derived = sort (map (c => camel (codeText c)) allDiagCodes)
+      expectAll [
+        expectEqual 186 (length derived),
+        expectEqual [] (missingFrom declared derived),
+        expectEqual [] (missingFrom derived declared),
+        expectEqual (length declared) (length (nub declared)),
+      ]
+
+test "diag_codes_doc: every C runtime banner is a runtime or live row" = match (
+  docLines,
+  readFile (underRoot "runtime/medaka_rt.c"),
+)
+  (Err e, _) => fail e
+  (_, Err e) => fail "could not read medaka_rt.c: \{e}"
+  (Ok ls, Ok text) =>
+    let rows = registryRows ls
+    let known = textsWith "runtime" rows ++ textsWith "live" rows
+    let banners = bannerCodes (lines text)
+    expectAll [
+      expectEqual 4 (length (textsWith "runtime" rows)),
+      expectEqual [] (missingFrom known banners),
+    ]
