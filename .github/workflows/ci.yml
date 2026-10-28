@@ -1587,7 +1587,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # Full history, trees and blobs fetched on demand: test/arch_ratchet.sh proves its
+      # BASE..HEAD range complete, and unshallowing a depth-1 clone inside the step fails
+      # on runner images that ship git 2.56 (#4563).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # Toolchain still needed (clang builds the typecheck oracle; the fixpoint
       # gate cold-bootstraps from the seed on its own); the BINARY comes from
@@ -1708,7 +1714,10 @@ jobs:
     needs: [detect, build]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # `inlang-backend-core-validate-test` (compiler/backend/core_validate_test.mdk) re-runs
+    # its own probe in serial children and has grown to 22-25 min; until that test is fixed
+    # the job needs headroom over its old 30-minute ceiling (#4568).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # #1931. The job-level `if:` stays `!cancelled()` — NEVER a job-level skip, or
