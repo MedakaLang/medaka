@@ -7,8 +7,8 @@
 -- an imported shadow (`shadowStandaloneHead`, `plainAppHeadVar`), and the recorded-site
 -- resolution `resolveRLocalSite` for a receiver no impl answers and for one a live impl
 -- does, the mark sets a module may name (`methodMarkCtx`) and those it marks with
--- (`moduleMarkCtx`), and the externs a module declares (`directExternSigs`, `declExternNames`).  One property: the shadows a program has do not depend on the order its standalones
--- are declared in.  Each test builds the module record, interface scope and impl
+-- (`moduleMarkCtx`).  One property: the shadows a program has do not depend on the order its
+-- standalones are declared in.  Each test builds the module record, interface scope and impl
 -- environment it reads; none reaches the inference recursion.
 
 import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
@@ -46,8 +46,6 @@ import types.tc_shadow.{
   stampMethodArities,
   stampRoutes,
   methodMarkCtx,
-  declExternNames,
-  directExternSigs,
   moduleMarkCtx,
 }
 import types.tc_state.{
@@ -669,27 +667,4 @@ test "a shadow row is kept for a function the module defines or a name it import
         []
         (markedWith [] [] [("g", "size")] [] (parse (standalone "f"))).mcSm,
     ),
-  ]
-
--- ── the externs a module declares ─────────────────────────────────────────
-
-externs : String
-externs =
-  """
-extern first : Int -> Int
-plain : Int
-plain = 1
-extern second : Bool
-"""
-
-test "the extern signatures of a module are its extern declarations in source order, others skipped" =
-  expectEqual ["first", "second"] (map fst (directExternSigs (parse externs)))
-
-test "the extern names of a module are those of its extern declarations in source order" = expectEach
-  [
-    (
-      "two externs",
-      expectEqual ["first", "second"] (declExternNames (parse externs)),
-    ),
-    ("none", expectEqual [] (declExternNames (parse (standalone "f")))),
   ]

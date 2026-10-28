@@ -15,7 +15,6 @@ computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String,
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 coreShadowMapFor : GraphCtx -> List Decl -> List (String, String) -> List (String, String)
 declBareLocals : GraphCtx -> List Decl -> BareLocals -> BareLocals
-declExternNames : List Decl -> List String
 declaredConstraintFor : ModuleCtx -> String -> CDeclared
 declaredEffectsAt : GraphCtx -> MethodTrackedInstantiation -> Option CDeclared -> Option CDeclared
 declaresStandalone : String -> List Decl -> Bool
@@ -28,7 +27,6 @@ definerShadowSpineVarAt : ModuleCtx -> Expr -> Option (String, Expr, List Expr)
 definerShadowVarHead : ModuleCtx -> Expr -> Option String
 definerShadowsFromSet : GraphCtx -> (String -> Bool) -> List Decl -> List String
 dictVarSatisfiesIface : ModuleCtx -> String -> Int -> List (String, Mono) -> Bool
-directExternSigs : List Decl -> List (String, Ty)
 emitValueShadowGate : ModuleCtx -> String -> Bool
 enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
 formBareLocals : GraphCtx -> UsePath -> BareLocals -> BareLocals

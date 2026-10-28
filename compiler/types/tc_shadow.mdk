@@ -1,8 +1,7 @@
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
 -- including the recorded-local site resolution `resolveRLocalSite` (SHADOW S2's inversion at route
 -- time), the admitted-set occurrence checks (S2-DECL (d)), and the mark sets a module may name
--- (`methodMarkCtx`: S1-NS nameability; its module-level wrapper `moduleMarkCtx` with the
--- extern-name followers `declExternNames` and `directExternSigs`).
+-- (`methodMarkCtx`: S1-NS nameability; its module-level wrapper `moduleMarkCtx`).
 --
 -- Spec: SHADOW-SEMANTICS section 1 S1-S9, section 1.1; S2-DECL (d).
 --
@@ -102,7 +101,6 @@ import frontend.ast.{
   EffAtomTy(..),
   EvId(..),
   Expr(..),
-  ExternDecl(..),
   IfaceMethod(..),
   Loc(..),
   Route(..),
@@ -141,6 +139,7 @@ import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
 import frontend.visibility.{useModId}
 import map as IdMap
+import types.tc_foreign.{declExternNames}
 
 -- ── #2809: the seed's ROUTE half and its TYPING half are different questions ──
 -- `routeLocalSym` (in `tc_solve`) is the ROUTE half: the symbol the emitter must call, which
@@ -2250,17 +2249,6 @@ methodMarkCtx gctx ms _ prog
               && moduleSpellsShadowBare sc (fst e) (snd e))
           shadowMap,
     }
-
-export
-directExternSigs : List Decl -> List (String, Ty)
-directExternSigs [] = []
-directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  (n, ty) :: directExternSigs rest
-directExternSigs (_ :: rest) = directExternSigs rest
-
-export
-declExternNames : List Decl -> List String
-declExternNames decls = map fst (directExternSigs decls)
 
 -- `moduleMarkCtx ms mid prog`: core (`mid == ""`) is marked with the unsplit set and
 -- the core-scoped shadow map (#2153).  A user module gets the split set, scoped by the

@@ -1,5 +1,5 @@
 # META
-source_lines=446
+source_lines=458
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -12,7 +12,8 @@ stages=DESUGAR,MARK
 -- a live impl (`readerOfLib`), the environment of an importer shadow over it (`shadowEnvOf`),
 -- a method occurrence of it (`methodOccurrence`), and the environment over the data and
 -- record types a source declares (`scopedWith`, `envWithData`, `declareData`,
--- `recordShapes`).  Test siblings import it and no production module does.
+-- `recordShapes`), and a source with an interface and its impl at `Int` (`sizeable`).  Test
+-- siblings import it and no production module does.
 -- It imports no module above `tc_decls`, so a sibling of a lower module cannot reach a higher
 -- one through it; the fixtures that run a source through the mark pass and `infer`
 -- (`mainOf`, `withMain`) live in `tc_infer_test`.
@@ -406,6 +407,17 @@ export
 declsOf : String -> String -> List Decl
 declsOf origin src = declaredIn origin (desugar (parse src))
 
+-- A source that declares the interface `Sz` with one method and its impl at `Int`.
+export
+sizeable : String
+sizeable =
+  """
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz x = x
+"""
+
 -- The ordinal of the first user module in the tables `envsOf` builds.  Ordinal 0 is the
 -- prelude's, which the coherence sweep never checks against itself.
 export
@@ -569,6 +581,8 @@ oblOver iface args = UObligation {
 (DFunDef false "moduleDecls" ((PVar "src")) (EApp (EApp (EVar "declsOf") (ELit (LString "m"))) (EVar "src")))
 (DTypeSig true "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declsOf" ((PVar "origin") (PVar "src")) (EApp (EApp (EVar "declaredIn") (EVar "origin")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src")))))
+(DTypeSig true "sizeable" (TyCon "String"))
+(DFunDef false "sizeable" () (ELit (LString "interface Sz a where\n  sz : a -> Int\nimpl Sz Int where\n  sz x = x\n")))
 (DTypeSig true "moduleOrdinal" (TyCon "Int"))
 (DFunDef false "moduleOrdinal" () (ELit (LInt 1)))
 (DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
@@ -698,6 +712,8 @@ oblOver iface args = UObligation {
 (DFunDef false "moduleDecls" ((PVar "src")) (EApp (EApp (EVar "declsOf") (ELit (LString "m"))) (EVar "src")))
 (DTypeSig true "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declsOf" ((PVar "origin") (PVar "src")) (EApp (EApp (EVar "declaredIn") (EVar "origin")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src")))))
+(DTypeSig true "sizeable" (TyCon "String"))
+(DFunDef false "sizeable" () (ELit (LString "interface Sz a where\n  sz : a -> Int\nimpl Sz Int where\n  sz x = x\n")))
 (DTypeSig true "moduleOrdinal" (TyCon "Int"))
 (DFunDef false "moduleOrdinal" () (ELit (LInt 1)))
 (DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))

@@ -390,9 +390,11 @@ import types.tc_decls.{
   declEnvAccOf,
   declEnvModulesFrom,
   pubTopFnNames,
+  stampGraphDecls,
   withDeclParamKinds,
 }
 import types.tc_foreign.{
+  directExternSigs,
   externDecls,
   externSigsToMap,
   ffiExternTypeRowsWith,
@@ -408,9 +410,6 @@ import types.tc_solve.{
 }
 import types.tc_solve_check.{
   checkCallObligationsU,
-}
-import types.tc_shadow.{
-  directExternSigs,
 }
 import types.tc_effects.{
   grantOrder,
@@ -443,7 +442,6 @@ import types.tc_module.{
   externSchemesGo,
   publicValNames,
   settleClosedBody,
-  stampGraphDecls,
   verdictFinding,
 }
 

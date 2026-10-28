@@ -3,10 +3,10 @@ source_lines=2052
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
--- operator-to-method rewriting: tree-to-tree passes
--- over evidence; and the realization of solved evidence into the tree's route cells, one recorded
--- site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`,
--- `realizeRecDictApps`): the cells `dictPass` reads.
+-- operator-to-method rewriting: tree-to-tree passes over evidence; and the realization of solved
+-- evidence into the tree's route cells, one recorded site at a time (`resolve*Site`,
+-- `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`, `realizeRecDictApps`): the cells
+-- `dictPass` reads.
 --
 -- Spec: DICT section 4 (translation), section 7; EFFECTS section 8.
 --

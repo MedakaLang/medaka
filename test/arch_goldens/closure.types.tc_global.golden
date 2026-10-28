@@ -27,6 +27,7 @@ types.evidence
 types.evidence_complete
 types.evidence_coverage
 types.extern_source
+types.ffi_bindings
 types.invocation_basis
 types.manifest_publish
 types.module_interface
@@ -53,6 +54,7 @@ types.tc_diag
 types.tc_diag_text
 types.tc_effects
 types.tc_env
+types.tc_foreign
 types.tc_groups
 types.tc_infer
 types.tc_infer_records

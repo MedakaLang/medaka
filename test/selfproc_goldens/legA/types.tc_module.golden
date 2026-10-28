@@ -25,7 +25,6 @@ cycleReportLoc : Map String (Map String Unit) -> List Decl -> Int -> CeRow -> Op
 declIsOwnedType : String -> String -> Decl -> Bool
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
-derivingTypeLoc : Decl -> Option Loc
 drainStampQueue : ModuleCtx -> List DrainFinding
 elabModuleStamp : ModuleCtx -> String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
@@ -56,7 +55,6 @@ inferMembers : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) 
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferTestBodies : TcEnv -> List Decl -> Unit
-inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
 isInterfaceDecl : Decl -> Bool
 isLiveSpan : Map String Unit -> Option Loc -> Bool
 judgeCells : Array (Option EvCell) -> Int -> Int -> List (String, TcDiag) -> List (String, TcDiag)
@@ -69,7 +67,6 @@ liveGoalsOf : ModuleCtx -> List Mono -> List LiveGoal
 liveLocsOf : ModuleCtx -> List Obligation -> List String
 liveMemberIds : ModuleCtx -> List Mono -> Map String Unit
 liveVarIdsOf : ModuleCtx -> Mono -> List Int
-locatedImpls : Option Loc -> List Decl -> List (Option Loc, Decl)
 mapLocalSchemes : ModuleCtx -> List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
 materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
 materializeBinderTypes : GraphCtx -> Unit -> Unit
@@ -146,12 +143,10 @@ sigsOf : List Decl -> List (String, Ty)
 spanKeys : List (Option Loc) -> List String
 stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
 stampEach : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
-stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl
-uOblIsDecidableNow : GraphCtx -> UObligation -> Bool
 unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
 useAdmittedRows : GraphCtx -> Bool -> List Decl -> List (String, (String, String))
 useDefinerRows : GraphCtx -> Bool -> UsePath -> List (String, (String, String))

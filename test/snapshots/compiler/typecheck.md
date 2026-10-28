@@ -1,5 +1,5 @@
 # META
-source_lines=4868
+source_lines=4866
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -394,9 +394,11 @@ import types.tc_decls.{
   declEnvAccOf,
   declEnvModulesFrom,
   pubTopFnNames,
+  stampGraphDecls,
   withDeclParamKinds,
 }
 import types.tc_foreign.{
+  directExternSigs,
   externDecls,
   externSigsToMap,
   ffiExternTypeRowsWith,
@@ -412,9 +414,6 @@ import types.tc_solve.{
 }
 import types.tc_solve_check.{
   checkCallObligationsU,
-}
-import types.tc_shadow.{
-  directExternSigs,
 }
 import types.tc_effects.{
   grantOrder,
@@ -447,7 +446,6 @@ import types.tc_module.{
   externSchemesGo,
   publicValNames,
   settleClosedBody,
-  stampGraphDecls,
   verdictFinding,
 }
 
@@ -4911,18 +4909,17 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
-(DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "pubTopFnNames" false) (mem "withDeclParamKinds" false))))
-(DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
+(DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "pubTopFnNames" false) (mem "stampGraphDecls" false) (mem "withDeclParamKinds" false))))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "directExternSigs" false) (mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "directExternSigs" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "stampGraphDecls" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -5360,18 +5357,17 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
-(DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "pubTopFnNames" false) (mem "withDeclParamKinds" false))))
-(DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
+(DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "pubTopFnNames" false) (mem "stampGraphDecls" false) (mem "withDeclParamKinds" false))))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "directExternSigs" false) (mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "directExternSigs" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "stampGraphDecls" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))

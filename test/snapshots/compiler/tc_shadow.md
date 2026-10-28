@@ -1,12 +1,11 @@
 # META
-source_lines=2306
+source_lines=2294
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
 -- including the recorded-local site resolution `resolveRLocalSite` (SHADOW S2's inversion at route
 -- time), the admitted-set occurrence checks (S2-DECL (d)), and the mark sets a module may name
--- (`methodMarkCtx`: S1-NS nameability; its module-level wrapper `moduleMarkCtx` with the
--- extern-name followers `declExternNames` and `directExternSigs`).
+-- (`methodMarkCtx`: S1-NS nameability; its module-level wrapper `moduleMarkCtx`).
 --
 -- Spec: SHADOW-SEMANTICS section 1 S1-S9, section 1.1; S2-DECL (d).
 --
@@ -106,7 +105,6 @@ import frontend.ast.{
   EffAtomTy(..),
   EvId(..),
   Expr(..),
-  ExternDecl(..),
   IfaceMethod(..),
   Loc(..),
   Route(..),
@@ -145,6 +143,7 @@ import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
 import frontend.visibility.{useModId}
 import map as IdMap
+import types.tc_foreign.{declExternNames}
 
 -- ── #2809: the seed's ROUTE half and its TYPING half are different questions ──
 -- `routeLocalSym` (in `tc_solve`) is the ROUTE half: the symbol the emitter must call, which
@@ -2255,17 +2254,6 @@ methodMarkCtx gctx ms _ prog
           shadowMap,
     }
 
-export
-directExternSigs : List Decl -> List (String, Ty)
-directExternSigs [] = []
-directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
-  (n, ty) :: directExternSigs rest
-directExternSigs (_ :: rest) = directExternSigs rest
-
-export
-declExternNames : List Decl -> List String
-declExternNames decls = map fst (directExternSigs decls)
-
 -- `moduleMarkCtx ms mid prog`: core (`mid == ""`) is marked with the unsplit set and
 -- the core-scoped shadow map (#2153).  A user module gets the split set, scoped by the
 -- filter below.
@@ -2321,7 +2309,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "routeLocalSym" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "dedupSlotVecs" false) (mem "ifaceSelfAndSupers" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
@@ -2332,6 +2320,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseAlias ("map") "IdMap"))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DTypeSig true "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
 (DFunDef false "recoveredShadowSym" ((PVar "name") (PVar "tagRef")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoExpr (EIf (EBinOp "==" (EVar "s") (EVar "name")) (ELit (LString "")) (EVar "s")))))
 (DTypeSig true "methodCellOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvId") (TyCon "EvCell"))))
@@ -2604,12 +2593,6 @@ moduleMarkCtx gctx ms mid prog imported =
 (DTypeSig true "methodMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkCtx"))))))
 (DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") (PLit (LString "")) (PVar "coreProg")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msMarkRpNames")) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkRpNames"))) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") PWild (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msMarkSharedNames") (EFieldAccess (EVar "ms") "msGraphShadowNames")))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty")))) (fa "mcSm" (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoLet false false (PVar "shadowMap") (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkSharedNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "shadowSymSpelledBare") (EVar "sc")) (EVar "shadowMap")) (EVar "n"))))) (EFieldAccess (EVar "ms") "msGraphShadowNames"))))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty")))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "directExternSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "directExternSigs" ((PList)) (EListLit))
-(DFunDef false "directExternSigs" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "directExternSigs") (EVar "rest"))))
-(DFunDef false "directExternSigs" ((PCons PWild (PVar "rest"))) (EApp (EVar "directExternSigs") (EVar "rest")))
-(DTypeSig true "declExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declExternNames" ((PVar "decls")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EVar "decls"))))
 (DTypeSig true "moduleMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "MarkCtx")))))))
 (DFunDef false "moduleMarkCtx" ((PVar "gctx") (PVar "ms") (PVar "mid") (PVar "prog") (PVar "imported")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EApp (EApp (EVar "methodMarkCtx") (EVar "gctx")) (EVar "ms")) (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declExternNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "IdMap.difference") (EFieldAccess (EVar "candidates") "mcRp")) (EVar "externs"))) (fa "mcAn" (EApp (EApp (EVar "IdMap.difference") (EFieldAccess (EVar "candidates") "mcAn")) (EVar "externs"))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "entry")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "entry"))) (EVar "local")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "entry"))) (EVar "imported"))))) (EFieldAccess (EVar "candidates") "mcSm"))))))))
 # MARK
@@ -2625,7 +2608,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "routeLocalSym" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "dedupSlotVecs" false) (mem "ifaceSelfAndSupers" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
@@ -2636,6 +2619,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseAlias ("map") "IdMap"))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DTypeSig true "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
 (DFunDef false "recoveredShadowSym" ((PVar "name") (PVar "tagRef")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoExpr (EIf (EBinOp "==" (EVar "s") (EVar "name")) (ELit (LString "")) (EVar "s")))))
 (DTypeSig true "methodCellOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvId") (TyCon "EvCell"))))
@@ -2908,11 +2892,5 @@ moduleMarkCtx gctx ms mid prog imported =
 (DTypeSig true "methodMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkCtx"))))))
 (DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") (PLit (LString "")) (PVar "coreProg")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msMarkRpNames")) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "coreProg"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkRpNames"))) (EVar "omEmpty"))) (fa "mcAn" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty"))) (fa "mcSm" (EFieldAccess (EVar "ms") "msCoreShadowMap")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "methodMarkCtx" ((PVar "gctx") (PVar "ms") PWild (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EApp (EVar "ifaceExportsIndex") (EVar "gctx")) (ELit LUnit))) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msMarkSharedNames") (EFieldAccess (EVar "ms") "msGraphShadowNames")))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ms") "msArgNames")) (EVar "omEmpty")))) (fa "mcSm" (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EApp (EVar "nameableIfaceMethodSet") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoLet false false (PVar "shadowMap") (EFieldAccess (EFieldAccess (EVar "gctx") "mangledShadowMapRef") "value")) (DoLet false false (PVar "sc") (EApp (EApp (EVar "spellCtxOf") (EVar "gctx")) (EVar "prog"))) (DoLet false false (PVar "aliasRows") (EApp (EApp (EVar "aliasMethodSpellings") (EVar "gctx")) (EVar "prog"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msMarkSharedNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "shadowSymSpelledBare") (EVar "sc")) (EVar "shadowMap")) (EVar "n"))))) (EFieldAccess (EVar "ms") "msGraphShadowNames"))))) (EVar "omEmpty")))) (fa "mcAn" (EApp (EApp (EVar "withAliasMethodNames") (EVar "aliasRows")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterList") (EVar "keep")) (EFieldAccess (EVar "ms") "msArgNames"))) (EVar "omEmpty")))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "directExternSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "directExternSigs" ((PList)) (EListLit))
-(DFunDef false "directExternSigs" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "directExternSigs") (EVar "rest"))))
-(DFunDef false "directExternSigs" ((PCons PWild (PVar "rest"))) (EApp (EVar "directExternSigs") (EVar "rest")))
-(DTypeSig true "declExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declExternNames" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EVar "decls"))))
 (DTypeSig true "moduleMarkCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MarkSets") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "MarkCtx")))))))
 (DFunDef false "moduleMarkCtx" ((PVar "gctx") (PVar "ms") (PVar "mid") (PVar "prog") (PVar "imported")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EApp (EApp (EVar "methodMarkCtx") (EVar "gctx")) (EVar "ms")) (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declExternNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "MarkCtx" ((fa "mcRp" (EApp (EApp (EVar "IdMap.difference") (EFieldAccess (EVar "candidates") "mcRp")) (EVar "externs"))) (fa "mcAn" (EApp (EApp (EVar "IdMap.difference") (EFieldAccess (EVar "candidates") "mcAn")) (EVar "externs"))) (fa "mcSm" (EApp (EApp (EVar "filterList") (ELam ((PVar "entry")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "entry"))) (EVar "local")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "entry"))) (EVar "imported"))))) (EFieldAccess (EVar "candidates") "mcSm"))))))))

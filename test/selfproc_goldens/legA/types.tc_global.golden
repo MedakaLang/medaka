@@ -55,6 +55,7 @@ constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
 declNameLocs : String -> Decl -> List Loc
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
+derivingTypeLoc : Decl -> Option Loc
 firstImplMethodLoc : List ImplMethod -> Option Loc
 gatesBodyCascade : MethodBodyKind -> Bool
 globalCoherenceConflict : ModuleCtx -> ImplEnv -> (Option String, Option String)
@@ -83,8 +84,10 @@ inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
 inferPlainImpl : TcEnv -> ClassEnv -> Int -> IfaceRef -> List Ty -> List ImplMethod -> Unit
 inferRequiresImpl : TcEnv -> List String -> ClassEnv -> Int -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
+inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
 instantiateMethodBody : ModuleCtx -> MethodBodyKind -> List String -> Ty -> List (String, List Kind) -> MethodBodyInstance
 knownPredicateSlot : IfaceRef -> List Mono -> PredicateSlot
+locatedImpls : Option Loc -> List Decl -> List (Option Loc, Decl)
 methodBodyHeadMonos : MethodBodyKind -> List Mono
 methodBodyOwnTyparams : MethodBodyKind -> List String -> List String
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
@@ -112,3 +115,4 @@ superHeadCovers : List Ty -> List Ty -> Bool
 superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
 superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
+uOblIsDecidableNow : GraphCtx -> UObligation -> Bool

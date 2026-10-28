@@ -1,3 +1,5 @@
+declExternNames : List Decl -> List String
+directExternSigs : List Decl -> List (String, Ty)
 externDecls : List Decl -> List Decl
 externSigsToMap : List Decl -> Map String (Ty, List (String, Int)) -> Map String (Ty, List (String, Int))
 ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
