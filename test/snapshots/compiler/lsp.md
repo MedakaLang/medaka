@@ -1,17 +1,17 @@
 # META
-source_lines=2346
+source_lines=2351
 stages=DESUGAR,MARK
 # SOURCE
 import tools.syntax_queries.{
   strictDocumentSymbols, symbolsFromRecovered, wholeLineRange, innerDecl,
   jPosition, jRange
 }
-import tools.source_snapshot.{parseSnapshotSyntax}
+import tools.snapshot_syntax.{parseSnapshotSyntax}
 import tools.lsp_diagnostics.{
   diagnosticJsonOr, diagnosticWithRange, parseDiagnosticJson,
   parseDiagnosticActions, snapshotJson
 }
-import tools.source_snapshot.{SourceSnapshot, makeSnapshot}
+import tools.source_snapshot.{SourceSnapshot, SourceRevision(..), makeSnapshot}
 import frontend.parse_diagnostic.{diagnosticCode, diagnosticLoc}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- lint-disable-file rule-duplicate-body
@@ -1880,12 +1880,17 @@ handleDocumentSymbol : Json -> Json -> Docs -> <IO> Unit
 handleDocumentSymbol idJson params docs =
   let result = match requestUri params
     None => JNull
-    Some uri => match docsSnapshot uri docs
-      None => JNull
-      Some snapshot =>
-        match symbolsFromRecovered snapshot (parseSnapshotSyntax snapshot)
-          Err _ => JNull
-          Ok symbols => jArray symbols
+    Some uri => match (docsGet uri docs, docs)
+      (Some text, Docs _ _ _ _ generations _) =>
+        match docsLookup uri generations
+          None => JNull
+          Some generation =>
+            let revision =
+              SourceRevision uri (docsVersion uri docs) generation text
+            match symbolsFromRecovered revision (parseSnapshotSyntax revision)
+              Err _ => JNull
+              Ok symbols => jArray symbols
+      _ => JNull
   writeMessage (responseMsg idJson result)
 
 cursorIdentifier : String -> Json -> Option (Int, Int, String)
@@ -2350,9 +2355,9 @@ unit : Unit
 unit = ()
 # DESUGAR
 (DUse false (UseGroup ("tools" "syntax_queries") ((mem "strictDocumentSymbols" false) (mem "symbolsFromRecovered" false) (mem "wholeLineRange" false) (mem "innerDecl" false) (mem "jPosition" false) (mem "jRange" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "parseSnapshotSyntax" false))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false))))
 (DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false) (mem "diagnosticWithRange" false) (mem "parseDiagnosticJson" false) (mem "parseDiagnosticActions" false) (mem "snapshotJson" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" false) (mem "makeSnapshot" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" false) (mem "SourceRevision" true) (mem "makeSnapshot" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "diagnosticCode" false) (mem "diagnosticLoc" false))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
@@ -2751,7 +2756,7 @@ unit = ()
 (DTypeSig false "handleFormatting" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleFormatting" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "formattingEdits") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "handleDocumentSymbol" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsSnapshot") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "snapshot")) () (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "snapshot")) (EApp (EVar "parseSnapshotSyntax") (EVar "snapshot"))) (arm (PCon "Err" PWild) () (EVar "JNull")) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jArray") (EVar "symbols"))))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (ETuple (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (EVar "docs")) (arm (PTuple (PCon "Some" (PVar "text")) (PCon "Docs" PWild PWild PWild PWild (PVar "generations") PWild)) () (EMatch (EApp (EApp (EVar "docsLookup") (EVar "uri")) (EVar "generations")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "generation")) () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EApp (EApp (EVar "docsVersion") (EVar "uri")) (EVar "docs"))) (EVar "generation")) (EVar "text"))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (arm (PCon "Err" PWild) () (EVar "JNull")) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jArray") (EVar "symbols"))))))))) (arm PWild () (EVar "JNull")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "cursorIdentifier" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "cursorIdentifier" ((PVar "src") (PVar "params")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "line") (PVar "col")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col"))) (ELam ((PVar "name")) (EApp (EVar "Some") (ETuple (EVar "line") (EVar "col") (EVar "name"))))))))))
 (DTypeSig false "projectRefIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "RefIndex")))))))
@@ -2813,9 +2818,9 @@ unit = ()
 (DFunDef false "unit" () (ELit LUnit))
 # MARK
 (DUse false (UseGroup ("tools" "syntax_queries") ((mem "strictDocumentSymbols" false) (mem "symbolsFromRecovered" false) (mem "wholeLineRange" false) (mem "innerDecl" false) (mem "jPosition" false) (mem "jRange" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "parseSnapshotSyntax" false))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false))))
 (DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false) (mem "diagnosticWithRange" false) (mem "parseDiagnosticJson" false) (mem "parseDiagnosticActions" false) (mem "snapshotJson" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" false) (mem "makeSnapshot" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" false) (mem "SourceRevision" true) (mem "makeSnapshot" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "diagnosticCode" false) (mem "diagnosticLoc" false))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
@@ -3214,7 +3219,7 @@ unit = ()
 (DTypeSig false "handleFormatting" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleFormatting" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EVar "formattingEdits") (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "handleDocumentSymbol" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsSnapshot") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "snapshot")) () (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "snapshot")) (EApp (EVar "parseSnapshotSyntax") (EVar "snapshot"))) (arm (PCon "Err" PWild) () (EVar "JNull")) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jArray") (EVar "symbols"))))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
+(DFunDef false "handleDocumentSymbol" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (ETuple (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (EVar "docs")) (arm (PTuple (PCon "Some" (PVar "text")) (PCon "Docs" PWild PWild PWild PWild (PVar "generations") PWild)) () (EMatch (EApp (EApp (EVar "docsLookup") (EVar "uri")) (EVar "generations")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "generation")) () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EApp (EApp (EVar "docsVersion") (EVar "uri")) (EVar "docs"))) (EVar "generation")) (EVar "text"))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (arm (PCon "Err" PWild) () (EVar "JNull")) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jArray") (EVar "symbols"))))))))) (arm PWild () (EVar "JNull")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "cursorIdentifier" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "cursorIdentifier" ((PVar "src") (PVar "params")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "sourceCursor") (EVar "src")) (EVar "params"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "line") (PVar "col")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col"))) (ELam ((PVar "name")) (EApp (EVar "Some") (ETuple (EVar "line") (EVar "col") (EVar "name"))))))))))
 (DTypeSig false "projectRefIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "RefIndex")))))))

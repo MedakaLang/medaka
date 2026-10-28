@@ -1,10 +1,12 @@
 # META
-source_lines=1982
+source_lines=2006
 stages=DESUGAR,MARK
 # SOURCE
-import tools.source_snapshot.{
-  SourceSnapshot(..), makeSnapshot, parseSnapshotSyntax, snapshotSyntaxResult
+import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
+import tools.snapshot_syntax.{
+  parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
+import string.{StrCursor, startCursor, nextChar}
 import tools.syntax_queries.{symbolsFromRecovered}
 import tools.lsp_diagnostics.{diagnosticJsonOr}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
@@ -843,29 +845,51 @@ regionPosition index off = match offsetToUtf16Position index off
   Some (line, col) => jObject [("line", JInt line), ("character", JInt col)]
   None => JNull
 
+sourceEnd : StrCursor -> Int -> Int -> Bool -> (Int, Int)
+sourceEnd cursor line col afterCR = match nextChar cursor
+  None => (line, col)
+  Some (c, next) =>
+    if c == '\r' then
+      sourceEnd next (line + 1) 0 True
+    else if c == '\n' then
+      sourceEnd next (if afterCR then line else line + 1) 0 False
+    else
+      sourceEnd next line (col + (if charCode c > 65535 then 2 else 1)) False
+
 symbolsResult : String -> String -> Json
 symbolsResult path src =
-  let snapshot = makeSnapshot (uriOfPath path) None 0 src
-  let syntax = parseSnapshotSyntax snapshot
+  let revision = SourceRevision (uriOfPath path) None 0 src
+  let syntax = parseSnapshotSyntax revision
   let result = snapshotSyntaxResult syntax
-  let index = match snapshot
-    SourceSnapshot _ _ _ _ i => i
   let (completeness, stop) = match recoveredCompleteness result
     Complete => ("complete", JNull)
     Partial why => ("partial", JString (stopName why))
-  let regions =
-    map
-      (region => match invalidExtent region
-        SourceExtent start end => jObject [
-          ("start", regionPosition index start),
-          ("end", regionPosition index end),
-          ("reason", JString (reasonName (invalidReason region))),
-        ])
-      (invalidRegions result)
-  let diagnostics =
-    map
-      (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
-      (recoveredDiagnostics result)
+  let (regions, diagnostics) = match snapshotSyntaxSnapshot syntax
+    None =>
+      let (line, col) = sourceEnd (startCursor src) 0 0 False
+      (
+        [
+          jObject [
+            ("start", jObject [("line", JInt 0), ("character", JInt 0)]),
+            ("end", jObject [("line", JInt line), ("character", JInt col)]),
+            ("reason", JString "recoveryBudget"),
+          ],
+        ],
+        [],
+      )
+    Some (SourceSnapshot _ _ _ _ index) => (
+      map
+        (region => match invalidExtent region
+          SourceExtent start end => jObject [
+            ("start", regionPosition index start),
+            ("end", regionPosition index end),
+            ("reason", JString (reasonName (invalidReason region))),
+          ])
+        (invalidRegions result),
+      map
+        (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
+        (recoveredDiagnostics result),
+    )
   let metadata = jObject [
     (
       "origin",
@@ -880,7 +904,7 @@ symbolsResult path src =
     ("invalidRegions", jArray regions),
     ("diagnostics", jArray diagnostics),
   ]
-  match symbolsFromRecovered snapshot syntax
+  match symbolsFromRecovered revision syntax
     Err _ => toolArgError "medaka_symbols: snapshot mismatch"
     Ok symbols => jObject [
       (
@@ -1985,7 +2009,9 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
   serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 # DESUGAR
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "startCursor" false) (mem "nextChar" false))))
 (DUse false (UseGroup ("tools" "syntax_queries") ((mem "symbolsFromRecovered" false))))
 (DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
@@ -2118,8 +2144,10 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "stopName" ((PCon "ExhaustedBudget")) (ELit (LString "exhaustedBudget")))
 (DTypeSig false "regionPosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "regionPosition" ((PVar "index") (PVar "off")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "off")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (arm (PCon "None") () (EVar "JNull"))))
+(DTypeSig false "sourceEnd" (TyFun (TyCon "StrCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "sourceEnd" ((PVar "cursor") (PVar "line") (PVar "col") (PVar "afterCR")) (EMatch (EApp (EVar "nextChar") (EVar "cursor")) (arm (PCon "None") () (ETuple (EVar "line") (EVar "col"))) (arm (PCon "Some" (PTuple (PVar "c") (PVar "next"))) () (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EIf (EVar "afterCR") (EVar "line") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "False")) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EVar "line")) (EBinOp "+" (EVar "col") (EIf (EBinOp ">" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65535))) (ELit (LInt 2)) (ELit (LInt 1))))) (EVar "False")))))))
 (DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))
-(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "snapshot") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "snapshot"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "index") (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "i")) () (EVar "i")))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PVar "regions") (EApp (EApp (EVar "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result")))) (DoLet false false (PVar "diagnostics") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result")))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "snapshot")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "structuredContent")) (EVar "metadata")))))))))
+(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PTuple (PVar "regions") (PVar "diagnostics")) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EApp (EVar "startCursor") (EVar "src"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (ETuple (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (ELit (LInt 0)))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "end")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (ELit (LString "recoveryBudget"))))))) (EListLit))))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index"))) () (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result"))))))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "structuredContent")) (EVar "metadata")))))))))
 (DTypeSig false "runSymbolsTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "symbolsResult") (EVar "path")) (EVar "src")))))))
 (DTypeSig false "medakaDefinitionSchema" (TyCon "Json"))
@@ -2258,7 +2286,9 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false PWild (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
 # MARK
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "startCursor" false) (mem "nextChar" false))))
 (DUse false (UseGroup ("tools" "syntax_queries") ((mem "symbolsFromRecovered" false))))
 (DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false))))
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
@@ -2391,8 +2421,10 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "stopName" ((PCon "ExhaustedBudget")) (ELit (LString "exhaustedBudget")))
 (DTypeSig false "regionPosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "regionPosition" ((PVar "index") (PVar "off")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "off")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (arm (PCon "None") () (EVar "JNull"))))
+(DTypeSig false "sourceEnd" (TyFun (TyCon "StrCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "sourceEnd" ((PVar "cursor") (PVar "line") (PVar "col") (PVar "afterCR")) (EMatch (EApp (EVar "nextChar") (EVar "cursor")) (arm (PCon "None") () (ETuple (EVar "line") (EVar "col"))) (arm (PCon "Some" (PTuple (PVar "c") (PVar "next"))) () (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0))) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EIf (EVar "afterCR") (EVar "line") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "False")) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EVar "next")) (EVar "line")) (EBinOp "+" (EVar "col") (EIf (EBinOp ">" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65535))) (ELit (LInt 2)) (ELit (LInt 1))))) (EVar "False")))))))
 (DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))
-(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "snapshot") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "snapshot"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "index") (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "i")) () (EVar "i")))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PVar "regions") (EApp (EApp (EMethodRef "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result")))) (DoLet false false (PVar "diagnostics") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result")))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "snapshot")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "structuredContent")) (EVar "metadata")))))))))
+(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PTuple (PVar "regions") (PVar "diagnostics")) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EVar "sourceEnd") (EApp (EVar "startCursor") (EVar "src"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (ETuple (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (ELit (LInt 0)))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "end")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (ELit (LString "recoveryBudget"))))))) (EListLit))))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index"))) () (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result"))))))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "structuredContent")) (EVar "metadata")))))))))
 (DTypeSig false "runSymbolsTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "symbolsResult") (EVar "path")) (EVar "src")))))))
 (DTypeSig false "medakaDefinitionSchema" (TyCon "Json"))

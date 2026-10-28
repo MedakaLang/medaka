@@ -2282,3 +2282,41 @@ test "reopening with a reused version rejects old edits" =
       ("stale action", expectEqual [] (elems (resultTo 42 objs))),
       ("current outline", expectEqual [] (elems (resultTo 43 objs))),
     ]
+
+test "discarded source separates outline clauses" =
+  let uri = "file:///barrier.mdk"
+  let (errors, out) = drive [
+    didOpenMsg uri "f : Int -> Int\nbroken = )\nf x = x\n",
+    rpc 91 "textDocument/documentSymbol" (docParams uri),
+    didChangeMsg uri "f : Int -> Int\nf x = x\n",
+    rpc 92 "textDocument/documentSymbol" (docParams uri),
+    bye,
+  ]
+  match decodeFrames out
+    Err e => fail e
+    Ok objs =>
+      let broken = elems (resultTo 91 objs)
+      let valid = elems (resultTo 92 objs)
+      expectEach [
+        ("process", expectEqual [] errors),
+        (
+          "broken names",
+          expectEqual ["f:13@0()", "f:12@2()"] (map symbolSkeleton broken),
+        ),
+        (
+          "broken ranges",
+          expectEqual
+            [
+              Some (jObject [("start", coordPos 0 0), ("end", coordPos 1 0)]),
+              Some (jObject [("start", coordPos 2 0), ("end", coordPos 3 0)]),
+            ]
+            (map (get "range") broken),
+        ),
+        ("valid names", expectEqual ["f:12@0()"] (map symbolSkeleton valid)),
+        (
+          "valid range",
+          expectEqual
+            [Some (jObject [("start", coordPos 0 0), ("end", coordPos 2 0)])]
+            (map (get "range") valid),
+        ),
+      ]

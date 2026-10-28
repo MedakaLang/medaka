@@ -1,6 +1,8 @@
-import tools.source_snapshot.{
-  SourceSnapshot(..), makeSnapshot, parseSnapshotSyntax, snapshotSyntaxResult
+import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
+import tools.snapshot_syntax.{
+  parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
+import string.{StrCursor, startCursor, nextChar}
 import tools.syntax_queries.{symbolsFromRecovered}
 import tools.lsp_diagnostics.{diagnosticJsonOr}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
@@ -839,29 +841,51 @@ regionPosition index off = match offsetToUtf16Position index off
   Some (line, col) => jObject [("line", JInt line), ("character", JInt col)]
   None => JNull
 
+sourceEnd : StrCursor -> Int -> Int -> Bool -> (Int, Int)
+sourceEnd cursor line col afterCR = match nextChar cursor
+  None => (line, col)
+  Some (c, next) =>
+    if c == '\r' then
+      sourceEnd next (line + 1) 0 True
+    else if c == '\n' then
+      sourceEnd next (if afterCR then line else line + 1) 0 False
+    else
+      sourceEnd next line (col + (if charCode c > 65535 then 2 else 1)) False
+
 symbolsResult : String -> String -> Json
 symbolsResult path src =
-  let snapshot = makeSnapshot (uriOfPath path) None 0 src
-  let syntax = parseSnapshotSyntax snapshot
+  let revision = SourceRevision (uriOfPath path) None 0 src
+  let syntax = parseSnapshotSyntax revision
   let result = snapshotSyntaxResult syntax
-  let index = match snapshot
-    SourceSnapshot _ _ _ _ i => i
   let (completeness, stop) = match recoveredCompleteness result
     Complete => ("complete", JNull)
     Partial why => ("partial", JString (stopName why))
-  let regions =
-    map
-      (region => match invalidExtent region
-        SourceExtent start end => jObject [
-          ("start", regionPosition index start),
-          ("end", regionPosition index end),
-          ("reason", JString (reasonName (invalidReason region))),
-        ])
-      (invalidRegions result)
-  let diagnostics =
-    map
-      (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
-      (recoveredDiagnostics result)
+  let (regions, diagnostics) = match snapshotSyntaxSnapshot syntax
+    None =>
+      let (line, col) = sourceEnd (startCursor src) 0 0 False
+      (
+        [
+          jObject [
+            ("start", jObject [("line", JInt 0), ("character", JInt 0)]),
+            ("end", jObject [("line", JInt line), ("character", JInt col)]),
+            ("reason", JString "recoveryBudget"),
+          ],
+        ],
+        [],
+      )
+    Some (SourceSnapshot _ _ _ _ index) => (
+      map
+        (region => match invalidExtent region
+          SourceExtent start end => jObject [
+            ("start", regionPosition index start),
+            ("end", regionPosition index end),
+            ("reason", JString (reasonName (invalidReason region))),
+          ])
+        (invalidRegions result),
+      map
+        (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
+        (recoveredDiagnostics result),
+    )
   let metadata = jObject [
     (
       "origin",
@@ -876,7 +900,7 @@ symbolsResult path src =
     ("invalidRegions", jArray regions),
     ("diagnostics", jArray diagnostics),
   ]
-  match symbolsFromRecovered snapshot syntax
+  match symbolsFromRecovered revision syntax
     Err _ => toolArgError "medaka_symbols: snapshot mismatch"
     Ok symbols => jObject [
       (

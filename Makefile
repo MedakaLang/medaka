@@ -185,6 +185,7 @@ inlang-support-sexp-value-test:
 	./medaka test compiler/tools/lsp_positions_test.mdk
 	./medaka test compiler/tools/lsp_diagnostics_test.mdk
 	./medaka test compiler/tools/source_snapshot_test.mdk
+	./medaka test compiler/tools/snapshot_syntax_test.mdk
 	./medaka test compiler/tools/syntax_queries_test.mdk
 
 inlang-ir-dce-test:

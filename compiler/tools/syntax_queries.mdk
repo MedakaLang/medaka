@@ -1,3 +1,4 @@
+import list.{reverse}
 import json.{Json(..), jObject, jArray}
 import frontend.ast.{
   Decl(..), ExternDecl(..), Loc(..), Variant(..), LetBind(..), ConPayload(..),
@@ -7,14 +8,18 @@ import frontend.parser.{
   DeclPos, positionsDecls, declPosLine, declPosEndLine, declPosNameLoc,
   declPosChildLocs, parseWithPositionsOpt
 }
-import frontend.recovery_result.{recoveredDecls, recoveredPositions}
+import frontend.recovery_result.{
+  recoveredDecls, recoveredPositions, invalidRegions, invalidExtent,
+  SourceExtent(..), InvalidRegion
+}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
 }
 import tools.lsp_positions.{locToLspRange}
-import tools.source_snapshot.{
-  SourceSnapshot(..), SnapshotMismatch(..), snapshotId, snapshotSyntaxId,
-  snapshotSyntaxMatches, snapshotSyntaxResult, SnapshotSyntax
+import tools.source_snapshot.{SourceRevision, SourceSnapshot(..), revisionId}
+import tools.snapshot_syntax.{
+  SnapshotMismatch(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxMatches,
+  snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
 
 export
@@ -253,19 +258,41 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
       |> collapseSymbols
       |> map (renderSymbol index len)
 
+barrierLines : SourceIndex -> List InvalidRegion -> List Int
+barrierLines index regions =
+  map
+    (region => match invalidExtent region
+      SourceExtent start _ => match offsetToUtf16Position index start
+        Some (line, _) => line
+        None => -1)
+    regions
+
+collapseRecovered : List Int -> List SymRow -> List SymRow
+collapseRecovered barriers rows = go barriers rows []
+  where
+    go _ [] group = collapseSymbols (reverse group)
+    go bs ((row@(SymRow _ _ line _ _ _ _)) :: rest) group = match bs
+      b :: tail =>
+        if b < line then
+          collapseSymbols (reverse group) ++ go tail (row :: rest) []
+        else
+          go bs rest (row :: group)
+      [] => go [] rest (row :: group)
+
 export
-symbolsFromRecovered : SourceSnapshot ->
-  SnapshotSyntax ->
+symbolsFromRecovered : SourceRevision ->
+  PreparedSyntax ->
   Result SnapshotMismatch (List Json)
-symbolsFromRecovered snapshot syntax =
-  if not (snapshotSyntaxMatches snapshot syntax) then
-    Err (SnapshotMismatch (snapshotSyntaxId syntax) (snapshotId snapshot))
-  else match snapshot
-    SourceSnapshot _ _ _ src index =>
+symbolsFromRecovered revision syntax =
+  if not (snapshotSyntaxMatches revision syntax) then
+    Err (SnapshotMismatch (snapshotSyntaxId syntax) (revisionId revision))
+  else match snapshotSyntaxSnapshot syntax
+    None => Ok []
+    Some (SourceSnapshot _ _ _ src index) =>
       let result = snapshotSyntaxResult syntax
       let len = stringLength src
       Ok
         (positionsDecls (recoveredPositions result)
           |> symbolParts index len (recoveredDecls result)
-          |> collapseSymbols
+          |> collapseRecovered (barrierLines index (invalidRegions result))
           |> map (renderSymbol index len))

@@ -730,8 +730,8 @@ symbolField key obj = do
   value <- get key obj
   asString value
 
-outlineNames : Json -> Option (List (Option String))
-outlineNames result = do
+outlineSymbols : Json -> Option (List Json)
+outlineSymbols result = do
   content <- get "content" result
   first <- match content
     JArray items => match toList items
@@ -743,8 +743,11 @@ outlineNames result = do
     Ok v => Some v
     Err _ => None
   match value
-    JArray items => Some (map (symbolField "name") (toList items))
+    JArray items => Some (toList items)
     _ => None
+
+outlineNames : Json -> Option (List (Option String))
+outlineNames result = map (map (symbolField "name")) (outlineSymbols result)
 
 currentSymbolsWire : String -> <Exec, IO, FileRead> Expectation
 currentSymbolsWire dir =
@@ -867,3 +870,67 @@ terminalSymbolsWire dir =
 
 test "mcp symbols stop at delimiters and terminal lex errors" =
   withScratchDir terminalSymbolsWire
+
+barrierSymbolsWire : String -> <Exec, IO, FileRead> Expectation
+barrierSymbolsWire dir =
+  let broken = dir ++ "/broken.mdk"
+  let valid = dir ++ "/valid.mdk"
+  let request = dir ++ "/barrier.jsonl"
+  let calls = stringConcat [
+    coordinateCall 1 "medaka_symbols" (coordinateFile broken),
+    "\n",
+    coordinateCall 2 "medaka_symbols" (coordinateFile valid),
+    "\n",
+  ]
+  match (
+    writeOk broken "f : Int -> Int\nbroken = )\nf x = x\n",
+    writeOk valid "f : Int -> Int\nf x = x\n",
+    writeOk request calls,
+  )
+    (Ok _, Ok _, Ok _) => match mcpRun 30 request "" []
+      Err e => fail e
+      Ok (code, out, _) => match split "\n" out
+        a :: b :: _ => match (parse a, parse b)
+          (Ok x, Ok y) =>
+            let brokenSymbols = do
+              result <- get "result" x
+              outlineSymbols result
+            let validSymbols = do
+              result <- get "result" y
+              outlineSymbols result
+            expectEach [
+              ("exit", expectEqual 0 code),
+              (
+                "broken names",
+                expectEqual
+                  (Some [Some "f", Some "f"])
+                  (map (map (symbolField "name")) brokenSymbols),
+              ),
+              (
+                "broken ranges",
+                expectEqual
+                  (Some [
+                    Some (symbolRange 0 0 1 0),
+                    Some (symbolRange 2 0 3 0),
+                  ])
+                  (map (map (get "range")) brokenSymbols),
+              ),
+              (
+                "valid names",
+                expectEqual
+                  (Some [Some "f"])
+                  (map (map (symbolField "name")) validSymbols),
+              ),
+              (
+                "valid range",
+                expectEqual
+                  (Some [Some (symbolRange 0 0 2 0)])
+                  (map (map (get "range")) validSymbols),
+              ),
+            ]
+          _ => fail "invalid MCP response"
+        _ => fail "missing MCP responses"
+    _ => fail "barrier fixture write failed"
+
+test "mcp symbols keep invalid regions as barriers" =
+  withScratchDir barrierSymbolsWire

@@ -1,6 +1,9 @@
+import tools.snapshot_syntax.{parseSnapshotSyntax}
 import json.{Json, get, asString}
-import tools.source_snapshot.{makeSnapshot, parseSnapshotSyntax}
-import tools.syntax_queries.{symbolsFromRecovered, strictDocumentSymbols}
+import tools.source_snapshot.{SourceRevision(..)}
+import tools.syntax_queries.{
+  symbolsFromRecovered, strictDocumentSymbols, jRange
+}
 import test.{expectAll, expectEqual, expectTrue}
 
 symbolName : Json -> Option String
@@ -12,33 +15,52 @@ namesOrEmpty : Result e (List Json) -> List (Option String)
 namesOrEmpty (Ok symbols) = map symbolName symbols
 namesOrEmpty (Err _) = []
 
-rejected : Result e a -> Bool
-rejected (Err _) = True
-rejected (Ok _) = False
-
 test "projection uses recovered current declarations" =
   let source = "before = 1\nbroken = )\nafter = 2\n"
-  let snapshot = makeSnapshot "file:///a" (Some 2) 2 source
+  let snapshot = SourceRevision "file:///a" (Some 2) 2 source
   expectEqual
     [Some "before", Some "after"]
     (namesOrEmpty
       (symbolsFromRecovered snapshot (parseSnapshotSyntax snapshot)))
 
 test "projection rejects stale identity or version" =
-  let snapshot = makeSnapshot "file:///a" (Some 1) 1 "before = 1\n"
+  let snapshot = SourceRevision "file:///a" (Some 1) 1 "before = 1\n"
   let syntax = parseSnapshotSyntax snapshot
   let stale =
     symbolsFromRecovered
-      (makeSnapshot "file:///a" (Some 1) 2 "after = 1\n")
+      (SourceRevision "file:///a" (Some 1) 2 "after = 1\n")
       syntax
   let wrongVersion =
     symbolsFromRecovered
-      (makeSnapshot "file:///a" (Some 2) 1 "after = 1\n")
+      (SourceRevision "file:///a" (Some 2) 1 "after = 1\n")
       syntax
   expectAll [
-    expectTrue (rejected stale),
-    expectTrue (rejected wrongVersion),
+    expectTrue (isErr stale),
+    expectTrue (isErr wrongVersion),
     expectEqual
       (map symbolName (strictDocumentSymbols "before = 1\n"))
       (namesOrEmpty (symbolsFromRecovered snapshot syntax)),
   ]
+
+test "discarded declarations separate same-name clauses" =
+  let broken =
+    SourceRevision "file:///a" None 1 "f : Int -> Int\nbroken = )\nf x = x\n"
+  let valid = SourceRevision "file:///a" None 1 "f : Int -> Int\nf x = x\n"
+  expectAll [
+    expectEqual
+      [Some "f", Some "f"]
+      (namesOrEmpty (symbolsFromRecovered broken (parseSnapshotSyntax broken))),
+    expectEqual
+      [Some "f"]
+      (namesOrEmpty (symbolsFromRecovered valid (parseSnapshotSyntax valid))),
+    expectEqual
+      [Some (jRange 0 0 1 0), Some (jRange 2 0 3 0)]
+      (ranges (symbolsFromRecovered broken (parseSnapshotSyntax broken))),
+    expectEqual
+      [Some (jRange 0 0 2 0)]
+      (ranges (symbolsFromRecovered valid (parseSnapshotSyntax valid))),
+  ]
+
+ranges : Result e (List Json) -> List (Option Json)
+ranges (Ok symbols) = map (get "range") symbols
+ranges (Err _) = []

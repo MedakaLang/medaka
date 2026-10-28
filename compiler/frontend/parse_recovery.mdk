@@ -8,7 +8,7 @@ import frontend.parse_engine.{
   contextLineStarts, peekTok, mark, rewind, failProblem, locOfSpan
 }
 import frontend.parse_result.{
-  ParsedSource, parsedDecls, parsedPositions, parseErrorDiagnostic
+  parsedDecls, parsedPositions, parseErrorDiagnostic
 }
 import frontend.parse_positions.{Positions(..), positionsFromSpans}
 import frontend.parse_diagnostic.{
@@ -16,6 +16,7 @@ import frontend.parse_diagnostic.{
 }
 import frontend.ast.{Decl, Loc(..)}
 import support.source_index.{SourceIndex, indexSource, offsetToLineColFast}
+import support.util.{isEmptyL, isNonEmptyL}
 
 import frontend.recovery_result.{
   RecoveredSource, SourceExtent(..), InvalidReason(..), RecoveryStop(..),
@@ -48,10 +49,6 @@ closeKind TRBrace = 4
 closeKind (TInterpEnd _) = 5
 closeKind _ = 0
 
-isRoot : List Int -> Bool
-isRoot [] = True
-isRoot _ = False
-
 fences : ParseContext -> (Array Bool, Option InvalidReason)
 fences ctx =
   let (flags, reason) = walkFence ctx 0 0 [] False []
@@ -69,7 +66,7 @@ walkFence ctx p depth stack poison acc
     acc,
     if poison then
       Some MismatchedDelimiter
-    else if not (isRoot stack) then
+    else if isNonEmptyL stack then
       Some UnclosedDelimiter
     else
       None,
@@ -79,7 +76,11 @@ walkFence ctx p depth stack poison acc
     let off = fst (arrayGetUnsafe p (contextOffsets ctx))
     let (_line, col) = offsetToLineColFast (contextLineStarts ctx) off
     let allowed =
-      col == 0 && not (isNoiseTok t) && depth == 0 && isRoot stack && not poison
+      col == 0
+        && not (isNoiseTok t)
+        && depth == 0
+        && isEmptyL stack
+        && not poison
     let d = match t
       TIndent => depth + 1
       TDedent => max 0 (depth - 1)
@@ -385,14 +386,18 @@ parseRecoveringWith (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxD
     recoverTokens limits src index
 
 export
-parseRecoveringWithIndex : SourceIndex -> String -> RecoveredSource
-parseRecoveringWithIndex index src =
-  let limits = defaultRecoveryLimits
-  if stringLength src > 8388608 then
-    budgetResult src 0
-  else
-    recoverTokens limits src (() => index)
+defaultRecoveryAdmission : String -> Option RecoveredSource
+defaultRecoveryAdmission src = match defaultRecoveryLimits
+  RecoveryLimits maxSource _ _ _ =>
+    if stringLength src > maxSource then Some (budgetResult src 0) else None
 
+export
+parseRecoveringWithIndex : SourceIndex -> String -> RecoveredSource
+parseRecoveringWithIndex index src = match defaultRecoveryAdmission src
+  Some result => result
+  None => recoverTokens defaultRecoveryLimits src (() => index)
+
+export
 budgetResult : String -> Int -> RecoveredSource
 budgetResult src count =
   makeRecoveredSource

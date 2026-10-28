@@ -1,7 +1,8 @@
 # META
-source_lines=271
+source_lines=298
 stages=DESUGAR,MARK
 # SOURCE
+import list.{reverse}
 import json.{Json(..), jObject, jArray}
 import frontend.ast.{
   Decl(..), ExternDecl(..), Loc(..), Variant(..), LetBind(..), ConPayload(..),
@@ -11,14 +12,18 @@ import frontend.parser.{
   DeclPos, positionsDecls, declPosLine, declPosEndLine, declPosNameLoc,
   declPosChildLocs, parseWithPositionsOpt
 }
-import frontend.recovery_result.{recoveredDecls, recoveredPositions}
+import frontend.recovery_result.{
+  recoveredDecls, recoveredPositions, invalidRegions, invalidExtent,
+  SourceExtent(..), InvalidRegion
+}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position
 }
 import tools.lsp_positions.{locToLspRange}
-import tools.source_snapshot.{
-  SourceSnapshot(..), SnapshotMismatch(..), snapshotId, snapshotSyntaxId,
-  snapshotSyntaxMatches, snapshotSyntaxResult, SnapshotSyntax
+import tools.source_snapshot.{SourceRevision, SourceSnapshot(..), revisionId}
+import tools.snapshot_syntax.{
+  SnapshotMismatch(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxMatches,
+  snapshotSyntaxResult, snapshotSyntaxSnapshot
 }
 
 export
@@ -257,30 +262,54 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
       |> collapseSymbols
       |> map (renderSymbol index len)
 
+barrierLines : SourceIndex -> List InvalidRegion -> List Int
+barrierLines index regions =
+  map
+    (region => match invalidExtent region
+      SourceExtent start _ => match offsetToUtf16Position index start
+        Some (line, _) => line
+        None => -1)
+    regions
+
+collapseRecovered : List Int -> List SymRow -> List SymRow
+collapseRecovered barriers rows = go barriers rows []
+  where
+    go _ [] group = collapseSymbols (reverse group)
+    go bs ((row@(SymRow _ _ line _ _ _ _)) :: rest) group = match bs
+      b :: tail =>
+        if b < line then
+          collapseSymbols (reverse group) ++ go tail (row :: rest) []
+        else
+          go bs rest (row :: group)
+      [] => go [] rest (row :: group)
+
 export
-symbolsFromRecovered : SourceSnapshot ->
-  SnapshotSyntax ->
+symbolsFromRecovered : SourceRevision ->
+  PreparedSyntax ->
   Result SnapshotMismatch (List Json)
-symbolsFromRecovered snapshot syntax =
-  if not (snapshotSyntaxMatches snapshot syntax) then
-    Err (SnapshotMismatch (snapshotSyntaxId syntax) (snapshotId snapshot))
-  else match snapshot
-    SourceSnapshot _ _ _ src index =>
+symbolsFromRecovered revision syntax =
+  if not (snapshotSyntaxMatches revision syntax) then
+    Err (SnapshotMismatch (snapshotSyntaxId syntax) (revisionId revision))
+  else match snapshotSyntaxSnapshot syntax
+    None => Ok []
+    Some (SourceSnapshot _ _ _ src index) =>
       let result = snapshotSyntaxResult syntax
       let len = stringLength src
       Ok
         (positionsDecls (recoveredPositions result)
           |> symbolParts index len (recoveredDecls result)
-          |> collapseSymbols
+          |> collapseRecovered (barrierLines index (invalidRegions result))
           |> map (renderSymbol index len))
 # DESUGAR
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "Variant" true) (mem "LetBind" true) (mem "ConPayload" true) (mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false) (mem "parseWithPositionsOpt" false))))
-(DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false))))
+(DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "invalidRegions" false) (mem "invalidExtent" false) (mem "SourceExtent" true) (mem "InvalidRegion" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotMismatch" true) (mem "snapshotId" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "SnapshotSyntax" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" false) (mem "SourceSnapshot" true) (mem "revisionId" false))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "SnapshotMismatch" true) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
 (DTypeSig true "jPosition" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "jPosition" ((PVar "line") (PVar "ch")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "ch"))))))
 (DTypeSig true "jRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
@@ -321,16 +350,22 @@ symbolsFromRecovered snapshot syntax =
 (DFunDef false "renderSymbol" ((PVar "index") (PVar "len") (PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids") (PVar "nameLoc"))) (EBlock (DoLet false false (PVar "range") (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EVar "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (DoLet false false (PVar "selRange") (EMatch (EVar "nameLoc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "jRangeOfLoc") (EVar "index")) (EVar "l"))) (arm (PCon "None") () (EVar "range")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "selRange")) (EVar "kids")))))
 (DTypeSig true "strictDocumentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "strictDocumentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len")))))))))
-(DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "SnapshotSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))
-(DFunDef false "symbolsFromRecovered" ((PVar "snapshot") (PVar "syntax")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "snapshotSyntaxMatches") (EVar "snapshot")) (EVar "syntax"))) (EApp (EVar "Err") (EApp (EApp (EVar "SnapshotMismatch") (EApp (EVar "snapshotSyntaxId") (EVar "syntax"))) (EApp (EVar "snapshotId") (EVar "snapshot")))) (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild (PVar "src") (PVar "index")) () (EBlock (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EApp (EVar "recoveredPositions") (EVar "result"))) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EApp (EVar "recoveredDecls") (EVar "result")))) (EVar "collapseSymbols")) (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len")))))))))))
+(DTypeSig false "barrierLines" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "InvalidRegion")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "barrierLines" ((PVar "index") (PVar "regions")) (EApp (EApp (EVar "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "start")) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EVar "line")) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1))))))))) (EVar "regions")))
+(DTypeSig false "collapseRecovered" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
+(DFunDef false "collapseRecovered" ((PVar "barriers") (PVar "rows")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "group")) (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group")))) (clause ((PVar "bs") (PCons (PAs "row" (PCon "SymRow" PWild PWild (PVar "line") PWild PWild PWild PWild)) (PVar "rest")) (PVar "group")) (EMatch (EVar "bs") (arm (PCons (PVar "b") (PVar "tail")) () (EIf (EBinOp "<" (EVar "b") (EVar "line")) (EBinOp "++" (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group"))) (EApp (EApp (EApp (EVar "go") (EVar "tail")) (EBinOp "::" (EVar "row") (EVar "rest"))) (EListLit))) (EApp (EApp (EApp (EVar "go") (EVar "bs")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group"))))) (arm (PList) () (EApp (EApp (EApp (EVar "go") (EListLit)) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group")))))))) (EApp (EApp (EApp (EVar "go") (EVar "barriers")) (EVar "rows")) (EListLit))))
+(DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceRevision") (TyFun (TyCon "PreparedSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))
+(DFunDef false "symbolsFromRecovered" ((PVar "revision") (PVar "syntax")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "snapshotSyntaxMatches") (EVar "revision")) (EVar "syntax"))) (EApp (EVar "Err") (EApp (EApp (EVar "SnapshotMismatch") (EApp (EVar "snapshotSyntaxId") (EVar "syntax"))) (EApp (EVar "revisionId") (EVar "revision")))) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EApp (EVar "Ok") (EListLit))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild (PVar "src") (PVar "index"))) () (EBlock (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EApp (EVar "recoveredPositions") (EVar "result"))) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EApp (EVar "recoveredDecls") (EVar "result")))) (EApp (EVar "collapseRecovered") (EApp (EApp (EVar "barrierLines") (EVar "index")) (EApp (EVar "invalidRegions") (EVar "result"))))) (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len")))))))))))
 # MARK
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "Variant" true) (mem "LetBind" true) (mem "ConPayload" true) (mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false) (mem "parseWithPositionsOpt" false))))
-(DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false))))
+(DUse false (UseGroup ("frontend" "recovery_result") ((mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "invalidRegions" false) (mem "invalidExtent" false) (mem "SourceExtent" true) (mem "InvalidRegion" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
-(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotMismatch" true) (mem "snapshotId" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "SnapshotSyntax" false))))
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" false) (mem "SourceSnapshot" true) (mem "revisionId" false))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "SnapshotMismatch" true) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxMatches" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
 (DTypeSig true "jPosition" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))
 (DFunDef false "jPosition" ((PVar "line") (PVar "ch")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "ch"))))))
 (DTypeSig true "jRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
@@ -371,5 +406,9 @@ symbolsFromRecovered snapshot syntax =
 (DFunDef false "renderSymbol" ((PVar "index") (PVar "len") (PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids") (PVar "nameLoc"))) (EBlock (DoLet false false (PVar "range") (EApp (EApp (EApp (EApp (EVar "wholeLineRange") (EMethodRef "index")) (EVar "len")) (EVar "sl")) (EVar "el"))) (DoLet false false (PVar "selRange") (EMatch (EVar "nameLoc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "jRangeOfLoc") (EMethodRef "index")) (EVar "l"))) (arm (PCon "None") () (EVar "range")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "selRange")) (EVar "kids")))))
 (DTypeSig true "strictDocumentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "strictDocumentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len")))))))))
-(DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "SnapshotSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))
-(DFunDef false "symbolsFromRecovered" ((PVar "snapshot") (PVar "syntax")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "snapshotSyntaxMatches") (EVar "snapshot")) (EVar "syntax"))) (EApp (EVar "Err") (EApp (EApp (EVar "SnapshotMismatch") (EApp (EVar "snapshotSyntaxId") (EVar "syntax"))) (EApp (EVar "snapshotId") (EVar "snapshot")))) (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild (PVar "src") (PVar "index")) () (EBlock (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EApp (EVar "recoveredPositions") (EVar "result"))) (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EApp (EVar "recoveredDecls") (EVar "result")))) (EVar "collapseSymbols")) (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len")))))))))))
+(DTypeSig false "barrierLines" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "InvalidRegion")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "barrierLines" ((PVar "index") (PVar "regions")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "start")) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EVar "line")) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1))))))))) (EVar "regions")))
+(DTypeSig false "collapseRecovered" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
+(DFunDef false "collapseRecovered" ((PVar "barriers") (PVar "rows")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "group")) (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group")))) (clause ((PVar "bs") (PCons (PAs "row" (PCon "SymRow" PWild PWild (PVar "line") PWild PWild PWild PWild)) (PVar "rest")) (PVar "group")) (EMatch (EVar "bs") (arm (PCons (PVar "b") (PVar "tail")) () (EIf (EBinOp "<" (EVar "b") (EVar "line")) (EBinOp "++" (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group"))) (EApp (EApp (EApp (EVar "go") (EVar "tail")) (EBinOp "::" (EVar "row") (EVar "rest"))) (EListLit))) (EApp (EApp (EApp (EVar "go") (EVar "bs")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group"))))) (arm (PList) () (EApp (EApp (EApp (EVar "go") (EListLit)) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group")))))))) (EApp (EApp (EApp (EVar "go") (EVar "barriers")) (EVar "rows")) (EListLit))))
+(DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceRevision") (TyFun (TyCon "PreparedSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))
+(DFunDef false "symbolsFromRecovered" ((PVar "revision") (PVar "syntax")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "snapshotSyntaxMatches") (EVar "revision")) (EVar "syntax"))) (EApp (EVar "Err") (EApp (EApp (EVar "SnapshotMismatch") (EApp (EVar "snapshotSyntaxId") (EVar "syntax"))) (EApp (EVar "revisionId") (EVar "revision")))) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EApp (EVar "Ok") (EListLit))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild (PVar "src") (PVar "index"))) () (EBlock (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EApp (EVar "recoveredPositions") (EVar "result"))) (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EApp (EVar "recoveredDecls") (EVar "result")))) (EApp (EVar "collapseRecovered") (EApp (EApp (EVar "barrierLines") (EMethodRef "index")) (EApp (EVar "invalidRegions") (EVar "result"))))) (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len")))))))))))
