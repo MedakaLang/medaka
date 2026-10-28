@@ -5,7 +5,8 @@
 -- last. `debug` quotes strings and `display` does not. Indexing a string
 -- counts codepoints, not bytes.
 
-import test.{expectEqual, expectTrue, expectFalse}
+import test.{expectEqual, expectTrue, expectFalse, expectAll, Expectation}
+import map.{Map}
 
 -- # Debug and Display of lists
 
@@ -257,3 +258,179 @@ test "floatToString renders the canonical lexeme" =
       floatToString 1e-07,
       floatToString 1e+20,
     ]
+
+-- # Lazy fallbacks
+--
+-- The fallback panics if it runs on the hit path, and bumps a counter on the
+-- miss path so "exactly once" is observable.
+
+test "optionOrElse does not call the fallback for Some" =
+  expectEqual 1 (optionOrElse (u => panic "fallback ran") (Some 1))
+
+test "optionOrElse calls the fallback once for None" =
+  let calls = Ref 0
+  let v = optionOrElse (u => setRef calls (!calls + 1) |> (x => 7)) None
+  expectEqual (7, 1) (v, !calls)
+
+test "resultOrElse does not call the fallback for Ok" =
+  expectEqual
+    1
+    (resultOrElse (e => panic "fallback ran") (Ok 1 : Result String Int))
+
+test "resultOrElse calls the fallback once with the error for Err" =
+  let calls = Ref 0
+  let v =
+    resultOrElse
+      (e => setRef calls (!calls + 1) |> (x => stringLength e))
+      (Err "boom")
+  expectEqual (4, 1) (v, !calls)
+
+test "orElseWith on Some does not call the fallback" =
+  expectEqual (Some 1) (orElseWith (Some 1) (u => panic "fallback ran"))
+
+test "orElseWith on None calls the fallback once" =
+  let calls = Ref 0
+  let v = orElseWith (None : Option Int) (u =>
+    setRef calls (!calls + 1) |> (x => Some 7))
+  expectEqual (Some 7, 1) (v, !calls)
+
+test "orElseWith on List appends the fallback" =
+  expectEqual [1, 2, 3] (orElseWith [1, 2] (u => [3]))
+
+-- # Short-circuiting folds
+
+-- Each probe returns the answer and how many times the predicate ran.
+countedAny : Foldable t => Int -> t Int -> (Bool, Int)
+countedAny target xs =
+  let calls = Ref 0
+  let r = any (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+countedAll : Foldable t => Int -> t Int -> (Bool, Int)
+countedAll limit xs =
+  let calls = Ref 0
+  let r = all (x => (calls := !calls + 1) |> (u => x < limit)) xs
+  (r, !calls)
+
+countedFind : Foldable t => Int -> t Int -> (Option Int, Int)
+countedFind target xs =
+  let calls = Ref 0
+  let r = find (x => (calls := !calls + 1) |> (u => x == target)) xs
+  (r, !calls)
+
+tenList : List Int
+tenList = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+tenArray : Array Int
+tenArray = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+
+-- Early hit, middle hit, late hit, miss.
+probeTargets : List Int
+probeTargets = [1, 5, 10, 99]
+
+-- The same expected answers must hold for the `List` and the `Array`.
+expectOnBoth : (Eq r, Debug r) => List r -> List r -> List r -> Expectation
+expectOnBoth expected viaList viaArray =
+  expectAll [expectEqual expected viaList, expectEqual expected viaArray]
+
+test "any stops at the hit and runs n times on a miss" =
+  expectOnBoth
+    [(True, 1), (True, 5), (True, 10), (False, 10)]
+    (map (n => countedAny n tenList) probeTargets)
+    (map (n => countedAny n tenArray) probeTargets)
+
+test "all stops at the first failure and runs n times on success" =
+  expectOnBoth
+    [(False, 1), (False, 5), (False, 10), (True, 10)]
+    (map (n => countedAll n tenList) probeTargets)
+    (map (n => countedAll n tenArray) probeTargets)
+
+test "find returns the first hit and stops there" =
+  expectOnBoth
+    [(Some 1, 1), (Some 5, 5), (Some 10, 10), (None, 10)]
+    (map (n => countedFind n tenList) probeTargets)
+    (map (n => countedFind n tenArray) probeTargets)
+
+test "find returns the first of several matches" =
+  expectEqual (Some 4) (find (x => x > 3) [1, 4, 9])
+
+test "elem on a list finds early, middle, late and misses" =
+  let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "elem on an array finds early, middle, late and misses" =
+  let xs = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+  expectEqual
+    [True, True, True, False]
+    [elem 1 xs, elem 5 xs, elem 10 xs, elem 99 xs]
+
+test "any, all, elem and find on empty containers" =
+  expectEqual
+    (False, True, False, None)
+    (
+      any (x => x > 0) ([] : List Int),
+      all (x => x > 0) ([||] : Array Int),
+      elem 1 ([] : List Int),
+      find (x => x > 0) ([||] : Array Int),
+    )
+
+test "foldUntil on a list breaks with the payload and skips the rest" =
+  let calls = Ref 0
+  let step =
+    acc x =>
+      (calls := !calls + 1)
+        |> (u => if x > 2 then Break (acc * 100) else Continue (acc + x))
+  expectEqual (300, 3) (foldUntil step 0 [1, 2, 3, 4, 5], !calls)
+
+test "foldUntil on an array that never breaks folds everything" =
+  expectEqual 10 (foldUntil (acc x => Continue (acc + x)) 0 [|1, 2, 3, 4|])
+
+test "foldUntil default on Option and Result" =
+  expectEqual
+    (7, 3, 0)
+    (
+      foldUntil (acc x => Continue (acc + x)) 0 (Some 7),
+      foldUntil (acc x => Break (acc + x)) 0 (Ok 3 : Result String Int),
+      foldUntil (acc x => Continue (acc + x)) 0 (Err "e" : Result String Int),
+    )
+
+test "foldUntil default on a Map stops early" =
+  let m : Map Int Int = Map { 1 => 10, 2 => 20, 3 => 30 }
+  expectEqual
+    30
+    (foldUntil
+      (acc x => if acc + x >= 30 then Break (acc + x) else Continue (acc + x))
+      0
+      m)
+
+-- # List andThen
+
+test "List andThen concatenates in order" =
+  expectEqual
+    ([1, 10, 2, 20, 3, 30], [] : List Int, [1, 3], [7, 8])
+    (
+      andThen [1, 2, 3] (x => [x, x * 10]),
+      andThen ([] : List Int) (x => [x]),
+      andThen [1, 2, 3, 4] (x => if x % 2 == 0 then [] else [x]),
+      andThen [1, 2] (x => if x == 1 then [7, 8] else []),
+    )
+
+test "List andThen calls f once per element, left to right" =
+  let log : Ref (List Int) = Ref []
+  let out = andThen [1, 2, 3] (x => setRef log (x :: !log) |> (u => [x, x]))
+  expectEqual ([1, 1, 2, 2, 3, 3], [3, 2, 1]) (out, !log)
+
+test "ControlFlow compares, renders and hashes by constructor and payload" = expectAll
+  [
+    expectEqual (Continue 1) (Continue 1),
+    expectEqual Lt (compare (Continue 9) (Break 0)),
+    expectEqual "Break 2" (debug (Break 2)),
+    expectEqual (hash (Continue 3)) (hash (Continue 3)),
+  ]
+
+test "bestEffort discards an Err and an Ok alike" = expectAll [
+  expectEqual () (bestEffort "gone already" (Err "ENOENT" : Result String Int)),
+  expectEqual () (bestEffort "unused" (Ok 1 : Result String Int)),
+]

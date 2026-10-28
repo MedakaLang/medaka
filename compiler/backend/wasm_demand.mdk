@@ -773,6 +773,7 @@ externResultStamp fn =
     "charToStr",
     "stringConcat",
     "stringSlice",
+    "stringSliceBytes",
     "stringToUpper",
     "stringToLower",
     "floatToString",

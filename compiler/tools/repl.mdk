@@ -22,12 +22,14 @@
 --      Eval: can panic on runtime errors (same as OCaml REPL).
 --
 -- Known limitations:
---   * No source-location info on errors (compiler AST is location-stripped).
+--   * Non-parse errors lack source locations (compiler AST is location-stripped).
 --   * No :load / :reload commands.
 
 import frontend.ast.{Decl(..), DataVis(..), IfaceMethod(..)}
 import frontend.lexer.{Token(..), tokenize}
-import frontend.parser.{parse}
+import frontend.parser.{
+  parseResult, ParseError, parseErrorLine, parseErrorCol, parseErrorMessage
+}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
@@ -283,6 +285,14 @@ combinedDecls newDecls = !accumulatedRef ++ newDecls
 printErr : String -> <IO> Unit
 printErr msg = ePutStrLn ("<repl>: " ++ msg)
 
+printParseErr : Int -> ParseError -> <IO> Unit
+printParseErr prefix e =
+  let line = parseErrorLine e
+  let col = parseErrorCol e
+  let adjusted = if line == 1 then max 0 (col - prefix) else col
+  ePutStrLn
+    "<repl>:\{intToString line}:\{intToString adjusted}: \{parseErrorMessage e}"
+
 mapIO : (a -> <IO> Unit) -> List a -> <IO> Unit
 mapIO _ [] = ()
 mapIO f (x :: rest) =
@@ -297,8 +307,12 @@ mapIO_ f (x :: rest) =
 
 -- ── Process a declaration input ───────────────────────────────────────────
 processDeclInput : String -> <IO> Unit
-processDeclInput src =
-  let newDecls = desugar (parse src)
+processDeclInput src = match parseResult src
+  Err e => printParseErr 0 e
+  Ok raw => processDeclParsed (desugar raw)
+
+processDeclParsed : List Decl -> <IO> Unit
+processDeclParsed newDecls =
   let combined = combinedDecls newDecls
   let (errs, allSchemes, _bindings, _) = runPipeline combined
   match errs
@@ -328,7 +342,12 @@ schemeToBinding (n, s) = (n, ppScheme s)
 processExprInput : String -> <IO> Unit
 processExprInput src =
   let wrappedSrc = "__repl__ = " ++ src
-  let newDecls = desugar (parse wrappedSrc)
+  match parseResult wrappedSrc
+    Err e => printParseErr 11 e
+    Ok raw => processExprParsed (desugar raw)
+
+processExprParsed : List Decl -> <IO> Unit
+processExprParsed newDecls =
   let combined = combinedDecls newDecls
   let (errs, allSchemes, bindings, facts) = runPipeline combined
   match errs
@@ -344,21 +363,26 @@ processExprInput src =
         _ => ()
 
 -- ── Process :type command ─────────────────────────────────────────────────
-processTypeCmd : String -> <IO> Unit
-processTypeCmd exprSrc =
+processTypeCmd : Int -> String -> <IO> Unit
+processTypeCmd commandLen exprSrc =
   let trimmed = stringTrim exprSrc
   if trimmed == "" then
     ePutStrLn ":type requires an expression"
   else
-    let wrappedSrc = "__repl__ = " ++ trimmed
-    let newDecls = desugar (parse wrappedSrc)
-    let combined = combinedDecls newDecls
-    let (errs, allSchemes, _, _) = runPipeline combined
-    match errs
-      e :: _ => mapIO_ printErr errs
-      [] => match lookupScheme "__repl__" allSchemes
-        Some scheme => putStrLn (ppScheme scheme)
-        None => ()
+    let wrappedSrc = "__repl__ = " ++ exprSrc
+    match parseResult wrappedSrc
+      Err e => printParseErr (11 - commandLen) e
+      Ok raw => processTypeParsed (desugar raw)
+
+processTypeParsed : List Decl -> <IO> Unit
+processTypeParsed newDecls =
+  let combined = combinedDecls newDecls
+  let (errs, allSchemes, _, _) = runPipeline combined
+  match errs
+    e :: _ => mapIO_ printErr errs
+    [] => match lookupScheme "__repl__" allSchemes
+      Some scheme => putStrLn (ppScheme scheme)
+      None => ()
 
 -- ── Process :browse / :env command ───────────────────────────────────────
 processBrowse : Unit -> <IO> Unit
@@ -411,11 +435,11 @@ processCommand cmd =
     True
   else if startsWith ":type" cmd then
     let rest = stringSlice 5 (stringLength cmd) cmd
-    let _ = processTypeCmd rest
+    let _ = processTypeCmd 5 rest
     True
   else if startsWith ":t " cmd then
     let rest = stringSlice 3 (stringLength cmd) cmd
-    let _ = processTypeCmd rest
+    let _ = processTypeCmd 3 rest
     True
   else
     let _ =

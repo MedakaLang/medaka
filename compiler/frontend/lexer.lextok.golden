@@ -1,5 +1,23 @@
 NEWLINE
 IMPORT
+IDENT "frontend"
+DOT
+IDENT "parse_diagnostic"
+DOT_LBRACE
+UPPER "ParseDiagnosticKind"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+UPPER "UnicodeProblem"
+LPAREN
+DOTDOT
+RPAREN
+COMMA
+IDENT "renderParseProblem"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "support"
 DOT
 IDENT "stage_count"
@@ -54,1477 +72,47 @@ COMMA
 IDENT "listLen"
 COMMA
 IDENT "anyList"
-COMMA
-IDENT "u64HalvesHex"
 RBRACE
 NEWLINE
-PUBLIC
 EXPORT
-DATA
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_token"
+DOT_LBRACE
 UPPER "Token"
-EQUAL
-INDENT
-PIPE
-UPPER "TInt"
-UPPER "Int"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TWideInt"
-UPPER "Int"
-UPPER "Int"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TFloat"
-UPPER "Float"
-NEWLINE
-PIPE
-UPPER "TString"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TChar"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TBool"
-UPPER "Bool"
-NEWLINE
-PIPE
-UPPER "TInterpOpen"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TInterpMid"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TInterpEnd"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TIdent"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TUpper"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TBacktickIdent"
-UPPER "String"
-NEWLINE
-PIPE
-UPPER "TLet"
-NEWLINE
-PIPE
-UPPER "TRec"
-NEWLINE
-PIPE
-UPPER "TWith"
-NEWLINE
-PIPE
-UPPER "TMut"
-NEWLINE
-PIPE
-UPPER "TIn"
-NEWLINE
-PIPE
-UPPER "TIf"
-NEWLINE
-PIPE
-UPPER "TThen"
-NEWLINE
-PIPE
-UPPER "TElse"
-NEWLINE
-PIPE
-UPPER "TMatch"
-NEWLINE
-PIPE
-UPPER "TData"
-NEWLINE
-PIPE
-UPPER "TInterface"
-NEWLINE
-PIPE
-UPPER "TDefault"
-NEWLINE
-PIPE
-UPPER "TImpl"
-NEWLINE
-PIPE
-UPPER "TImport"
-NEWLINE
-PIPE
-UPPER "TExport"
-NEWLINE
-PIPE
-UPPER "TPublic"
-NEWLINE
-PIPE
-UPPER "TWhere"
-NEWLINE
-PIPE
-UPPER "TOf"
-NEWLINE
-PIPE
-UPPER "TRequires"
-NEWLINE
-PIPE
-UPPER "TDo"
-NEWLINE
-PIPE
-UPPER "TDefer"
-NEWLINE
-PIPE
-UPPER "TAs"
-NEWLINE
-PIPE
-UPPER "TExtern"
-NEWLINE
-PIPE
-UPPER "TDeriving"
-NEWLINE
-PIPE
-UPPER "TType"
-NEWLINE
-PIPE
-UPPER "TNewtype"
-NEWLINE
-PIPE
-UPPER "TProp"
-NEWLINE
-PIPE
-UPPER "TTest"
-NEWLINE
-PIPE
-UPPER "TBench"
-NEWLINE
-PIPE
-UPPER "TEffect"
-NEWLINE
-PIPE
-UPPER "TFunction"
-NEWLINE
-PIPE
-UPPER "TPlus"
-NEWLINE
-PIPE
-UPPER "TMinus"
-NEWLINE
-PIPE
-UPPER "TMinusTight"
-NEWLINE
-PIPE
-UPPER "TStar"
-NEWLINE
-PIPE
-UPPER "TSlash"
-NEWLINE
-PIPE
-UPPER "TMod"
-NEWLINE
-PIPE
-UPPER "TEqEq"
-NEWLINE
-PIPE
-UPPER "TNeq"
-NEWLINE
-PIPE
-UPPER "TBangEq"
-NEWLINE
-PIPE
-UPPER "TLt"
-NEWLINE
-PIPE
-UPPER "TGt"
-NEWLINE
-PIPE
-UPPER "TLeq"
-NEWLINE
-PIPE
-UPPER "TGeq"
-NEWLINE
-PIPE
-UPPER "TAnd"
-NEWLINE
-PIPE
-UPPER "TOr"
-NEWLINE
-PIPE
-UPPER "TCons"
-NEWLINE
-PIPE
-UPPER "TPlusPlus"
-NEWLINE
-PIPE
-UPPER "TPipeRight"
-NEWLINE
-PIPE
-UPPER "TRCompose"
-NEWLINE
-PIPE
-UPPER "TLCompose"
-NEWLINE
-PIPE
-UPPER "TFatArrow"
-NEWLINE
-PIPE
-UPPER "TArrow"
-NEWLINE
-PIPE
-UPPER "TLArrow"
-NEWLINE
-PIPE
-UPPER "TAt"
-NEWLINE
-PIPE
-UPPER "TBang"
-NEWLINE
-PIPE
-UPPER "TAsAt"
-NEWLINE
-PIPE
-UPPER "TEqual"
-NEWLINE
-PIPE
-UPPER "TColon"
-NEWLINE
-PIPE
-UPPER "TColonEq"
-NEWLINE
-PIPE
-UPPER "TComma"
-NEWLINE
-PIPE
-UPPER "TDot"
-NEWLINE
-PIPE
-UPPER "TPipe"
-NEWLINE
-PIPE
-UPPER "TUnderscore"
-NEWLINE
-PIPE
-UPPER "TLParen"
-NEWLINE
-PIPE
-UPPER "TRParen"
-NEWLINE
-PIPE
-UPPER "TLBracket"
-NEWLINE
-PIPE
-UPPER "TLBracketTight"
-NEWLINE
-PIPE
-UPPER "TRBracket"
-NEWLINE
-PIPE
-UPPER "TLBrace"
-NEWLINE
-PIPE
-UPPER "TRBrace"
-NEWLINE
-PIPE
-UPPER "TLArray"
-NEWLINE
-PIPE
-UPPER "TRArray"
-NEWLINE
-PIPE
-UPPER "TDotLBrace"
-NEWLINE
-PIPE
-UPPER "TDotStar"
-NEWLINE
-PIPE
-UPPER "TEllipsis"
-NEWLINE
-PIPE
-UPPER "TDotDot"
-NEWLINE
-PIPE
-UPPER "TDotDotEq"
-NEWLINE
-PIPE
-UPPER "TNewline"
-NEWLINE
-PIPE
-UPPER "TIndent"
-NEWLINE
-PIPE
-UPPER "TDedent"
-NEWLINE
-PIPE
-UPPER "TEof"
-NEWLINE
-PIPE
-UPPER "TLexError"
-UPPER "String"
-NEWLINE
-DERIVING
 LPAREN
-UPPER "Eq"
+DOTDOT
 RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "tokenToString"
-COLON
-UPPER "Token"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TInt"
-IDENT "n"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "INT "
-PLUSPLUS
-IDENT "intToString"
-IDENT "n"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TWideInt"
-IDENT "hi"
-IDENT "lo"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "INT 0x"
-PLUSPLUS
-IDENT "u64HalvesHex"
-IDENT "hi"
-IDENT "lo"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TFloat"
-IDENT "f"
-RPAREN
-EQUAL
-STRING "FLOAT "
-PLUSPLUS
-IDENT "floatToString"
-IDENT "f"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TString"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "STRING "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TChar"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "CHAR "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TBool"
-UPPER "True"
-RPAREN
-EQUAL
-STRING "BOOL true"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TBool"
-UPPER "False"
-RPAREN
-EQUAL
-STRING "BOOL false"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TInterpOpen"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "INTERP_OPEN "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TInterpMid"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "INTERP_MID "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TInterpEnd"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "INTERP_END "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TIdent"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "IDENT "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TUpper"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "UPPER "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TBacktickIdent"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "BACKTICK_IDENT "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLet"
-EQUAL
-STRING "LET"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRec"
-EQUAL
-STRING "REC"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TWith"
-EQUAL
-STRING "WITH"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TMut"
-EQUAL
-STRING "MUT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TIn"
-EQUAL
-STRING "IN"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TIf"
-EQUAL
-STRING "IF"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TThen"
-EQUAL
-STRING "THEN"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TElse"
-EQUAL
-STRING "ELSE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TMatch"
-EQUAL
-STRING "MATCH"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TData"
-EQUAL
-STRING "DATA"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TInterface"
-EQUAL
-STRING "INTERFACE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDefault"
-EQUAL
-STRING "DEFAULT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TImpl"
-EQUAL
-STRING "IMPL"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TImport"
-EQUAL
-STRING "IMPORT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TExport"
-EQUAL
-STRING "EXPORT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TPublic"
-EQUAL
-STRING "PUBLIC"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TWhere"
-EQUAL
-STRING "WHERE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TOf"
-EQUAL
-STRING "OF"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRequires"
-EQUAL
-STRING "REQUIRES"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDo"
-EQUAL
-STRING "DO"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDefer"
-EQUAL
-STRING "DEFER"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TAs"
-EQUAL
-STRING "AS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TExtern"
-EQUAL
-STRING "EXTERN"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDeriving"
-EQUAL
-STRING "DERIVING"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TType"
-EQUAL
-STRING "TYPE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TNewtype"
-EQUAL
-STRING "NEWTYPE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TProp"
-EQUAL
-STRING "PROP"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TTest"
-EQUAL
-STRING "TEST"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TBench"
-EQUAL
-STRING "BENCH"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TEffect"
-EQUAL
-STRING "EFFECT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TFunction"
-EQUAL
-STRING "FUNCTION"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TPlus"
-EQUAL
-STRING "PLUS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TMinus"
-EQUAL
-STRING "MINUS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TMinusTight"
-EQUAL
-STRING "MINUS_TIGHT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TStar"
-EQUAL
-STRING "STAR"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TSlash"
-EQUAL
-STRING "SLASH"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TMod"
-EQUAL
-STRING "MOD"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TEqEq"
-EQUAL
-STRING "EQ_EQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TNeq"
-EQUAL
-STRING "NEQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TBangEq"
-EQUAL
-STRING "BANGEQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLt"
-EQUAL
-STRING "LT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TGt"
-EQUAL
-STRING "GT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLeq"
-EQUAL
-STRING "LEQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TGeq"
-EQUAL
-STRING "GEQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TAnd"
-EQUAL
-STRING "AND"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TOr"
-EQUAL
-STRING "OR"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TCons"
-EQUAL
-STRING "CONS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TPlusPlus"
-EQUAL
-STRING "PLUSPLUS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TPipeRight"
-EQUAL
-STRING "PIPE_RIGHT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRCompose"
-EQUAL
-STRING "RCOMPOSE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLCompose"
-EQUAL
-STRING "LCOMPOSE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TFatArrow"
-EQUAL
-STRING "FAT_ARROW"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TArrow"
-EQUAL
-STRING "ARROW"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLArrow"
-EQUAL
-STRING "LARROW"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TAt"
-EQUAL
-STRING "AT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TBang"
-EQUAL
-STRING "BANG"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TAsAt"
-EQUAL
-STRING "AS_AT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TEqual"
-EQUAL
-STRING "EQUAL"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TColon"
-EQUAL
-STRING "COLON"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TColonEq"
-EQUAL
-STRING "COLONEQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TComma"
-EQUAL
-STRING "COMMA"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDot"
-EQUAL
-STRING "DOT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TPipe"
-EQUAL
-STRING "PIPE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TUnderscore"
-EQUAL
-STRING "UNDERSCORE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLParen"
-EQUAL
-STRING "LPAREN"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRParen"
-EQUAL
-STRING "RPAREN"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLBracket"
-EQUAL
-STRING "LBRACKET"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLBracketTight"
-EQUAL
-STRING "LBRACKET_TIGHT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRBracket"
-EQUAL
-STRING "RBRACKET"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLBrace"
-EQUAL
-STRING "LBRACE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRBrace"
-EQUAL
-STRING "RBRACE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TLArray"
-EQUAL
-STRING "LARRAY"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRArray"
-EQUAL
-STRING "RARRAY"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDotLBrace"
-EQUAL
-STRING "DOT_LBRACE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDotStar"
-EQUAL
-STRING "DOT_STAR"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TEllipsis"
-EQUAL
-STRING "ELLIPSIS"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDotDot"
-EQUAL
-STRING "DOTDOT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDotDotEq"
-EQUAL
-STRING "DOTDOT_EQ"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TNewline"
-EQUAL
-STRING "NEWLINE"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TIndent"
-EQUAL
-STRING "INDENT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TDedent"
-EQUAL
-STRING "DEDENT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TEof"
-EQUAL
-STRING "EOF"
-NEWLINE
-IDENT "tokenToString"
-LPAREN
-UPPER "TLexError"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "LEX_ERROR "
-PLUSPLUS
-IDENT "debugStringLit"
-IDENT "s"
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "describeToken"
-COLON
-UPPER "Token"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TInt"
-UNDERSCORE
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a number"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TWideInt"
-UNDERSCORE
-UNDERSCORE
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a number"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TFloat"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a number"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TString"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a string"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TChar"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a character literal"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TBool"
-UPPER "True"
-RPAREN
-EQUAL
-STRING "`true`"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TBool"
-UPPER "False"
-RPAREN
-EQUAL
-STRING "`false`"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TInterpOpen"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a string"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TInterpMid"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a string"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TInterpEnd"
-UNDERSCORE
-RPAREN
-EQUAL
-STRING "a string"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TIdent"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "`"
-PLUSPLUS
-IDENT "s"
-PLUSPLUS
-STRING "`"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TUpper"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "`"
-PLUSPLUS
-IDENT "s"
-PLUSPLUS
-STRING "`"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TBacktickIdent"
-IDENT "s"
-RPAREN
-EQUAL
-STRING "`"
-PLUSPLUS
-IDENT "s"
-PLUSPLUS
-STRING "`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLet"
-EQUAL
-STRING "`let`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRec"
-EQUAL
-STRING "`rec`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TWith"
-EQUAL
-STRING "`with`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TMut"
-EQUAL
-STRING "`mut`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TIn"
-EQUAL
-STRING "`in`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TIf"
-EQUAL
-STRING "`if`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TThen"
-EQUAL
-STRING "`then`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TElse"
-EQUAL
-STRING "`else`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TMatch"
-EQUAL
-STRING "`match`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TData"
-EQUAL
-STRING "`data`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TInterface"
-EQUAL
-STRING "`interface`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDefault"
-EQUAL
-STRING "`default`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TImpl"
-EQUAL
-STRING "`impl`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TImport"
-EQUAL
-STRING "`import`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TExport"
-EQUAL
-STRING "`export`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TPublic"
-EQUAL
-STRING "`public`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TWhere"
-EQUAL
-STRING "`where`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TOf"
-EQUAL
-STRING "`of`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRequires"
-EQUAL
-STRING "`requires`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDo"
-EQUAL
-STRING "`do`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDefer"
-EQUAL
-STRING "`defer`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TAs"
-EQUAL
-STRING "`as`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TExtern"
-EQUAL
-STRING "`extern`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDeriving"
-EQUAL
-STRING "`deriving`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TType"
-EQUAL
-STRING "`type`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TNewtype"
-EQUAL
-STRING "`newtype`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TProp"
-EQUAL
-STRING "`prop`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TTest"
-EQUAL
-STRING "`test`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TBench"
-EQUAL
-STRING "`bench`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TEffect"
-EQUAL
-STRING "`effect`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TFunction"
-EQUAL
-STRING "`function`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TPlus"
-EQUAL
-STRING "`+`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TMinus"
-EQUAL
-STRING "`-`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TMinusTight"
-EQUAL
-STRING "`-`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TStar"
-EQUAL
-STRING "`*`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TSlash"
-EQUAL
-STRING "`/`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TMod"
-EQUAL
-STRING "`%`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TEqEq"
-EQUAL
-STRING "`==`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TNeq"
-EQUAL
-STRING "`/=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TBangEq"
-EQUAL
-STRING "`!=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLt"
-EQUAL
-STRING "`<`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TGt"
-EQUAL
-STRING "`>`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLeq"
-EQUAL
-STRING "`<=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TGeq"
-EQUAL
-STRING "`>=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TAnd"
-EQUAL
-STRING "`&&`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TOr"
-EQUAL
-STRING "`||`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TCons"
-EQUAL
-STRING "`::`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TPlusPlus"
-EQUAL
-STRING "`++`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TPipeRight"
-EQUAL
-STRING "`|>`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRCompose"
-EQUAL
-STRING "`>>`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLCompose"
-EQUAL
-STRING "`<<`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TFatArrow"
-EQUAL
-STRING "`=>`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TArrow"
-EQUAL
-STRING "`->`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLArrow"
-EQUAL
-STRING "`<-`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TAt"
-EQUAL
-STRING "`@`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TBang"
-EQUAL
-STRING "`!`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TAsAt"
-EQUAL
-STRING "`@`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TEqual"
-EQUAL
-STRING "`=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TColon"
-EQUAL
-STRING "`:`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TColonEq"
-EQUAL
-STRING "`:=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TComma"
-EQUAL
-STRING "`,`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDot"
-EQUAL
-STRING "`.`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TPipe"
-EQUAL
-STRING "`|`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TUnderscore"
-EQUAL
-STRING "`_`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLParen"
-EQUAL
-STRING "`(`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRParen"
-EQUAL
-STRING "`)`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLBracket"
-EQUAL
-STRING "`[`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLBracketTight"
-EQUAL
-STRING "`[`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRBracket"
-EQUAL
-STRING "`]`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLBrace"
-EQUAL
-STRING "`{`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRBrace"
-EQUAL
-STRING "`}`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TLArray"
-EQUAL
-STRING "`[|`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRArray"
-EQUAL
-STRING "`|]`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDotLBrace"
-EQUAL
-STRING "`.{`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDotStar"
-EQUAL
-STRING "`.*`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TEllipsis"
-EQUAL
-STRING "`...`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDotDot"
-EQUAL
-STRING "`..`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDotDotEq"
-EQUAL
-STRING "`..=`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TNewline"
-EQUAL
-STRING "a line break"
-NEWLINE
-IDENT "describeToken"
-UPPER "TIndent"
-EQUAL
-STRING "an indent"
-NEWLINE
-IDENT "describeToken"
-UPPER "TDedent"
-EQUAL
-STRING "a dedent"
-NEWLINE
-IDENT "describeToken"
-UPPER "TEof"
-EQUAL
-STRING "end of input"
-NEWLINE
-IDENT "describeToken"
-LPAREN
-UPPER "TLexError"
-IDENT "s"
-RPAREN
-EQUAL
-IDENT "s"
-NEWLINE
-DATA
+COMMA
+IDENT "tokenToString"
+COMMA
+IDENT "describeToken"
+COMMA
+IDENT "isCommaTok"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "frontend"
+DOT
+IDENT "lex_token"
+DOT_LBRACE
 UPPER "RawTok"
-EQUAL
-INDENT
-PIPE
-UPPER "RTok"
-UPPER "Token"
-UPPER "Int"
-UPPER "Int"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
 NEWLINE
-PIPE
-UPPER "RTripleInterpOpen"
-UPPER "String"
-UPPER "Int"
-UPPER "Int"
-NEWLINE
-PIPE
-UPPER "RNewline"
-UPPER "Int"
-UPPER "Int"
-NEWLINE
-PIPE
-UPPER "RComment"
-UPPER "Int"
-UPPER "Int"
-NEWLINE
-PIPE
-UPPER "RClauseNl"
-UPPER "Int"
-UPPER "Int"
-NEWLINE
-PIPE
-UPPER "RClauseOpen"
-UPPER "Int"
-UPPER "Int"
-UPPER "Int"
-NEWLINE
-DEDENT
+EXPORT
+IMPORT
+IDENT "support"
+DOT
+IDENT "source_index"
+DOT_LBRACE
+IDENT "lineStartsOf"
+COMMA
+IDENT "offsetToLineColFast"
+RBRACE
 NEWLINE
 IDENT "at"
 COLON
@@ -1646,24 +234,6 @@ EQ_EQ
 IDENT "c"
 NEWLINE
 DEDENT
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "isCommaTok"
-COLON
-UPPER "Token"
-ARROW
-UPPER "Bool"
-NEWLINE
-IDENT "isCommaTok"
-UPPER "TComma"
-EQUAL
-UPPER "True"
-NEWLINE
-IDENT "isCommaTok"
-UNDERSCORE
-EQUAL
-UPPER "False"
 NEWLINE
 EXPORT
 NEWLINE
@@ -2205,7 +775,8 @@ UPPER "None"
 FAT_ARROW
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "integer literal too large for U64 (max 2^64 - 1)"
+IDENT "e"
+UPPER "IntegerOverflow"
 NEWLINE
 DEDENT
 NEWLINE
@@ -2623,7 +1194,8 @@ THEN
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "unterminated block comment"
+IDENT "len"
+UPPER "UnterminatedComment"
 NEWLINE
 DEDENT
 ELSE
@@ -2788,6 +1360,13 @@ IDENT "at"
 IDENT "src"
 IDENT "p"
 RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
 EQUAL
 IDENT "p"
 NEWLINE
@@ -2809,23 +1388,26 @@ IDENT "lexErrorTok"
 COLON
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "ParseDiagnosticKind"
 ARROW
 UPPER "List"
 UPPER "RawTok"
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "p"
-IDENT "msg"
+IDENT "end"
+IDENT "kind"
 EQUAL
 LBRACKET
 UPPER "RTok"
 LPAREN
 UPPER "TLexError"
-IDENT "msg"
+IDENT "kind"
 RPAREN
 IDENT "p"
-IDENT "p"
+IDENT "end"
 RBRACKET
 NEWLINE
 IDENT "skipBlockComment"
@@ -4445,41 +3027,22 @@ IDENT "pos"
 IDENT "bad"
 IDENT "prefix"
 IDENT "digits"
+EQUAL
 INDENT
-PIPE
+IDENT "lexErrorTok"
+IDENT "pos"
+LPAREN
+IDENT "pos"
+PLUS
 IDENT "stringLength"
-IDENT "digits"
-EQ_EQ
-INT 0
-EQUAL
-INDENT
-IDENT "lexErrorTok"
-IDENT "pos"
-INTERP_OPEN "malformed radix literal `"
 IDENT "bad"
-INTERP_MID "`: no digits follow the "
-IDENT "prefix"
-INTERP_END " prefix; an underscore may only separate digits"
-NEWLINE
-DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-INDENT
-IDENT "lexErrorTok"
-IDENT "pos"
-INTERP_OPEN "malformed radix literal `"
+RPAREN
+LPAREN
+UPPER "MalformedRadix"
 IDENT "bad"
-INTERP_MID "`: an underscore cannot follow the "
 IDENT "prefix"
-INTERP_MID " prefix; write `"
-IDENT "prefix"
-INTERP_MID ""
 IDENT "digits"
-INTERP_END "`"
-NEWLINE
-DEDENT
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -4905,11 +3468,13 @@ INTERP_END ""
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+IDENT "expE"
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must follow the decimal point; write `"
 IDENT "good"
-INTERP_END "`"
+UPPER "False"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -5081,11 +3646,21 @@ RPAREN
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+LPAREN
+IDENT "e1"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must follow the decimal point; write `"
+LPAREN
 IDENT "bad"
-INTERP_END "0`"
+PLUSPLUS
+STRING "0"
+RPAREN
+UPPER "False"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -5225,7 +3800,8 @@ ELSE
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "float literal out of range (overflows to infinity)"
+IDENT "endp"
+UPPER "FloatOverflow"
 NEWLINE
 DEDENT
 NEWLINE
@@ -5267,7 +3843,8 @@ IDENT "len"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
-STRING "unterminated string literal"
+IDENT "len"
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "isQuote"
@@ -5348,7 +3925,8 @@ RPAREN
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
-STRING "unterminated string literal"
+IDENT "len"
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -5517,18 +4095,19 @@ IDENT "invalidStrEscMsg"
 COLON
 UPPER "Char"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "invalidStrEscMsg"
 IDENT "e"
 EQUAL
-INDENT
-INTERP_OPEN "invalid escape sequence `\\"
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
-NEWLINE
-DEDENT
+RPAREN
+UPPER "False"
 NEWLINE
 IDENT "scanStrEsc"
 COLON
@@ -5615,14 +4194,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -5661,6 +4236,16 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
 LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
@@ -5701,6 +4286,11 @@ UPPER "None"
 FAT_ARROW
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -6074,14 +4664,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6119,6 +4705,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -6132,6 +4728,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -6786,14 +5387,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -6834,6 +5431,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -6847,6 +5454,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -7314,14 +5926,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -7359,6 +5967,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
@@ -7372,6 +5990,11 @@ IDENT "otherwise"
 EQUAL
 IDENT "lexErrorTok"
 IDENT "p"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
 LPAREN
 IDENT "invalidStrEscMsg"
 IDENT "e"
@@ -8744,6 +7367,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 PIPE
@@ -8760,13 +7384,17 @@ INT 1
 GEQ
 IDENT "len"
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 LPAREN
 IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isBackslash"
@@ -8841,16 +7469,18 @@ IDENT "src"
 IDENT "p"
 RPAREN
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 LPAREN
 IDENT "p"
 MINUS
 INT 1
 RPAREN
-STRING "character literal is empty; a character is exactly one codepoint, such as `'a'`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+UPPER "EmptyChar"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -8866,11 +7496,11 @@ DEDENT
 NEWLINE
 IDENT "charUntermMsg"
 COLON
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "charUntermMsg"
 EQUAL
-STRING "unterminated character literal"
+UPPER "UnterminatedChar"
 NEWLINE
 IDENT "escChar"
 COLON
@@ -8909,6 +7539,16 @@ INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 LPAREN
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscMsgChar"
 IDENT "src"
 IDENT "len"
@@ -8926,15 +7566,23 @@ IDENT "e"
 INDENT
 UPPER "None"
 FAT_ARROW
-INDENT
 IDENT "lexErrorTok"
 IDENT "p"
-INTERP_OPEN "invalid escape sequence `\\"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+LPAREN
+UPPER "InvalidEscape"
+LPAREN
+STRING "\\"
+PLUSPLUS
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\u{...}"
-NEWLINE
-DEDENT
+RPAREN
+UPPER "True"
+RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "s"
@@ -8991,6 +7639,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9099,6 +7748,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9110,12 +7760,20 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
-INTERP_OPEN "character literal `'"
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "LongChar"
+LPAREN
 IDENT "substr"
 IDENT "src"
 IDENT "p"
 IDENT "e"
-INTERP_END "'` has more than one codepoint; write a `\"...\"` string for text"
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9432,23 +8090,33 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscTermErr"
 IDENT "src"
 IDENT "len"
 IDENT "s"
 IDENT "he"
+IDENT "p"
+IDENT "endp"
 INDENT
 PIPE
 IDENT "he"
 GEQ
 IDENT "len"
 EQUAL
-INDENT
-STRING "unicode escape is not terminated; the file ends before its closing `}`"
-NEWLINE
-DEDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeUnterminated"
+RPAREN
 NEWLINE
 PIPE
 IDENT "at"
@@ -9457,10 +8125,13 @@ IDENT "he"
 EQ_EQ
 CHAR "_"
 EQUAL
-INDENT
-STRING "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
-NEWLINE
-DEDENT
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeSeparator"
+RPAREN
 NEWLINE
 PIPE
 IDENT "he"
@@ -9474,7 +8145,13 @@ EQ_EQ
 CHAR "}"
 EQUAL
 INDENT
-STRING "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+UPPER "UnicodeEmpty"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9484,14 +8161,23 @@ EQ_EQ
 IDENT "s"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape expects a hex digit after `\\u{` but found `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedDigit"
+LPAREN
 IDENT "charToStr"
 LPAREN
 IDENT "at"
 IDENT "src"
 IDENT "he"
 RPAREN
-INTERP_END "`"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9499,14 +8185,23 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape expects `}` after its hex digits but found `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeExpectedClose"
+LPAREN
 IDENT "charToStr"
 LPAREN
 IDENT "at"
 IDENT "src"
 IDENT "he"
 RPAREN
-INTERP_END "`"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9521,14 +8216,24 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "List"
+UPPER "RawTok"
 NEWLINE
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
+EQUAL
 INDENT
-PIPE
+LET
+IDENT "endp"
+EQUAL
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+NEWLINE
+IF
 IDENT "not"
 LPAREN
 IDENT "uniEscWellFormed"
@@ -9536,7 +8241,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 RPAREN
-EQUAL
+THEN
 INDENT
 IDENT "uniEscTermErr"
 IDENT "src"
@@ -9556,12 +8261,11 @@ PLUS
 INT 3
 RPAREN
 RPAREN
+IDENT "p"
+IDENT "endp"
 NEWLINE
 DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
+ELSE
 MATCH
 IDENT "uniEscCode"
 IDENT "src"
@@ -9575,28 +8279,150 @@ IDENT "uniIsSurrogate"
 IDENT "cp"
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeSurrogate"
+LPAREN
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape `"
+IDENT "lexErrorTok"
+IDENT "p"
+IDENT "endp"
+LPAREN
+UPPER "BadUnicodeEscape"
+LPAREN
+UPPER "UnicodeOutOfRange"
+LPAREN
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "` is out of range; a codepoint is at most 10FFFF"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "unicodeErrorEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 3
+RPAREN
+NEWLINE
+IDENT "unicodeErrorEndGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "at"
+IDENT "src"
+IDENT "p"
+EQ_EQ
+CHAR "}"
+EQUAL
+IDENT "p"
+PLUS
+INT 1
+NEWLINE
+PIPE
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+OR
+IDENT "isCR"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "p"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "unicodeErrorEndGo"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9631,14 +8457,10 @@ IDENT "p"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "lexErrorTok"
-IDENT "p"
-LPAREN
 IDENT "uniEscErr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-RPAREN
 NEWLINE
 UPPER "Some"
 IDENT "c"
@@ -9710,6 +8532,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
+IDENT "len"
 IDENT "charUntermMsg"
 NEWLINE
 DEDENT
@@ -9900,7 +8723,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
@@ -9908,17 +8731,19 @@ IDENT "len"
 IDENT "p"
 EQUAL
 INDENT
-INTERP_OPEN "bare unicode escape `"
+UPPER "BareUnicodeEscape"
+LPAREN
 IDENT "bareUnicodeEscWritten"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_MID "` is not valid; did you mean `"
+RPAREN
+LPAREN
 IDENT "bareUnicodeEscSuggested"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "`?"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -9931,7 +8756,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "ParseDiagnosticKind"
 NEWLINE
 IDENT "bareUnicodeEscMsgChar"
 IDENT "src"
@@ -11366,12 +10191,14 @@ IDENT "depth"
 IDENT "id"
 CHAR "\\"
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "Medaka has no `\\x -> e` lambdas; write `x => e`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsLambda"
 NEWLINE
 IDENT "singleOp"
 IDENT "src"
@@ -11381,12 +10208,14 @@ IDENT "depth"
 IDENT "id"
 CHAR "$"
 EQUAL
-INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "Medaka has no `$`; write `f (g x)`"
-NEWLINE
-DEDENT
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+UPPER "HsDollar"
 NEWLINE
 IDENT "singleOp"
 IDENT "src"
@@ -11399,10 +10228,18 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "unexpected character `"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+LPAREN
+UPPER "UnexpectedCharacter"
+LPAREN
 IDENT "charToStr"
 IDENT "c"
-INTERP_END "`"
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -11572,11 +10409,17 @@ IDENT "e"
 NEWLINE
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "malformed float literal `"
+IDENT "e"
+LPAREN
+UPPER "MalformedFloat"
 IDENT "bad"
-INTERP_MID "`: a digit must precede the decimal point; write `0"
+LPAREN
+STRING "0"
+PLUSPLUS
 IDENT "bad"
-INTERP_END "`"
+RPAREN
+UPPER "True"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -19138,226 +17981,6 @@ INT 0
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "lineStartsOf"
-COLON
-UPPER "String"
-ARROW
-UPPER "Array"
-UPPER "Int"
-NEWLINE
-IDENT "lineStartsOf"
-IDENT "s"
-EQUAL
-INDENT
-LET
-IDENT "src"
-EQUAL
-IDENT "stringToChars"
-IDENT "s"
-NEWLINE
-LET
-IDENT "len"
-EQUAL
-IDENT "arrayLength"
-IDENT "src"
-NEWLINE
-IDENT "arrayFromList"
-LPAREN
-INT 0
-CONS
-IDENT "lineStartsGo"
-IDENT "src"
-IDENT "len"
-INT 0
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "lineStartsGo"
-COLON
-UPPER "Array"
-UPPER "Char"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "List"
-UPPER "Int"
-NEWLINE
-IDENT "lineStartsGo"
-IDENT "src"
-IDENT "len"
-IDENT "i"
-INDENT
-PIPE
-IDENT "i"
-GEQ
-IDENT "len"
-EQUAL
-LBRACKET
-RBRACKET
-NEWLINE
-PIPE
-IDENT "arrayGetUnsafe"
-IDENT "i"
-IDENT "src"
-EQ_EQ
-CHAR "\n"
-EQUAL
-IDENT "i"
-PLUS
-INT 1
-CONS
-IDENT "lineStartsGo"
-IDENT "src"
-IDENT "len"
-LPAREN
-IDENT "i"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-IDENT "lineStartsGo"
-IDENT "src"
-IDENT "len"
-LPAREN
-IDENT "i"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "offsetToLineColFast"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-LPAREN
-UPPER "Int"
-COMMA
-UPPER "Int"
-RPAREN
-NEWLINE
-IDENT "offsetToLineColFast"
-IDENT "lineStarts"
-IDENT "off"
-EQUAL
-INDENT
-LET
-IDENT "idx"
-EQUAL
-IDENT "lineStartSearch"
-IDENT "lineStarts"
-IDENT "off"
-INT 0
-LPAREN
-IDENT "arrayLength"
-IDENT "lineStarts"
-MINUS
-INT 1
-RPAREN
-NEWLINE
-LPAREN
-IDENT "idx"
-PLUS
-INT 1
-COMMA
-IDENT "off"
-MINUS
-IDENT "arrayGetUnsafe"
-IDENT "idx"
-IDENT "lineStarts"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "lineStartSearch"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-NEWLINE
-IDENT "lineStartSearch"
-IDENT "arr"
-IDENT "off"
-IDENT "lo"
-IDENT "hi"
-INDENT
-PIPE
-IDENT "lo"
-GEQ
-IDENT "hi"
-EQUAL
-IDENT "lo"
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-INDENT
-LET
-IDENT "mid"
-EQUAL
-LPAREN
-IDENT "lo"
-PLUS
-IDENT "hi"
-PLUS
-INT 1
-RPAREN
-SLASH
-INT 2
-NEWLINE
-IF
-IDENT "arrayGetUnsafe"
-IDENT "mid"
-IDENT "arr"
-LEQ
-IDENT "off"
-THEN
-INDENT
-IDENT "lineStartSearch"
-IDENT "arr"
-IDENT "off"
-IDENT "mid"
-IDENT "hi"
-NEWLINE
-DEDENT
-ELSE
-INDENT
-IDENT "lineStartSearch"
-IDENT "arr"
-IDENT "off"
-IDENT "lo"
-LPAREN
-IDENT "mid"
-MINUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-EXPORT
-NEWLINE
 IDENT "offsetsToLines"
 COLON
 UPPER "Array"
@@ -19437,6 +18060,60 @@ IDENT "line2"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "isLineBreakAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isLineBreakAt"
+IDENT "src"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+LT
+IDENT "arrayLength"
+IDENT "src"
+AND
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\n"
+OR
+IDENT "arrayGetUnsafe"
+IDENT "p"
+IDENT "src"
+EQ_EQ
+CHAR "\r"
+AND
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+GEQ
+IDENT "arrayLength"
+IDENT "src"
+OR
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+IDENT "src"
+NEQ
+CHAR "\n"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "advanceLine"
 COLON
 UPPER "Array"
@@ -19484,11 +18161,9 @@ IDENT "p"
 RPAREN
 NEWLINE
 PIPE
-IDENT "arrayGetUnsafe"
-IDENT "p"
+IDENT "isLineBreakAt"
 IDENT "src"
-EQ_EQ
-CHAR "\n"
+IDENT "p"
 EQUAL
 IDENT "advanceLine"
 IDENT "src"
@@ -19622,11 +18297,9 @@ IDENT "lineStart"
 RPAREN
 NEWLINE
 PIPE
-IDENT "at"
+IDENT "isLineBreakAt"
 IDENT "src"
 IDENT "p"
-EQ_EQ
-CHAR "\n"
 EQUAL
 IDENT "posLineColFrom"
 IDENT "src"

@@ -1814,8 +1814,8 @@ for gap_p in gap-p1 gap-p2; do
   }
 done
 [ "$(wc -l < "$INPUT_WORK/gap-record.events")" -eq 2 ] &&
-  sed -n '1p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapB' >/dev/null &&
-  sed -n '2p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapA' >/dev/null || {
+  sed -n '1p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapA' >/dev/null &&
+  sed -n '2p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapB' >/dev/null || {
     echo "FAIL wasm typed gap lifecycle: record events lost order or freshness"
     exit 1
   }
@@ -1833,7 +1833,7 @@ grep -Fx "GAP_STRICT_AFTER_RECORD_CENSUS" "$INPUT_WORK/strict-gap.out" >/dev/nul
   echo "FAIL wasm typed gap lifecycle: record/census setup did not precede strict gap"
   exit 1
 }
-grep -F "unbound variable 'missingGapB'" "$INPUT_WORK/strict-gap.err" >/dev/null || {
+grep -F "unbound variable 'missingGapA'" "$INPUT_WORK/strict-gap.err" >/dev/null || {
   echo "FAIL wasm typed gap lifecycle: same-process strict gap lost its loud diagnostic"
   exit 1
 }
@@ -2370,10 +2370,10 @@ assert_string_segments() {
     exit 1
   }
 }
-P_SEGMENTS="$(printf '0\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\n1\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n2\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n3\t\\70\\2d\\74\\61\\69\\6c\n4\t\\70\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n5\t\\70\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n6\t\\70\\2d\\63\\6c\\61\\75\\73\\65\n7\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\62\\6f\\64\\79\n8\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\6f\\74\\68\\65\\72\n9\t\\70\\2d\\65\\78\\70\\72')"
-P_REFS="$(printf '9\n9\n6\n7\n8\n3\n4\n5\n0\n1\n2')"
-U_SEGMENTS="$(printf '0\t\\75\\2d\\6f\\74\\68\\65\\72\n1\t\\75\\2d\\65\\78\\70\\72')"
-U_REFS="$(printf '1\n0')"
+P_SEGMENTS="$(printf '0\t\\70\\2d\\65\\78\\70\\72\n1\t\\70\\2d\\63\\6c\\61\\75\\73\\65\n2\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\62\\6f\\64\\79\n3\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\6f\\74\\68\\65\\72\n4\t\\70\\2d\\74\\61\\69\\6c\n5\t\\70\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n6\t\\70\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n7\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\n8\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n9\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72')"
+P_REFS="$(printf '0\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9')"
+U_SEGMENTS="$(printf '0\t\\75\\2d\\65\\78\\70\\72\n1\t\\75\\2d\\6f\\74\\68\\65\\72')"
+U_REFS="$(printf '0\n1')"
 assert_string_segments string-p1 "$WORK/string-p1.wat" "$P_SEGMENTS" "$P_REFS"
 assert_string_segments string-u "$WORK/string-u.wat" "$U_SEGMENTS" "$U_REFS"
 assert_string_segments string-p2 "$WORK/string-p2.wat" "$P_SEGMENTS" "$P_REFS"

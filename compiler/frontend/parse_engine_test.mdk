@@ -1,0 +1,224 @@
+import frontend.parse_engine.{
+  PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMode(..),
+  newParseContext, newParseContextWith, runPWith, runP, getPos, expectTok,
+  advance, failP, fatalAtP, orElse as parseOrElse, many, mark, rewind, depthOf,
+  withDepth, recordTrailingComma, recordUnitStart, forgetLatestUnitStart,
+  contextCues, tokLineCol, renderFail
+}
+import frontend.lex_token.{Token(..)}
+import frontend.parse_result.{
+  makeParseMetadata, metadataTrailingCommas, metadataUnitStarts
+}
+import test.{expectEqual, expectEach}
+
+session : Unit -> ParseContext
+session _ =
+  newParseContext
+    "a b c"
+    (arrayFromList [TIdent "a", TIdent "b", TIdent "c", TEof])
+    (arrayFromList [(0, 1), (2, 3), (4, 5), (5, 5)])
+
+status : PR a -> (String, Int)
+status (POk _ q) = ("ok", q)
+status (PErr f q) = (renderFail f, q)
+status (PFatal f q) = ("fatal: " ++ renderFail f, q)
+
+writeFail : Int -> Bool -> Parser Unit
+writeFail q fatal = defer
+  recordTrailingComma 1
+  recordUnitStart 4 2
+  if fatal then
+    fatalAtP "stop" q
+  else
+    ParserE (_ctx _p => PErr (FailMsg "miss") q)
+
+writeOk : Parser Unit
+writeOk = defer
+  recordTrailingComma 0
+  recordUnitStart 1 0
+
+test "sessions publish independent persistent cue lists" =
+  let p = session ()
+  let _ = runPWith p writeOk 0
+  let saved = contextCues p
+  let q = session ()
+  let _ = runPWith q (recordTrailingComma 2) 0
+  expectEqual ([(1, 0)], [(1, 1, 0)]) saved
+
+test "a published metadata value survives later context mutation" =
+  let ctx = session ()
+  let _ = runPWith ctx writeOk 0
+  let (cs, us) = contextCues ctx
+  let published = makeParseMetadata cs us
+  let _ = runPWith ctx (recordTrailingComma 2) 0
+  let _ = runPWith ctx forgetLatestUnitStart 0
+  expectEqual
+    ([(1, 0)], [(1, 1, 0)])
+    (metadataTrailingCommas published, metadataUnitStarts published)
+
+test "recoverable left failure rewinds before successful right alternative" =
+  let ctx = session ()
+  let r = runPWith ctx (parseOrElse (writeFail 3 False) writeOk) 0
+  expectEqual (("ok", 0), ([(1, 0)], [(1, 1, 0)])) (status r, contextCues ctx)
+
+test "both failed alternatives rewind and preserve farthest and tie selection" =
+  expectEach
+    (map
+      ((qa, qb) =>
+        let ctx = session ()
+        let right = defer
+          recordTrailingComma 2
+          ParserE (_ctx _p => PErr (FailMsg "right") qb)
+        let r = runPWith ctx (parseOrElse (writeFail qa False) right) 0
+        (
+          "\{qa}/\{qb}",
+          expectEqual
+            ((if qa > qb then "miss" else "right", max qa qb), ([], []))
+            (status r, contextCues ctx),
+        ))
+      [(3, 1), (1, 3), (2, 2)])
+
+test "fatal left commits without executing the right branch" =
+  let ctx = session ()
+  let calls = Ref 0
+  let right = ParserE (_ctx p =>
+    calls := !calls + 1
+    POk () p)
+  let r = runPWith ctx (parseOrElse (writeFail 3 True) right) 0
+  expectEqual
+    (("fatal: stop", 3), ([], []), 0)
+    (status r, contextCues ctx, !calls)
+
+test "fatal right alternative rewinds both attempted branches" =
+  let ctx = session ()
+  let r = runPWith ctx (parseOrElse (writeFail 2 False) (writeFail 1 True)) 0
+  expectEqual (("fatal: stop", 1), ([], [])) (status r, contextCues ctx)
+
+test "many keeps progress and rewinds its swallowed failed item" =
+  let ctx = session ()
+  let item = defer
+    p <- getPos
+    recordTrailingComma p
+    expectTok (TIdent "a")
+    deferPure p
+  let r = runPWith ctx (many item) 0
+  expectEqual (("ok", 1), ([(1, 0)], [])) (status r, contextCues ctx)
+
+test "many propagates fatal and rewinds its current item" =
+  let ctx = session ()
+  let r = runPWith ctx (many (writeFail 2 True)) 0
+  expectEqual (("fatal: stop", 2), ([], [])) (status r, contextCues ctx)
+
+test "zero progress preserves its terminal item but discards its writes" =
+  let ctx = session ()
+  let r =
+    runPWith
+      ctx
+      (many (defer
+        writeOk
+        deferPure 7))
+      0
+  match r
+    POk xs q => expectEqual (([7], 0), ([], [])) ((xs, q), contextCues ctx)
+    _ => expectEqual "ok" (fst (status r))
+
+test "zero progress restores a popped journal root as well as appended cues" =
+  let ctx = session ()
+  let _ = runPWith ctx writeOk 0
+  let r =
+    runPWith
+      ctx
+      (many (defer
+        forgetLatestUnitStart
+        recordTrailingComma 2
+        deferPure 9))
+      0
+  expectEqual (("ok", 0), ([(1, 0)], [(1, 1, 0)])) (status r, contextCues ctx)
+
+test "a mark restores its owning session and leaves another session alone" =
+  let p = session ()
+  let q = session ()
+  let saved = mark p
+  let _ = runPWith p writeOk 0
+  let _ = runPWith q (recordTrailingComma 2) 0
+  rewind saved
+  expectEqual (([], []), ([(1, 4)], [])) (contextCues p, contextCues q)
+
+test "successful lookahead rewinds appended and popped cues" =
+  let ctx = session ()
+  let _ = runPWith ctx writeOk 0
+  let saved = mark ctx
+  let r =
+    runPWith
+      ctx
+      (defer
+        forgetLatestUnitStart
+        recordTrailingComma 2
+        advance)
+      0
+  rewind saved
+  expectEqual (("ok", 1), ([(1, 0)], [(1, 1, 0)])) (status r, contextCues ctx)
+
+test "depth is restored for success, recoverable failure and fatal failure" =
+  expectEach
+    (map
+      ((label, parser) =>
+        let ctx = session ()
+        let r = runPWith ctx (withDepth 2 (FailMsg "limit") parser) 0
+        (label, expectEqual 0 (depthOf ctx)))
+      [
+        ("success", writeOk),
+        ("recoverable", failP "miss"),
+        ("fatal", fatalAtP "stop" 0),
+      ])
+
+test "depth cap is shared by nested parser executions" =
+  let ctx = session ()
+  let p = withDepth 1 (FailMsg "limit") (withDepth 1 (FailMsg "limit") writeOk)
+  let r = runPWith ctx p 2
+  expectEqual (("fatal: limit", 2), 0) (status r, depthOf ctx)
+
+test "location and guard-position modes remain independent" =
+  let ts = arrayFromList [TIdent "x", TEof]
+  let os = arrayFromList [(2, 3), (3, 3)]
+  expectEach
+    (map
+      ((name, mode, expected) =>
+        let ctx = newParseContextWith mode "  x" ts os
+        (name, expectEqual expected (tokLineCol ctx 0)))
+      [
+        ("unlocated syntax", UnlocatedSyntax, (0, 0)),
+        ("located syntax", LocatedSyntax, (0, 0)),
+        ("unlocated checked", UnlocatedChecked, (1, 2)),
+        ("located checked", LocatedChecked, (1, 2)),
+      ])
+
+test "parser construction defers effectful callbacks until execution" =
+  let calls = Ref 0
+  let p =
+    deferMap
+      (x =>
+        calls := !calls + 1
+        x)
+      (deferPure 3 : Parser Int)
+  let before = !calls
+  let _ = runP p (arrayFromList []) 0
+  expectEqual (0, 1) (before, !calls)
+
+test "parser-owned rollback leaves user callback effects intact" =
+  let ctx = session ()
+  let calls = Ref 0
+  let left = defer
+    let _ = calls := !calls + 1
+    writeFail 1 False
+  let _ = runPWith ctx (parseOrElse left writeOk) 0
+  expectEqual (1, ([(1, 0)], [(1, 1, 0)])) (!calls, contextCues ctx)
+
+test "a suspended parser preserves its caller's stdout effect row" =
+  let p =
+    deferMap
+      (x =>
+        println "parse engine effect callback"
+        x)
+      (deferPure 5 : ParserE <Stdout> Int)
+  expectEqual ("ok", 0) (status (runP p (arrayFromList []) 0))

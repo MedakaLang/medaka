@@ -19,6 +19,58 @@ the claims below still holds; **their symbol names, file paths and line numbers 
 not**, and are left as written rather than retro-edited. Re-derive with
 `grep -rn 'firstTyLoc\|orElseLoc' compiler/frontend/ast.mdk`.
 
+## Editor coordinate contract
+
+The internal `SourceIndex` indexes codepoint offsets and uses one-based lines
+and zero-based codepoint columns for `Loc` conversion. LSP and MCP positions
+use zero-based lines and UTF-16 code-unit columns. Astral characters occupy two
+units; combining characters and tabs are not display-width expanded. LF,
+CRLF, and lone CR end lines. Conversion accepts valid boundaries through EOF,
+rejects positions inside a surrogate pair and outside a line, and treats the
+interior of CRLF as invalid. Output ranges use valid source boundaries.
+Incoming positions use strict validation. When an existing diagnostic producer
+supplies an out-of-bounds endpoint, `clampSourcePositionToOffset` clamps its
+one-based source line and zero-based codepoint column to a valid boundary before
+converting it to a protocol position; it reuses the same line arrays.
+
+The immutable index holds line starts, line ends and UTF-16 prefix widths.
+Construction scans the source once; endpoint lookup uses binary search. It is
+owned by the request and does not retain a parser context or session state.
+Project diagnostic publication resolves each destination against the open
+buffer, then the exact source captured by that analysis, then disk. The loader
+returns an invocation-owned immutable map of sources it actually parsed, even
+when loading fails; its long-lived last-good source cache is not provenance.
+If no source is available, a nonempty diagnostic retains its message and uses
+an explicitly imprecise zero-width range at 0:0. Only an empty diagnostic
+bucket clears a client's prior diagnostics.
+
+## Parser position ownership decision
+
+The parse-ownership sprint moves per-parse state out of module globals. Each
+invocation owns its cursor context, nesting depth, and formatting cue journals.
+A speculative branch restores its cue roots when its result is discarded;
+lookahead restores them even on success. A successful parse publishes
+declarations, positions, and immutable cue lists without exposing the context
+or retaining its source. Syntax-only formatting entry points keep their
+existing acceptance rules; strict entry points continue to run prescans.
+
+The full `SourceIndex` remains the authority for UTF-16 protocol coordinates.
+Parser position projection needs only codepoint line starts, so the existing
+line-start helpers move from the lexer into `support/source_index.mdk` and the
+lexer retains compatibility exports. The parser engine may use the shared
+position module's span query; the published parse result does not depend on the
+engine. This avoids constructing UTF-16 prefix widths for every parse. In the
+design spike, full index construction allocated 335,548,672 bytes for a
+4,194,322-byte comment-heavy source; the existing complete located parser
+allocated 67,146,576 bytes for that input. Those are separate measurements, not
+a claim about the eventual implementation's total cost.
+
+The earlier channel-first decision for declaration positions remains in place;
+this changes the channel's ownership and lifetime, not AST field placement.
+The sprint contract records the exact interfaces, rollback cases, consumer
+migration and full-parser performance and retention checks before the code
+changes land.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;

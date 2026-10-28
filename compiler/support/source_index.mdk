@@ -1,0 +1,181 @@
+import array.{fromList}
+import list.{reverse}
+import string.{toChars}
+
+export data SourceIndex = SourceIndex (Array Int) (Array Int) (Array Int)
+
+-- Starts and ends exclude newline codepoints; prefixes count UTF-16 units.
+data ScanState = ScanState { offset : Int, lineStart : Int, units : Int }
+
+indexGo : Array Char ->
+  ScanState ->
+  List Int ->
+  List Int ->
+  List Int ->
+  SourceIndex
+indexGo chars state starts ends prefixes =
+  let i = state.offset
+  let start = state.lineStart
+  let units = state.units
+  if i >= arrayLength chars then
+    SourceIndex
+      (fromList (reverse (start :: starts)))
+      (fromList (reverse (i :: ends)))
+      (fromList (reverse (units :: prefixes)))
+  else
+    let c = arrayGetUnsafe i chars
+    if c == '\r'
+      && i + 1 < arrayLength chars
+      && arrayGetUnsafe (i + 1) chars == '\n' then
+      indexGo
+        chars
+        ScanState { offset = i + 2, lineStart = i + 2, units = units + 2 }
+        (start :: starts)
+        (i :: ends)
+        (units + 1 :: units :: prefixes)
+    else if c == '\r' || c == '\n' then
+      indexGo
+        chars
+        ScanState { offset = i + 1, lineStart = i + 1, units = units + 1 }
+        (start :: starts)
+        (i :: ends)
+        (units :: prefixes)
+    else
+      indexGo
+        chars
+        ScanState {
+          offset = i + 1,
+          lineStart = start,
+          units = units + (if charCode c > 65535 then 2 else 1),
+        }
+        starts
+        ends
+        (units :: prefixes)
+
+export
+indexSource : String -> SourceIndex
+indexSource source =
+  indexGo
+    (toChars source)
+    ScanState { offset = 0, lineStart = 0, units = 0 }
+    []
+    []
+    []
+
+-- First index in [lo, hi) whose value exceeds target, or hi.
+upperBound : Array Int -> Int -> Int -> Int -> Int
+upperBound values target lo hi =
+  if lo >= hi then
+    lo
+  else
+    let mid = (lo + hi) / 2
+    if arrayGetUnsafe mid values <= target then
+      upperBound values target (mid + 1) hi
+    else
+      upperBound values target lo mid
+
+export
+offsetToSourcePosition : SourceIndex -> Int -> Option (Int, Int)
+offsetToSourcePosition (SourceIndex starts ends _) offset =
+  let upper = upperBound starts offset 0 (arrayLength starts)
+  let line = upper - 1
+  if upper == 0 || offset > arrayGetUnsafe line ends then
+    None
+  else
+    Some (line + 1, offset - arrayGetUnsafe line starts)
+
+export
+sourcePositionToOffset : SourceIndex -> Int -> Int -> Option Int
+sourcePositionToOffset (SourceIndex starts ends _) line column =
+  let i = line - 1
+  if i < 0 || i >= arrayLength starts || column < 0 then
+    None
+  else
+    let start = arrayGetUnsafe i starts
+    if column > arrayGetUnsafe i ends - start then
+      None
+    else
+      Some (start + column)
+
+export
+clampSourcePositionToOffset : SourceIndex -> Int -> Int -> Int
+clampSourcePositionToOffset (SourceIndex starts ends _) line column =
+  let i = max 0 (min (arrayLength starts - 1) (line - 1))
+  let start = arrayGetUnsafe i starts
+  start + max 0 (min (arrayGetUnsafe i ends - start) column)
+
+export
+offsetToUtf16Position : SourceIndex -> Int -> Option (Int, Int)
+offsetToUtf16Position index offset = match index
+  SourceIndex starts _ prefixes => do
+    (line, _) <- offsetToSourcePosition index offset
+    let start = arrayGetUnsafe (line - 1) starts
+    Some (
+      line - 1,
+      arrayGetUnsafe offset prefixes - arrayGetUnsafe start prefixes,
+    )
+
+export
+utf16PositionToOffset : SourceIndex -> Int -> Int -> Option Int
+utf16PositionToOffset (SourceIndex starts ends prefixes) line column =
+  if line < 0 || line >= arrayLength starts || column < 0 then
+    None
+  else
+    let start = arrayGetUnsafe line starts
+    let end = arrayGetUnsafe line ends
+    let target = arrayGetUnsafe start prefixes + column
+    let upper = upperBound prefixes target start (end + 1)
+    let offset = upper - 1
+    if upper == start || arrayGetUnsafe offset prefixes /= target then
+      None
+    else
+      Some offset
+
+-- Precompute the sorted array of line-start char offsets for a source string:
+-- offset 0, plus the offset after each LF, CRLF, or lone CR. One O(N) scan. Fed to
+-- `offsetToLineColFast` so the located-parse pass can resolve each offset in
+-- O(log N) instead of re-walking from 0 (which made `locOfSpan` O(N²)).
+export
+lineStartsOf : String -> Array Int
+lineStartsOf s =
+  let src = stringToChars s
+  let len = arrayLength src
+  arrayFromList (0 :: lineStartsGo src len 0)
+
+lineStartsGo : Array Char -> Int -> Int -> List Int
+lineStartsGo src len i
+  | i >= len = []
+  | arrayGetUnsafe i src == '\r'
+    && i + 1 < len
+    && arrayGetUnsafe (i + 1) src == '\n' =
+    i + 2 :: lineStartsGo src len (i + 2)
+  | arrayGetUnsafe i src == '\r' = i + 1 :: lineStartsGo src len (i + 1)
+  | arrayGetUnsafe i src == '\n' = i + 1 :: lineStartsGo src len (i + 1)
+  | otherwise = lineStartsGo src len (i + 1)
+
+-- Resolve a 0-based char offset to a (1-based line, 0-based column) pair using a
+-- precomputed line-starts array (`lineStartsOf`), by binary search.  This is
+-- The line is one plus the index of the last start at or before `off`;
+-- the column is `off` minus that start.
+export
+offsetToLineColFast : Array Int -> Int -> (Int, Int)
+offsetToLineColFast lineStarts off =
+  let idx = lineStartIndex lineStarts off
+  (idx + 1, off - arrayGetUnsafe idx lineStarts)
+
+-- Rightmost index `idx` in [lo, hi] with `lineStarts[idx] <= off`.
+-- `lineStarts[0]` is 0 and `off >= 0`, so such an index always exists in range.
+lineStartSearch : Array Int -> Int -> Int -> Int -> Int
+lineStartSearch arr off lo hi
+  | lo >= hi = lo
+  | otherwise =
+    let mid = (lo + hi + 1) / 2
+    if arrayGetUnsafe mid arr <= off then
+      lineStartSearch arr off mid hi
+    else
+      lineStartSearch arr off lo (mid - 1)
+
+export
+lineStartIndex : Array Int -> Int -> Int
+lineStartIndex lineStarts off =
+  lineStartSearch lineStarts off 0 (arrayLength lineStarts - 1)

@@ -1,8 +1,10 @@
 import frontend.lexer.{
-  Token(..), tokenToString, tokenize, tokenizeWithOffsets,
+  Token(..), tokenToString, describeToken, tokenize, tokenizeWithOffsets,
   tokenizeWithOffsetPairs
 }
 import test.{Expectation, expectEqual, expectAll, expectEach}
+import list.{zip, filterMap}
+import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
 
 literalText : Token -> String
 literalText (TInterpOpen s) = s
@@ -170,5 +172,69 @@ test "triple and middle segment projection controls" = expectEach [
       "\"\"\"\n  a \\{1}\n  b\n  \"\"\""
       ["a ", "", "\nb\n", "", ""]
       [(8, 10), (10, 11), (19, 22), (0, 0), (0, 0)],
+  ),
+]
+
+unicodeFailureRow : String -> UnicodeProblem -> (Int, Int) -> Expectation
+unicodeFailureRow source problem span =
+  let (tokens, spans) = tokenizeWithOffsetPairs source
+  let errors =
+    filterMap
+      ((token, offsets) => match token
+        TLexError _ => Some (tokenToString token, offsets)
+        _ => None)
+      (zip tokens spans)
+  expectEqual
+    [(tokenToString (TLexError (BadUnicodeEscape problem)), span)]
+    errors
+
+test "Unicode failure kinds and exact spans agree across scanner continuations" =
+  expectEach
+    (flatMap
+      ((label, prefix, suffix) =>
+        let start = stringLength prefix
+        map
+            ((spelling, problem) => (
+              label ++ spelling,
+              unicodeFailureRow (prefix ++ spelling ++ suffix) problem (
+                start,
+                start + stringLength spelling,
+              ),
+            ))
+            [
+              ("\\u{}", UnicodeEmpty),
+              ("\\u{4_1}", UnicodeSeparator),
+              ("\\u{z}", UnicodeExpectedDigit "z"),
+              ("\\u{41z}", UnicodeExpectedClose "z"),
+              ("\\u{D800}", UnicodeSurrogate "\\u{D800}"),
+              ("\\u{110000}", UnicodeOutOfRange "\\u{110000}"),
+            ]
+          ++ [
+            (
+              label ++ "unterminated",
+              unicodeFailureRow (prefix ++ "\\u{41") UnicodeUnterminated (
+                start,
+                start + 5,
+              ),
+            ),
+          ])
+      [
+        ("string", "\"😀", "\""),
+        ("triple", "\"\"\"😀", "\"\"\""),
+        ("interpolation", "\"a\\{1}😀", "\""),
+        ("triple interpolation", "\"\"\"a\\{1}😀", "\"\"\""),
+        ("character", "'", "'"),
+      ])
+
+test "token descriptions and constructors" = expectEach [
+  (
+    "identifier",
+    expectEqual
+      ("IDENT \"hello\"", "`hello`")
+      (tokenToString (TIdent "hello"), describeToken (TIdent "hello")),
+  ),
+  (
+    "eof",
+    expectEqual ("EOF", "end of input") (tokenToString TEof, describeToken TEof),
   ),
 ]

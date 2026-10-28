@@ -166,9 +166,9 @@ indentBlock : Doc -> Doc
 indentBlock d = Nest 2 (Cat Hardline d)
 
 -- ── Layout engine ─────────────────────────────────
--- mode = Flat | Break ; a render item = (indent, mode, doc).
+-- mode = Flat | Broken ; a render item = (indent, mode, doc).
 
-public export data Mode = Flat | Break
+public export data Mode = Flat | Broken
 
 public export data Item = Item Int Mode Doc
 
@@ -196,15 +196,15 @@ fits w ((Item i m (Nest j d)) :: z) = fits w (Item (i + j) m d :: z)
 fits w ((Item _ _ (Text s)) :: z) = fits (w - stringLength s) z
 fits w ((Item _ Flat Line) :: z) = fits (w - 1) z
 fits w ((Item _ Flat Softline) :: z) = fits w z
-fits _ ((Item _ Break Line) :: _) = True
-fits _ ((Item _ Break Softline) :: _) = True
-fits _ ((Item _ Break Hardline) :: _) = True
+fits _ ((Item _ Broken Line) :: _) = True
+fits _ ((Item _ Broken Softline) :: _) = True
+fits _ ((Item _ Broken Hardline) :: _) = True
 fits _ ((Item _ Flat Hardline) :: _) = False
-fits _ ((Item _ Break BlankLine) :: _) = True
+fits _ ((Item _ Broken BlankLine) :: _) = True
 fits _ ((Item _ Flat BlankLine) :: _) = False
 -- A group keeps the mode it is met in: the candidate under measurement is
 -- Flat all the way down, while a group among the items that FOLLOW it on the
--- line (still in the enclosing Break mode) may break at its own first Line —
+-- line (still in the enclosing Broken mode) may break at its own first Line —
 -- so a long sibling that will break for itself never forces an earlier
 -- group open.
 fits w ((Item i m (Group d)) :: z) = fits w (Item i m d :: z)
@@ -218,12 +218,12 @@ fits w ((Item i m (Hang sep d)) :: z) =
 -- comment fits (everything before it fit, and `go` renders what follows
 -- broken — see the `LineComment` arm there).
 fits _ ((Item _ Flat (LineComment _)) :: z) = restEndsLine z
-fits _ ((Item _ Break (LineComment _)) :: _) = True
+fits _ ((Item _ Broken (LineComment _)) :: _) = True
 fits w ((Item i m (Fill sf ds)) :: z) =
   fits w (Item i m (fillFlatDoc sf ds) :: z)
 
 -- Would the items after a flat line comment start a new line before printing
--- anything else?  (A Break-mode line does; flat text or a flat space does not.)
+-- anything else?  (A Broken-mode line does; flat text or a flat space does not.)
 restEndsLine : List Item -> Bool
 restEndsLine [] = True
 restEndsLine ((Item _ _ Nil) :: z) = restEndsLine z
@@ -234,8 +234,8 @@ restEndsLine ((Item _ _ (Text s)) :: z) =
   if s == "" then restEndsLine z else False
 restEndsLine ((Item _ Flat Line) :: _) = False
 restEndsLine ((Item _ Flat Softline) :: z) = restEndsLine z
-restEndsLine ((Item _ Break Line) :: _) = True
-restEndsLine ((Item _ Break Softline) :: _) = True
+restEndsLine ((Item _ Broken Line) :: _) = True
+restEndsLine ((Item _ Broken Softline) :: _) = True
 restEndsLine ((Item _ _ Hardline) :: _) = True
 restEndsLine ((Item _ _ BlankLine) :: _) = True
 restEndsLine ((Item i m (Group d)) :: z) = restEndsLine (Item i m d :: z)
@@ -265,7 +265,7 @@ newlineStr : Int -> String
 newlineStr i = "\n" ++ spaces i
 
 itemBroken : Item -> Item
-itemBroken (Item i _ d) = Item i Break d
+itemBroken (Item i _ d) = Item i Broken d
 
 -- The render loop: returns the accumulated output pieces (stringConcat'd once).
 go : Int -> List Item -> List String
@@ -276,8 +276,8 @@ go col ((Item i m (Nest j d)) :: z) = go col (Item (i + j) m d :: z)
 go col ((Item _ _ (Text s)) :: z) = s :: go (col + stringLength s) z
 go col ((Item _ Flat Line) :: z) = " " :: go (col + 1) z
 go col ((Item _ Flat Softline) :: z) = go col z
-go _ ((Item i Break Line) :: z) = newlineStr i :: go i z
-go _ ((Item i Break Softline) :: z) = newlineStr i :: go i z
+go _ ((Item i Broken Line) :: z) = newlineStr i :: go i z
+go _ ((Item i Broken Softline) :: z) = newlineStr i :: go i z
 go _ ((Item i _ Hardline) :: z) = newlineStr i :: go i z
 go _ ((Item _ _ BlankLine) :: z) = "\n" :: go 0 z
 go col ((Item i _ (Group d)) :: z) =
@@ -285,43 +285,43 @@ go col ((Item i _ (Group d)) :: z) =
   if fits (defaultWidth - col) flat then
     go col flat
   else
-    go col (Item i Break d :: z)
--- FlatAlt: in Flat mode render the flat alternative `b`; in Break mode render `a`.
+    go col (Item i Broken d :: z)
+-- FlatAlt: in Flat mode render the flat alternative `b`; in Broken mode render `a`.
 go col ((Item i Flat (FlatAlt _ b)) :: z) = go col (Item i Flat b :: z)
-go col ((Item i Break (FlatAlt a _)) :: z) = go col (Item i Break a :: z)
+go col ((Item i Broken (FlatAlt a _)) :: z) = go col (Item i Broken a :: z)
 go col ((Item i Flat (Alt a _)) :: z) = go col (Item i Flat a :: z)
-go col ((Item i Break (Alt a b)) :: z) =
-  if fits (defaultWidth - col) (Item i Break a :: z) then
-    go col (Item i Break a :: z)
+go col ((Item i Broken (Alt a b)) :: z) =
+  if fits (defaultWidth - col) (Item i Broken a :: z) then
+    go col (Item i Broken a :: z)
   else
-    go col (Item i Break b :: z)
+    go col (Item i Broken b :: z)
 go col ((Item i Flat (Hang sep d)) :: z) =
   go col (Item i Flat (hangInline sep d) :: z)
-go col ((Item i Break (Hang sep d)) :: z) =
+go col ((Item i Broken (Hang sep d)) :: z) =
   let inline = hangInline sep d
   if fits (defaultWidth - col) (Item i Flat inline :: z) then
     go col (Item i Flat inline :: z)
   else if fits (defaultWidth - i - 2) (Item (i + 2) Flat d :: z) then
-    go col (Item i Break (Cat (text sep) (Nest 2 (Cat Line d))) :: z)
+    go col (Item i Broken (Cat (text sep) (Nest 2 (Cat Line d))) :: z)
   else
-    go col (Item i Break inline :: z)
+    go col (Item i Broken inline :: z)
 -- A `--` comment runs to the end of the line, so nothing may follow it there:
--- every pending item switches to Break mode, and the next Line/Softline (a
+-- every pending item switches to Broken mode, and the next Line/Softline (a
 -- separator, a closing bracket's) starts a fresh line.
 go col ((Item _ _ (LineComment s)) :: z) =
   "  " ++ s :: go (col + 2 + stringLength s) (map itemBroken z)
 -- Fill, Flat mode: identical to a plain space-separated sequence.
 go col ((Item i Flat (Fill sf ds)) :: z) =
   go col (Item i Flat (fillFlatDoc sf ds) :: z)
--- Fill, Break mode: greedy packing.  The FIRST item of the whole fill takes no
+-- Fill, Broken mode: greedy packing.  The FIRST item of the whole fill takes no
 -- separator and no fits-check — it is already at the fresh indent.  Every
 -- later item is preceded by a space if it still fits, else by a newline at the
 -- indent.
-go col ((Item _ Break (Fill _ [])) :: z) = go col z
-go col ((Item i Break (Fill False (d :: ds))) :: z) =
-  go col (Item i Flat d :: Item i Break (Fill True ds) :: z)
-go col ((Item i Break (Fill True (d :: ds))) :: z) =
-  let rest = Item i Flat d :: Item i Break (Fill True ds) :: z
+go col ((Item _ Broken (Fill _ [])) :: z) = go col z
+go col ((Item i Broken (Fill False (d :: ds))) :: z) =
+  go col (Item i Flat d :: Item i Broken (Fill True ds) :: z)
+go col ((Item i Broken (Fill True (d :: ds))) :: z) =
+  let rest = Item i Flat d :: Item i Broken (Fill True ds) :: z
   if fits (defaultWidth - col - 1) [Item i Flat d] then
     " " :: go (col + 1) rest
   else
@@ -329,7 +329,7 @@ go col ((Item i Break (Fill True (d :: ds))) :: z) =
 
 export
 render : Doc -> String
-render doc = stringConcat (go 0 [Item 0 Break doc])
+render doc = stringConcat (go 0 [Item 0 Broken doc])
 
 -- Render a Doc UNCONDITIONALLY flat — every Group/Line/Softline takes its flat
 -- form regardless of width.  Used to measure a `match` scrutinee (see
@@ -846,7 +846,7 @@ bracedPieces open_ forced ps =
 
 -- ── Magic trailing comma ──────────────────────────
 -- The parser records the source position of every trailing comma it consumed
--- (`trailingCommaLocs`, a (line, col) list); `medaka fmt` installs them here.
+-- (a (line, col) list in ParseMetadata); `medaka fmt` installs them here.
 -- A collection literal whose last element is followed by one of them explodes
 -- one element per line.
 
@@ -2839,7 +2839,7 @@ effAxesDoc axes =
 (DFunDef false "concatD" ((PCons (PVar "d") (PVar "ds"))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "concatD") (EVar "ds"))))
 (DTypeSig false "indentBlock" (TyFun (TyCon "Doc") (TyCon "Doc")))
 (DFunDef false "indentBlock" ((PVar "d")) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EVar "d"))))
-(DData Public "Mode" () ((variant "Flat" (ConPos)) (variant "Break" (ConPos))) ())
+(DData Public "Mode" () ((variant "Flat" (ConPos)) (variant "Broken" (ConPos))) ())
 (DData Public "Item" () ((variant "Item" (ConPos (TyCon "Int") (TyCon "Mode") (TyCon "Doc")))) ())
 (DTypeSig false "defaultWidth" (TyCon "Int"))
 (DFunDef false "defaultWidth" () (ELit (LInt 80)))
@@ -2858,18 +2858,18 @@ effAxesDoc axes =
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "w") (EApp (EVar "stringLength") (EVar "s")))) (EVar "z")))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) (PVar "z"))) (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "w") (ELit (LInt 1)))) (EVar "z")))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EVar "z")))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Line")) PWild)) (EVar "True"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Softline")) PWild)) (EVar "True"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Hardline")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Line")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Softline")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Hardline")) PWild)) (EVar "True"))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Hardline")) PWild)) (EVar "False"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "BlankLine")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "BlankLine")) PWild)) (EVar "True"))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "BlankLine")) PWild)) (EVar "False"))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Group" (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "d")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "FlatAlt" PWild (PVar "b"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "b")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Alt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "a")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "LineComment" PWild)) (PVar "z"))) (EApp (EVar "restEndsLine") (EVar "z")))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "LineComment" PWild)) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "LineComment" PWild)) PWild)) (EVar "True"))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
 (DTypeSig false "restEndsLine" (TyFun (TyApp (TyCon "List") (TyCon "Item")) (TyCon "Bool")))
 (DFunDef false "restEndsLine" ((PList)) (EVar "True"))
@@ -2879,8 +2879,8 @@ effAxesDoc axes =
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "restEndsLine") (EVar "z")) (EVar "False")))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) PWild)) (EVar "False"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EVar "restEndsLine") (EVar "z")))
-(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Break") (PCon "Line")) PWild)) (EVar "True"))
-(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Break") (PCon "Softline")) PWild)) (EVar "True"))
+(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Broken") (PCon "Line")) PWild)) (EVar "True"))
+(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Broken") (PCon "Softline")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "Hardline")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "BlankLine")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Group" (PVar "d"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "d")) (EVar "z"))))
@@ -2898,7 +2898,7 @@ effAxesDoc axes =
 (DTypeSig false "newlineStr" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "newlineStr" ((PVar "i")) (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "spaces") (EVar "i"))))
 (DTypeSig false "itemBroken" (TyFun (TyCon "Item") (TyCon "Item")))
-(DFunDef false "itemBroken" ((PCon "Item" (PVar "i") PWild (PVar "d"))) (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "d")))
+(DFunDef false "itemBroken" ((PCon "Item" (PVar "i") PWild (PVar "d"))) (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "d")))
 (DTypeSig false "go" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Item")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "go" (PWild (PList)) (EListLit))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "Nil")) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
@@ -2907,24 +2907,24 @@ effAxesDoc axes =
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EVar "s") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (EApp (EVar "stringLength") (EVar "s")))) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
-(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Line")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
-(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Softline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
+(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Line")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
+(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Softline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
 (DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") PWild (PCon "Hardline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
 (DFunDef false "go" (PWild (PCons (PCon "Item" PWild PWild (PCon "BlankLine")) (PVar "z"))) (EBinOp "::" (ELit (LString "\n")) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") PWild (PCon "Group" (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "flat") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EVar "z"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EVar "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EVar "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "d")) (EVar "z")))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") PWild (PCon "Group" (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "flat") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EVar "z"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EVar "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EVar "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "d")) (EVar "z")))))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "FlatAlt" PWild (PVar "b"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "b")) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "FlatAlt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "FlatAlt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Alt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "a")) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Alt" (PVar "a") (PVar "b"))) (PVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "b")) (EVar "z")))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Alt" (PVar "a") (PVar "b"))) (PVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "b")) (EVar "z")))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "inline") (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "i")) (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "Flat")) (EVar "d")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "sep"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EVar "d"))))) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "inline")) (EVar "z"))))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "inline") (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "i")) (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "Flat")) (EVar "d")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "sep"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EVar "d"))))) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "inline")) (EVar "z"))))))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "LineComment" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EApp (EVar "go") (EBinOp "+" (EBinOp "+" (EVar "col") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "s")))) (EApp (EApp (EVar "map") (EVar "itemBroken")) (EVar "z")))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Break") (PCon "Fill" PWild (PList))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Fill" (PCon "False") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Fill" (PCon "True") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EBlock (DoLet false false (PVar "rest") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "col")) (ELit (LInt 1)))) (EListLit (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "rest"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "rest")))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Fill" PWild (PList))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Fill" (PCon "False") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Fill" (PCon "True") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EBlock (DoLet false false (PVar "rest") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "col")) (ELit (LInt 1)))) (EListLit (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "rest"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "rest")))))))
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
-(DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
+(DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Broken")) (EVar "doc"))))))
 (DTypeSig false "goFlat" (TyFun (TyApp (TyCon "List") (TyCon "Doc")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "goFlat" ((PList)) (EListLit))
 (DFunDef false "goFlat" ((PCons (PCon "Nil") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))
@@ -3816,7 +3816,7 @@ effAxesDoc axes =
 (DFunDef false "concatD" ((PCons (PVar "d") (PVar "ds"))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "concatD") (EVar "ds"))))
 (DTypeSig false "indentBlock" (TyFun (TyCon "Doc") (TyCon "Doc")))
 (DFunDef false "indentBlock" ((PVar "d")) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EVar "d"))))
-(DData Public "Mode" () ((variant "Flat" (ConPos)) (variant "Break" (ConPos))) ())
+(DData Public "Mode" () ((variant "Flat" (ConPos)) (variant "Broken" (ConPos))) ())
 (DData Public "Item" () ((variant "Item" (ConPos (TyCon "Int") (TyCon "Mode") (TyCon "Doc")))) ())
 (DTypeSig false "defaultWidth" (TyCon "Int"))
 (DFunDef false "defaultWidth" () (ELit (LInt 80)))
@@ -3835,18 +3835,18 @@ effAxesDoc axes =
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "w") (EApp (EVar "stringLength") (EVar "s")))) (EVar "z")))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) (PVar "z"))) (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "w") (ELit (LInt 1)))) (EVar "z")))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EVar "z")))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Line")) PWild)) (EVar "True"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Softline")) PWild)) (EVar "True"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "Hardline")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Line")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Softline")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Hardline")) PWild)) (EVar "True"))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Hardline")) PWild)) (EVar "False"))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "BlankLine")) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "BlankLine")) PWild)) (EVar "True"))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "BlankLine")) PWild)) (EVar "False"))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Group" (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "d")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "FlatAlt" PWild (PVar "b"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "b")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Alt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "a")) (EVar "z"))))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
 (DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Flat") (PCon "LineComment" PWild)) (PVar "z"))) (EApp (EVar "restEndsLine") (EVar "z")))
-(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Break") (PCon "LineComment" PWild)) PWild)) (EVar "True"))
+(DFunDef false "fits" (PWild (PCons (PCon "Item" PWild (PCon "Broken") (PCon "LineComment" PWild)) PWild)) (EVar "True"))
 (DFunDef false "fits" ((PVar "w") (PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EApp (EVar "fits") (EVar "w")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
 (DTypeSig false "restEndsLine" (TyFun (TyApp (TyCon "List") (TyCon "Item")) (TyCon "Bool")))
 (DFunDef false "restEndsLine" ((PList)) (EVar "True"))
@@ -3856,8 +3856,8 @@ effAxesDoc axes =
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "restEndsLine") (EVar "z")) (EVar "False")))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) PWild)) (EVar "False"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EVar "restEndsLine") (EVar "z")))
-(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Break") (PCon "Line")) PWild)) (EVar "True"))
-(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Break") (PCon "Softline")) PWild)) (EVar "True"))
+(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Broken") (PCon "Line")) PWild)) (EVar "True"))
+(DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild (PCon "Broken") (PCon "Softline")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "Hardline")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "BlankLine")) PWild)) (EVar "True"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Group" (PVar "d"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EVar "d")) (EVar "z"))))
@@ -3875,7 +3875,7 @@ effAxesDoc axes =
 (DTypeSig false "newlineStr" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "newlineStr" ((PVar "i")) (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "spaces") (EVar "i"))))
 (DTypeSig false "itemBroken" (TyFun (TyCon "Item") (TyCon "Item")))
-(DFunDef false "itemBroken" ((PCon "Item" (PVar "i") PWild (PVar "d"))) (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "d")))
+(DFunDef false "itemBroken" ((PCon "Item" (PVar "i") PWild (PVar "d"))) (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "d")))
 (DTypeSig false "go" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Item")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "go" (PWild (PList)) (EListLit))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "Nil")) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
@@ -3884,24 +3884,24 @@ effAxesDoc axes =
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "Text" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EVar "s") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (EApp (EVar "stringLength") (EVar "s")))) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Line")) (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Flat") (PCon "Softline")) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
-(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Line")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
-(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Softline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
+(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Line")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
+(DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Softline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
 (DFunDef false "go" (PWild (PCons (PCon "Item" (PVar "i") PWild (PCon "Hardline")) (PVar "z"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "z"))))
 (DFunDef false "go" (PWild (PCons (PCon "Item" PWild PWild (PCon "BlankLine")) (PVar "z"))) (EBinOp "::" (ELit (LString "\n")) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") PWild (PCon "Group" (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "flat") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EVar "z"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EDictApp "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EDictApp "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "d")) (EVar "z")))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") PWild (PCon "Group" (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "flat") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EVar "z"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EDictApp "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EDictApp "flat")) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "d")) (EVar "z")))))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "FlatAlt" PWild (PVar "b"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "b")) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "FlatAlt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "FlatAlt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Alt" (PVar "a") PWild)) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "a")) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Alt" (PVar "a") (PVar "b"))) (PVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "b")) (EVar "z")))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Alt" (PVar "a") (PVar "b"))) (PVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "a")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "b")) (EVar "z")))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "inline") (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "i")) (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "Flat")) (EVar "d")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "sep"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EVar "d"))))) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EVar "inline")) (EVar "z"))))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EBlock (DoLet false false (PVar "inline") (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EVar "defaultWidth") (EVar "col"))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "inline")) (EVar "z"))) (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "i")) (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "Flat")) (EVar "d")) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "sep"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EVar "d"))))) (EVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EVar "inline")) (EVar "z"))))))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "LineComment" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EApp (EVar "go") (EBinOp "+" (EBinOp "+" (EVar "col") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "s")))) (EApp (EApp (EMethodRef "map") (EVar "itemBroken")) (EVar "z")))))
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Flat") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Break") (PCon "Fill" PWild (PList))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Fill" (PCon "False") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))))
-(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Break") (PCon "Fill" (PCon "True") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EBlock (DoLet false false (PVar "rest") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Break")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "col")) (ELit (LInt 1)))) (EListLit (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "rest"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "rest")))))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild (PCon "Broken") (PCon "Fill" PWild (PList))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EVar "z")))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Fill" (PCon "False") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EApp (EApp (EVar "go") (EVar "col")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))))
+(DFunDef false "go" ((PVar "col") (PCons (PCon "Item" (PVar "i") (PCon "Broken") (PCon "Fill" (PCon "True") (PCons (PVar "d") (PVar "ds")))) (PVar "z"))) (EBlock (DoLet false false (PVar "rest") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")) (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Broken")) (EApp (EApp (EVar "Fill") (EVar "True")) (EVar "ds"))) (EVar "z")))) (DoExpr (EIf (EApp (EApp (EVar "fits") (EBinOp "-" (EBinOp "-" (EVar "defaultWidth") (EVar "col")) (ELit (LInt 1)))) (EListLit (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "Flat")) (EVar "d")))) (EBinOp "::" (ELit (LString " ")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "rest"))) (EBinOp "::" (EApp (EVar "newlineStr") (EVar "i")) (EApp (EApp (EVar "go") (EVar "i")) (EVar "rest")))))))
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
-(DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
+(DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Broken")) (EVar "doc"))))))
 (DTypeSig false "goFlat" (TyFun (TyApp (TyCon "List") (TyCon "Doc")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "goFlat" ((PList)) (EListLit))
 (DFunDef false "goFlat" ((PCons (PCon "Nil") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))

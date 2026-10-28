@@ -1,0 +1,19 @@
+import support.source_index.{SourceIndex, indexSource}
+
+public export data SourceSnapshot =
+  SourceSnapshot String (Option Int) Int String SourceIndex
+public export data SnapshotId = SnapshotId String Int
+
+export
+makeSnapshot : String -> Option Int -> Int -> String -> SourceSnapshot
+makeSnapshot uri version generation text =
+  SourceSnapshot uri version generation text (indexSource text)
+
+export
+snapshotId : SourceSnapshot -> SnapshotId
+snapshotId (SourceSnapshot uri _ generation _ _) = SnapshotId uri generation
+
+export
+matchesSnapshot : SnapshotId -> SourceSnapshot -> Bool
+matchesSnapshot (SnapshotId uri generation) (SourceSnapshot u _ g _ _) =
+  uri == u && generation == g

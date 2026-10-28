@@ -203,8 +203,33 @@ printf '%s\n' "$deleted_helper_out" | grep -q '^  GATE      test/native_consumer
 printf '%s\n' "$deleted_helper_out" | grep -q '^  UNMAPPED  test/removed_test_support.mdk$' &&
   fail "deleted shared native-gate helper is reported UNMAPPED despite a surviving consumer"
 
+# Each extracted module inherits the selector of its owning stage.
+for pair in \
+  'lex_token lexer' \
+  'parse_engine parser' \
+  'parse_positions parser' \
+  'parse_result parser'
+do
+  set -- $pair
+  printf 'compiler/frontend/%s.mdk\n' "$1" > "$WORK/helper_changed.txt"
+  extracted_out="$(cd "$ROOT" || exit 1; PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_changed.txt" sh test/preflight.sh 2>&1)"
+  printf 'compiler/frontend/%s.mdk\n' "$2" > "$WORK/helper_changed.txt"
+  owner_out="$(cd "$ROOT" || exit 1; PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_changed.txt" sh test/preflight.sh 2>&1)"
+  extracted_gates="$(printf '%s\n' "$extracted_out" | grep '^  GATE ')"
+  owner_gates="$(printf '%s\n' "$owner_out" | grep '^  GATE ')"
+  [ -n "$extracted_gates" ] || fail "$1 selector has no gates"
+  printf '%s\n' "$owner_gates" > "$WORK/owner_gates.txt"
+  while IFS= read -r gate; do
+    case "$gate" in *diff_interface_onoff.sh) continue ;; esac
+    printf '%s\n' "$extracted_gates" | grep -Fxq "$gate" ||
+      fail "$1 selector lacks $gate from $2"
+  done < "$WORK/owner_gates.txt"
+  printf '%s\n' "$extracted_out" | grep -q "^  UNMAPPED  compiler/frontend/$1.mdk$" &&
+    fail "$1 is reported UNMAPPED"
+done
+
 if [ "$fails" -ne 0 ]; then
   echo "diff_compiler_preflight_base: $fails assertion(s) FAILED"
   exit 1
 fi
-echo "diff_compiler_preflight_base: PASS (6 assertions)"
+echo "diff_compiler_preflight_base: PASS (6 assertions and 4 frontend selectors)"

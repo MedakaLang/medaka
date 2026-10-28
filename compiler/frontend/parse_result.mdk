@@ -1,0 +1,58 @@
+import frontend.ast.{Decl, Loc(..)}
+import frontend.parse_positions.{Positions}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, diagnosticLoc, renderParseDiagnostic
+}
+
+export data ParseMetadata =
+  ParseMetadata (List (Int, Int)) (List (Int, Int, Int))
+export data ParsedSource = ParsedSource (List Decl) Positions ParseMetadata
+
+export
+makeParseMetadata : List (Int, Int) -> List (Int, Int, Int) -> ParseMetadata
+makeParseMetadata commas units = ParseMetadata commas units
+
+export
+makeParsedSource : List Decl -> Positions -> ParseMetadata -> ParsedSource
+makeParsedSource decls positions metadata =
+  ParsedSource decls positions metadata
+
+export
+parsedDecls : ParsedSource -> List Decl
+parsedDecls (ParsedSource decls _ _) = decls
+
+export
+parsedPositions : ParsedSource -> Positions
+parsedPositions (ParsedSource _ positions _) = positions
+
+export
+parsedMetadata : ParsedSource -> ParseMetadata
+parsedMetadata (ParsedSource _ _ metadata) = metadata
+
+export
+metadataTrailingCommas : ParseMetadata -> List (Int, Int)
+metadataTrailingCommas (ParseMetadata commas _) = commas
+
+export
+metadataUnitStarts : ParseMetadata -> List (Int, Int, Int)
+metadataUnitStarts (ParseMetadata _ units) = units
+
+public export data ParseError = ParseError ParseDiagnostic
+
+export
+parseErrorDiagnostic : ParseError -> ParseDiagnostic
+parseErrorDiagnostic (ParseError diagnostic) = diagnostic
+
+export
+parseErrorLine : ParseError -> Int
+parseErrorLine (ParseError diagnostic) = match diagnosticLoc diagnostic
+  Loc _ line _ _ _ => line
+
+export
+parseErrorCol : ParseError -> Int
+parseErrorCol (ParseError diagnostic) = match diagnosticLoc diagnostic
+  Loc _ _ col _ _ => col
+
+export
+parseErrorMessage : ParseError -> String
+parseErrorMessage (ParseError diagnostic) = renderParseDiagnostic diagnostic

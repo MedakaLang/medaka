@@ -15,7 +15,8 @@ import compiler_cli_test_support.{fixtureStems}
 import string.{lines, startsWith, endsWith, replaceAll, split, join}
 import test_process.{medakaBin, underRoot, boundedVerb, withScratchDir}
 import test.{
-  Expectation, expectAll, expectEach, expectGolden, expectAtLeast, fail, pass
+  Expectation, expectAll, expectEach, expectGolden, expectAtLeast, expectFalse,
+  expectTextContainsAll, fail, pass
 }
 
 fixDir : <IO> String
@@ -283,3 +284,19 @@ test "medaka doc: head line names clause parameters, absent on destructuring ent
     else
       pass,
   ])
+
+malformedDocIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+malformedDocIn dir =
+  let path = "\{dir}/bad.mdk"
+  match writeFile path "f x = = 1\n"
+    Err e => fail "could not write malformed input: \{e}"
+    Ok () => match boundedVerb medakaBin ["doc", path]
+      Err e => fail "could not spawn medaka doc: \{e}"
+      Ok (1, _, err) => expectAll [
+        expectFalse (hasSubstr "E-PANIC" err),
+        expectTextContainsAll ["\{path}:1:6", "expected an expression"] err,
+      ]
+      Ok (code, _, err) => fail "doc exited \{intToString code}: \{err}"
+
+test "medaka doc reports malformed single-file input" =
+  withScratchDir malformedDocIn

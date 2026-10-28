@@ -1960,6 +1960,40 @@ long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   return mdk_str_cell(bytes + blo, bhi - blo, hi - lo);
 }
 
+/* stringCodepointAtByte : String -> Int -> Int.  Packs the codepoint starting
+ * at byte offset `b` as codepoint * 8 + width.  The caller passes an offset
+ * on a codepoint boundary inside the cell; an offset outside [0, byte_len)
+ * yields 0 rather than reading past the end. */
+long long mdk_string_codepoint_at_byte(long long s, long long b_t) {
+  const char *cell = (const char *)s;
+  long long byte_len = ((const long long *)cell)[1];
+  const char *bytes = cell + 24;
+  long long b = b_t >> 1;
+  if (b < 0 || b >= byte_len) return 1;
+  int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
+  return ((cp * 8 + w) << 1) | 1;
+}
+
+/* stringSliceBytes : Int -> Int -> String -> String.  The byte range
+ * [lo, hi) of the cell, as a fresh well-formed cell.  Both offsets must lie
+ * in [0, byte_len], lo <= hi, and neither may land on a continuation byte, so
+ * the result is whole codepoints of a well-formed cell; anything else panics. */
+long long mdk_string_slice_bytes(long long lo_t, long long hi_t, long long s) {
+  const char *cell = (const char *)s;
+  long long byte_len = ((const long long *)cell)[1];
+  const char *bytes = cell + 24;
+  long long lo = lo_t >> 1, hi = hi_t >> 1;
+  if (lo < 0 || hi > byte_len || lo > hi
+      || (lo < byte_len && ((unsigned char)bytes[lo] & 0xC0) == 0x80)
+      || (hi < byte_len && ((unsigned char)bytes[hi] & 0xC0) == 0x80)) {
+    static const char msg[] =
+      "stdlib/string.mdk sliceBetween: the cursors do not bound a slice of "
+      "one string (offset out of range, reversed, or inside a character)";
+    mdk_panic(mdk_str_lit(msg, (long long)(sizeof msg - 1)));
+  }
+  return mdk_str_cell(bytes + lo, hi - lo, mdk_utf8_cp_count(bytes + lo, hi - lo));
+}
+
 /* ── native extern catalog slice 14: ASCII char classification + case mapping ── */
 /* Predicates take a tagged Char, return raw 0/1 (emitter tags to Bool). */
 long long mdk_char_is_alpha(long long t) {

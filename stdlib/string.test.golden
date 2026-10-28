@@ -76,5 +76,7 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:776: padLeft 5 '.' "ab"
   ok   stdlib/string.mdk:790: padRight 5 '.' "ab"
   ok   stdlib/string.mdk:805: center 5 '.' "ab"
+  ok   stdlib/string.mdk:834: isNone (nextChar (startCursor ""))
+  ok   stdlib/string.mdk:861: sliceBetween (startCursor "héllo") (startCursor "héllo")
 
-stdlib/string.mdk: 77/77 passed
+stdlib/string.mdk: 79/79 passed

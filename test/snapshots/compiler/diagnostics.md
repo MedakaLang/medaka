@@ -1,8 +1,12 @@
 # META
-source_lines=3631
+source_lines=3412
 stages=DESUGAR,MARK
 # SOURCE
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import driver.main_autoprint.{executedMainInputs}
+import support.source_index.{
+  indexSource, sourcePositionToOffset, offsetToUtf16Position
+}
 import types.capability_manifest.{EntryKey(..)}
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
@@ -22,17 +26,15 @@ import types.capability_manifest.{EntryKey(..)}
 -- one per line, sorted by the harness.
 
 import frontend.ast.{
-  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp,
-  UsePath(..), UseMember(..), useMemberLocal
+  Decl(..), Expr(..), Loc(..), Pat, Ty, UsePath(..), UseMember(..),
+  useMemberLocal
 }
 import frontend.parser.{
   parse,
   parseLocated,
   parseResult,
   ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
 }
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugar, checkDerives}
@@ -103,6 +105,7 @@ import driver.loader.{
   LoadError(..),
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
+  loadProgramFilesLocatedCachedSourcesE,
   loadedSourceOf,
   parseCachedLocated,
   loadProgramFilesLocatedE,
@@ -140,33 +143,7 @@ import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
-public export data Severity = SevError | SevWarning
-
--- A structured diagnostic: severity + human-readable message + an optional
--- source span (B.10.2b).  `Some` for type errors (expr-level span from the
--- ELoc substrate); `None` for resolve / guard / match diagnostics the compiler
--- pipeline does not yet locate.
--- Stage 1 (DIAGNOSTIC-CODES-DESIGN): every Diag carries a stable machine-readable
--- `Code` (a kebab string, e.g. "T-TYPE-MISMATCH") authored at its producing site.
--- The JSON `kind` is DERIVED from the code prefix (`codeKind`), never stored — so
--- authors supply exactly one token.  The CLI text renderers (`ppDiag`/
--- `ppDiagCliSrc`) deliberately ignore the code (JSON-only for Stage 1), keeping the
--- human-facing CLI output byte-identical.
--- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
--- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
--- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
--- today only did-you-mean (a resolve error carrying a suggestion) populates
--- them.  A `Fix` replaces its `Loc` span with the replacement string.
-public export data Fix = Fix Loc String
-
-public export data Diag =
-  Diag Severity String String (Option Loc) (Option String) (Option Fix)
-
--- Smart constructor for a diagnostic with no structured help/fix (the common
--- case) — keeps the ~15 plain construction sites terse.
-export
-mkDiag : Severity -> String -> String -> Option Loc -> Diag
-mkDiag sev code msg loc = Diag sev code msg loc None None
+export import driver.diagnostic_value.{Severity(..), Fix(..), Diag(..), mkDiag}
 
 -- The edit for a did-you-mean at [loc].  A PrivateNameAccess carries the
 -- statement's span when the dotted import form (`import m.name`) has no member
@@ -409,209 +386,6 @@ codeKind code
   | startsWith "W-" code = "warning"
   | startsWith "rule-" code = "lint"
   | otherwise = "error"
-
--- The reserved-keyword-in-identifier-position diagnostic (parser.mdk's
--- `reservedKeywordMsg`) reads ``<word>` is a reserved keyword — …`.  Its stable
--- marker is the substring "is a reserved keyword" (the word itself varies, so a
--- prefix match won't do); the offending keyword is the text between the first
--- pair of backticks.  Recover it here — from the message the diagnostic already
--- carries, no re-lex — so both the code mapping and the rename `fix` can reuse it.
-isReservedKwMsg : String -> Bool
-isReservedKwMsg msg = match stringIndexOf "is a reserved keyword" msg
-  Some _ => True
-  None => False
-
-wordBetweenBackticks : String -> Option String
-wordBetweenBackticks msg = match stringIndexOf "`" msg
-  None => None
-  Some i =>
-    let rest = stringSlice (i + 1) (stringLength msg) msg
-    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
-
--- Every backtick-quoted substring in `msg`, in order. The malformed-literal
--- lex messages (#677) embed BOTH the offending spelling and the suggested
--- one (`` `bad`: … write `good` ``), so a two-element read of this list is
--- exactly the (old, new) pair a machine `fix` needs — without re-deriving
--- either from the diagnostic's single-point `Loc`, which only pins the START
--- column, not a length.
-allBacktickWords : String -> List String
-allBacktickWords msg = match stringIndexOf "`" msg
-  None => []
-  Some i =>
-    let rest = stringSlice (i + 1) (stringLength msg) msg
-    match stringIndexOf "`" rest
-      None => []
-      Some j =>
-        let word = stringSlice 0 j rest
-        let after = stringSlice (j + 1) (stringLength rest) rest
-        word :: allBacktickWords after
-
-twoBacktickWords : String -> Option (String, String)
-twoBacktickWords msg = match allBacktickWords msg
-  a :: b :: _ => Some (a, b)
-  _ => None
-
--- A whole-literal replacement `Fix`, spanning exactly `[sc, sc + len(old))` —
--- the malformed spelling — replaced with the suggested one.
-oldNewFixOf : String -> Int -> Int -> (String, String) -> Fix
-oldNewFixOf f sl sc (old, new) =
-  Fix (Loc f sl sc sl (sc + stringLength old)) new
-
--- Stable code for a parse/lex diagnostic, recovered at the ParseError→Diag
--- boundary from the message (a lexer TLexError surfaces as a ParseError; lexer
--- messages map to `L-*`, specifically recognized parse errors to their own `P-*`,
--- and everything else to the umbrella `P-PARSE`).
---
--- The guard clauses below ARE the list — do not restate their number here. Counts
--- like "the four lexer messages" or "the two special parse cases" rot silently, in
--- the one file whose whole job is mapping messages to codes. A count encodes a
--- fact with no derivation and no expiry (.claude/ORCHESTRATING.md, "DERIVE, don't
--- encode"), so it goes stale the next time anyone adds a clause and nothing
--- notices — which is exactly how it rotted, unremarked, twice. Read the clauses;
--- they cannot lie.
-export
-parseErrCode : String -> String
-parseErrCode msg
-  | startsWith "unterminated string" msg = "L-UNTERMINATED-STRING"
-  | startsWith "unterminated block" msg = "L-UNTERMINATED-COMMENT"
-  | startsWith "unterminated character" msg = "L-BAD-CHAR-LITERAL"
-  | startsWith "invalid escape" msg = "L-BAD-ESCAPE"
-  | startsWith "unicode escape" msg = "L-BAD-UNICODE-ESCAPE"
-  | startsWith "bare unicode escape" msg = "L-BARE-UNICODE-ESCAPE"
-  | startsWith "character literal" msg = "L-BAD-CHAR-LITERAL"
-  | startsWith "Medaka has no `\\x" msg = "L-HS-LAMBDA"
-  | startsWith "Medaka has no `$`" msg = "L-HS-DOLLAR"
-  | startsWith "unexpected character" msg = "L-BAD-CHAR"
-  | startsWith "integer literal too large" msg = "L-INT-OVERFLOW"
-  | startsWith "float literal out of range" msg = "L-FLOAT-OVERFLOW"
-  | startsWith "malformed radix literal" msg = "L-MALFORMED-RADIX"
-  | startsWith "malformed float literal" msg = "L-MALFORMED-FLOAT"
-  | startsWith "unexpected end of input" msg = "P-UNEXPECTED-EOF"
-  | startsWith "unexpected `!=`" msg = "P-BAD-NEQ"
-  | startsWith "Medaka has no `case" msg = "P-HS-CASE"
-  | startsWith "Medaka has no `match ... with`" msg = "P-OCAML-MATCH-WITH"
-  | startsWith "Medaka has no `**`" msg = "P-NO-POW-OPERATOR"
-  | startsWith "`::` is the list cons operator" msg = "P-HS-SIG"
-  | startsWith "Medaka has no `/* " msg = "L-BLOCKCOMMENT"
-  | startsWith "Medaka has no `{ ... }` blocks" msg = "P-BRACE-BLOCK"
-  | startsWith "Medaka has no `for`" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no `while`" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no `def`" msg = "P-DEF-KEYWORD"
-  | startsWith "Medaka has no statement terminator" msg = "L-SEMICOLON"
-  | startsWith "missing `where` on this " msg = "P-MISSING-WHERE"
-  | startsWith "a `where` block must start on the next line" msg =
-    "P-WHERE-BODY-SAME-LINE"
-  | startsWith "a `do` block must end" msg = "P-DO-ENDS-IN-BINDING"
-  | startsWith "a `defer` block must end" msg = "P-DO-ENDS-IN-BINDING"
-  | startsWith "a match-arm guard uses" msg = "P-GUARD-BAR-IN-MATCH"
-  | startsWith "an equation guard uses" msg = "P-GUARD-IF-IN-EQUATION"
-  | isReservedKwMsg msg = "P-RESERVED-KEYWORD"
-  | otherwise = "P-PARSE"
-
-doEndsInBindingHelp : String
-doEndsInBindingHelp =
-  "end the block with the expression whose value it should have, such as `pure x`"
-
--- Build the (help, fix) pair for the two parse-error hints with a clean,
--- mechanical single-token fix (the Haskell `::`-signature carveout and the
--- `!=`-inequality hint).  Both hints' pre-scan already reports a `Loc` whose
--- start col points at the offending token's first character (verified against
--- `medaka check --json`: `::` and `!=` both start exactly at `sc`), so the fix
--- span is `[sc, sc+2)` — the two-character token — regardless of the diag's
--- own (single-char, display-only) range.  Every other parse hint (`\x->`, `$`,
--- `case…of`) needs a multi-edit rewrite, so it stays help/message-only (no
--- `fix`) — this is deliberately narrow, not a general parse-error-fix engine.
-export
-parseErrHelpFix : String -> Loc -> (Option String, Option Fix)
-parseErrHelpFix msg (Loc f sl sc el ec)
-  | startsWith "`::` is the list cons operator" msg = (
-    Some "replace `::` with `:`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) ":"),
-  )
-  | startsWith "unexpected `!=`" msg = (
-    Some "replace `!=` with `/=`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
-  )
-  | startsWith intMinLiteralMsg msg = (Some intMinLiteralHelp, None)
-  -- Malformed radix/float literals (#677): the lexer already embeds BOTH the
-  -- offending spelling and its suggested fix in backticks (`` `bad` … `good` ``),
-  -- so the fix span is `[sc, sc + len(bad))` — the malformed literal itself,
-  -- starting exactly where the diag is anchored (the lexer raises the error at
-  -- the literal's own start, not a downstream victim). When the literal has no
-  -- safe suggested spelling (`0x_`, digits nowhere in sight), the message
-  -- carries only the one `bad` backtick pair and `twoBacktickWords` returns
-  -- `None` — help stays, `fix` doesn't.
-  -- Bare `\uXXXX` unicode escape (#515): the lexer's message already embeds
-  -- both spellings as the first two backtick pairs (`` `\uXXXX` `` then
-  -- `` `\u{XXXX}` ``), so this reuses the SAME (old, new) machinery the
-  -- malformed-radix/malformed-float hints use just above — no bespoke
-  -- fix-building needed.
-  | startsWith "bare unicode escape" msg = (
-    Some "write the unicode escape braced, `\\u{XXXX}`",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  | startsWith "malformed radix literal" msg = (
-    Some "the digit separator `_` may only appear between digits",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  | startsWith "malformed float literal" msg = (
-    Some "a float literal needs a digit on both sides of the decimal point",
-    map (oldNewFixOf f sl sc) (twoBacktickWords msg),
-  )
-  -- A reserved keyword used as a name: rename by appending `_` (any reserved word
-  -- + `_` is a legal identifier).  The diagnostic's `sc` already points at the
-  -- keyword's first char, so the fix span is `[sc, sc + len(word))` — the same
-  -- `sc + stringLength …` span the did-you-mean resolve fix uses.
-  | isReservedKwMsg msg = match wordBetweenBackticks msg
-    Some w => (
-      Some
-        "rename it to `\{w}_`; any reserved word plus `_` is a valid identifier",
-      Some (Fix (Loc f sl sc sl (sc + stringLength w)) "\{w}_"),
-    )
-    None => (None, None)
-  -- `public` in front of anything but `data` (#67): `afterPublicFor`
-  -- (`compiler/frontend/parser.mdk`) now reports this AT the `public` token
-  -- itself (captured via `getPos` before it's consumed), so `sc` already
-  -- points at its first char — the fix is a clean single-token deletion, the
-  -- same shape as the reserved-keyword rename above.
-  | startsWith "`public` applies only to `data` declarations" msg = (
-    Some "drop `public`; a function or value is exported with plain `export`",
-    Some (Fix (Loc f sl sc sl (sc + stringLength "public")) ""),
-  )
-  -- Missing `where` on an `interface`/`impl` header (#1160), and a member
-  -- written on the same line as `where` (#1140).  Help-only, deliberately: the
-  -- repair for the first is an INSERTION at the end of the header LINE and for
-  -- the second a line break plus an indent, and neither position is derivable
-  -- from the single-point `Loc` these diagnostics carry (both are anchored at
-  -- the construct that is wrong — the header keyword / the misplaced member —
-  -- not at the edit site).  A `fix` here would have to guess a column, which is
-  -- worse than none: an agent applies it verbatim.
-  | startsWith "missing `where` on this " msg = (
-    Some
-      "end the header with `where`; without it the next line is read as another type argument",
-    None,
-  )
-  | startsWith "a `do` block must end" msg = (Some doEndsInBindingHelp, None)
-  | startsWith "a `defer` block must end" msg = (Some doEndsInBindingHelp, None)
-  | startsWith "a `where` block must start on the next line" msg = (
-    Some
-      "`where` opens a block only when it ends the line; move the member to the next line",
-    None,
-  )
-  -- Guard-keyword confusion (#591): the parser anchors each diagnostic AT the
-  -- offending keyword (`|` / `if`), so `sc` is its first char — the fix is a
-  -- clean single-token swap to the other spelling.
-  | startsWith "a match-arm guard uses" msg = (
-    Some "replace `|` with `if`",
-    Some (Fix (Loc f sl sc sl (sc + 1)) "if"),
-  )
-  | startsWith "an equation guard uses" msg = (
-    Some "replace `if` with `|`",
-    Some (Fix (Loc f sl sc sl (sc + 2)) "|"),
-  )
-  | otherwise = (None, None)
-
--- ── rendering ──────────────────────────────────────────────────────────────
 
 export
 ppSeverity : Severity -> String
@@ -1636,30 +1410,9 @@ wrappedRead cacheRef staleRef parseCacheRef read path = match read path
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
 
--- A parse-error `Loc` for the editing buffer (1-based line, 0-based col), so the
--- LSP can squiggle the offending token (mirror parseResult's located line/col).
-parseErrLoc : String -> ParseError -> Loc
-parseErrLoc path e =
-  let ln = parseErrorLine e
-  let c = parseErrorCol e
-  Loc path ln c ln (c + 1)
-
--- A located parse/lex `Diag` for `path`, carrying the stable `P-*`/`L-*` code and
--- any machine-applicable fix.  One definition shared by the stale-buffer path and
--- the loader's `LoadParseFailed` path (#100) so an imported module's parse error
--- is byte-for-byte the diagnostic that file gets when checked directly.
 export
 parseErrDiag : String -> ParseError -> Diag
-parseErrDiag path e =
-  let ploc = parseErrLoc path e
-  let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
-  Diag
-    SevError
-    (parseErrCode (parseErrorMessage e))
-    (parseErrorMessage e)
-    (Some ploc)
-    phelp
-    pfix
+parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
 
 -- ── project analysis ────────────────────────────────────────────────────────
 --
@@ -1824,49 +1577,92 @@ analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
 analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
-  match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
-    -- #100: a parse/lex error in a dependency is attributed to THAT module's file
-    -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
-    -- (a half-typed buffer), and it must not reach here as a panic that would take the
-    -- whole didChange response with it.
-    Err (LoadParseFailed mpath _ pe) =>
-      (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-    Err (LoadMsg e) => (
-      None,
-      appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
-    )
-    -- The cycle is reported at the `import` that closes it, in the module that
-    -- holds that import.
-    Err (LoadCycle e cpath csite) => match csite
-      Some (_, loc) => (
-        None,
-        appendStale staleRef [
-          (cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)]),
-        ],
-      )
-      None => (
-        None,
-        appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
-      )
-    Ok mods =>
-      let chainKey = chainKeyOf entry roots
-      let front =
-        frontEnd
-          exportsFor
-          (d => unkept (checkReportOf RecordSteps chainKey d))
-          FrontInput {
-            fiInputs = driveInputsFor !selectedProfile False [],
-            fiAllowInternal = allowInternal,
-            fiTrusted = trustedMods,
-            fiRuntimeSrc = runtimeSrc,
-            fiCoreSrc = coreSrc,
-            fiPolicy = DriveUnblocked chainKey RecordSteps,
-            fiProgram = FrontGraph mods (desugaredModPairs mods),
-          }
-      (
-        Some ((front.foReport, front.foOutputs), graphIdOf mods),
-        appendStale staleRef front.foDiags,
-      )
+  projectKeyedFromLoad
+    exportsFor
+    allowInternal
+    trustedMods
+    entry
+    roots
+    runtimeSrc
+    coreSrc
+    staleRef
+    (loadProgramFilesLocatedCachedE parseCacheRef wread entry roots)
+
+export
+analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  Ref (List (String, String)) ->
+  Ref (OrdMap (List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag), OrdMap String)
+analyzeProjectKeyedSources exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+  let staleRef = newStale ()
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let (loaded, sources) =
+    loadProgramFilesLocatedCachedSourcesE parseCacheRef wread entry roots
+  let (keyed, diags) =
+    projectKeyedFromLoad
+      exportsFor
+      allowInternal
+      trustedMods
+      entry
+      roots
+      runtimeSrc
+      coreSrc
+      staleRef
+      loaded
+  (keyed, diags, sources)
+
+projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  Ref (List (String, Diag)) ->
+  Result LoadError (List (String, String, List Decl)) ->
+  <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
+-- Dependency errors keep the destination file and the exact located parser error.
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+  (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadMsg e)) = (
+  None,
+  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+)
+-- A located cycle belongs to the importing module that closes it.
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e cpath (Some (_, loc)))) = (
+  None,
+  appendStale staleRef [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])],
+)
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e _ None)) = (
+  None,
+  appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+)
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
+  let chainKey = chainKeyOf entry roots
+  let front =
+    frontEnd
+      exportsFor
+      (d => unkept (checkReportOf RecordSteps chainKey d))
+      FrontInput {
+        fiInputs = driveInputsFor !selectedProfile False [],
+        fiAllowInternal = allowInternal,
+        fiTrusted = trustedMods,
+        fiRuntimeSrc = runtimeSrc,
+        fiCoreSrc = coreSrc,
+        fiPolicy = DriveUnblocked chainKey RecordSteps,
+        fiProgram = FrontGraph mods (desugaredModPairs mods),
+      }
+  (
+    Some ((front.foReport, front.foOutputs), graphIdOf mods),
+    appendStale staleRef front.foDiags,
+  )
 
 -- Whether resolve rejected any module of a bucketed graph.
 bucketsResolveRejected : List (String, List Diag) -> Bool
@@ -2836,7 +2632,16 @@ cjRange sl sc el ec =
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
 export
 cjRangeOfLoc : String -> Option Loc -> Json
-cjRangeOfLoc src (Some (Loc _ sl sc el ec)) = cjRange (sl - 1) sc (el - 1) ec
+cjRangeOfLoc "" (Some (Loc _ sl sc el ec)) = cjRange (sl - 1) sc (el - 1) ec
+cjRangeOfLoc src (Some (Loc _ sl sc el ec)) =
+  let index = indexSource src
+  let positions = do
+    start <- sourcePositionToOffset index sl sc
+    end <- sourcePositionToOffset index el ec
+    (a, b) <- offsetToUtf16Position index start
+    (c, d) <- offsetToUtf16Position index end
+    Some (cjRange a b c d)
+  optionOr JNull positions
 cjRangeOfLoc src None = JNull
 
 -- Severity code: Error=1, Warning=2.
@@ -2864,8 +2669,11 @@ optField _ None = []
 -- the range covering exactly the span to overwrite (mirrors the LSP text edit).
 export
 cjFixJson : Fix -> Json
-cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject [
-  ("range", cjRange (sl - 1) sc (el - 1) ec),
+cjFixJson = cjFixJsonWithSource ""
+
+cjFixJsonWithSource : String -> Fix -> Json
+cjFixJsonWithSource src (Fix loc repl) = jObject [
+  ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
 
@@ -2874,7 +2682,7 @@ cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
     ([("code", JString code)]
-      ++ optField "fix" (map cjFixJson fix)
+      ++ optField "fix" (map (cjFixJsonWithSource src) fix)
       ++ optField "help" (map JString help)
       ++ [
         ("kind", JString (diagKind sev code)),
@@ -2885,8 +2693,6 @@ cjDiagnostic _ src (Diag sev code msg loc help fix) =
       ])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
--- `src` is the file's source text; the JSON range comes from each `Loc`, so it
--- is unused by `cjRangeOfLoc`.
 -- `diags` is the List Diag from analyzeProject.
 export
 cjFileEntry : String -> String -> List Diag -> Json
@@ -3375,35 +3181,11 @@ readFileSafe path = match readFile path
   Err _ => ""
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
--- Mirrors runCheckJsonCmd's inline parse-error diag (built inline, not via
--- cjDiagnostic) so a hard parse failure still carries a stable `code`, a range,
--- and — for the two single-token hints — a machine-applicable `fix`.
+-- Uses the same serializer as other diagnostics, including typed edits.
 export
 cjParseErrJson : String -> String -> ParseError -> String
 cjParseErrJson target src e =
-  let ln = parseErrorLine e - 1
-  let col = parseErrorCol e
-  let r = cjRange ln col ln (col + 1)
-  let pcode = parseErrCode (parseErrorMessage e)
-  let ploc = Loc target (parseErrorLine e) col (parseErrorLine e) (col + 1)
-  let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
-  let diagJson =
-    jObject
-      ([("code", JString pcode)]
-        ++ optField "fix" (map cjFixJson pfix)
-        ++ optField "help" (map JString phelp)
-        ++ [
-          ("kind", JString (codeKind pcode)),
-          ("message", JString (parseErrorMessage e)),
-          ("range", r),
-          ("severity", JInt 1),
-          ("source", JString "medaka"),
-        ])
-  let filesJson = jObject [
-    ("file", JString target),
-    ("diagnostics", JArray (arrayFromList [diagJson])),
-  ]
-  stringify (jObject [("files", JArray (arrayFromList [filesJson]))])
+  cjAllToJson [(target, src, [parseErrDiag target e])]
 
 -- Single-module check → JSON.  Parse errors are detected FIRST; otherwise the
 -- single-file located pipeline runs and its diags serialize via cjAllToJson.
@@ -3417,8 +3199,7 @@ cjParseErrJson target src e =
 -- `CjParts` also carries the ENTRY's path key — the value a caller needs to
 -- fold diagnostics of its own into the right file's bucket, since the
 -- multi-module arm relativizes paths.  The located parse-error envelope is
--- hand-built (`cjParseErrJson` computes a range `cjDiagnostic` does not), so
--- it can only be handed back already rendered; it always travels with
+-- rendered as a complete envelope and always travels with
 -- `hasErr = True`, which is why no caller has to fold into it.
 public export data CheckJson =
   | CjRendered String
@@ -3634,10 +3415,12 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
     True,
   )
 # DESUGAR
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
@@ -3653,18 +3436,14 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
-(DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
-(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
-(DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
-(DTypeSig true "mkDiag" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Diag"))))))
-(DFunDef false "mkDiag" ((PVar "sev") (PVar "code") (PVar "msg") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "None")) (EVar "None")))
+(DUse true (UseGroup ("driver" "diagnostic_value") ((mem "Severity" true) (mem "Fix" true) (mem "Diag" true) (mem "mkDiag" false))))
 (DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
 (DTypeSig true "resErrorHelpFix" (TyFun (TyCon "ResError") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix")))))
@@ -3697,22 +3476,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedKwMsg" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "is a reserved keyword"))) (EVar "msg")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "wordBetweenBackticks" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "wordBetweenBackticks" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "msg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "msg"))) (EVar "msg"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))
-(DTypeSig false "allBacktickWords" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "allBacktickWords" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "msg")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "msg"))) (EVar "msg"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "j")) () (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest"))) (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "rest"))) (EVar "rest"))) (DoExpr (EBinOp "::" (EVar "word") (EApp (EVar "allBacktickWords") (EVar "after"))))))))))))
-(DTypeSig false "twoBacktickWords" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "twoBacktickWords" ((PVar "msg")) (EMatch (EApp (EVar "allBacktickWords") (EVar "msg")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (ETuple (EVar "a") (EVar "b")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "oldNewFixOf" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Fix"))))))
-(DFunDef false "oldNewFixOf" ((PVar "f") (PVar "sl") (PVar "sc") (PTuple (PVar "old") (PVar "new"))) (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "old"))))) (EVar "new")))
-(DTypeSig true "parseErrCode" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "parseErrCode" ((PVar "msg")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated string"))) (EVar "msg")) (ELit (LString "L-UNTERMINATED-STRING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated block"))) (EVar "msg")) (ELit (LString "L-UNTERMINATED-COMMENT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated character"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR-LITERAL")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "invalid escape"))) (EVar "msg")) (ELit (LString "L-BAD-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unicode escape"))) (EVar "msg")) (ELit (LString "L-BAD-UNICODE-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "bare unicode escape"))) (EVar "msg")) (ELit (LString "L-BARE-UNICODE-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "character literal"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR-LITERAL")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `\\x"))) (EVar "msg")) (ELit (LString "L-HS-LAMBDA")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `$`"))) (EVar "msg")) (ELit (LString "L-HS-DOLLAR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected character"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "integer literal too large"))) (EVar "msg")) (ELit (LString "L-INT-OVERFLOW")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "float literal out of range"))) (EVar "msg")) (ELit (LString "L-FLOAT-OVERFLOW")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed radix literal"))) (EVar "msg")) (ELit (LString "L-MALFORMED-RADIX")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed float literal"))) (EVar "msg")) (ELit (LString "L-MALFORMED-FLOAT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected end of input"))) (EVar "msg")) (ELit (LString "P-UNEXPECTED-EOF")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected `!=`"))) (EVar "msg")) (ELit (LString "P-BAD-NEQ")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `case"))) (EVar "msg")) (ELit (LString "P-HS-CASE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `match ... with`"))) (EVar "msg")) (ELit (LString "P-OCAML-MATCH-WITH")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `**`"))) (EVar "msg")) (ELit (LString "P-NO-POW-OPERATOR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`::` is the list cons operator"))) (EVar "msg")) (ELit (LString "P-HS-SIG")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `/* "))) (EVar "msg")) (ELit (LString "L-BLOCKCOMMENT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `{ ... }` blocks"))) (EVar "msg")) (ELit (LString "P-BRACE-BLOCK")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `for`"))) (EVar "msg")) (ELit (LString "P-FOR-WHILE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `while`"))) (EVar "msg")) (ELit (LString "P-FOR-WHILE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `def`"))) (EVar "msg")) (ELit (LString "P-DEF-KEYWORD")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no statement terminator"))) (EVar "msg")) (ELit (LString "L-SEMICOLON")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "missing `where` on this "))) (EVar "msg")) (ELit (LString "P-MISSING-WHERE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `where` block must start on the next line"))) (EVar "msg")) (ELit (LString "P-WHERE-BODY-SAME-LINE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `do` block must end"))) (EVar "msg")) (ELit (LString "P-DO-ENDS-IN-BINDING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `defer` block must end"))) (EVar "msg")) (ELit (LString "P-DO-ENDS-IN-BINDING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a match-arm guard uses"))) (EVar "msg")) (ELit (LString "P-GUARD-BAR-IN-MATCH")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "an equation guard uses"))) (EVar "msg")) (ELit (LString "P-GUARD-IF-IN-EQUATION")) (EIf (EApp (EVar "isReservedKwMsg") (EVar "msg")) (ELit (LString "P-RESERVED-KEYWORD")) (EIf (EVar "otherwise") (ELit (LString "P-PARSE")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))))))))))))))))))))))))
-(DTypeSig false "doEndsInBindingHelp" (TyCon "String"))
-(DFunDef false "doEndsInBindingHelp" () (ELit (LString "end the block with the expression whose value it should have, such as `pure x`")))
-(DTypeSig true "parseErrHelpFix" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))))
-(DFunDef false "parseErrHelpFix" ((PVar "msg") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`::` is the list cons operator"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `::` with `:`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString ":"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected `!=`"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `!=` with `/=`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString "/="))))) (EIf (EApp (EApp (EVar "startsWith") (EVar "intMinLiteralMsg")) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "intMinLiteralHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "bare unicode escape"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "write the unicode escape braced, `\\u{XXXX}`"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed radix literal"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "the digit separator `_` may only appear between digits"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed float literal"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "a float literal needs a digit on both sides of the decimal point"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EVar "isReservedKwMsg") (EVar "msg")) (EMatch (EApp (EVar "wordBetweenBackticks") (EVar "msg")) (arm (PCon "Some" (PVar "w")) () (ETuple (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename it to `")) (EApp (EVar "display") (EVar "w"))) (ELit (LString "_`; any reserved word plus `_` is a valid identifier")))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "w"))))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "w"))) (ELit (LString "_"))))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`public` applies only to `data` declarations"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "drop `public`; a function or value is exported with plain `export`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (ELit (LString "public")))))) (ELit (LString ""))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "missing `where` on this "))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "end the header with `where`; without it the next line is read as another type argument"))) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `do` block must end"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "doEndsInBindingHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `defer` block must end"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "doEndsInBindingHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `where` block must start on the next line"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "`where` opens a block only when it ends the line; move the member to the next line"))) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a match-arm guard uses"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `|` with `if`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 1))))) (ELit (LString "if"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "an equation guard uses"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `if` with `|`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString "|"))))) (EIf (EVar "otherwise") (ETuple (EVar "None") (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))
 (DTypeSig true "ppSeverity" (TyFun (TyCon "Severity") (TyCon "String")))
 (DFunDef false "ppSeverity" ((PCon "SevError")) (ELit (LString "error")))
 (DFunDef false "ppSeverity" ((PCon "SevWarning")) (ELit (LString "warning")))
@@ -3845,10 +3608,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
-(DTypeSig false "parseErrLoc" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Loc"))))
-(DFunDef false "parseErrLoc" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EApp (EVar "parseErrorLine") (EVar "e"))) (DoLet false false (PVar "c") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "ln")) (EVar "c")) (EVar "ln")) (EBinOp "+" (EVar "c") (ELit (LInt 1)))))))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
-(DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ploc") (EApp (EApp (EVar "parseErrLoc") (EVar "path")) (EVar "e"))) (DoLet false false (PTuple (PVar "phelp") (PVar "pfix")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (EApp (EVar "parseErrorMessage") (EVar "e"))) (EApp (EVar "Some") (EVar "ploc"))) (EVar "phelp")) (EVar "pfix")))))
+(DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EApp (EVar "parseErrorDiagnostic") (EVar "e"))))
 (DTypeSig false "preludeDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "preludeDesugared" ((PVar "src")) (EApp (EVar "desugaredPrelude") (EVar "src")))
 (DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
@@ -3865,7 +3626,15 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
 (DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))))))
+(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))))))
+(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))))))))))
+(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
+(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PCon "Some" (PTuple PWild (PVar "loc")))))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc")))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadCycle" (PVar "e") PWild (PCon "None")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
 (DTypeSig false "bucketsResolveRejected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "bucketsResolveRejected" ((PVar "buckets")) (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EApp (EVar "resolveRejected") (EApp (EVar "snd") (EVar "b"))))) (EVar "buckets")))
 (DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
@@ -4002,7 +3771,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "cjRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "cjRange" ((PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "end")) (EApp (EApp (EVar "cjPosition") (EVar "el")) (EVar "ec"))) (ETuple (ELit (LString "start")) (EApp (EApp (EVar "cjPosition") (EVar "sl")) (EVar "sc"))))))
 (DTypeSig true "cjRangeOfLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))
-(DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
+(DFunDef false "cjRangeOfLoc" ((PLit (LString "")) (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
+(DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "sl")) (EVar "sc"))) (ELam ((PVar "start")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec"))) (ELam ((PVar "end")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "start"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "c") (PVar "d")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "cjRange") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))))))))))))))) (DoExpr (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EVar "positions")))))
 (DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "None")) (EVar "JNull"))
 (DTypeSig false "cjSevCode" (TyFun (TyCon "Severity") (TyCon "Int")))
 (DFunDef false "cjSevCode" ((PCon "SevError")) (ELit (LInt 1)))
@@ -4011,9 +3781,11 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "optField" ((PVar "k") (PCon "Some" (PVar "v"))) (EListLit (ETuple (EVar "k") (EVar "v"))))
 (DFunDef false "optField" (PWild (PCon "None")) (EListLit))
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
-(DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
+(DFunDef false "cjFixJson" () (EApp (EVar "cjFixJsonWithSource") (ELit (LString ""))))
+(DTypeSig false "cjFixJsonWithSource" (TyFun (TyCon "String") (TyFun (TyCon "Fix") (TyCon "Json"))))
+(DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "Fix" (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EApp (EVar "cjFixJsonWithSource") (EVar "src"))) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
@@ -4117,7 +3889,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "readFileSafe" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig true "cjParseErrJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
-(DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EBinOp "-" (EApp (EVar "parseErrorLine") (EVar "e")) (ELit (LInt 1)))) (DoLet false false (PVar "col") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EApp (EVar "cjRange") (EVar "ln")) (EVar "col")) (EVar "ln")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (DoLet false false (PVar "pcode") (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (DoLet false false (PVar "ploc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "target")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EVar "col")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (DoLet false false (PTuple (PVar "phelp") (PVar "pfix")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoLet false false (PVar "diagJson") (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "pcode")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "pfix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "phelp")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "pcode")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ETuple (ELit (LString "range")) (EVar "r")) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka")))))))) (DoLet false false (PVar "filesJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "target"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EListLit (EVar "diagJson")))))))) (DoExpr (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EListLit (EVar "filesJson")))))))))))
+(DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e")))))))
 (DData Public "CheckJson" () ((variant "CjRendered" (ConPos (TyCon "String"))) (variant "CjParts" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
 (DTypeSig true "ppCheckJson" (TyFun (TyCon "CheckJson") (TyCon "String")))
 (DFunDef false "ppCheckJson" ((PCon "CjRendered" (PVar "json"))) (EVar "json"))
@@ -4145,10 +3917,12 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
 (DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))
 # MARK
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
@@ -4164,18 +3938,14 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
-(DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
-(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
-(DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
-(DTypeSig true "mkDiag" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Diag"))))))
-(DFunDef false "mkDiag" ((PVar "sev") (PVar "code") (PVar "msg") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "None")) (EVar "None")))
+(DUse true (UseGroup ("driver" "diagnostic_value") ((mem "Severity" true) (mem "Fix" true) (mem "Diag" true) (mem "mkDiag" false))))
 (DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
 (DTypeSig true "resErrorHelpFix" (TyFun (TyCon "ResError") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix")))))
@@ -4208,22 +3978,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedKwMsg" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "is a reserved keyword"))) (EVar "msg")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "wordBetweenBackticks" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "wordBetweenBackticks" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "msg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "msg"))) (EVar "msg"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))
-(DTypeSig false "allBacktickWords" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "allBacktickWords" ((PVar "msg")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "msg")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "msg"))) (EVar "msg"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "j")) () (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest"))) (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "rest"))) (EVar "rest"))) (DoExpr (EBinOp "::" (EVar "word") (EApp (EVar "allBacktickWords") (EVar "after"))))))))))))
-(DTypeSig false "twoBacktickWords" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "twoBacktickWords" ((PVar "msg")) (EMatch (EApp (EVar "allBacktickWords") (EVar "msg")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (ETuple (EVar "a") (EVar "b")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "oldNewFixOf" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Fix"))))))
-(DFunDef false "oldNewFixOf" ((PVar "f") (PVar "sl") (PVar "sc") (PTuple (PVar "old") (PVar "new"))) (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "old"))))) (EVar "new")))
-(DTypeSig true "parseErrCode" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "parseErrCode" ((PVar "msg")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated string"))) (EVar "msg")) (ELit (LString "L-UNTERMINATED-STRING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated block"))) (EVar "msg")) (ELit (LString "L-UNTERMINATED-COMMENT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unterminated character"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR-LITERAL")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "invalid escape"))) (EVar "msg")) (ELit (LString "L-BAD-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unicode escape"))) (EVar "msg")) (ELit (LString "L-BAD-UNICODE-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "bare unicode escape"))) (EVar "msg")) (ELit (LString "L-BARE-UNICODE-ESCAPE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "character literal"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR-LITERAL")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `\\x"))) (EVar "msg")) (ELit (LString "L-HS-LAMBDA")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `$`"))) (EVar "msg")) (ELit (LString "L-HS-DOLLAR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected character"))) (EVar "msg")) (ELit (LString "L-BAD-CHAR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "integer literal too large"))) (EVar "msg")) (ELit (LString "L-INT-OVERFLOW")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "float literal out of range"))) (EVar "msg")) (ELit (LString "L-FLOAT-OVERFLOW")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed radix literal"))) (EVar "msg")) (ELit (LString "L-MALFORMED-RADIX")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed float literal"))) (EVar "msg")) (ELit (LString "L-MALFORMED-FLOAT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected end of input"))) (EVar "msg")) (ELit (LString "P-UNEXPECTED-EOF")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected `!=`"))) (EVar "msg")) (ELit (LString "P-BAD-NEQ")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `case"))) (EVar "msg")) (ELit (LString "P-HS-CASE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `match ... with`"))) (EVar "msg")) (ELit (LString "P-OCAML-MATCH-WITH")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `**`"))) (EVar "msg")) (ELit (LString "P-NO-POW-OPERATOR")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`::` is the list cons operator"))) (EVar "msg")) (ELit (LString "P-HS-SIG")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `/* "))) (EVar "msg")) (ELit (LString "L-BLOCKCOMMENT")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `{ ... }` blocks"))) (EVar "msg")) (ELit (LString "P-BRACE-BLOCK")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `for`"))) (EVar "msg")) (ELit (LString "P-FOR-WHILE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `while`"))) (EVar "msg")) (ELit (LString "P-FOR-WHILE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no `def`"))) (EVar "msg")) (ELit (LString "P-DEF-KEYWORD")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Medaka has no statement terminator"))) (EVar "msg")) (ELit (LString "L-SEMICOLON")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "missing `where` on this "))) (EVar "msg")) (ELit (LString "P-MISSING-WHERE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `where` block must start on the next line"))) (EVar "msg")) (ELit (LString "P-WHERE-BODY-SAME-LINE")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `do` block must end"))) (EVar "msg")) (ELit (LString "P-DO-ENDS-IN-BINDING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `defer` block must end"))) (EVar "msg")) (ELit (LString "P-DO-ENDS-IN-BINDING")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a match-arm guard uses"))) (EVar "msg")) (ELit (LString "P-GUARD-BAR-IN-MATCH")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "an equation guard uses"))) (EVar "msg")) (ELit (LString "P-GUARD-IF-IN-EQUATION")) (EIf (EApp (EVar "isReservedKwMsg") (EVar "msg")) (ELit (LString "P-RESERVED-KEYWORD")) (EIf (EVar "otherwise") (ELit (LString "P-PARSE")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))))))))))))))))))))))))
-(DTypeSig false "doEndsInBindingHelp" (TyCon "String"))
-(DFunDef false "doEndsInBindingHelp" () (ELit (LString "end the block with the expression whose value it should have, such as `pure x`")))
-(DTypeSig true "parseErrHelpFix" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))))
-(DFunDef false "parseErrHelpFix" ((PVar "msg") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`::` is the list cons operator"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `::` with `:`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString ":"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "unexpected `!=`"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `!=` with `/=`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString "/="))))) (EIf (EApp (EApp (EVar "startsWith") (EVar "intMinLiteralMsg")) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "intMinLiteralHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "bare unicode escape"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "write the unicode escape braced, `\\u{XXXX}`"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed radix literal"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "the digit separator `_` may only appear between digits"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "malformed float literal"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "a float literal needs a digit on both sides of the decimal point"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "oldNewFixOf") (EVar "f")) (EVar "sl")) (EVar "sc"))) (EApp (EVar "twoBacktickWords") (EVar "msg")))) (EIf (EApp (EVar "isReservedKwMsg") (EVar "msg")) (EMatch (EApp (EVar "wordBetweenBackticks") (EVar "msg")) (arm (PCon "Some" (PVar "w")) () (ETuple (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename it to `")) (EApp (EMethodRef "display") (EVar "w"))) (ELit (LString "_`; any reserved word plus `_` is a valid identifier")))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "w"))))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "w"))) (ELit (LString "_"))))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "`public` applies only to `data` declarations"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "drop `public`; a function or value is exported with plain `export`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (ELit (LString "public")))))) (ELit (LString ""))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "missing `where` on this "))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "end the header with `where`; without it the next line is read as another type argument"))) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `do` block must end"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "doEndsInBindingHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `defer` block must end"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (EVar "doEndsInBindingHelp")) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a `where` block must start on the next line"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "`where` opens a block only when it ends the line; move the member to the next line"))) (EVar "None")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "a match-arm guard uses"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `|` with `if`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 1))))) (ELit (LString "if"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "an equation guard uses"))) (EVar "msg")) (ETuple (EApp (EVar "Some") (ELit (LString "replace `if` with `|`"))) (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (ELit (LInt 2))))) (ELit (LString "|"))))) (EIf (EVar "otherwise") (ETuple (EVar "None") (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))
 (DTypeSig true "ppSeverity" (TyFun (TyCon "Severity") (TyCon "String")))
 (DFunDef false "ppSeverity" ((PCon "SevError")) (ELit (LString "error")))
 (DFunDef false "ppSeverity" ((PCon "SevWarning")) (ELit (LString "warning")))
@@ -4356,10 +4110,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
-(DTypeSig false "parseErrLoc" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Loc"))))
-(DFunDef false "parseErrLoc" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EApp (EVar "parseErrorLine") (EVar "e"))) (DoLet false false (PVar "c") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "ln")) (EVar "c")) (EVar "ln")) (EBinOp "+" (EVar "c") (ELit (LInt 1)))))))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
-(DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ploc") (EApp (EApp (EVar "parseErrLoc") (EVar "path")) (EVar "e"))) (DoLet false false (PTuple (PVar "phelp") (PVar "pfix")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (EApp (EVar "parseErrorMessage") (EVar "e"))) (EApp (EVar "Some") (EVar "ploc"))) (EVar "phelp")) (EVar "pfix")))))
+(DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EApp (EVar "parseErrorDiagnostic") (EVar "e"))))
 (DTypeSig false "preludeDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "preludeDesugared" ((PVar "src")) (EApp (EVar "desugaredPrelude") (EVar "src")))
 (DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
@@ -4376,7 +4128,15 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
 (DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))))))
+(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))))))
+(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))))))))))
+(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
+(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PCon "Some" (PTuple PWild (PVar "loc")))))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc")))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadCycle" (PVar "e") PWild (PCon "None")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
 (DTypeSig false "bucketsResolveRejected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "bucketsResolveRejected" ((PVar "buckets")) (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EApp (EVar "resolveRejected") (EApp (EVar "snd") (EVar "b"))))) (EVar "buckets")))
 (DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
@@ -4513,7 +4273,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "cjRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))))
 (DFunDef false "cjRange" ((PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "end")) (EApp (EApp (EVar "cjPosition") (EVar "el")) (EVar "ec"))) (ETuple (ELit (LString "start")) (EApp (EApp (EVar "cjPosition") (EVar "sl")) (EVar "sc"))))))
 (DTypeSig true "cjRangeOfLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))
-(DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
+(DFunDef false "cjRangeOfLoc" ((PLit (LString "")) (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
+(DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "positions") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "sl")) (EVar "sc"))) (ELam ((PVar "start")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec"))) (ELam ((PVar "end")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "start"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "c") (PVar "d")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "cjRange") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))))))))))))))) (DoExpr (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EVar "positions")))))
 (DFunDef false "cjRangeOfLoc" ((PVar "src") (PCon "None")) (EVar "JNull"))
 (DTypeSig false "cjSevCode" (TyFun (TyCon "Severity") (TyCon "Int")))
 (DFunDef false "cjSevCode" ((PCon "SevError")) (ELit (LInt 1)))
@@ -4522,9 +4283,11 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "optField" ((PVar "k") (PCon "Some" (PVar "v"))) (EListLit (ETuple (EVar "k") (EVar "v"))))
 (DFunDef false "optField" (PWild (PCon "None")) (EListLit))
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
-(DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
+(DFunDef false "cjFixJson" () (EApp (EVar "cjFixJsonWithSource") (ELit (LString ""))))
+(DTypeSig false "cjFixJsonWithSource" (TyFun (TyCon "String") (TyFun (TyCon "Fix") (TyCon "Json"))))
+(DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "Fix" (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cjFixJsonWithSource") (EVar "src"))) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
@@ -4628,7 +4391,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "readFileSafe" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig true "cjParseErrJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
-(DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EBinOp "-" (EApp (EVar "parseErrorLine") (EVar "e")) (ELit (LInt 1)))) (DoLet false false (PVar "col") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EApp (EVar "cjRange") (EVar "ln")) (EVar "col")) (EVar "ln")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (DoLet false false (PVar "pcode") (EApp (EVar "parseErrCode") (EApp (EVar "parseErrorMessage") (EVar "e")))) (DoLet false false (PVar "ploc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "target")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EVar "col")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (DoLet false false (PTuple (PVar "phelp") (PVar "pfix")) (EApp (EApp (EVar "parseErrHelpFix") (EApp (EVar "parseErrorMessage") (EVar "e"))) (EVar "ploc"))) (DoLet false false (PVar "diagJson") (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "pcode")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "pfix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "phelp")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "pcode")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ETuple (ELit (LString "range")) (EVar "r")) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka")))))))) (DoLet false false (PVar "filesJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "target"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EListLit (EVar "diagJson")))))))) (DoExpr (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EListLit (EVar "filesJson")))))))))))
+(DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e")))))))
 (DData Public "CheckJson" () ((variant "CjRendered" (ConPos (TyCon "String"))) (variant "CjParts" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
 (DTypeSig true "ppCheckJson" (TyFun (TyCon "CheckJson") (TyCon "String")))
 (DFunDef false "ppCheckJson" ((PCon "CjRendered" (PVar "json"))) (EVar "json"))

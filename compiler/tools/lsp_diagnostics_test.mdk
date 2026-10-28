@@ -1,0 +1,92 @@
+import tools.lsp_diagnostics.{parseDiagnosticActions}
+import tools.source_snapshot.{makeSnapshot}
+import frontend.ast.{Loc(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic(..), ParseEdit(..), EditApplicability(..),
+  ParseDiagnosticKind(..)
+}
+import test.{expectEach, expectEqual}
+import json.{Json(..), jObject, jArray}
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
+import driver.diagnostic_value.{Diag(..), Fix(..)}
+
+test "parse actions require expected text and machine applicability" =
+  let snapshot = makeSnapshot "file:///a.mdk" None 1 "x != y"
+  let loc = Loc "" 1 2 1 4
+  let diag edit = ParseDiagnostic BadNeq loc [edit]
+  let range = jObject [
+    ("start", jObject [("line", JInt 0), ("character", JInt 2)]),
+    ("end", jObject [("line", JInt 0), ("character", JInt 4)]),
+  ]
+  let action = jObject [
+    ("title", JString "Replace with /="),
+    ("kind", JString "quickfix"),
+    (
+      "edit",
+      jObject [
+        (
+          "documentChanges",
+          jArray [
+            jObject [
+              (
+                "textDocument",
+                jObject [("uri", JString "file:///a.mdk"), ("version", JNull)],
+              ),
+              (
+                "edits",
+                jArray [jObject [("range", range), ("newText", JString "/=")]],
+              ),
+            ],
+          ],
+        ),
+      ],
+    ),
+  ]
+  expectEach [
+    (
+      "machine",
+      expectEqual
+        [action]
+        (parseDiagnosticActions snapshot [
+          diag (ParseEdit loc "!=" "/=" MachineApplicable),
+        ]),
+    ),
+    (
+      "mismatch",
+      expectEqual
+        []
+        (parseDiagnosticActions snapshot [
+          diag (ParseEdit loc "==" "/=" MachineApplicable),
+        ]),
+    ),
+    (
+      "human",
+      expectEqual
+        []
+        (parseDiagnosticActions snapshot [
+          diag (ParseEdit loc "!=" "/=" HumanOnly),
+        ]),
+    ),
+  ]
+
+test "adapter selects the first machine edit" =
+  let loc = Loc "" 1 2 1 4
+  let human = ParseEdit loc "!=" "human" HumanOnly
+  let first = ParseEdit loc "!=" "first" MachineApplicable
+  let second = ParseEdit loc "!=" "second" MachineApplicable
+  let selected edits =
+    match parseDiagnosticToDiag "a.mdk" (ParseDiagnostic BadNeq loc edits)
+      Diag _ _ _ _ _ fix => match fix
+        None => None
+        Some (Fix (Loc path sl sc el ec) replacement) =>
+          Some (path, (sl, sc), (el, ec), replacement)
+  expectEach [
+    ("no edit", expectEqual None (selected [])),
+    ("human only", expectEqual None (selected [human])),
+    (
+      "first machine",
+      expectEqual
+        (Some ("a.mdk", (1, 2), (1, 4), "first"))
+        (selected [human, first, second]),
+    ),
+  ]

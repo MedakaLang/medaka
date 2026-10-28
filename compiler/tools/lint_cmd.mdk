@@ -22,8 +22,6 @@ import support.util.{anyList, joinNl}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
   Positions,
-  parseWithPositions,
-  parseWithPositionsLocated,
 }
 import driver.loader.{findProjectRoot, findProjectRootOrSelf, readSource}
 import driver.diagnostics.{
@@ -33,6 +31,7 @@ import driver.diagnostics.{
   ppDiagCliLines,
   ppDiagCliSrc,
   srcLinesArr,
+  parseErrDiag,
 }
 import support.cli_targets.{collectMdkFiles, expandLintTarget}
 import support.stage_count.{stageExit}
@@ -55,6 +54,7 @@ import tools.lint.{
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
+  lintParseSource,
   lintProgramFacts,
   mkFileFacts,
   crossFileSelected,
@@ -106,7 +106,7 @@ import tools.lint_baseline.{
 --
 -- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
 -- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
--- runtime (`buildStdlibIndex`), content `ruleSetStamp`'s binary hash never
+-- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
 -- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
 -- file's cached findings silently answering with the pre-edit stdlib —
 -- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
@@ -494,45 +494,109 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       let _ = ePutStrLn msg
       (True, [], [])
     Ok src =>
-      -- Uncached, the excluded rules are skipped outright (their findings
-      -- would be filtered below anyway); under --cache the shard must hold the
-      -- full roster, so every rule runs.  The occurrence list is wanted whenever
-      -- the cross-file tier will read it from entries instead of re-walking
-      -- parses.
-      let rules = selectRules onlyNames disableNames
-      let wantOccs =
-        multiFile
-          && crossFileCacheSound
-          && crossFileSelected onlyNames disableNames
-      let (entry, parsed) = lintEntryOf idx cacheCtx rules wantOccs target src
-      -- Suppress findings silenced by inline `-- lint-disable-*` directives before
-      -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
-      -- and uncached paths render from THIS one expression over the entry, so a
-      -- hit and a miss cannot print different things: the only difference between
-      -- them is where `entry` came from.
-      let allFindings = applySuppressionsDirs entry.directives entry.findings
-      let filtered =
-        applyFindingFilters disableNames onlyNames denyNames allFindings
-      let findings = applyBaselineFindings baseCtx target filtered
-      -- `srcLinesArr` whole-file-splits `src` — deferred until there is at
-      -- least one finding to render, since a clean file (the common case
-      -- across a large corpus) never needs it.
-      let output = match findings
-        [] => ""
-        _ =>
-          let srcLines = srcLinesArr src
-          joinNl
-            (map
-              (f => ppDiagCliLines srcLines target (findingToDiag f))
-              findings)
-      let hasOutput = stringLength output > 0
-      let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
-      let _ = if hasOutput then putStrLn output
-      (anyList isFindingError findings, [entry], parsed)
+      let cached = match cacheCtx
+        Some (cacheDir, stamp) =>
+          loadEntry cacheDir stamp target (contentHashOf src)
+        None => None
+      match cached
+        Some hit =>
+          lintOneFileRender
+            multiFile
+            disableNames
+            onlyNames
+            denyNames
+            baseCtx
+            target
+            src
+            hit
+            []
+        None => match lintParseSource src
+          Err e =>
+            ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+            (True, [], [])
+          Ok parsedSource =>
+            lintOneFileParsed
+              idx
+              multiFile
+              disableNames
+              onlyNames
+              denyNames
+              baseCtx
+              cacheCtx
+              target
+              src
+              parsedSource
+
+lintOneFileParsed : StdlibIndex ->
+  Bool ->
+  List String ->
+  List String ->
+  List String ->
+  Option (String, LintBaseline) ->
+  Option (String, String) ->
+  String ->
+  String ->
+  (List Decl, Positions) ->
+  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+lintOneFileParsed idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target src parsedSource =
+  -- Uncached, the excluded rules are skipped outright (their findings
+  -- would be filtered below anyway); under --cache the shard must hold the
+  -- full roster, so every rule runs.  The occurrence list is wanted whenever
+  -- the cross-file tier will read it from entries instead of re-walking
+  -- parses.
+  let rules = selectRules onlyNames disableNames
+  let wantOccs =
+    multiFile && crossFileCacheSound && crossFileSelected onlyNames disableNames
+  let (entry, parsed) =
+    lintEntryOf idx cacheCtx rules wantOccs target src parsedSource
+  lintOneFileRender
+    multiFile
+    disableNames
+    onlyNames
+    denyNames
+    baseCtx
+    target
+    src
+    entry
+    parsed
+
+lintOneFileRender : Bool ->
+  List String ->
+  List String ->
+  List String ->
+  Option (String, LintBaseline) ->
+  String ->
+  String ->
+  LintEntry ->
+  List (String, String, Positions, List Decl) ->
+  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry parsed =
+  -- Suppress findings silenced by inline `-- lint-disable-*` directives before
+  -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
+  -- and uncached paths render from THIS one expression over the entry, so a
+  -- hit and a miss cannot print different things: the only difference between
+  -- them is where `entry` came from.
+  let allFindings = applySuppressionsDirs entry.directives entry.findings
+  let filtered =
+    applyFindingFilters disableNames onlyNames denyNames allFindings
+  let findings = applyBaselineFindings baseCtx target filtered
+  -- `srcLinesArr` whole-file-splits `src` — deferred until there is at
+  -- least one finding to render, since a clean file (the common case
+  -- across a large corpus) never needs it.
+  let output = match findings
+    [] => ""
+    _ =>
+      let srcLines = srcLinesArr src
+      joinNl
+        (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
+  let hasOutput = stringLength output > 0
+  let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
+  let _ = if hasOutput then putStrLn output
+  (anyList isFindingError findings, [entry], parsed)
 
 -- One file's lint result, from the cache when it can be trusted and from a real
 -- parse otherwise.  Also returns the parse for the parse-based cross-file tier —
--- empty on a cache hit (there is no parse) and whenever `crossFileCacheSound`
+-- empty on a cache hit and whenever `crossFileCacheSound`
 -- holds, since the tier is then reached from entries.
 --
 -- The `--cache` decision, in full: a HIT requires the shard to decode, and to
@@ -545,19 +609,22 @@ lintEntryOf : StdlibIndex ->
   Bool ->
   String ->
   String ->
+  (List Decl, Positions) ->
   <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf idx None rules wantOccs target src =
-  let (entry, pos, decls) = lintFileFresh idx rules target src "" wantOccs
+lintEntryOf idx None rules wantOccs target src parsedSource =
+  let (entry, pos, decls) =
+    lintFileFresh idx rules target src "" wantOccs parsedSource
   (entry, if crossFileCacheSound then [] else [(target, src, pos, decls)])
-lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src =
+lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src parsedSource =
   let hash = contentHashOf src
   match loadEntry cacheDir stamp target hash
     Some hit => (hit, [])
     None =>
-      let (entry, _, _) = lintFileFresh idx allRules target src hash True
+      let (entry, _, _) =
+        lintFileFresh idx allRules target src hash True parsedSource
       (entry, [])
 
--- Parse and lint a file for real: the miss path, and the whole of the uncached
+-- Lint a parsed file for real: the miss path, and the whole of the uncached
 -- path.  The returned entry is `dirty` — it is this run's work and its shard (if
 -- any) needs writing.
 --
@@ -574,9 +641,9 @@ lintFileFresh : StdlibIndex ->
   String ->
   String ->
   Bool ->
+  (List Decl, Positions) ->
   <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx rules target src hash wantOccs =
-  let (decls, pos) = parseWithPositionsLocated src
+lintFileFresh idx rules target src hash wantOccs (decls, pos) =
   let facts = mkFileFacts src decls pos
   (
     LintEntry {
@@ -597,17 +664,29 @@ lintOneFileFix onlyNames disableNames target = match readSource target
   Err msg =>
     let _ = ePutStrLn msg
     True
-  Ok src =>
-    let (decls, pos) = parseWithPositions src
-    let (newSrc, n) = applyFixes onlyNames disableNames src decls pos
-    if newSrc == src then
-      let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
+  Ok src => match lintParseSource src
+    Err e =>
+      ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+      True
+    Ok parsedSource =>
+      lintFixParsed onlyNames disableNames target src parsedSource
+
+lintFixParsed : List String ->
+  List String ->
+  String ->
+  String ->
+  (List Decl, Positions) ->
+  <IO> Bool
+lintFixParsed onlyNames disableNames target src (decls, pos) =
+  let (newSrc, n) = applyFixes onlyNames disableNames src decls pos
+  if newSrc == src then
+    let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
+    False
+  else match writeFile target newSrc
+    Err msg =>
+      let _ = ePutStrLn "\{target}: \{msg}"
+      let _ = stageExit 1
+      True
+    Ok _ =>
+      let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
       False
-    else match writeFile target newSrc
-      Err msg =>
-        let _ = ePutStrLn "\{target}: \{msg}"
-        let _ = stageExit 1
-        True
-      Ok _ =>
-        let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
-        False

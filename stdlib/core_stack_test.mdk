@@ -1,0 +1,15 @@
+-- Stack-depth tests for `stdlib/core.mdk`.
+--
+-- These build million-element lists, which the interpreter cannot run: it has
+-- no tail-call optimisation and caps call depth at 25000. The module is
+-- therefore rostered native-only in `test/stdlib_suite_test.mdk`.
+
+import test.{expectEqual}
+
+-- # List andThen
+
+test "List andThen is stack safe on a long input" =
+  expectEqual 1000000 (length (andThen [1..=1000000] (x => [x])))
+
+test "List andThen is stack safe on a long inner list" =
+  expectEqual 1000000 (length (andThen [1] (x => [1..=1000000])))

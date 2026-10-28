@@ -1,3 +1,4 @@
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import backend.core_validate.{validateForEmission, coreDefectMessage}
 import backend.emit_target.{Backend(..)}
 import driver.main_autoprint.{executedMainInputs, executedMainRequirement}
@@ -88,9 +89,7 @@ import frontend.parser.{
   parseLocatedResult,
   parseLocated,
   ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
+  parseErrorDiagnostic,
 }
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -115,7 +114,6 @@ import driver.diagnostics.{
   cjFileEntry,
   cjAllToJson,
   readDiagSrc,
-  parseErrCode,
   codeKind,
   missingMainDiag,
 }
@@ -282,7 +280,7 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
     Ok csrc => match readFile entry
       Err e => emitLoadFail entry e
       Ok tsrc => match parseResult tsrc
-        Err pe => emitParseError entry pe
+        Err pe => emitParseError entry tsrc pe
         Ok _ =>
           match (loadProgramFilesLocatedCachedE
             playgroundParseCache
@@ -291,7 +289,7 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
             roots)
             -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
             -- exactly as an entry-file parse error squiggles the entry.
-            Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
+            Err (LoadParseFailed mpath msrc pe) => emitParseError mpath msrc pe
             Err (LoadCycle cmsg cpath csite) =>
               let (cfile, csrc, cloc) = match csite
                 Some (s, l) => (cpath, s, Some l)
@@ -497,7 +495,7 @@ guardedEmit : DriveOutputs ->
   <IO> Unit
 guardedEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
   match parseLocatedResult tsrc
-    Err pe => emitParseError entry pe
+    Err pe => emitParseError entry tsrc pe
     Ok decls => match mainShapeError decls
       Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
       None => doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples
@@ -788,28 +786,12 @@ emitDiagnostics json =
   putStr (json ++ "\n")
 
 -- Parse error: single located diagnostic (mirrors medaka_cli runCheckJsonCmd).
-emitParseError : String -> ParseError -> <IO> Unit
-emitParseError entry pe =
-  -- parseErrorLine is 1-based, parseErrorCol 0-based (see medaka_cli.mdk); cjRange
-  -- wants 0-based LSP positions, so drop the line by one (col is already 0-based).
-  let ln = parseErrorLine pe - 1
-  let col = parseErrorCol pe
-  let r = cjRange ln col ln (col + 1)
-  let pcode = parseErrCode (parseErrorMessage pe)
-  let diagJson = jObject [
-    ("code", JString pcode),
-    ("kind", JString (codeKind pcode)),
-    ("message", JString (parseErrorMessage pe)),
-    ("range", r),
-    ("severity", JInt 1),
-    ("source", JString "medaka"),
-  ]
-  let filesJson = jObject [
-    ("file", JString entry),
-    ("diagnostics", JArray (arrayFromList [diagJson])),
-  ]
+emitParseError : String -> String -> ParseError -> <IO> Unit
+emitParseError entry src pe =
   emitDiagnostics
-    (stringify (jObject [("files", JArray (arrayFromList [filesJson]))]))
+    (cjAllToJson [
+      (entry, src, [parseDiagnosticToDiag entry (parseErrorDiagnostic pe)]),
+    ])
 
 -- A failed stdlib read becomes a single diagnostic too (never a trap).
 emitLoadFail : String -> String -> <IO> Unit

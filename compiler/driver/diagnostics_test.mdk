@@ -13,13 +13,16 @@
    publishes no link and no unsolved effect summary, and a value-restricted
    binding publishes its weak variable. -}
 
-import support.ordmap.{OrdMap, omEmpty, omSize}
+import support.ordmap.{OrdMap, omEmpty, omSize, omLookup}
 import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
-  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
-  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
-  FrontOutput(..), Diag(..), foldCachedIdentity, resolveCachedIdentity
+  analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
+  CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
+  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..),
+  foldCachedIdentity, resolveCachedIdentity
 }
+import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
+import support.source_index.{indexSource, offsetToUtf16Position}
 import types.typecheck.{defaultDriveInputs}
 import types.module_interface.{
   ModuleInterface(..), ModuleKey(..), currentModuleInterfaces
@@ -193,7 +196,7 @@ corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
         ("no published Link", expectEqual [] (cellsWhere isLink rows)),
         ("no open effect summary", expectEqual [] (cellsWhere isSummary rows)),
         ("every graph published its modules", expectEqual [] unloaded),
-        ("stdlib modules driven", expectEqual 47 (length stdlibEs)),
+        ("stdlib modules driven", expectEqual 48 (length stdlibEs)),
       ]
     (Err e, _) => fail e
     (_, Err e) => fail e
@@ -777,6 +780,144 @@ test "a graph recorded while another module was rejected serves what a cold anal
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (rejectedGraphCheck rsrc csrc)
     _ => fail "could not read the prelude pair"
+
+sourceSnapshotChecks : String -> <IO, FileWrite> Expectation
+sourceSnapshotChecks dir =
+  let entry = dir ++ "/main.mdk"
+  let dep = dir ++ "/dep.mdk"
+  let good = """import dep
+main = 1
+"""
+  let astral = "export value = \"😀\"\n"
+  match (writeFile entry good, writeFile dep astral)
+    (Ok _, Ok _) =>
+      let cache = Ref omEmpty
+      let (first, sources) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let (again, same) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let _ = removeFile dep
+      let (missing, missingSources) =
+        loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
+      let broken = "main = (\n"
+      let (bad, badSources) =
+        loadProgramFilesLocatedCachedSourcesE
+          cache
+          (p => if p == entry then Some broken else None)
+          entry
+          [dir]
+      expectEach [
+        ("success", expectTrue (isOk first)),
+        ("entry captured", expectEqual (Some good) (omLookup entry sources)),
+        ("astral captured", expectEqual (Some astral) (omLookup dep sources)),
+        (
+          "captured astral position after deletion",
+          expectEqual
+            (Some (0, 19))
+            (map
+                (src => offsetToUtf16Position (indexSource src) 18)
+                (omLookup dep sources)
+              |> optionOr None),
+        ),
+        ("repeated", expectTrue (isOk again)),
+        ("repeated source", expectEqual (Some astral) (omLookup dep same)),
+        ("missing dependency", expectTrue (isErr missing)),
+        (
+          "entry on failure",
+          expectEqual (Some good) (omLookup entry missingSources),
+        ),
+        ("no stale dependency", expectEqual None (omLookup dep missingSources)),
+        ("parse failure", expectTrue (isErr bad)),
+        ("broken source", expectEqual (Some broken) (omLookup entry badSources)),
+      ]
+    _ => fail "could not write snapshot fixture"
+
+test "loader snapshots contain only current parsed sources on success and failure" =
+  withScratchDir sourceSnapshotChecks
+
+analysisSnapshotChecks : String ->
+  String ->
+  String ->
+  <IO, FileWrite> Expectation
+analysisSnapshotChecks rsrc csrc dir =
+  let entry = dir ++ "/main.mdk"
+  let dep = dir ++ "/dep.mdk"
+  let entrySrc = """import dep
+main = 1
+"""
+  let depSrc = "export value = \"😀\"\n"
+  match (writeFile entry entrySrc, writeFile dep depSrc)
+    (Ok _, Ok _) =>
+      let cache = Ref []
+      let parseCache = Ref omEmpty
+      let (_, oldBuckets) =
+        analyzeProjectKeyed
+          noStdlibExports
+          True
+          []
+          (Ref [])
+          (Ref omEmpty)
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      let (keyed, newBuckets, sources) =
+        analyzeProjectKeyedSources
+          noStdlibExports
+          True
+          []
+          cache
+          parseCache
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      let _ = removeFile dep
+      let (failed, buckets, failedSources) =
+        analyzeProjectKeyedSources
+          noStdlibExports
+          True
+          []
+          cache
+          parseCache
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      expectEach [
+        ("success", expectTrue (isSome keyed)),
+        (
+          "unchanged diagnostics",
+          expectEqual
+            (map (b => (fst b, map diagText (snd b))) oldBuckets)
+            (map (b => (fst b, map diagText (snd b))) newBuckets),
+        ),
+        (
+          "captured dependency",
+          expectEqual (Some depSrc) (omLookup dep sources),
+        ),
+        ("failure", expectTrue (isNone failed)),
+        ("failure keeps diagnostics", expectTrue (length buckets > 0)),
+        (
+          "entry on failure",
+          expectEqual (Some entrySrc) (omLookup entry failedSources),
+        ),
+        (
+          "no previous dependency",
+          expectEqual None (omLookup dep failedSources),
+        ),
+      ]
+    _ => fail "could not write analysis snapshot fixture"
+
+test "project diagnostic snapshots are scoped to each analysis" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) => withScratchDir (analysisSnapshotChecks rsrc csrc)
+  _ => fail "could not read prelude"
 
 -- ── refutable binders, do binds and defer binds ───────────────────────────
 
