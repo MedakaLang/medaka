@@ -310,14 +310,9 @@ class = "history"
 count = 1
 
 [[entry]]
-file = "compiler/frontend/parse_cache.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "compiler/frontend/parser.mdk"
 class = "history"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/frontend/parser.mdk"
@@ -327,12 +322,12 @@ count = 1
 [[entry]]
 file = "compiler/frontend/parser.mdk"
 class = "emoji"
-count = 5
+count = 3
 
 [[entry]]
 file = "compiler/frontend/parser.mdk"
 class = "shout"
-count = 4
+count = 1
 
 [[entry]]
 file = "compiler/frontend/resolve.mdk"
@@ -452,7 +447,7 @@ count = 12
 [[entry]]
 file = "compiler/tools/lint.mdk"
 class = "shout"
-count = 10
+count = 9
 
 [[entry]]
 file = "compiler/tools/lint_baseline.mdk"
@@ -620,6 +615,11 @@ class = "history"
 count = 1
 
 [[entry]]
+file = "compiler/types/tc_elab.mdk"
+class = "draft"
+count = 1
+
+[[entry]]
 file = "compiler/types/tc_env.mdk"
 class = "history"
 count = 11
@@ -687,12 +687,12 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 109
+count = 104
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 7
+count = 6
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -702,7 +702,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 103
+count = 95
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

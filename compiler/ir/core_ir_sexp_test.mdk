@@ -21,7 +21,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{
@@ -70,6 +70,7 @@ import types.capability_manifest.{
 }
 import types.effect_domain.{Param(..)}
 import frontend.ast.{TyConOrigin(..)}
+import types.tc_elab.{grantWholeDomain}
 
 test "manifest serialization retains protocols origins domains variables joins and product axes" =
   let top = PProduct [("Host", PPrefix None), ("Method", PSet None)]

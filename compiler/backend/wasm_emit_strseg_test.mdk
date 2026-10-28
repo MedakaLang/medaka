@@ -21,7 +21,7 @@ import string.{split, stripSuffix}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import types.typecheck.{grantWholeDomain}
+import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
   ctorFieldTypeNames,
