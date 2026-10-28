@@ -1,5 +1,5 @@
 # META
-source_lines=572
+source_lines=574
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -385,6 +385,7 @@ collectVars (EDictAt x _) = [x]
 -- still carry them).  Missing one risks dropping a reachable binding.
 collectVars (EHeadAnnot e0 _) = collectVars e0
 collectVars (EAsPat _ e0) = collectVars e0
+collectVars (EOrPat es) = flatMap collectVars es
 collectVars (EMapLit _ kvs) = flatMap mapLitPairVars kvs
 collectVars (ESetLit _ es) = flatMap collectVars es
 collectVars (ELoc _ e) = collectVars e
@@ -479,6 +480,7 @@ localBoundExpr (ESection (SecRight _ e0)) = localBoundExpr e0
 localBoundExpr (ESection (SecLeft e0 _)) = localBoundExpr e0
 localBoundExpr (EHeadAnnot e0 _) = localBoundExpr e0
 localBoundExpr (EAsPat _ e0) = localBoundExpr e0
+localBoundExpr (EOrPat es) = flatMap localBoundExpr es
 localBoundExpr (EMapLit _ kvs) = flatMap mapLitPairBound kvs
 localBoundExpr (ESetLit _ es) = flatMap localBoundExpr es
 localBoundExpr (ELoc _ e) = localBoundExpr e
@@ -723,6 +725,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))
+(DFunDef false "collectVars" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectVars")) (EVar "es")))
 (DFunDef false "collectVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "mapLitPairVars")) (EVar "kvs")))
 (DFunDef false "collectVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectVars")) (EVar "es")))
 (DFunDef false "collectVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
@@ -785,6 +788,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "localBoundExpr") (EVar "e0")))
+(DFunDef false "localBoundExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "localBoundExpr")) (EVar "es")))
 (DFunDef false "localBoundExpr" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "mapLitPairBound")) (EVar "kvs")))
 (DFunDef false "localBoundExpr" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "localBoundExpr")) (EVar "es")))
 (DFunDef false "localBoundExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
@@ -976,6 +980,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))
+(DFunDef false "collectVars" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectVars")) (EVar "es")))
 (DFunDef false "collectVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "mapLitPairVars")) (EVar "kvs")))
 (DFunDef false "collectVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectVars")) (EVar "es")))
 (DFunDef false "collectVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
@@ -1038,6 +1043,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "localBoundExpr") (EVar "e0")))
+(DFunDef false "localBoundExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "localBoundExpr")) (EVar "es")))
 (DFunDef false "localBoundExpr" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "mapLitPairBound")) (EVar "kvs")))
 (DFunDef false "localBoundExpr" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "localBoundExpr")) (EVar "es")))
 (DFunDef false "localBoundExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))

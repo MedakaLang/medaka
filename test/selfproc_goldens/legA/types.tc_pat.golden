@@ -3,6 +3,7 @@ bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
 closeExistentialScope : ModuleCtx -> ExistentialScope -> Mono -> Option Loc -> Unit
 ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
+inferOrPatRefused : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
 inferPatAs : TcEnv -> String -> Loc -> BinderId -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))

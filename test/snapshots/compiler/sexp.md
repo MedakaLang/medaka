@@ -1,5 +1,5 @@
 # META
-source_lines=420
+source_lines=422
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -85,6 +85,7 @@ patSexp (PCons a b) = node "PCons" [patSexp a, patSexp b]
 patSexp (PTuple ps) = node "PTuple" (map patSexp ps)
 patSexp (PList ps) = node "PList" (map patSexp ps)
 patSexp (PAs x _ _ q) = node "PAs" [escStr x, patSexp q]
+patSexp (POr ps) = node "POr" (map patSexp ps)
 patSexp (PRng lo hi incl) = node "PRng" [litSexp lo, litSexp hi, boolStr incl]
 patSexp (PRec name fields rest) =
   node "PRec" [escStr name, slist (map recPatFieldSexp fields), boolStr rest]
@@ -229,6 +230,7 @@ exprSexp (EVariantUpdate c e fs) =
 exprSexp (EMapLit n kvs) = node "EMapLit" [escStr n, slist (map kvSexp kvs)]
 exprSexp (ESetLit n es) = node "ESetLit" [escStr n, slist (map exprSexp es)]
 exprSexp (EAsPat x e) = node "EAsPat" [escStr x, exprSexp e]
+exprSexp (EOrPat es) = node "EOrPat" [slist (map exprSexp es)]
 exprSexp (EMethodRef name) = node "EMethodRef" [escStr name]
 exprSexp (EDictApp name) = node "EDictApp" [escStr name]
 
@@ -452,6 +454,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "patSexp" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "PTuple"))) (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "PList"))) (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PAs" (PVar "x") PWild PWild (PVar "q"))) (EApp (EApp (EVar "node") (ELit (LString "PAs"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "patSexp") (EVar "q")))))
+(DFunDef false "patSexp" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "POr"))) (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "PRng"))) (EListLit (EApp (EVar "litSexp") (EVar "lo")) (EApp (EVar "litSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "patSexp" ((PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EApp (EApp (EVar "node") (ELit (LString "PRec"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "recPatFieldSexp")) (EVar "fields"))) (EApp (EVar "boolStr") (EVar "rest")))))
 (DTypeSig false "recPatFieldSexp" (TyFun (TyCon "RecPatField") (TyCon "String")))
@@ -537,6 +540,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "node") (ELit (LString "EMapLit"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "kvSexp")) (EVar "kvs"))))))
 (DFunDef false "exprSexp" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "ESetLit"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "exprSexp")) (EVar "es"))))))
 (DFunDef false "exprSexp" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "EAsPat"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "exprSexp") (EVar "e")))))
+(DFunDef false "exprSexp" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "EOrPat"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "exprSexp")) (EVar "es"))))))
 (DFunDef false "exprSexp" ((PCon "EMethodRef" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "EMethodRef"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
 (DFunDef false "exprSexp" ((PCon "EDictApp" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "EDictApp"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
 (DTypeSig false "sectionSexp" (TyFun (TyCon "Section") (TyCon "String")))
@@ -655,6 +659,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "patSexp" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "PTuple"))) (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "PList"))) (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PAs" (PVar "x") PWild PWild (PVar "q"))) (EApp (EApp (EVar "node") (ELit (LString "PAs"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "patSexp") (EVar "q")))))
+(DFunDef false "patSexp" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "node") (ELit (LString "POr"))) (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))))
 (DFunDef false "patSexp" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "PRng"))) (EListLit (EApp (EVar "litSexp") (EVar "lo")) (EApp (EVar "litSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "patSexp" ((PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EApp (EApp (EVar "node") (ELit (LString "PRec"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "recPatFieldSexp")) (EVar "fields"))) (EApp (EVar "boolStr") (EVar "rest")))))
 (DTypeSig false "recPatFieldSexp" (TyFun (TyCon "RecPatField") (TyCon "String")))
@@ -740,6 +745,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "node") (ELit (LString "EMapLit"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "kvSexp")) (EVar "kvs"))))))
 (DFunDef false "exprSexp" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "ESetLit"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "exprSexp")) (EVar "es"))))))
 (DFunDef false "exprSexp" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "EAsPat"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "exprSexp") (EVar "e")))))
+(DFunDef false "exprSexp" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "EOrPat"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "exprSexp")) (EVar "es"))))))
 (DFunDef false "exprSexp" ((PCon "EMethodRef" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "EMethodRef"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
 (DFunDef false "exprSexp" ((PCon "EDictApp" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "EDictApp"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
 (DTypeSig false "sectionSexp" (TyFun (TyCon "Section") (TyCon "String")))

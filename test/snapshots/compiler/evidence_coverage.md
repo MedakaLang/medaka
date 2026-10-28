@@ -1,5 +1,5 @@
 # META
-source_lines=277
+source_lines=278
 stages=DESUGAR,MARK
 # SOURCE
 -- Evidence coverage: does a published evidence table answer every site its
@@ -213,6 +213,7 @@ exprFaults idx (EVariantUpdate _ e0 fs) acc =
 exprFaults idx (EMapLit _ kvs) acc = kvsFaults idx kvs acc
 exprFaults idx (ESetLit _ es) acc = exprsFaults idx es acc
 exprFaults idx (EAsPat _ e0) acc = exprFaults idx e0 acc
+exprFaults idx (EOrPat es) acc = exprsFaults idx es acc
 exprFaults _ (EMethodRef _) acc = acc
 exprFaults _ (EDictApp _) acc = acc
 exprFaults _ (EVarAt _ _) acc = acc
@@ -368,6 +369,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "EMapLit" PWild (PVar "kvs")) (PVar "acc")) (EApp (EApp (EApp (EVar "kvsFaults") (EVar "idx")) (EVar "kvs")) (EVar "acc")))
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "ESetLit" PWild (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprsFaults") (EVar "idx")) (EVar "es")) (EVar "acc")))
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "EAsPat" PWild (PVar "e0")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e0")) (EVar "acc")))
+(DFunDef false "exprFaults" ((PVar "idx") (PCon "EOrPat" (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprsFaults") (EVar "idx")) (EVar "es")) (EVar "acc")))
 (DFunDef false "exprFaults" (PWild (PCon "EMethodRef" PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "exprFaults" (PWild (PCon "EDictApp" PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "exprFaults" (PWild (PCon "EVarAt" PWild PWild) (PVar "acc")) (EVar "acc"))
@@ -496,6 +498,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "EMapLit" PWild (PVar "kvs")) (PVar "acc")) (EApp (EApp (EApp (EVar "kvsFaults") (EVar "idx")) (EVar "kvs")) (EVar "acc")))
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "ESetLit" PWild (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprsFaults") (EVar "idx")) (EVar "es")) (EVar "acc")))
 (DFunDef false "exprFaults" ((PVar "idx") (PCon "EAsPat" PWild (PVar "e0")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e0")) (EVar "acc")))
+(DFunDef false "exprFaults" ((PVar "idx") (PCon "EOrPat" (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprsFaults") (EVar "idx")) (EVar "es")) (EVar "acc")))
 (DFunDef false "exprFaults" (PWild (PCon "EMethodRef" PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "exprFaults" (PWild (PCon "EDictApp" PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "exprFaults" (PWild (PCon "EVarAt" PWild PWild) (PVar "acc")) (EVar "acc"))

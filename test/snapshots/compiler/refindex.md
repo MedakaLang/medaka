@@ -1,5 +1,5 @@
 # META
-source_lines=1895
+source_lines=1897
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -263,6 +263,7 @@ patBinders fb (PCons a b) = patBinders fb a ++ patBinders fb b
 patBinders fb (PTuple ps) = flatMap (patBinders fb) ps
 patBinders fb (PList ps) = flatMap (patBinders fb) ps
 patBinders fb (PAs x l _ p) = (x, l) :: patBinders fb p
+patBinders fb (POr ps) = flatMap (patBinders fb) ps
 patBinders _ (PRng _ _ _) = []
 patBinders fb (PRec _ fields _) = flatMap (recFieldBinders fb) fields
 
@@ -577,6 +578,7 @@ walkExpr w scope curLoc (EVariantUpdate con e0 fs) =
 walkExpr w scope curLoc (EMapLit _ kvs) = walkKvs w scope curLoc kvs
 walkExpr w scope curLoc (ESetLit _ es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (EAsPat _ e0) = walkExpr w scope curLoc e0
+walkExpr w scope curLoc (EOrPat es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (ESection s) = walkSection w scope curLoc s
 walkExpr _ _ _ _ = ()
 
@@ -1953,6 +1955,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "l")) (EApp (EApp (EVar "patBinders") (EVar "fb")) (EVar "p"))))
+(DFunDef false "patBinders" ((PVar "fb") (PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" (PWild (PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "recFieldBinders") (EVar "fb"))) (EVar "fields")))
 (DTypeSig false "recFieldBinders" (TyFun (TyCon "Loc") (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
@@ -2027,6 +2030,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EApp (EApp (EVar "walkKvs") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "kvs")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAsPat" PWild (PVar "e0"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))
+(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESection" (PVar "s"))) (EApp (EApp (EApp (EApp (EVar "walkSection") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "s")))
 (DFunDef false "walkExpr" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "walkFieldAccess" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "Unit")))))))
@@ -2487,6 +2491,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "l")) (EApp (EApp (EVar "patBinders") (EVar "fb")) (EVar "p"))))
+(DFunDef false "patBinders" ((PVar "fb") (PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "fb"))) (EVar "ps")))
 (DFunDef false "patBinders" (PWild (PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBinders" ((PVar "fb") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "recFieldBinders") (EVar "fb"))) (EVar "fields")))
 (DTypeSig false "recFieldBinders" (TyFun (TyCon "Loc") (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
@@ -2561,6 +2566,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EApp (EApp (EVar "walkKvs") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "kvs")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAsPat" PWild (PVar "e0"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))
+(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESection" (PVar "s"))) (EApp (EApp (EApp (EApp (EVar "walkSection") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "s")))
 (DFunDef false "walkExpr" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "walkFieldAccess" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "Unit")))))))

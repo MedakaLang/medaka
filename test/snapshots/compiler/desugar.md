@@ -1,5 +1,5 @@
 # META
-source_lines=1356
+source_lines=1395
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1343,21 +1343,60 @@ stampStmt mid (DoLet m r p e site) = DoLet m r (stampPat mid p) e site
 stampStmt _ s = s
 
 stampPat : String -> Pat -> Pat
-stampPat mid (PVar x l _) = PVar x l (freshBinderId mid)
-stampPat mid (PAs x l _ p) = PAs x l (freshBinderId mid) (stampPat mid p)
-stampPat mid (PCon c ps) = PCon c (map (stampPat mid) ps)
-stampPat mid (PCons h t) = PCons (stampPat mid h) (stampPat mid t)
-stampPat mid (PTuple ps) = PTuple (map (stampPat mid) ps)
-stampPat mid (PList ps) = PList (map (stampPat mid) ps)
-stampPat mid (PRec n fields isOpen) =
-  PRec n (map (stampRecField mid) fields) isOpen
-stampPat _ p = p
+stampPat mid p = stampPatBy (_ => freshBinderId mid) p
 
-stampRecField : String -> RecPatField -> RecPatField
-stampRecField mid (RecPatField l loc _ None) =
-  RecPatField l loc (freshBinderId mid) None
-stampRecField mid (RecPatField l loc _ (Some p)) =
-  RecPatField l loc noBinderId (Some (stampPat mid p))
+-- Stamp binders with ids drawn from `mint` (called with the binder's name).  An
+-- or-pattern's alternatives bind the same names, so alternative 1 mints and the
+-- rest reuse its ids: one binder per name, several definition sites.
+stampPatBy : (String -> BinderId) -> Pat -> Pat
+stampPatBy mint (PVar x l _) = PVar x l (mint x)
+stampPatBy mint (PAs x l _ p) = PAs x l (mint x) (stampPatBy mint p)
+stampPatBy mint (PCon c ps) = PCon c (map (stampPatBy mint) ps)
+stampPatBy mint (PCons h t) = PCons (stampPatBy mint h) (stampPatBy mint t)
+stampPatBy mint (PTuple ps) = PTuple (map (stampPatBy mint) ps)
+stampPatBy mint (PList ps) = PList (map (stampPatBy mint) ps)
+stampPatBy mint (PRec n fields isOpen) =
+  PRec n (map (stampRecFieldBy mint) fields) isOpen
+stampPatBy mint (POr (p :: ps)) =
+  let first = stampPatBy mint p
+  let shared = patBinderIds first
+  POr (first :: map (stampPatBy (x => sharedBinderId mint shared x)) ps)
+stampPatBy _ p = p
+
+sharedBinderId : (String -> BinderId) ->
+  List (String, BinderId) ->
+  String ->
+  BinderId
+sharedBinderId mint shared x = match lookupAssoc x shared
+  Some b => b
+  None => mint x
+
+lookupAssoc : String -> List (String, BinderId) -> Option BinderId
+lookupAssoc _ [] = None
+lookupAssoc x ((y, b) :: rest) = if x == y then Some b else lookupAssoc x rest
+
+-- The (name, id) pairs a stamped pattern binds; an or-pattern reads its first
+-- alternative.
+patBinderIds : Pat -> List (String, BinderId)
+patBinderIds (PVar x _ b) = [(x, b)]
+patBinderIds (PAs x _ b p) = (x, b) :: patBinderIds p
+patBinderIds (PCon _ ps) = flatMap patBinderIds ps
+patBinderIds (PCons h t) = patBinderIds h ++ patBinderIds t
+patBinderIds (PTuple ps) = flatMap patBinderIds ps
+patBinderIds (PList ps) = flatMap patBinderIds ps
+patBinderIds (PRec _ fields _) = flatMap recFieldBinderIds fields
+patBinderIds (POr (p :: _)) = patBinderIds p
+patBinderIds _ = []
+
+recFieldBinderIds : RecPatField -> List (String, BinderId)
+recFieldBinderIds (RecPatField l _ b None) = [(l, b)]
+recFieldBinderIds (RecPatField _ _ _ (Some p)) = patBinderIds p
+
+stampRecFieldBy : (String -> BinderId) -> RecPatField -> RecPatField
+stampRecFieldBy mint (RecPatField l loc _ None) =
+  RecPatField l loc (mint l) None
+stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
+  RecPatField l loc noBinderId (Some (stampPatBy mint p))
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
@@ -1838,17 +1877,38 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampStmt" ((PVar "mid") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p"))) (EVar "e")) (EVar "site")))
 (DFunDef false "stampStmt" (PWild (PVar "s")) (EVar "s"))
 (DTypeSig false "stampPat" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Pat"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EVar "freshBinderId") (EVar "mid"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EVar "freshBinderId") (EVar "mid"))) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "h"))) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "t"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "isOpen"))) (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "stampRecField") (EVar "mid"))) (EVar "fields"))) (EVar "isOpen")))
-(DFunDef false "stampPat" (PWild (PVar "p")) (EVar "p"))
-(DTypeSig false "stampRecField" (TyFun (TyCon "String") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
-(DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EApp (EVar "freshBinderId") (EVar "mid"))) (EVar "None")))
-(DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p")))))
+(DFunDef false "stampPat" ((PVar "mid") (PVar "p")) (EApp (EApp (EVar "stampPatBy") (ELam (PWild) (EApp (EVar "freshBinderId") (EVar "mid")))) (EVar "p")))
+(DTypeSig false "stampPatBy" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EVar "mint") (EVar "x"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EVar "mint") (EVar "x"))) (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "h"))) (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "t"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "isOpen"))) (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "stampRecFieldBy") (EVar "mint"))) (EVar "fields"))) (EVar "isOpen")))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "POr" (PCons (PVar "p") (PVar "ps")))) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p"))) (DoLet false false (PVar "shared") (EApp (EVar "patBinderIds") (EVar "first"))) (DoExpr (EApp (EVar "POr") (EBinOp "::" (EVar "first") (EApp (EApp (EVar "map") (EApp (EVar "stampPatBy") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "sharedBinderId") (EVar "mint")) (EVar "shared")) (EVar "x"))))) (EVar "ps")))))))
+(DFunDef false "stampPatBy" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "sharedBinderId" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyFun (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "sharedBinderId" ((PVar "mint") (PVar "shared") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "shared")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "mint") (EVar "x")))))
+(DTypeSig false "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyApp (TyCon "Option") (TyCon "BinderId")))))
+(DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupAssoc" ((PVar "x") (PCons (PTuple (PVar "y") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "rest"))))
+(DTypeSig false "patBinderIds" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "patBinderIds" ((PCon "PVar" (PVar "x") PWild (PVar "b"))) (EListLit (ETuple (EVar "x") (EVar "b"))))
+(DFunDef false "patBinderIds" ((PCon "PAs" (PVar "x") PWild (PVar "b") (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "b")) (EApp (EVar "patBinderIds") (EVar "p"))))
+(DFunDef false "patBinderIds" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBinderIds") (EVar "h")) (EApp (EVar "patBinderIds") (EVar "t"))))
+(DFunDef false "patBinderIds" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBinderIds")) (EVar "fields")))
+(DFunDef false "patBinderIds" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBinderIds") (EVar "p")))
+(DFunDef false "patBinderIds" (PWild) (EListLit))
+(DTypeSig false "recFieldBinderIds" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "recFieldBinderIds" ((PCon "RecPatField" (PVar "l") PWild (PVar "b") (PCon "None"))) (EListLit (ETuple (EVar "l") (EVar "b"))))
+(DFunDef false "recFieldBinderIds" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBinderIds") (EVar "p")))
+(DTypeSig false "stampRecFieldBy" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EApp (EVar "mint") (EVar "l"))) (EVar "None")))
+(DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
@@ -2329,14 +2389,35 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampStmt" ((PVar "mid") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p"))) (EVar "e")) (EVar "site")))
 (DFunDef false "stampStmt" (PWild (PVar "s")) (EVar "s"))
 (DTypeSig false "stampPat" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Pat"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EVar "freshBinderId") (EVar "mid"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EVar "freshBinderId") (EVar "mid"))) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "h"))) (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "t"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPat") (EVar "mid"))) (EVar "ps"))))
-(DFunDef false "stampPat" ((PVar "mid") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "isOpen"))) (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampRecField") (EVar "mid"))) (EVar "fields"))) (EVar "isOpen")))
-(DFunDef false "stampPat" (PWild (PVar "p")) (EVar "p"))
-(DTypeSig false "stampRecField" (TyFun (TyCon "String") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
-(DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EApp (EVar "freshBinderId") (EVar "mid"))) (EVar "None")))
-(DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p")))))
+(DFunDef false "stampPat" ((PVar "mid") (PVar "p")) (EApp (EApp (EVar "stampPatBy") (ELam (PWild) (EApp (EVar "freshBinderId") (EVar "mid")))) (EVar "p")))
+(DTypeSig false "stampPatBy" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EVar "mint") (EVar "x"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EVar "mint") (EVar "x"))) (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "h"))) (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "t"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPatBy") (EVar "mint"))) (EVar "ps"))))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "isOpen"))) (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampRecFieldBy") (EVar "mint"))) (EVar "fields"))) (EVar "isOpen")))
+(DFunDef false "stampPatBy" ((PVar "mint") (PCon "POr" (PCons (PVar "p") (PVar "ps")))) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p"))) (DoLet false false (PVar "shared") (EApp (EVar "patBinderIds") (EVar "first"))) (DoExpr (EApp (EVar "POr") (EBinOp "::" (EVar "first") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampPatBy") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "sharedBinderId") (EVar "mint")) (EVar "shared")) (EVar "x"))))) (EVar "ps")))))))
+(DFunDef false "stampPatBy" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "sharedBinderId" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyFun (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "sharedBinderId" ((PVar "mint") (PVar "shared") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "shared")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "mint") (EVar "x")))))
+(DTypeSig false "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyApp (TyCon "Option") (TyCon "BinderId")))))
+(DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupAssoc" ((PVar "x") (PCons (PTuple (PVar "y") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "rest"))))
+(DTypeSig false "patBinderIds" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "patBinderIds" ((PCon "PVar" (PVar "x") PWild (PVar "b"))) (EListLit (ETuple (EVar "x") (EVar "b"))))
+(DFunDef false "patBinderIds" ((PCon "PAs" (PVar "x") PWild (PVar "b") (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "b")) (EApp (EVar "patBinderIds") (EVar "p"))))
+(DFunDef false "patBinderIds" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBinderIds") (EVar "h")) (EApp (EVar "patBinderIds") (EVar "t"))))
+(DFunDef false "patBinderIds" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderIds")) (EVar "ps")))
+(DFunDef false "patBinderIds" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBinderIds")) (EVar "fields")))
+(DFunDef false "patBinderIds" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBinderIds") (EVar "p")))
+(DFunDef false "patBinderIds" (PWild) (EListLit))
+(DTypeSig false "recFieldBinderIds" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
+(DFunDef false "recFieldBinderIds" ((PCon "RecPatField" (PVar "l") PWild (PVar "b") (PCon "None"))) (EListLit (ETuple (EVar "l") (EVar "b"))))
+(DFunDef false "recFieldBinderIds" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBinderIds") (EVar "p")))
+(DTypeSig false "stampRecFieldBy" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EApp (EVar "mint") (EVar "l"))) (EVar "None")))
+(DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p")))))

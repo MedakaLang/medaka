@@ -144,6 +144,7 @@ annotateExpr fr (EVariantUpdate con e0 fs) =
 annotateExpr fr (EMapLit n kvs) = EMapLit n (map (annotateKv fr) kvs)
 annotateExpr fr (ESetLit n es) = ESetLit n (map (annotateExpr fr) es)
 annotateExpr fr (EAsPat x e0) = EAsPat x (annotateExpr fr e0)
+annotateExpr fr (EOrPat es) = EOrPat (map (annotateExpr fr) es)
 annotateExpr fr (ESection s) = ESection (annotateSection fr s)
 -- ELoc is transparent: preserve the loc, annotate the wrapped expr.
 annotateExpr fr (ELoc l e) = ELoc l (annotateExpr fr e)

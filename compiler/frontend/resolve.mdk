@@ -263,6 +263,11 @@ public export data ResError =
   -- ("pattern" / "parameter list"); second = the offending name.
   | DuplicateBinder String String (Option Loc)
   | AsPatternMisplaced (Option Loc)  -- `x@..` outside a binding LHS
+  | OrPatternMisplaced (Option Loc)  -- `(a | b)` outside a binding LHS
+  -- the alternatives of an or-pattern bind different names: the first
+  -- alternative's names, the offending alternative's names, and whether an
+  -- alternative is a bare identifier (the `pat | cond =>` guard habit).
+  | OrPatternBinders (List String) (List String) Bool (Option Loc)
   -- name USED unqualified, exported by ≥2 non-`core` modules (use-time
   -- ambiguity; MAP-SET-AMBIGUITY-DESIGN.md)
   | AmbiguousOccurrence String (List String) (Option Loc)
@@ -384,6 +389,8 @@ resErrorLoc (DuplicateSignature _ l _) = l
 resErrorLoc (OrphanSignature _ l _) = l
 resErrorLoc (DuplicateBinder _ _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
+resErrorLoc (OrPatternMisplaced l) = l
+resErrorLoc (OrPatternBinders _ _ _ l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
 resErrorLoc (AmbiguousConstructor _ _ l) = l
 resErrorLoc (AmbiguousAliasCtor _ _ l) = l
@@ -800,8 +807,34 @@ checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
 checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PAs _ _ _ p) = checkPat cur env p
+checkPat cur env (POr ps) =
+  flatMap (checkPat cur env) ps ++ orBinderErrors cur ps
 checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
 checkPat _ _ _ = []
+
+-- Every alternative of an or-pattern binds the same names (order and
+-- repetition aside).  One error per or-pattern: the first alternative that
+-- differs from alternative 1.
+orBinderErrors : Option Loc -> List Pat -> List ResError
+orBinderErrors _ [] = []
+orBinderErrors cur (p :: rest) =
+  let names = patBindings p
+  match filter (q => not (sameBinders names (patBindings q))) rest
+    [] => []
+    q :: _ => [
+      OrPatternBinders names (patBindings q) (any isBareVarPat (p :: rest)) cur,
+    ]
+
+sameBinders : List String -> List String -> Bool
+sameBinders xs ys = all (x => contains x ys) xs && all (y => contains y xs) ys
+
+isBareVarPat : Pat -> Bool
+isBareVarPat (PVar _ _ _) = True
+isBareVarPat _ = False
+
+renderBinderSet : List String -> String
+renderBinderSet [] = "no names"
+renderBinderSet xs = joinWith ", " (map (x => "`\{x}`") xs)
 
 checkRecPat : Option Loc -> Env -> String -> List RecPatField -> List ResError
 checkRecPat cur env name fields =
@@ -995,6 +1028,8 @@ checkExpr cur env scope (EVariantUpdate con e0 fs) =
   checkExpr cur env scope e0 ++ checkRecordCreate cur env scope con fs
 checkExpr cur env scope (EAsPat _ e0) =
   AsPatternMisplaced cur :: checkExpr cur env scope e0
+checkExpr cur env scope (EOrPat es) =
+  OrPatternMisplaced cur :: flatMap (checkExpr cur env scope) es
 checkExpr cur env scope (ESection s) = checkSection cur env scope s
 -- ELoc captures its span into `cur` (Stage B), then recurses — so any error in
 -- the wrapped subtree is attributed to this span.
@@ -2769,6 +2804,9 @@ resErrorSexp (OrphanSignature n _ _) = "(OrphanSignature " ++ escStr n ++ ")"
 resErrorSexp (DuplicateBinder k n _) =
   "(DuplicateBinder \{escStr k} \{escStr n})"
 resErrorSexp (AsPatternMisplaced _) = "AsPatternMisplaced"
+resErrorSexp (OrPatternMisplaced _) = "OrPatternMisplaced"
+resErrorSexp (OrPatternBinders xs ys _ _) =
+  "(OrPatternBinders \{joinWith " " (map escStr xs)} | \{joinWith " " (map escStr ys)})"
 resErrorSexp (AmbiguousOccurrence n mods _) =
   "(AmbiguousOccurrence " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousConstructor n mods _) =
@@ -2922,6 +2960,11 @@ ppResError (AbstractFieldAccess t f _) =
 ppResError (UnknownModule n _) = "unknown module `\{n}`"
 ppResError (AsPatternMisplaced _) =
   "an `@` as-pattern is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern"
+ppResError (OrPatternMisplaced _) =
+  "an or-pattern `(a | b)` is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern"
+ppResError (OrPatternBinders xs ys steer _) =
+  "the alternatives of an or-pattern must bind the same names, but one binds \{renderBinderSet xs} and another binds \{renderBinderSet ys}"
+    ++ (if steer then "; a match-arm guard uses `if`, not `|`" else "")
 ppResError (NonRecursiveValueLet n _) =
   "`\{n}` is not in scope in its own binding: a value `let` is not recursive; write `let rec \{n} = ...` with a lambda on the right"
 ppResError (DuplicateBinding n _) =
@@ -3030,6 +3073,8 @@ resErrorCode (DuplicateSignature _ _ _) = RDuplicateSignature
 resErrorCode (OrphanSignature _ _ _) = ROrphanSignature
 resErrorCode (DuplicateBinder _ _ _) = RDupBinder
 resErrorCode (AsPatternMisplaced _) = RAsPatternMisplaced
+resErrorCode (OrPatternMisplaced _) = ROrPatternMisplaced
+resErrorCode (OrPatternBinders _ _ _ _) = ROrPatternBinders
 resErrorCode (AmbiguousOccurrence _ _ _) = RAmbiguousOccurrence
 resErrorCode (AmbiguousConstructor _ _ _) = RAmbiguousCtor
 resErrorCode (AmbiguousAliasCtor _ _ _) = RAmbiguousCtor
@@ -4551,6 +4596,7 @@ stampExpr env (EVariantUpdate con e0 fs) =
 stampExpr env (EMapLit n kvs) = EMapLit n (map (stampKv env) kvs)
 stampExpr env (ESetLit n es) = ESetLit n (map (stampExpr env) es)
 stampExpr env (EAsPat x e0) = EAsPat x (stampExpr env e0)
+stampExpr env (EOrPat es) = EOrPat (map (stampExpr env) es)
 stampExpr env (ESection s) = ESection (stampSection env s)
 stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
@@ -5443,6 +5489,7 @@ unqualPat ctx (PCons a b) = PCons (unqualPat ctx a) (unqualPat ctx b)
 unqualPat ctx (PTuple ps) = PTuple (map (unqualPat ctx) ps)
 unqualPat ctx (PList ps) = PList (map (unqualPat ctx) ps)
 unqualPat ctx (PAs x l bid p) = PAs x l bid (unqualPat ctx p)
+unqualPat ctx (POr ps) = POr (map (unqualPat ctx) ps)
 unqualPat _ (PRng a b incl) = PRng a b incl
 unqualPat ctx (PRec name fs rest) =
   PRec (unqualHead ctx name) (map (unqualRecPatField ctx) fs) rest
@@ -5510,6 +5557,7 @@ unqualExpr ctx (EMapLit n kvs) =
 unqualExpr ctx (ESetLit n es) =
   ESetLit (unqualHead ctx n) (map (unqualExpr ctx) es)
 unqualExpr ctx (EAsPat x e0) = EAsPat x (unqualExpr ctx e0)
+unqualExpr ctx (EOrPat es) = EOrPat (map (unqualExpr ctx) es)
 unqualExpr ctx (ESection s) = ESection (unqualSection ctx s)
 unqualExpr ctx (ELoc l e) = ELoc l (unqualExpr ctx e)
 unqualExpr ctx (EDoOrigin l e) = EDoOrigin l (unqualExpr ctx e)

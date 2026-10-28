@@ -1226,6 +1226,7 @@ patVarsTc (PCons h t) = patVarsTc h ++ patVarsTc t
 patVarsTc (PTuple ps) = patVarsListTc ps
 patVarsTc (PList ps) = patVarsListTc ps
 patVarsTc (PAs x _ _ p) = x :: patVarsTc p
+patVarsTc (POr (p :: _)) = patVarsTc p
 patVarsTc (PRec _ fields _) = flatMap recPatFieldVarsTc fields
 patVarsTc _ = []
 

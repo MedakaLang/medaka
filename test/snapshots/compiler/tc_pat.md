@@ -1,5 +1,5 @@
 # META
-source_lines=534
+source_lines=553
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
@@ -159,7 +159,26 @@ inferPat env (PList pats) = inferPatList env pats
 inferPat env (PAs x xloc bid p) = inferPatAs env x xloc bid p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
+inferPat env (POr alts) = inferOrPatRefused env alts
 inferPat env _ = panic "typecheck: unsupported pattern"
+
+-- Typecheck does not infer or-patterns yet: one located refusal per or-pattern.
+-- The first alternative is still inferred, so its binders stay in scope and the
+-- refusal does not cascade into unbound-variable errors.
+inferOrPatRefused : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferOrPatRefused env alts =
+  recordTypeError
+    env.teDyn.dcModule
+    (TcDiag
+      TOrPatternUnsupported
+      1
+      env.teDyn.dcModule.mcLoc
+      "or-patterns are not supported by the typechecker yet"
+      (Some "write one match arm per alternative")
+      None)
+  match alts
+    [] => (freshVar env.teDyn.dcModule (), [])
+    first :: _ => inferPat env first
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
 -- binds no variables
@@ -578,7 +597,10 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "inferPat" ((PVar "env") (PCon "PAs" (PVar "x") (PVar "xloc") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EApp (EVar "inferPatAs") (EVar "env")) (EVar "x")) (EVar "xloc")) (EVar "bid")) (EVar "p")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "inferPatRec") (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "inferPatRng") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "lo")) (EVar "hi")))
+(DFunDef false "inferPat" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "inferOrPatRefused") (EVar "env")) (EVar "alts")))
 (DFunDef false "inferPat" ((PVar "env") PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern"))))
+(DTypeSig false "inferOrPatRefused" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "inferOrPatRefused" ((PVar "env") (PVar "alts")) (EBlock (DoExpr (EApp (EApp (EVar "recordTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "TOrPatternUnsupported")) (ELit (LInt 1))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcLoc")) (ELit (LString "or-patterns are not supported by the typechecker yet"))) (EApp (EVar "Some") (ELit (LString "write one match arm per alternative")))) (EVar "None")))) (DoExpr (EMatch (EVar "alts") (arm (PList) () (ETuple (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit)) (EListLit))) (arm (PCons (PVar "first") PWild) () (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "first")))))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "inferPatRng" ((PVar "mctx") (PCon "LInt" PWild) (PCon "LInt" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EListLit)))
 (DFunDef false "inferPatRng" ((PVar "mctx") (PCon "LChar" PWild) (PCon "LChar" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Char"))) (EListLit)))
@@ -709,7 +731,10 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "inferPat" ((PVar "env") (PCon "PAs" (PVar "x") (PVar "xloc") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EApp (EVar "inferPatAs") (EVar "env")) (EVar "x")) (EVar "xloc")) (EVar "bid")) (EVar "p")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "inferPatRec") (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "inferPatRng") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "lo")) (EVar "hi")))
+(DFunDef false "inferPat" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "inferOrPatRefused") (EVar "env")) (EVar "alts")))
 (DFunDef false "inferPat" ((PVar "env") PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern"))))
+(DTypeSig false "inferOrPatRefused" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "inferOrPatRefused" ((PVar "env") (PVar "alts")) (EBlock (DoExpr (EApp (EApp (EVar "recordTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "TOrPatternUnsupported")) (ELit (LInt 1))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcLoc")) (ELit (LString "or-patterns are not supported by the typechecker yet"))) (EApp (EVar "Some") (ELit (LString "write one match arm per alternative")))) (EVar "None")))) (DoExpr (EMatch (EVar "alts") (arm (PList) () (ETuple (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit)) (EListLit))) (arm (PCons (PVar "first") PWild) () (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "first")))))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "inferPatRng" ((PVar "mctx") (PCon "LInt" PWild) (PCon "LInt" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EListLit)))
 (DFunDef false "inferPatRng" ((PVar "mctx") (PCon "LChar" PWild) (PCon "LChar" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Char"))) (EListLit)))

@@ -67,6 +67,7 @@ joinLocs : List Loc -> Option Loc
 kvToTuple : (Expr, Expr) -> Expr
 lexCompareExprs : List (Expr, Expr) -> Expr
 locatedAt : Option Loc -> Expr -> Expr
+lookupAssoc : String -> List (String, BinderId) -> Option BinderId
 lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lowerContainerLiterals : List Decl -> List Decl
 lowerDo : Bool -> List DoStmt -> Expr
@@ -104,6 +105,7 @@ ordRow : List (Int, Variant) -> (Int, Variant) -> List Arm
 outerLocs : Expr -> List Loc -> List Loc
 paramReq : String -> String -> Require
 paramRequires : String -> List String -> List Require
+patBinderIds : Pat -> List (String, BinderId)
 pinType : String -> List Ty -> Ty
 pinTypeGo : Ty -> List Ty -> Ty
 punField : Expr -> FieldAssign
@@ -111,6 +113,7 @@ pureMethodName : Bool -> String
 qualifiedAt : Expr -> String -> Expr -> Expr
 qualifyAliasRefs : List Decl -> List Decl
 qualifyAliasRefsWith : List String -> List Decl -> List Decl
+recFieldBinderIds : RecPatField -> List (String, BinderId)
 recPatFields : List Field -> List String -> List RecPatField
 reserveBinderOrdinals : Int -> Int
 rewriteAliasQual : List String -> Expr -> Expr
@@ -120,6 +123,7 @@ rewriteDo : Expr -> Expr
 rewriteRecordPun : List String -> Expr -> Expr
 rewriteSugar : Expr -> Expr
 sectionToCore : Section -> Expr
+sharedBinderId : (String -> BinderId) -> List (String, BinderId) -> String -> BinderId
 showArm : String -> Variant -> Arm
 showBody : String -> String -> ConPayload -> List String -> Expr
 showFieldPart : String -> Int -> String -> List Expr
@@ -138,7 +142,8 @@ stampLetBind : String -> LetBind -> LetBind
 stampLetBindHead : String -> LetBind -> LetBind
 stampNode : String -> Expr -> Expr
 stampPat : String -> Pat -> Pat
-stampRecField : String -> RecPatField -> RecPatField
+stampPatBy : (String -> BinderId) -> Pat -> Pat
+stampRecFieldBy : (String -> BinderId) -> RecPatField -> RecPatField
 stampStmt : String -> DoStmt -> DoStmt
 toRep : String -> Expr
 typeKindedParams : List String -> List (Option KindAnn) -> List String

@@ -319,8 +319,19 @@ exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
 -- reference `expr_to_pat`'s `SecLeft (a, "::")` case).
 exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
+exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
 exprToPat _ = PWild
+
+-- Alternatives joined into one pattern; nested or-patterns are flattened so a
+-- POr never sits directly inside a POr.
+orPatOf : List Pat -> Pat
+orPatOf [p] = p
+orPatOf ps = POr (flatMap orAlts ps)
+
+orAlts : Pat -> List Pat
+orAlts (POr qs) = qs
+orAlts p = [p]
 
 ctorOrVar : String -> Pat
 ctorOrVar x
@@ -1199,10 +1210,27 @@ sectionTail op _ = defer
 
 parseParenExpr : Parser Expr
 parseParenExpr = defer
-  es <- sepBy1 parseBracketElem (expectTok TComma)
+  es <- sepBy1 parseOrAltsExpr (expectTok TComma)
   optTrailingCommaTuple es
   expectTok TRParen
   deferPure (parenResult es)
+
+-- `e1 | e2 | ...` inside parentheses: the expression twin of an or-pattern.
+-- `|` has no other meaning in a parenthesized expression.
+parseOrAltsExpr : Parser Expr
+parseOrAltsExpr = defer
+  e <- parseBracketElem
+  rest <- many orAltExpr
+  deferPure (orExprOf e rest)
+
+orAltExpr : Parser Expr
+orAltExpr = defer
+  expectTok TPipe
+  parseBracketElem
+
+orExprOf : Expr -> List Expr -> Expr
+orExprOf e [] = e
+orExprOf e rest = EOrPat (e :: rest)
 
 parenResult : List Expr -> Expr
 parenResult [e] = leftSectionOrExpr e
@@ -1514,7 +1542,7 @@ armsCons matchPos = defer
   deferPure (a :: rest)
 
 parseArm : Int -> Parser Arm
-parseArm matchPos = ParserE (ctx pos => match runPWith ctx parsePat pos
+parseArm matchPos = ParserE (ctx pos => match runPWith ctx parseArmPat pos
   POk pat q => runPWith ctx (parseArmRest pos pat) q
   PFatal f q => PFatal f q
   PErr _ _ =>
@@ -1556,21 +1584,46 @@ armGuardOpt = defer
   t <- peekP
   armGuardFor t
 
--- A `|` where a match arm's guard/`=>` belongs is the Haskell/ML habit: equation
--- (function-clause) guards use `|`, but MATCH-ARM guards use `if` (see `parseArm`
--- above and SYNTAX.md "Match-arm guards").  `|` never validly follows a pattern
--- in a match arm — Medaka has neither `|` guards nor or-patterns there — so this
--- is unambiguous.  Commit with `fatalP` (at the `|`) so the targeted message
--- reaches the user instead of being swallowed by `armsLoop`'s `parseOrElse … (deferPure [])`
--- and re-surfacing as the misleading "expected the end of the block" caret on
--- the PATTERN (#591).  The message names the guard fix, the likelier intent;
--- an or-pattern (`1 | 2 => …`) spells the same `pat | … => …` and is also absent.
+-- A `|` after a match-arm pattern joins alternatives (`parseArmPat`), so by the
+-- time a guard is read, no `|` can remain.  Match-arm guards use `if`; the
+-- equation (function-clause) guards use `|`.
 armGuardFor : Token -> Parser (List Guard)
 armGuardFor TIf = defer
   advance
   sepBy1 parseGuard (expectTok TComma)
-armGuardFor TPipe = fatalP matchArmBarGuardMsg
 armGuardFor _ = deferPure []
+
+-- A match-arm pattern: alternatives `p | q | ...` joined by a bare `|`.  A `|`
+-- followed by something that is not a pattern ending the alternative (`=>`,
+-- `if`, another `|`) is the Haskell guard habit (`pat | cond => ...`) and
+-- keeps the targeted `if` message; it is committed (`fatalP`) so the steer
+-- survives `armsLoop`'s backtracking (#591).
+parseArmPat : Parser Pat
+parseArmPat = defer
+  p <- parsePat
+  t <- peekP
+  armPatAlts [p] t
+
+armPatAlts : List Pat -> Token -> Parser Pat
+armPatAlts acc TPipe = barSteer (defer
+  advance
+  q <- parsePat
+  t <- peekP
+  armAltEnd (q :: acc) t)
+armPatAlts acc _ = deferPure (orPatOf (reverseL acc))
+
+armAltEnd : List Pat -> Token -> Parser Pat
+armAltEnd acc TPipe = armPatAlts acc TPipe
+armAltEnd acc TFatArrow = armPatAlts acc TFatArrow
+armAltEnd acc TIf = armPatAlts acc TIf
+armAltEnd _ _ = failP "expected `=>` after the alternative"
+
+-- A recoverable failure after a `|` becomes the committed steer, positioned at
+-- the `|` so the diagnostic and its `if` fix land on it.
+barSteer : Parser a -> Parser a
+barSteer p = ParserE (ctx pos => match runPWith ctx p pos
+  PErr _ _ => PFatal (FailProblem matchArmBarGuardMsg) pos
+  r => r)
 
 matchArmBarGuardMsg : ParseDiagnosticKind
 matchArmBarGuardMsg = MatchGuardBar
@@ -1909,10 +1962,22 @@ parsePatParen = defer
 patParenFor : Token -> Parser Pat
 patParenFor TRParen = emit (PLit LUnit)
 patParenFor _ = defer
-  ps <- sepBy1 parsePat (expectTok TComma)
+  ps <- sepBy1 parsePatAlts (expectTok TComma)
   optTrailingCommaTuple ps
   expectTok TRParen
   deferPure (tuplePatOrSingle ps)
+
+-- `p | q | ...` inside parentheses.
+parsePatAlts : Parser Pat
+parsePatAlts = defer
+  p <- parsePat
+  rest <- many patAlt
+  deferPure (orPatOf (p :: rest))
+
+patAlt : Parser Pat
+patAlt = defer
+  expectTok TPipe
+  parsePat
 
 parsePatList : Parser Pat
 parsePatList = defer

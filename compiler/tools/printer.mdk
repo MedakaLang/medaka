@@ -609,6 +609,7 @@ exprSpan (EVariantUpdate _ e fs) =
 exprSpan (EMapLit _ kvs) = spansOf kvSpan kvs
 exprSpan (ESetLit _ es) = spansOf exprSpan es
 exprSpan (EAsPat _ e) = exprSpan e
+exprSpan (EOrPat es) = spansOf exprSpan es
 exprSpan _ = noSpan
 
 interpSpan : InterpPart -> (Int, Int, Int, Int)
@@ -636,6 +637,7 @@ patSpan (PCons a b) = mergeSpan (patSpan a) (patSpan b)
 patSpan (PTuple ps) = spansOf patSpan ps
 patSpan (PList ps) = spansOf patSpan ps
 patSpan (PRec _ fs _) = spansOf recPatFieldSpan fs
+patSpan (POr ps) = spansOf patSpan ps
 patSpan _ = noSpan
 
 recPatFieldSpan : RecPatField -> (Int, Int, Int, Int)
@@ -1106,11 +1108,13 @@ printPat (PCon c pats) =
       (Cat
         (concatD (map (p => Cat (text " ") (printPatAtom p)) pats))
         (text ")")))
-printPat (PCons a b) = Cat (printPatAtom a) (Cat (text " :: ") (printPat b))
+printPat (PCons a b) =
+  Cat (printPatAtom a) (Cat (text " :: ") (printPatNoBareOr b))
 printPat (PTuple ps) =
   Cat (text "(") (Cat (sepBy (text ", ") (map printPatArm ps)) (text ")"))
 printPat (PList ps) =
-  Cat (text "[") (Cat (sepBy (text ", ") (map printPatArm ps)) (text "]"))
+  Cat (text "[") (Cat (sepBy (text ", ") (map printPatListElem ps)) (text "]"))
+printPat (POr ps) = sepBy (text " | ") (map printPatArm ps)
 printPat (PAs x _ _ inner) = Cat (text x) (Cat (text "@") (printPatAtom inner))
 printPat (PRec name fields rest) =
   let fieldDocs = map recPatFieldDoc fields
@@ -1122,7 +1126,7 @@ printPat (PRng lo hi incl) =
 recPatFieldDoc : RecPatField -> Doc
 recPatFieldDoc (RecPatField k _ _ None) = text k
 recPatFieldDoc (RecPatField k _ _ (Some q)) =
-  Cat (text k) (Cat (text " = ") (printPat q))
+  Cat (text k) (Cat (text " = ") (printPatNoBareOr q))
 
 -- PCon with args already self-parenthesizes in printPat, so it is atom-safe.
 -- A PRec with fields is NOT self-delimiting, so in atom position it must be
@@ -1138,6 +1142,17 @@ printPatAtom (PRec n fs r) =
   Cat (text "(") (Cat (printPat (PRec n fs r)) (text ")"))
 printPatAtom (PRng lo hi incl) = printPat (PRng lo hi incl)
 printPatAtom p = Cat (text "(") (Cat (printPat p) (text ")"))
+
+-- A bare `|` is only read at the top of a match arm and inside parentheses, so
+-- an or-pattern anywhere else (a list element, a cons tail, a record field, a
+-- do-bind or guard-bind pattern) is parenthesized.
+printPatNoBareOr : Pat -> Doc
+printPatNoBareOr (POr ps) = Cat (text "(") (Cat (printPat (POr ps)) (text ")"))
+printPatNoBareOr p = printPat p
+
+printPatListElem : Pat -> Doc
+printPatListElem (POr ps) = printPatNoBareOr (POr ps)
+printPatListElem p = printPatArm p
 
 -- Top-of-a-match-arm pattern: an outer constructor application stands alone, so
 -- `Some i =>` needs no parens; nested args still route through printPatAtom.
@@ -1237,6 +1252,7 @@ exprPrec (EInfix _ _ _) = precInfix
 exprPrec (EBinOp op _ _ _) = binopPrec op
 exprPrec (ESection _) = precAtom
 exprPrec (EAsPat _ _) = precApp
+exprPrec (EOrPat _) = precAtom
 exprPrec (ELam _ _) = precTop
 exprPrec (ELet _ _ _ _ _) = precTop
 exprPrec (ELetGroup _ _) = precTop
@@ -1439,6 +1455,10 @@ printExprRaw _ (ESection (SecLeft e op)) =
     (Cat (printExpr precTop e) (Cat (text " ") (Cat (text op) (text " _)"))))
 printExprRaw _ (EAsPat x e) =
   Cat (text x) (Cat (text "@") (printExpr precAtom e))
+printExprRaw _ (EOrPat es) =
+  Cat
+    (text "(")
+    (Cat (sepBy (text " | ") (map (printExpr precTop) es)) (text ")"))
 printExprRaw _ (EBlock stmts) = printBlock stmts
 printExprRaw _ (EDo d stmts) = Cat (text (doKeyword d)) (printBlock stmts)
 printExprRaw _ (EAnnot e t) =
@@ -1565,7 +1585,7 @@ printBlock stmts = indentBlock (joinHard (pieceDocsHard (map stmtPiece stmts)))
 
 printDoStmt : DoStmt -> Doc
 printDoStmt (DoBind pat e) =
-  Cat (printPat pat) (Cat (text " <- ") (printExprBody e))
+  Cat (printPatNoBareOr pat) (Cat (text " <- ") (printExprBody e))
 printDoStmt (DoExpr e) = printExprBody e
 printDoStmt (DoLet isMut False pat e _) =
   Cat
@@ -1596,6 +1616,7 @@ printLetBinderPat pat =
 letBinderNeedsParens : Pat -> Bool
 letBinderNeedsParens (PAs _ _ _ _) = True
 letBinderNeedsParens (PCons _ _) = True
+letBinderNeedsParens (POr _) = True
 letBinderNeedsParens _ = False
 
 -- A recursive block `let`: either a curried function form (`let f a b = …`,
@@ -1944,7 +1965,8 @@ matchGuardsDoc guards =
 
 guardDoc : Guard -> Doc
 guardDoc (GBool g) = condExprDoc g
-guardDoc (GBind gp g) = Cat (printPat gp) (Cat (text " <- ") (condExprDoc g))
+guardDoc (GBind gp g) =
+  Cat (printPatNoBareOr gp) (Cat (text " <- ") (condExprDoc g))
 
 -- A condition (`if c then`, a guard) is followed by more text on its last line,
 -- so a form that carries its own trailing text (`match` arms, `if … then`,
