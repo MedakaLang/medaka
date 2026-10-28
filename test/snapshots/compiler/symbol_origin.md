@@ -1,5 +1,5 @@
 # META
-source_lines=27
+source_lines=30
 stages=DESUGAR,MARK
 # SOURCE
 -- Where an emitter wrote or used a physical symbol, and how a symbol defect
@@ -8,7 +8,10 @@ stages=DESUGAR,MARK
 -- emit driver (driver/diagnostics.mdk) locates the diagnostic from it.
 
 -- The source binding whose emission wrote or used the symbol, and that binding's
--- file, line and column ("" and 0 when it has none).
+-- file, line and column ("" and 0 when it has none).  File and position are
+-- independent absences and render differently: "" means the emit driver's own
+-- file, and 0 means a placeholder span, which `placeOf` still prints as
+-- `file:0:0` when a file is known.  One Option would merge those two.
 public export data SymbolOrigin =
   SymbolOrigin String String Int Int
   deriving (Eq, Debug)
