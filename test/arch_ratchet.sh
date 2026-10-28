@@ -77,10 +77,25 @@ complete() { # $@ = tips
 }
 make_complete() { # $@ = tips
   complete "$@" && return 0
-  git fetch --no-tags --unshallow --filter=tree:0 origin "$@" >/dev/null 2>&1 ||
-    git fetch --no-tags --unshallow origin "$@" >/dev/null 2>&1 || true
-  complete "$@" ||
-    fail "history of $* is shallow and could not be completed; refusing to trust a partial range"
+  # A transient fetch failure must not red the required soundness check: retry, and keep
+  # the fetch output so a persistent failure names its cause.
+  : > "$TMP/fetch.log"
+  attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    git fetch --no-tags --unshallow --filter=tree:0 origin "$@" >> "$TMP/fetch.log" 2>&1 ||
+      git fetch --no-tags --unshallow origin "$@" >> "$TMP/fetch.log" 2>&1 || true
+    complete "$@" && return 0
+    sleep $((attempt * 5))
+  done
+  echo "arch-ratchet: fetch output after $attempt attempts:" >&2
+  tail -20 "$TMP/fetch.log" >&2
+  if git rev-list "$@" > "$TMP/reach" 2>/dev/null; then
+    echo "arch-ratchet: $(grep -cxFf "$shallow_file" "$TMP/reach") shallow boundary commit(s) still reachable" >&2
+  else
+    echo "arch-ratchet: git rev-list of the tips failed" >&2
+  fi
+  fail "history of $* is shallow and could not be completed; refusing to trust a partial range"
 }
 
 event="${GITHUB_EVENT_NAME:-}"
