@@ -1571,8 +1571,8 @@ inferUserImplBodies env allProg ce cur decls =
   -- method body (`sig _ = idInt "str"`, `idInt : Int -> Int` in a String-returning
   -- method) went unenforced end-to-end — `check`/`build` exit 0 and the built binary
   -- printed a wrong value.  Infer these bodies too so the `unify`/`typeMismatch` clash
-  -- is surfaced (it is pushed to `typeErrors`, and kept because nothing removes it —
-  -- see the retirement note at the end of this function), mirroring the
+  -- is surfaced (it is pushed to `typeErrors`, and kept because nothing removes it),
+  -- mirroring the
   -- ground-head fix.  BUT a parametric impl also records obligations on its ABSTRACT
   -- element tyvar (`impl Eq (List a) requires Eq a` → an `Eq a` obligation over an
   -- unground var); those never ground on the check path and would reach

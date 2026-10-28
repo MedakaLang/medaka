@@ -1498,9 +1498,9 @@ declBodyVarsOf _ _ = []
 -- #782 (effect leak) then established that the type/effect errors the body inference itself
 -- raises (e.g. an EFFECT LEAK: `putStr` in a pure-typed method body, or a body type mismatch)
 -- are genuine soundness bugs that must reject symmetrically with top-level functions — so those
--- are now KEPT — and since issue 1146 they are kept because nothing removes them: the
--- window that used to rebuild this list is retired (see the retirement note at the end
--- of `inferUserImplBodies` in `types/tc_module.mdk`).  Per-axis history follows.
+-- are now KEPT — and since issue 1146 they are kept because nothing removes them: no
+-- window rebuilds this list any more (`inferUserImplBodies`, `types/tc_global.mdk`).
+-- Per-axis history follows.
 -- #777 (S0, silent wrongness): a GENUINE type mismatch inside a ground impl-method
 -- body (`sig _ = idInt "str"` where `idInt : Int -> Int` but `sig`'s declared return
 -- is `String`) is a `unify`/`typeMismatch` error pushed DURING body inference, not an
@@ -3140,7 +3140,8 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- foldModules — NOT a flat union of every earlier module's publics, which let
 -- a same-named function from a non-imported module win by load order (e.g.
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
--- worker: ISOLATED per-module diagnostics harvest (`checkModuleFullDiags` in `types/tc_module.mdk`).  Surfaces this module's own `schemes` (for pubV) plus the
+-- worker: ISOLATED per-module diagnostics harvest (`checkModuleFullDiags` in
+-- `types/tc_module.mdk`).  Surfaces this module's own `schemes` (for pubV) plus the
 -- (marked tree, schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like
 -- cmCheckWorker; NOT a flat union.  ONE worker serves EVERY graph consumer — the
 -- per-module diagnostics fold behind `analyzeProject` and the LSP, the entry report (`checkModulesEntryFullSplitK`), and the elaboration behind

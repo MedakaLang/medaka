@@ -731,31 +731,21 @@ resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scop
 -- → entail (EKNestedTop).  So the single-entailment-function law holds at 4-of-5 BY CONSTRUCTION; what
 -- stays out is exactly the binding-selection axis §3 never claimed (cf. §8 I1: identity keyed by
 -- binding, not bare name).  "Does an impl exist" and "which impl entails" must agree on ONE
--- impl table — a drift between them would be a real dispatch bug.  #415 item 2: that
--- agreement is STRUCTURAL, not a standing obligation.
--- Arch B-2.1-g rebased both reads, together, onto `ModuleCells.mcCells.bodyImplEnvRef`, and the
--- sentence that stood here — "There is no second table in scope to drift TO" — WAS ALREADY
--- FALSE and is what licensed a bad scoping.  `bodyImplEnvRef` has been a second impl table,
--- in scope from anywhere, since B-2.1-a2, and B-2.1-b2 moved three SELECTION legs onto it
--- while this site's two reads stayed on the threaded prefix `[keyTable]`.  `B-2.1-c` then
--- moved the sibling SHADOW existence reads and deferred this one, which produced exactly the
--- drift this block claimed was unreachable: existence answered True off the whole graph while
--- `routesOfMonosTop … keyTable`, one line below, had no row to select — a located reject
--- became exit 0 printing a garbage pointer.  So the agreement is restored the only way it can
--- be, by moving BOTH: `ieImplExistsForHead …bodyImplEnvRef…` directly, and `keyForSite` (also
--- repointed onto `bodyImplEnvRef`) via routesOfMonosTop → routeOf → entail (EKNestedTop) →
--- entailInst.  The invariant is unchanged and is still the one that matters: these two
--- reads must name ONE population.  It is no longer enforced by a shared parameter, so it is
--- now enforced by a shared REF — and the check on any future edit here is "does the thing I
--- am reading answer over the same population `keyForSite` selects from?", not "am I using
--- [keyTable]?".  No impl list is threaded through this signature or through
--- `routesOfMonosTop`'s subtree any more.
--- (The inference-time existence reads in `inferShadowApp` / `definerReceiverDispatches` are
--- the same decision at an earlier PHASE and are now on the same ref for the same reason —
--- B-2.1-c's measurement is that a phase split of one decision is as fatal as a table split.
--- Do not re-derive the retired defence "GLOBAL by design — local ∪ imported ∪ prelude":
--- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global, and
--- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
+-- impl table — a drift between them would be a real dispatch bug.  The agreement is
+-- STRUCTURAL, not a standing obligation: both reads name ONE population, the graph-global
+-- `ModuleCells.mcCells.bodyImplEnvRef`.  `ieImplExistsForHead …bodyImplEnvRef…` answers
+-- existence directly, and `keyForSite` (also on `bodyImplEnvRef`) selects via
+-- routesOfMonosTop → routeOf → entail (EKNestedTop) → entailInst.  It is enforced by a
+-- shared REF, not by a threaded parameter: no impl list is threaded through this signature
+-- or through `routesOfMonosTop`'s subtree.  The check on any edit here is "does the thing I
+-- am reading answer over the same population `keyForSite` selects from?".  A split is
+-- observable: existence answered True off the whole graph while `routesOfMonosTop` had no
+-- row to select turns a located reject into exit 0 printing a garbage pointer.
+-- The inference-time existence reads in `inferShadowApp` / `definerReceiverDispatches` are
+-- the same decision at an earlier PHASE and read the same ref: a phase split of one decision
+-- is as fatal as a table split.
+-- Do not describe the population as "GLOBAL by design — local ∪ imported ∪ prelude":
+-- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global.
 resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
 resolveRLocalSites sx [] = ()
 resolveRLocalSites sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
@@ -820,27 +810,18 @@ resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc
 -- Runs over ALL interfaces in scope (prelude + user) — a prelude cycle would
 -- be equally ill-formed.  The `done` ref tracks fully-explored nodes to avoid
 -- redundant traversal and re-reporting multi-root cycles.
--- #1557 A-3.5c: relocated onto stage K's `CE`, AND RE-KEYED — this is the
--- unit's #1258-class acceptance delta, the one the owner ruling of 2026-08-12
--- accepts by name (*"re-keying a bare-name table does not create wrongness, it
--- creates VISIBILITY"*).
---
--- WAS: `collectIfaceNames allDecls` for the roots and `ifaceSupersOf allDecls
--- <name>` for every edge — BOTH bare-name scans of a decl list, so a superinterface
--- edge resolved to whichever same-spelled interface appeared FIRST in
--- the concatenation of every module's decls.  Two unrelated modules each declaring `Same` collapsed
--- into one node: `mod_a.Same requires mod_b.Same` could be reported as a self-cycle it
--- is not, and a genuine cycle could be masked by the other module's row winning the
--- scan.  Import order selected the symptom, exactly as it did for `#1257`'s kind rows.
---
--- NOW: nodes are `CeRow`s and an edge is followed by IDENTITY —
--- `ceLookupAt (regKeyOfTab (ifaceTabKey superOrigin superHead))`.  `Super` has carried
--- `superOrigin` since #1110 Stage A-1 and `resolve.mdk` stamps it through the SAME
--- `mapSuperOcc`/`tyOriginScope` walk that stamps a `DImpl`'s `implOrigin`, so the
--- occurrence and the `DInterface`'s `ifaceOrigin` declaration layer meet for the same
--- reason `ifaceTabKey`'s header argues for the impl-head key.  The `done` set and the
--- DFS `path` are keyed on `regKeyRender` rather than the bare name for the identical
--- reason.
+-- Nodes are `CeRow`s of stage K's `CE`, and an edge is followed by IDENTITY:
+-- `ceLookupAt (regKeyOfTab (ifaceTabKey superOrigin superHead))`.  A bare-name scan of a decl
+-- list would resolve a superinterface edge to whichever same-spelled interface appeared first
+-- in the concatenation of every module's decls: two unrelated modules each declaring `Same`
+-- would collapse into one node, `mod_a.Same requires mod_b.Same` could be reported as a
+-- self-cycle it is not, and a genuine cycle could be masked by the other module's row
+-- winning the scan, with import order selecting the symptom.  `Super` carries `superOrigin`
+-- and `resolve.mdk` stamps it through the SAME `mapSuperOcc`/`tyOriginScope` walk that stamps
+-- a `DImpl`'s `implOrigin`, so the occurrence and the `DInterface`'s `ifaceOrigin`
+-- declaration layer meet for the same reason `ifaceTabKey`'s header argues for the
+-- impl-head key.  The `done` set and the DFS `path` are keyed on `regKeyRender` rather than
+-- the bare name for the identical reason.
 --
 -- The miss arm is an abstention, and it is the one place this could go
 -- LOUD→SILENT.  An edge whose target is not in `CE` at this ordinal yields `None` and
@@ -888,8 +869,8 @@ checkInterfaceCycles mctx prog ce cur =
   -- `manyifaces:typecheck` op-count quadratic (independent of use sites — it surfaces on a
   -- file of N cycle-free interfaces).  Keyed into a set it is O(log n): `done` only prunes
   -- already-explored nodes (set membership is order-insensitive), and the DFS order +
-  -- cycle messages are driven by `path`/the root list.  A-3.5c keeps the shape and only
-  -- changes the KEY from a bare name to `regKeyRender`.
+  -- cycle messages are driven by `path`/the root list.  The key is `regKeyRender`, not a
+  -- bare name.
   let done = Ref omEmpty
   each (checkOneIfaceCycle mctx prog ce cur done) (ceRowsVisibleAt cur ce)
 
@@ -900,40 +881,37 @@ checkInterfaceCycles mctx prog ce cur =
 -- this helper has NO access to `prog` — the caller decides [cohDecls] explicitly
 -- (never a `prog` fallback).  Call ORDER is load-bearing (all push into typeErrors).
 --
--- #1557 A-3.5c: two of the four members now read stage K's `CE` instead of a decl
--- list.  [ownCe]/[cycCe] are the class environments the caller is entitled to read
--- and [cur] is the READING module's ordinal — Module passes the whole-graph
--- `deIfaces` twice with its own ordinal; Flat passes two single-module envs built
--- from the very lists it hands `checkPhantomMethods`/`checkInterfaceCycles`,
--- at ordinal 0 in the standalone-list compatibility helper; reading a graph envelope there
--- would switch both checks silently OFF.
+-- Two of the four members read stage K's `CE` instead of a decl list.  [ownCe]/[cycCe] are
+-- the class environments the caller is entitled to read and [cur] is the READING module's
+-- ordinal — Module passes the whole-graph `deIfaces` twice with its own ordinal; Flat passes
+-- two single-module envs built from the very lists it hands
+-- `checkPhantomMethods`/`checkInterfaceCycles`, at ordinal 0 in the standalone-list
+-- compatibility helper; reading a graph envelope there would switch both checks silently OFF.
 --
--- Call order is unchanged and that is deliberate.  A-3.5c moves two members'
--- SOURCE, not their position: coherence still runs first, then cycles, then phantom,
--- then super-impls, so no diagnostic changes rank against another family.  Whichever
--- unit lands A-3.5a/A-3.5b inherits this constraint — pulling a member OUT of this
--- sequence re-orders every accumulated diagnostic after it.
--- #1557 A-3.5b: the super-impl check reads stage K, taking [cycCe] and [cycIe] at the
--- same ordinal.  Both envs must be built over the same population: the whole-graph
--- `deImpls` with the reader's own ordinal on the Module arm, `flatImplEnvOf` of the
--- one list the Flat callers hand `cycCe`'s peer.
--- #1559 A-3.7: coherence reads stage K too, so this helper carries TWO `IE`s for
--- the same reason A-3.5c gave it two `CE`s — [cohIe] is the env over the population
--- [cohDecls] names (the USER boundary, trap #5) and [cycIe] is built over the
--- whole-graph population.  They are the same env only on the paths where those two
--- populations were already the same.  [cohIe] must contain the prelude at
--- ordinal 0, since coherence pairs the module's own rows with the prelude's.
+-- Call order is load-bearing and deliberate: coherence runs first, then cycles, then
+-- phantom, then super-impls, so no diagnostic changes rank against another family.  Pulling
+-- a member OUT of this sequence re-orders every accumulated diagnostic after it.
+-- The super-impl check reads stage K too, taking [cycCe] and [cycIe] at the same ordinal.
+-- Both envs must be built over the same population: the whole-graph `deImpls` with the
+-- reader's own ordinal on the Module arm, `buildFlatImplEnv` of the one list the Flat callers
+-- hand `cycCe`'s peer.
+-- Coherence reads stage K too, so this helper carries TWO `IE`s for the same reason it
+-- carries two `CE`s — [cohIe] is the env over the population [cohDecls] names (the USER
+-- boundary, trap #5) and [cycIe] is built over the whole-graph population.  They are the
+-- same env only on the paths where those two populations are already the same.  [cohIe] must
+-- contain the prelude at ordinal 0, since coherence pairs the module's own rows with the
+-- prelude's.
 --
--- SA-6 (sprint repair round): the `-1` sentinel is fail-closed here, and it has to be
--- Announced at this reader.  [cur] is `declEnvsOrdOf mid` on the Module arm, whose miss
+-- The `-1` sentinel is fail-closed here, and it has to be announced at this reader.  [cur]
+-- is `declEnvsOrdOf mid` on the Module arm, whose miss
 -- value is `0 - 1` (see that function: a miss is documented fail-CLOSED, and it says in
 -- so many words that the remedy for a stray id is at the READER — "abstain loudly / fail
 -- the pass" — never a sentinel that means "everything").  All four members below take
 -- [cur], and at `-1` they abstain in OPPOSITE directions: `checkCoherence` takes
--- `cohRowsOwnedBy -1` → no rows → **it checks nothing, silently**, where pre-A-3.7 it
--- walked the decl list unconditionally; `checkInterfaceCycles`/`checkPhantomMethods` take
+-- `cohRowsOwnedBy -1` → no rows → **it checks nothing, silently**;
+-- `checkInterfaceCycles`/`checkPhantomMethods` take
 -- `ceRowsVisibleAt -1`/`ceRowsOwnedBy -1` → likewise nothing; and `checkSuperImpls`,
--- whose row read SA-3 just widened to `ieCandidacyVisibleAt`, still finds no SUPERS
+-- whose row read is `ieCandidacyVisibleAt`, still finds no SUPERS
 -- (`ceLookupAt … -1`) and so also reports nothing.  So the whole tail degrades to a
 -- SILENT ACCEPT — a loud→silent transition, which this repo ranks as a severity increase
 -- even while unreachable.
@@ -962,7 +940,7 @@ runFinalChecks mctx cohDecls ownCe cycCe cohIe cycIe cur =
   checkPhantomMethods mctx ownCe cur
   checkSuperImpls mctx cohDecls cycCe cycIe cur
 
--- SA-6's guard, split out so the arm is a GUARD and not a `whenL`.  Medaka is strict:
+-- The sentinel guard is split out so the arm is a guard and not a `whenL`.  Medaka is strict:
 -- `whenL (cur < 0) (pushTypeError …)` would evaluate the push on EVERY call — the
 -- documented not-a-stub trap.  A guarded function does not.
 ordinalSentinelGuard : ModuleCtx -> Int -> Unit
@@ -1134,14 +1112,11 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- the full visible universe (shadows / key table /
   -- completeness / obligations): Flat = whole flattened program; Module = imported
   -- data + impl universe + this module.
-  -- #154 PR-A: every consumer of `fullUniverse` is a `Flat _ =>` arm (grep confirms:
-  -- buildDefinerShadows
-  -- / checkImplObligations / checkCallObligations — all Flat).  #1557 A-3.5a removed
-  -- `checkImplCompleteness` from that list: impl-completeness no longer takes a decl
-  -- list, it reads `classEnvHere`,
-  -- which IS this binding on that arm).  Medaka is STRICT, so the
-  -- Module arm's `accData ++ implDecls ++ prog0` allocated an O(|accData|) list every module
-  -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
+  -- Every consumer of `fullUniverse` is a `Flat _ =>` arm (buildDefinerShadows,
+  -- checkImplObligations, checkCallObligations).  Impl-completeness takes no decl list: it
+  -- reads `classEnvHere`, which carries this universe on the Flat arm.  Medaka is STRICT, so
+  -- binding `accData ++ implDecls ++ prog0` on the Module arm would allocate an O(|accData|)
+  -- list every module and discard it unread.  Bind `[]` on Module.
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
   -- (universeCtorPop/universeRecordPop), loaded+overlaid at the `dataEnv` binding below.
@@ -1169,41 +1144,33 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- guard, which fires for the is_letrec=true groups that come from DLetGroup) before the
   -- DFunDef groups are typechecked.
   checkLetRecDecls mctx prog
-  -- #154 PR1: on the Module path, grow the persistent universe accumulators by THIS
-  -- module's decls BEFORE the shadow/key reads below consult them — so they see the
-  -- same universe `fullUniverse` (which appended prog0) did.
-  -- untouched and rebuilds over its whole `prog` (already O(N)).
-  -- #1112 A-3.4 PR2: `ieShadowCompare mid prog0` stood here, and the hard `panic`
-  -- surface it put in the released compiler is GONE with it — that instrument had
-  -- exactly one job, measuring the §9.5 equality before the flip committed to it,
-  -- and the flip has now been made on a strictly stronger measurement (see
-  -- `moduleImplUniv` just below for what was measured and how it was shown
-  -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
-  -- so there is nothing left here for `IE` to be compared against.
+  -- On the Module path, grow the persistent universe accumulators by THIS module's decls
+  -- BEFORE the shadow/key reads below consult them — so they see the same universe
+  -- `fullUniverse` (which appended prog0) did.  Flat is untouched and rebuilds over its whole
+  -- `prog` (already O(N)).  `appendUniverseAccums` grows no impl universe: the impl
+  -- population is `IE`, bound below as `moduleImplUniv`.
   -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
   -- must know whether this pass is the PRELUDE's, because the prelude contributes to
   -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
   appendUniverseAccums gctx mid prog0
-  -- #1112 A-3.4 PR2 — THE `IE` READER FLIP.  A production read of stage K's `IE`
-  -- (A-3.5b added a second, `ieRowsVisibleAt`; do NOT re-instate "the ONE place" here).
-  -- It replaced the three `obUniv*` `CrossRun` accumulators, which are GONE rather than
-  -- merely unread — two sources of truth for "what impls exist" is what design law L1
-  -- removes.  The WAS/NOW migration narrative, and the whole-prefix equality MEASUREMENT
-  -- that licensed deleting the `ieShadowCompare` instrument, live in
-  -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.5a; what stays here are the facts a
-  -- reader of this line needs.
+  -- THE `IE` READER: a production read of stage K's `IE`.  A second production read,
+  -- `ieRowsVisibleAt`, exists: do NOT describe this one as "the ONE place".  No `obUniv*`
+  -- `CrossRun` accumulator exists beside it: two sources of truth for "what impls exist" is
+  -- what design law L1 forbids.  The migration narrative and the whole-prefix equality
+  -- measurement are in `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.5a; what stays here
+  -- are the facts a reader of this line needs.
   --
-  -- Since A-3.6 (#1558) this is not filtered to this module's ordinal prefix.
-  -- `ieSnapAt` routes through `ieCandidacyVisibleAt`, which is `True`, so this binding is
-  -- the WHOLE GRAPH's impl universe regardless of `mid`'s ordinal.  This line is where
-  -- A-3's C4/I2 claim is cashed: every obligation check on the multi-module path knows the
-  -- same impl population in every module — *"import scoping never decides which instances
-  -- exist"* (`docs/spec/DICT-SEMANTICS.md` §8 I5).  It WIDENS #1438's same-spelled-
-  -- interface reach (#1482 measured that topological prefix scoping was accidentally
-  -- load-bearing for it); expected and licensed, but an acceptance delta.  The pin that
-  -- grades that delta no longer exists: `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-
-  -- order` is gone from the tree (derive: `ls test/must_fail_fixtures | grep 1072`) — see
-  -- §9.5a; do not read its absence as "already drained".
+  -- This is not filtered to this module's ordinal prefix.  `ieSnapAt` routes through
+  -- `ieCandidacyVisibleAt`, which is `True`, so this binding is the WHOLE GRAPH's impl
+  -- universe regardless of `mid`'s ordinal.  This line is where C4/I2 is cashed: every
+  -- obligation check on the multi-module path knows the same impl population in every
+  -- module — *"import scoping never decides which instances exist"*
+  -- (`docs/spec/DICT-SEMANTICS.md` §8 I5).  It WIDENS the same-spelled-interface reach that
+  -- topological prefix scoping narrowed by accident; expected and licensed, but an
+  -- acceptance delta.  The pin that graded that delta no longer exists:
+  -- `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order` is gone from the tree
+  -- (derive: `ls test/must_fail_fixtures | grep 1072`) — see §9.5a; do not read its absence
+  -- as "already drained".
   --
   -- `declEnvsOrdOf mid` is still passed and is now inert on this path.  It is
   -- kept so the call site does not move and so re-scoping candidacy later is a
@@ -1214,25 +1181,21 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- the NAME axis.
   --
   -- Bound once, read twice, and the "once" is load-bearing.  There are TWO Module-arm
-  -- consumers — `residualUnivRef` (#1549) just below, and the end-of-body obligation
-  -- `obUniv` — and A-3.4's own design was written when there was only ONE.  Do not
-  -- re-derive the projection at the second site: it is a whole-prefix rebuild, so a
-  -- second call doubles this unit's already-measured per-module cost for a value that
-  -- cannot have changed (both `ord` and `IE` are immutable for the whole module; the
-  -- accumulator these replaced was likewise grown once, above, and read at both sites).
-  -- A third consumer should take this binding too, or say in writing why it needs a
-  -- different ordinal.
+  -- consumers — `residualUnivRef` just below, and the end-of-body obligation `obUniv`.  Do
+  -- not re-derive the projection at the second site: it is a whole-prefix rebuild, so a
+  -- second call doubles this binding's already-measured per-module cost for a value that
+  -- cannot have changed (both `ord` and `IE` are immutable for the whole module).  A third
+  -- consumer should take this binding too, or say in writing why it needs a different
+  -- ordinal.
   let moduleImplUniv =
     let envs = gctx.declEnvsRef.value
     ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
-  -- #1549: stash the impl universe the RESIDUAL REDUCER entails against
-  -- (`residualPredsOf`, called from each generalizing group's close).  This is NOT a
-  -- third source: it is the SAME two arm-gated sources the end-of-body obligation
-  -- checkers consume — `buildImplUniverse prog` on Flat, and since A-3.4 PR2 the `IE`
-  -- projection on Module (which carries this module's own impls, its ordinal being
-  -- included by `declEnvVisibleAt`, exactly as the retired accumulator did after the
-  -- `appendUniverseAccums` above).  Built ONCE per module rather than per group:
-  -- rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
+  -- Stash the impl universe the RESIDUAL REDUCER entails against (`residualPredsOf`, called
+  -- from each generalizing group's close).  This is NOT a third source: it is the SAME two
+  -- arm-gated sources the end-of-body obligation checkers consume — `buildImplUniverse prog`
+  -- on Flat, and the `IE` projection on Module (which carries this module's own impls, its
+  -- ordinal being included by `declEnvVisibleAt`).  Built ONCE per module rather than per
+  -- group: rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
   setRef mctx.mcCells.residualUnivRef moduleImplUniv
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
@@ -1269,24 +1232,18 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let sigs = sigsOf prog
   mctx.mcCells.definerShadowNamesRef := namesToSet definerShadows omEmpty
   mctx.mcCells.definerShadowSigsRef := omFromPairs (reverseL sigs) omEmpty
-  -- #154 PR1 seeded a SECOND impl-existence table here — `shadowKeyTableRef`, from
-  -- `buildKeyTable fullUniverse` on Flat and from the cumulative `universeKeyBucketsRef`
-  -- on Module.  ARCH B-2.1-g repointed all three of its boolean existence reads onto the
-  -- graph-global `bodyImplEnvRef` seeded just below (`ieImplExistsForHead`), and B-2.1-d
-  -- deleted both refs.  Do not re-add a prefix-keyed existence table here.  The Module
-  -- arm's source was a cumulative TOPOLOGICAL PREFIX while S2's impl universe is
-  -- graph-global (`SHADOW-SEMANTICS.md:183-186`, `:226`), so an importer shadow whose
-  -- receiver's impl sat in a topologically later module answered "no impl" and called the
-  -- standalone — a located reject became exit 0 printing a `Box` pointer fed to `n + 1`,
-  -- discriminated by the order of two `import` lines.  One substrate, one decision.
-  -- ARCH B-2.1-a2: the SAME impl population, seated on `IE`'s shape, on BOTH arms —
-  -- one ref, so the evidence reader B-2.1-b repoints has one substrate rather than an
-  -- arm gate.  It landed additive and behaviour-neutral, so the repoints that followed got
-  -- a substrate they could trust on a path where `IE` was empty (see `buildFlatImplEnv`
-  -- for the measured hazard, RUN-B-017 probe 3).
-  -- "nothing reads `bodyImplEnvRef` yet" was true only at a2 and is now FALSE: B-2.1-b2's
-  -- three selection legs, and B-2.1-g's route word plus three shadow existence reads, all
-  -- read this ref.  Derive the set: `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
+  -- Impl existence is read from ONE graph-global table, `bodyImplEnvRef`, seeded just below
+  -- (`ieImplExistsForHead`).  Do not add a prefix-keyed existence table here: a cumulative
+  -- TOPOLOGICAL PREFIX disagrees with S2's impl universe, which is graph-global
+  -- (`SHADOW-SEMANTICS.md:183-186`, `:226`), so an importer shadow whose receiver's impl sat
+  -- in a topologically later module would answer "no impl" and call the standalone — a
+  -- located reject became exit 0 printing a `Box` pointer fed to `n + 1`, discriminated by
+  -- the order of two `import` lines.  One substrate, one decision.
+  -- `bodyImplEnvRef` holds the impl population seated on `IE`'s shape, on BOTH arms: one ref,
+  -- so every reader has one substrate rather than an arm gate (see `buildFlatImplEnv` for the
+  -- measured hazard on a path where `IE` is empty).  Its readers are the three selection
+  -- legs, the route word and the shadow existence reads.  Derive the set:
+  -- `grep -n bodyImplEnvRef compiler/types/*.mdk`.
   -- The Module arm is a pointer copy of the env `buildDeclEnvs` already built; it
   -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
   mctx.mcCells.bodyImplEnvRef := gctx.declEnvsRef.value.deImpls
@@ -1328,7 +1285,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- name index until the final `setFunPredicateSlots` of this arm rebuilds it.
   mctx.mcCells.funPredicateSlotsRef :=
     gctx.crossRun.crossModuleFunPredicateSlotsRef.value
-  -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
+  -- The declared-prefix sidecar rides the IDS table — every
   -- whole-table replacement of `funConstraintsRef` owes one of these.
   mctx.mcCells.funConstraintDeclaredRef :=
     gctx.crossRun.crossModuleFunConstraintDeclaredRef.value
@@ -1358,7 +1315,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- BARE-NAME accumulators, so every name this module declares is currently answered by
   -- whichever module's same-named binding the topological order happened to put first.
   -- Re-key those names — and only those — onto this module's own `(mid, name)` rows.
-  -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
+  -- Three writes, in lockstep: the declared-prefix sidecar rides the
   -- IDS table, and this is a whole-table replacement of all three.
   setFunPredicateSlots
     mctx
@@ -1374,7 +1331,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       prog
       gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
       mctx.mcCells.funConstraintDeclaredRef.value)
-  -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
+  -- ONE derivation, two projections.  The two refs are read together
   -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
   -- must not be derived by two independent walks that could admit different rows.
   let admitted = importDefinersOf gctx prog
@@ -1416,12 +1373,10 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- pub_{k-1}..pub_1] to preserve lookupAssoc (first-wins) / omInsert (last-write-wins)
   -- semantics.
   let dataEnv =
-    -- A-3.2b (#1512): `mid` is BOUND here now — the overlay pool below is read at this
-    -- module's own ordinal, so the arm can no longer discard it.
-    -- A-3.2b residual (#1512): `envs`/`cur` are bound BEFORE the reload, not
-    -- after, because the reload's alias half is now a projection of `envs` at
-    -- `cur`.  Both bindings are pure reads of `GraphCtx`, so hoisting them
-    -- above `loadDataUniverse` changes nothing else.
+    -- `mid` is BOUND here: the overlay pool below is read at this module's own ordinal.
+    -- `envs`/`cur` are bound BEFORE the reload because the reload's alias half is a
+    -- projection of `envs` at `cur`.  Both bindings are pure reads of `GraphCtx`, so
+    -- hoisting them above `loadDataUniverse` changes nothing else.
     let envs = gctx.declEnvsRef.value
     let cur = declEnvsOrdOf mid envs
     loadDataUniverse mctx cur
@@ -1457,7 +1412,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     --   * `recordByNameRef` (`registerRecordInfoKeyed` → `omInsert`, BARE ctor name) —
     --     LAST-write-wins → prog0.  #1256's table, same keying, same hazard.
     --   * `dataParamKindsRef` (`recordParamKinds`, a consed list read FIRST-match) —
-    --     IDENTITY-keyed since A-2.3 (`tyTabKey o name`), so two modules' same-named
+    --     IDENTITY-keyed (`tyTabKey o name`), so two modules' same-named
     --     types get DIFFERENT keys and registration order cannot decide between them
     --     at all.  It is order-observable only for a decl registered twice, where it
     --     agrees.  It is NOT evidence about the bare-keyed tables above.
@@ -1468,20 +1423,19 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     --     THIS is the one a future edit can silently flip, so check it too.
     -- All four land on prog0 > overlay > universe.  Getting any two to disagree is
     -- #674's root cause.
-    -- #1111 A-2.11 (#1319 unit 1): a FIFTH layer, and it is a per-NAME overlay rather
+    -- A FIFTH layer, and it is a per-NAME overlay rather
     -- than a fifth registration — `applyCtorScopeOverrides` re-points the (normally
     -- empty) set of COLLIDED constructor names at the declaration THIS module's import
     -- scope selects.  It sits ABOVE prog0 and declines for any name prog0 declares, so
     -- the ladder above is unchanged: own > import scope > import overlay > universe.
     -- A collision-free program returns this very env unchanged and unallocated.
-    -- #1111 A-2.12 (#1319 unit 2): the two RECORD-table overlays are the same fifth
+    -- The two RECORD-table overlays are the same fifth
     -- layer one namespace-half over, and they must run HERE — after `registerAllData …
     -- prog0` has written the floor into `recordByNameRef` / `fieldOwnersRef` — for the
     -- same reason `applyCtorScopeOverrides` wraps that call.  They are statements rather
     -- than an env transform only because those two tables are per-run REFS, not `TcEnv`
     -- fields; the ladder they implement is identical.  See applyRecordScopeOverrides.
-    -- `CrossRun.universeDataDecls` — a positional `List Decl` accumulated by
-    -- `appendDataUniverse`, carrying no key at all — is RETIRED; the pool is the
+    -- No positional `List Decl` accumulator carries the pool: it is the
     -- whole-graph envelope read at THIS module's ordinal through
     -- `declEnvRowVisible`/`declEnvVisibleTo`.
     --
@@ -1494,7 +1448,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
     -- emit — `DUse` decls are never mangled.  This key does not go through that
     -- channel.)
-    -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed, read
+    -- The KIND and FIELD-OWNER halves of the seed, read
     -- from one ordinal-aware source.  Position in the ladder: the UNIVERSE layer, under
     -- the overlay and under `prog0`.  See `declEnvSeedChain` for
     -- why the reader's OWN row is excluded here and registered by the two
@@ -1527,18 +1481,10 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
   -- as the line above for the HEAD-constructor half, which still reads
   -- `dataParamKindsRef` that `dataEnv` above has just populated.
-  -- #1557 A-3.5c: the INTERFACE-slot half no longer reads a per-run table at all —
-  -- it reads stage K's `CE` at this module's ordinal, mirroring `moduleImplUniv`'s
-  -- arm-gated shape exactly. Standalone-list helpers build a single-module `CE` from
-  -- `prog`, the very list `registerAllData (envFor mctx) prog` walked to fill the
-  -- retired table, so the check does not go silent on a no-import `medaka check`.
-  -- #1557 A-3.5a: this pair is now BOUND ONCE and read by TWO consumers — the graded
-  -- impl-head check here and impl-completeness at the end of the body — hence the
-  -- neutral name.  Binding once is not a style choice: `flatClassEnvOf` folds the whole
-  -- decl list into a registry, so a second construction at the completeness site would
-  -- pay that fold twice per flat compile, and the two copies could drift.  On Flat
-  -- `fullUniverse = prog` (see its binding above), so `flatClassEnvOf prog` IS the
-  -- `flatClassEnvOf fullUniverse` the completeness relocation calls for.
+  -- The INTERFACE-slot half reads stage K's `CE` at this module's ordinal.  This pair is
+  -- BOUND ONCE and read by TWO consumers — the graded impl-head check here and
+  -- impl-completeness at the end of the body — hence the neutral name: a second construction
+  -- at the completeness site could drift from this one.
   let classEnvHere =
     let envs = gctx.declEnvsRef.value
     (envs.deIfaces, declEnvsOrdOf mid envs)
@@ -1658,8 +1604,6 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   inferTestBodies tailEnv progT
   -- (#3) cross-module dict-threading SNAPSHOT — MODULE ONLY (flat SKIPS: running it would
   -- pollute the cross-module accumulators with a phantom single-file attribution).
-  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
-  -- lint-disable-next-line rule-prefer-assign-op
 
   dedupPredicateSlotsTable mctx ()
   -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
@@ -1675,7 +1619,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     gctx.crossRun.crossModuleFunPredicateSlotsQualRef
     (attributeModuleEntries mid prog mctx.mcCells.funPredicateSlotsRef.value
       ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value)
-  -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
+  -- The sidecar's two snapshots, paired with the ids snapshots above.
   setRef
     gctx.crossRun.crossModuleFunConstraintDeclaredRef
     (mctx.mcCells.funConstraintDeclaredRef.value
@@ -1713,34 +1657,28 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
         gctx.crossRun.crossModuleSchemeOblsQualRef.value
         mctx.mcCells.schemeObligationsRef.value
       ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value)
-  -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
-  -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
-  -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
-  -- on that arm, at ordinal 0; Module: stage K's whole-graph `deIfaces` at this module's
-  -- ordinal).  It must NOT read `declEnvsRef` unconditionally: that envelope is
-  -- `emptyDeclEnvs` in compatibility helpers, so reading it there would make `ceRequiredAt` miss on
-  -- every interface, and the miss arm is `[]` — every live rejection here would become a
-  -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
+  -- Impl missing a required method: reads `classEnvHere` above, stage K's `CE` at this
+  -- module's ordinal.  The miss arm of `ceRequiredAt` is `[]`, so an envelope that lacks an
+  -- interface's row turns every live rejection here into a silent accept: `declEnvsRef` must
+  -- hold the graph envelope of this run before the first module is checked.
   checkImplCompletenessMap mctx (fst classEnvHere) (snd classEnvHere) prog
-  -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloats
+  -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloatsGo
   -- here so the per-module pass can
   -- stamp the Float-typed int literals, and a Flat consumer that read them unstamped
   -- would get Int cells where the inference said Float.  MODULE runs both channels
   -- here and leaves the Float stamp to the graph-end drain (`SSNumlitFloats`), on
   -- every driver (#2705).
 
-  -- #1112 A-3.4 PR2: the obligation universe is now the `IE` projection bound ONCE
-  -- as `moduleImplUniv` far above (see its block for the flip, the measurement, and
-  -- why re-deriving it here would be a second whole-prefix rebuild for a value that
-  -- cannot have changed).  The three `obUniv*` accumulators this used to read are
-  -- deleted from `CrossRun`.
+  -- The obligation universe is the `IE` projection bound ONCE as `moduleImplUniv` far above
+  -- (see its block for why re-deriving it here would be a second whole-prefix rebuild for a
+  -- value that cannot have changed).
 
   let obUniv = moduleImplUniv
   -- #838 I4: unified checker, same `obUniv`.  Impl channel = (deferNonGround=True);
   -- call channel = (deferNonGround=False).
   -- #2705: BOTH channels run on EVERY driver.  A driver that infers impl
   -- bodies without checking their obligations lets a program `check` rejects
-  -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
+  -- reach codegen through `build`'s own elaboration.  `setNumlitFloatsGo` is not called
   -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
   -- first step of the graph-end drain every Module-arm driver now runs.
   recordLiveRoots mctx ()
@@ -1760,8 +1698,8 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- module's own pub twice) — the register-time mirror of foldModules' `accData ++
   -- publicDataDecls prog` threading.  appendDataUniverse clobbers the working table refs,
   -- which are DEAD here (the next module's `freshModuleCtx` wipes them).  Flat leaves it untouched.
-  -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
-  -- reload reads the alias universe at this module's own ordinal.
+  -- `mid` is BOUND here: `appendDataUniverse`'s reload reads the alias universe at this
+  -- module's own ordinal.
   appendDataUniverse mctx mid prog0
   let result = (
     ModuleBindings {
@@ -2125,19 +2063,15 @@ liveVarIdsOf mctx m =
 -- check — normally a USER file, where an `extern f : Int -> <> Int` would type as
 -- a pure `Int -> Int`: a one-line escape hatch through the whole effect system.
 --
--- This function no longer rewrites a declared row (F1, epic #2070).  Its
--- predecessor STAMPED `FFI` into the terminal row whenever the label was absent,
--- which meant the declared row was never checked against what is enforced —
--- `<Net "a.com/*">` silently became `<FFI, Net "a.com/*">` exactly as `<>`
--- silently became `<FFI>`.  A signature that says one thing and types as another
--- is the defect, not the missing atom.  The honesty requirement is now a CHECK
+-- This function does not rewrite a declared row: stamping `FFI` into the terminal row
+-- whenever the label was absent would mean the declared row was never checked against
+-- what is enforced — `<Net "a.com/*">` silently becoming `<FFI, Net "a.com/*">` exactly
+-- as `<>` silently becoming `<FFI>`.  A signature that says one thing and types as another
+-- is the defect, not the missing atom.  The honesty requirement is a CHECK
 -- (`ffiCheckExternsLabelled`, run beside the crossable guard at the same
 -- `checkBodyImpl` seam): a user extern's terminal row must ALREADY name `FFI`,
 -- whatever else it names, or the declaration is a located type error.  The scheme
 -- built here is the declaration verbatim.
---
--- `mode` is still taken because every caller has one and the sibling guards read
--- it; the ownership gate now lives entirely on those guards.
 userExternSchemes : ModuleCtx ->
   OrdMap TyConOrigin ->
   List Decl ->
@@ -2474,7 +2408,7 @@ processSCC outer sigs grouped0 members =
   determineByUniqueInstance env.teDyn.dcModule unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
-  -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
+  -- not the impl obligation channel).  See numCallObls/numDictObls.  The synthetic entries
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
   let defaultObls = addedObls ++ calleeNumObls env.teDyn.dcModule callN0 dictN0
@@ -2528,9 +2462,8 @@ processSCC outer sigs grouped0 members =
   -- Mono`); registerSchemeObligations maps it with forwardedVecObls so a multi-param
   -- predicate survives whole.  #838 I5: a constrained callee's DICT slot is forwarded
   -- through THIS same call delta — inferDictAtFound records it as a 1-ary PCallSlot
-  -- obligation (recordCallObligations, beside pushDictApp), so the old `allDictObls`
-  -- re-derivation off the dict delta was a redundant duplicate (deduped away) and is
-  -- retired; addedObls now carries only the real pendingImplObligations delta.
+  -- obligation (recordCallObligations, beside pushDictApp), so no separate re-derivation off
+  -- the dict delta exists; addedObls carries only the real impl-obligation delta.
   let callOblsDelta = callOblsWindow env.teDyn.dcModule callN0
   registerSchemeObligations
     env.teDyn.dcModule
@@ -2819,8 +2752,8 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
 
 -- public top-level value names (the pub flag may sit on the sig, def, or extern).
 -- C8(a): a PUBLIC interface ALSO exports its method names so an importer can see
--- their schemes — methods of an
--- `is_pub = true` interface are appended to the exported value schemes.
+-- their schemes — methods of an `export interface` are appended to the exported value
+-- schemes.
 export
 publicValNames : List Decl -> List String
 publicValNames [] = []
@@ -2834,15 +2767,12 @@ publicValNames ((DInterface { pub = True, methods, ... }) :: rest) =
   ifaceMethodNames methods ++ publicValNames rest
 publicValNames (_ :: rest) = publicValNames rest
 
--- #1557 A-3.5a removed the completeness line from this fold, with the
--- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
--- guarantee of this fold, which `checkBodyImpl`'s Module arm calls BEFORE the shadow
--- reads so that this module's own decls are visible at the read, is no longer what
--- impl-completeness depends on: it reads stage K's `CE`, whose rows
--- carry their declaring module's ordinal, and `declEnvVisibleAt cur o` (`o <= cur`)
--- admits the reader's OWN row — the same 0..cur-inclusive prefix the accumulator held
--- here.  Do not re-add a completeness accumulator to restore an ordering property that
--- has moved onto the ordinal predicate.
+-- Impl-completeness is not part of this fold: it reads stage K's `CE`, whose rows carry
+-- their declaring module's ordinal, and `declEnvVisibleAt cur o` (`o <= cur`) admits the
+-- reader's OWN row.  The ordering guarantee of this fold, which `checkBodyImpl`'s Module
+-- arm calls BEFORE the shadow reads so that this module's own decls are visible at the
+-- read, is therefore not what impl-completeness depends on.  Do not add a completeness
+-- accumulator to restore an ordering property that lives on the ordinal predicate.
 appendUniverseAccums : GraphCtx -> String -> List Decl -> Unit
 appendUniverseAccums gctx mid prog =
   -- SHADOW-SEMANTICS S1-PRELUDE (a), RULED 2026-08-10 (#1375 item 2, #1499 clause (b)):
@@ -2878,13 +2808,10 @@ appendUniverseAccums gctx mid prog =
   gctx.crossRun.universeMethodDispatchIdxByIdRef :=
     gctx.crossRun.universeMethodDispatchIdxByIdRef.value
       ++ argDispatchIndicesById prog
-  -- #1112 A-3.4 PR2: the #154 PR3 leg that grew the three `obUniv*` obligation-universe
-  -- accumulators here is GONE.  Its consumer — the Module arm's `obUniv` — now projects
-  -- stage K's `IE` at the reader's ordinal instead (`ieUniverseAt`), so this fold was
-  -- building a second copy of a table nothing reads.  Note what that makes this function:
-  -- it no longer answers "what impls exist" at all; every remaining line here is an
-  -- interface/method/name-side accumulator.  Do not re-add an impl accumulator — the whole
-  -- point of the flip is that `IE` is the one answer, and a second one is design law L1's
+  -- No impl universe is grown here: the Module arm's `obUniv` projects stage K's `IE` at the
+  -- reader's ordinal (`ieUniverseAt`), so this function no longer answers "what impls exist"
+  -- at all; every line here is an interface/method/name-side accumulator.  Do not add an
+  -- impl accumulator — `IE` is the one answer, and a second one is design law L1's
   -- divergence.
   ()
 
@@ -3087,7 +3014,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- stamped from the callee's SCHEME, which importSeed binds under the alias local — so
 -- this costs only the cross-module arity DISAMBIGUATION, and only when two modules
 -- export same-named constrained fns of differing dict arity.
--- ── #674 / #1111 A-2.6: import-scoped constructor overlay ──────────────────
+-- ── import-scoped constructor overlay ─────────────────────────────────────────
 -- The `data`/`newtype` decls (from the surrounding universe `pool`) whose
 -- CONSTRUCTORS this module binds by name, read from its own DUse decls.  They
 -- OVERLAY the whole-universe ctor tables (the typecheck scheme table, the
@@ -3101,7 +3028,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 --       the original #674 rule; or
 --   (b) it names one of the decl's constructors (`import m.{T, C}` — and, because a
 --       record's sole variant carries the type's own name, `import m.{Cfg}` for a
---       `data Cfg = { … }`).  #1111 A-2.6: (b) is the half that drains #1259 (the
+--       `data Cfg = { … }`).  (b) is the half that drains #1259 (the
 --       ctor-scheme env) and #1256 (the record-info table).
 --
 -- Rule (b) is a CONSTRUCTOR-name test, not a "not a type name" test, and the
@@ -3118,12 +3045,11 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- import clause, decided by source order.  It is the pre-existing `(..)` hazard
 -- (#674's remainder), also reachable via (b), and it is order-dependent on `main` too.
 --
--- IT IS **#1284** (#1283 is the RE-EXPORT spelling; #733 item 1a is marked FIXED and
--- item 1c is wildcards only).  Pinned self-drainingly by
--- `test/must_fail_fixtures/1284-a26-overlay-sibling-ctor-beats-named-
--- import/`, whose CONTROL is the discriminator that dates it: the NON-sibling case is
--- rejected on `main` and accepted here, so A-2.6 repairs that one and leaves exactly
--- the sibling one.
+-- This is #1284 (#1283 is the RE-EXPORT spelling; #733 item 1a is marked FIXED and
+-- item 1c is wildcards only).  The must-fail fixture that pinned it is gone from the tree
+-- (derive: `ls test/must_fail_fixtures | grep 1284`, empty), so its absence is not evidence
+-- that the sibling case is drained: the non-sibling case is rejected on `main` and accepted
+-- here, and the sibling one is what remains.
 --
 -- The pool lookup is IDENTITY-scoped, not bare-name.  The pool is the WHOLE
 -- universe, so two modules declaring the same TYPE name (#1256's two `Cfg`s) made the
@@ -3167,24 +3093,22 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- available if it is ever needed — index `pool` by owning module id, which would make
 -- the owned passes O(log n) — but it does not exist today, so do not cite one.
 --
--- A-3.2b (#1512, absorbing #1319 unit 4): the pool is not a materialised accumulator
--- (which would carry no record of which module contributed what, and no key beyond
--- list position).  It is the whole-graph envelope (`DeclEnvs.deModules`, stage K) read at the READER'S OWN ORDINAL through
+-- The pool is not a materialised accumulator (which would carry no record of which module
+-- contributed what, and no key beyond list position).  It is the whole-graph envelope
+-- (`DeclEnvs.deModules`, stage K) read at the READER'S OWN ORDINAL through
 -- `declEnvRowVisible`, i.e. through `declEnvVisibleTo`'s two conjuncts.  `cur` is
 -- `declEnvsOrdOf mid` for the module being checked — a LOADER-derived identity, not a
 -- spelling re-derived from import syntax, which is what makes it survive the emit path
 -- (see the call site in `checkBodyImpl`).
 --
--- The population is not byte-identical to the old accumulator, and the difference
--- is exactly one row: the READER'S OWN module.  The accumulator held only STRICTLY
--- EARLIER modules' public decls (`appendDataUniverse` runs at the END of a module's
--- own pass); `declEnvVisibleTo` admits the reader's own row too, privately, because
--- `entryOrd == cur` short-circuits the publicity conjunct.  That is the ruled
--- predicate and it is deliberately not special-cased away here.  Its reach is
--- bounded: `ownedType`/`ownedCtor` are scoped by `declOwnedBy mid` where `mid` comes
--- from a `DUse` path, and no module imports itself, so an own-module decl can only
--- ever fill the `bareType` fallback — LAST in a FIRST-wins walk, so it can only add a
--- candidate where every earlier row supplied none, never displace one.
+-- The pool includes one row an accumulator over strictly earlier modules would not: the
+-- READER'S OWN module.  `declEnvVisibleTo` admits it, privately, because `entryOrd == cur`
+-- short-circuits the publicity conjunct.  That is the ruled predicate and it is
+-- deliberately not special-cased away here.  Its reach is bounded: `ownedType`/`ownedCtor`
+-- are scoped by `declOwnedBy mid` where `mid` comes from a `DUse` path, and no module
+-- imports itself, so an own-module decl can only ever fill the `bareType` fallback — LAST
+-- in a FIRST-wins walk, so it can only add a candidate where every earlier row supplied
+-- none, never displace one.
 -- The result is partitioned: named (`UseGroup`) rows and wildcard (`UseWild`) rows
 -- are two separate halves, and which half a consumer must see FIRST depends on that
 -- consumer's own tie-break direction.  This is not a style choice; a single flat
@@ -3359,7 +3283,7 @@ wildOverlayDecls cur (m :: rest) mid =
     wildOverlayDecls cur rest mid
 
 -- One member's overlay decl.  The bare-name fallback is kept for the `(..)` spelling
--- ALONE, so no overlay that fired before #1111 A-2.6 is lost where the identity cannot
+-- ALONE, so no overlay that fired on the bare name is lost where the identity cannot
 -- match — a RE-EXPORTED type's decl names the ORIGINAL module, not the re-exporter
 -- this import path names.  The (b) spellings are new, so they get no fallback: an
 -- unscoped guess there would be the load-order coin flip this unit is removing.
@@ -3391,7 +3315,7 @@ memberOverlayDecl cur rows mid (UseMember n ctors _ _) =
 -- by `test/llvm_fixtures_modules/ctor_scope_ctors_prefer_type_name/`.
 --
 -- The constructor pass is still the fallback for `(..)`, not dead: `import m.{C(..)}`
--- where `C` is a constructor and not a type name of `m` keeps its pre-A-2.6 meaning.
+-- where `C` is a constructor and not a type name of `m` keeps its constructor meaning.
 --
 -- The three passes share one traversal, and that is a measured perf contract.
 -- `pool` is the WHOLE accumulated universe and this runs once per UseGroup member of
@@ -3435,10 +3359,9 @@ findOverlayDecl mid n ctors cur rows =
 -- walk; WITHOUT `(..)` only `ownedCtor` is ever read, so exiting on `ownedType` would
 -- abandon the walk before the answer was found.  Exiting on "all three filled" is
 -- likewise wrong for the second case.
--- A-3.2b (#1512): the OUTER half of the same one-traversal walk, over the envelope's
--- per-module rows in ORDINAL order — which is the identical decl order the old
--- accumulator was appended in (`appendDataUniverse` ran once per module, dependency
--- first), so every FIRST-wins candidate below sees the same sequence it saw before.
+-- The OUTER half of the same one-traversal walk, over the envelope's per-module rows in
+-- ORDINAL order, which is dependency-first, the order the pool's decls are laid out in, so
+-- every FIRST-wins candidate below sees the sequence it is specified against.
 --
 -- The early exit must be checked at both levels.  `overlayScan` stops mid-row on
 -- the deciding candidate; without the identical test here the walk would continue into
@@ -3525,7 +3448,7 @@ overlayNote mid n tn o d acc = match acc
 
 -- Does this decl's DECLARATION identity name module `mid`?  Both sides go through
 -- `mkIdent`, so an ABSENT identity matches NOTHING — not even another absence.  That
--- polarity is deliberate and is A-2.3's, not A-2.10's: this answers a LOOKUP, where a
+-- polarity is deliberate: this answers a LOOKUP, where a
 -- miss is recoverable (the universe fallback stands, i.e. today's behaviour) and a
 -- false hit would silently overlay the wrong module's constructors.  It is why `mid`
 -- being `""` (the I6.3 "origin not recorded" sentinel, which `identOriginOf` refuses)
@@ -3546,19 +3469,17 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- here, once, and a form whose rows are missing is not a gap in one arm: it is a
 -- silent fall-through to bare-name first-match for that whole spelling.
 --
--- `import m.*` must contribute rows (#1425's F1).
--- `importedBindings` answers `None` for `UseWild` because a wildcard's member list
--- cannot be read off the `DUse` decl alone — it is every public top-level binding the
--- DEPENDENCY declares — so this walk simply skipped it and every wildcard-imported
--- name fell to the bare table.  While the bare table happened to be wrong on BOTH
--- sides of a same-name collision (a foreign constrained row sized the define AND the
--- call), the two errors cancelled and the spelling looked correct.  `selfDeclArities`
--- then repaired the DEFINE side by identity; the call side, still on the bare table,
--- began applying a dict its callee no longer abstracts —
--- `E-NOT-A-FUNCTION: applied non-function: <dict:>` on nine ordinary 3-line stdlib
--- programs, in BOTH import orders, behind a `check` that exits 0.  The defect did not
--- move because the repair was wrong; it moved because the repair was applied at one
--- arm of a seam whose other arm had no rows at all.
+-- `import m.*` must contribute rows.  `importedBindings` answers `None` for `UseWild`
+-- because a wildcard's member list cannot be read off the `DUse` decl alone — it is every
+-- public top-level binding the DEPENDENCY declares — so a walk over `DUse` decls alone
+-- skips it and every wildcard-imported name falls to the bare table.  The bare table is
+-- wrong on both sides of a same-name collision (a foreign constrained row sizes the define
+-- AND the call), so the two errors cancel and the spelling looks correct; but once
+-- `selfDeclArities` answers the DEFINE side by identity, the call side on the bare table
+-- applies a dict its callee no longer abstracts — `E-NOT-A-FUNCTION: applied non-function:
+-- <dict:>` on ordinary 3-line stdlib programs, in both import orders, behind a `check` that
+-- exits 0.  An arm of this seam with no rows is a defect even when the other arm's rows
+-- are right.
 --
 -- The graph is what supplies the missing member list, and it is already built and
 -- already keyed by module id: `declEnvsRef.deModules`.  On the Flat/loader-less paths
@@ -3571,20 +3492,19 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- this module, or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
 --
--- The supply side does not enumerate (RUN-XMOD-062).  Separate walks for the named and
--- the wildcard form, each deciding for itself what a dependency "makes available",
--- answer with the names a dependency DECLARES, so a name it RE-EXPORTS (`export import u.{pick}` / `export import u.*`,
--- at any depth) got no row and fell to the source-blind bare table — the same
--- `E-NOT-A-FUNCTION: applied non-function: <dict:>` on a well-typed program, one hop
--- further out.  That was the THIRD enumeration in this seam to miss a member.  The rows
--- are now DERIVED: `graphPubDefiners` answers "what does module m export, and who
--- DEFINED each of those names" (declared publics, plus re-exports resolved through the
--- same predicate, transitively), and `importFormRows` — the one admission predicate,
--- shared with `importFormSchemes` — answers "which of those does this import form
--- admit, under which local key".  A form or a re-export shape this seam has never seen
--- is covered by construction, not by a case.
+-- The supply side does not enumerate.  Separate walks for the named and the wildcard form,
+-- each deciding for itself what a dependency "makes available", answer with the names a
+-- dependency DECLARES, so a name it RE-EXPORTS (`export import u.{pick}` /
+-- `export import u.*`, at any depth) would get no row and fall to the source-blind bare
+-- table — the same `E-NOT-A-FUNCTION: applied non-function: <dict:>` on a well-typed
+-- program, one hop further out.  The rows are DERIVED: `graphPubDefiners` answers "what
+-- does module m export, and who DEFINED each of those names" (declared publics, plus
+-- re-exports resolved through the same predicate, transitively), and `importFormRows` — the
+-- one admission predicate, shared with `importFormSchemes` — answers "which of those does
+-- this import form admit, under which local key".  A form or a re-export shape this seam
+-- has never seen is covered by construction, not by a case.
 --
--- Also, the payload is now a PAIR: `(definer module, origin name at the definer)`,
+-- The payload is a PAIR: `(definer module, origin name at the definer)`,
 -- because an IMPORTER can rename a re-exported member (`import r1.{pick as pk}` — an
 -- ordinary import with an as-alias on a name that happens to be re-exported).  A
 -- RE-EXPORT hop itself cannot rename: `export import u.{pick as pk}` is a hard parse
@@ -3654,7 +3574,7 @@ memberDefinerRow depId pubs (origin, local) =
 -- aliased import (`hash_map.{set as hmSet}`) resolves its `Hash`/`Eq` dict instead of being
 -- misclassified as unconstrained and short-circuited (which DROPPED the dict → dispatch panic).
 --
--- RUN-XMOD-062: this is now a PROJECTION of `importDefinersOf`'s rows rather than its own
+-- This is a PROJECTION of `importDefinersOf`'s rows rather than its own
 -- `DUse` walk.  Two walks over the import forms could disagree about which rows exist —
 -- and a `(definer, origin)` key assembled from two disagreeing walks is exactly the
 -- silent misroute this seam pays for.  `definerRowsOf` is its sibling projection; both
@@ -3667,7 +3587,7 @@ definerRowsOf rows = map (e => (fst e, fst (snd e))) rows
 
 -- ── per-module ISOLATED diagnostics (the analyzeProject typecheck stage) ────
 -- Like checkModuleFull but ALSO harvests THIS module's type diagnostics: it shares the
--- flat paths' seeding via `seedCheckRun` (#415 item 1 — matchOracle/matchWarnings)
+-- flat paths' seeding via `seedCheckRun` (matchOracle/matchWarnings)
 -- and runs coherence over the module's OWN decls, while keeping the
 -- module ISOLATED — only
 -- PUBLIC schemes/data of earlier modules are seeded (via seedVars/accData), so a
@@ -3678,7 +3598,7 @@ definerRowsOf rows = map (e => (fst e, fst (snd e))) rows
 -- (`seedCheckRun`).  Returns (own value schemes, errs, warns) so the
 -- driver can thread accV/accData exactly as foldModules does.
 --
--- Precondition (#154 PR1/PR2): this is per-module, and the Module path consults the
+-- Precondition: this is per-module, and the Module path consults the
 -- persistent universe accumulators (`universeFunNamesRef` / …), which survive the
 -- per-module `freshModuleCtx`.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be cleared once per run by `mintGraphCtx` (and seeded by the core pass)
@@ -3687,10 +3607,10 @@ definerRowsOf rows = map (e => (fst e, fst (snd e))) rows
 -- caller that skips it would leak the previous run's universe into this one.
 --
 -- The stage-K envelope (`GraphCtx.declEnvsRef`, which carries the method namespace
--- `deMethods`) runs the other way (#1111 A-2.5b): it is not a `CrossRun` accumulator and
+-- `deMethods`) runs the other way: it is not a `CrossRun` accumulator and
 -- `mintGraphCtx` does not clear it, deliberately — it is derived once from the
 -- whole graph with no per-module re-seed, so clearing it mid-run is the defect that put
--- the method index on `GraphCtx` (F1: `check` clean while `run`/`build` reported a
+-- the method index on `GraphCtx` (`check` clean while `run`/`build` reported a
 -- type error).  For it the precondition is "overwrite with this run's graph before the
 -- first module":
 --     gctx.declEnvsRef := declEnvs
@@ -3708,7 +3628,7 @@ checkModuleFullDiags : GraphCtx ->
   List Decl ->
   (ModuleBindings, List Decl, List TcDiag, List TcDiag, ModuleCtx)
 checkModuleFullDiags gctx mid seedVars accData accAll prog =
-  -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
+  -- Same seeding preamble as the flat entry points (one body), but the
   -- oracle decls are THIS module's own first.
   -- P0-9: THIS module's own decls (`prog`) come FIRST so its constructors win
   -- the oracle's first-wins bare-name tables.  Another loaded module (in accData)
@@ -3717,7 +3637,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- the WRONG arity/type for this module's own `Bin` in a match and false-warns
   -- W-NONEXHAUSTIVE.  buildOracle is duplicate-tolerant, and accData still
   -- supplies prelude Option/Result ctors (this module never redefines them).
-  -- #674 / #1111 A-2.6: the decls whose CONSTRUCTORS this module binds by name are
+  -- The decls whose CONSTRUCTORS this module binds by name are
   -- prepended BEFORE accData so their ctors win the oracle's first-wins bare-name
   -- tables over any same-named ctor a non-imported module contributes by load order —
   -- the exhaustiveness peer of the typecheck-scheme overlay.  Own-module `prog` still
@@ -3725,7 +3645,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- dataEnv overlay uses), which equals accData here but keeps the two overlays in
   -- lockstep.
   --
-  -- Two tempting claims are false under A-2.6's rule (b):
+  -- Two tempting claims are false under rule (b) of the import-scoped overlay:
   --   * NOT "the types this module imports with `(..)`" — EVERY selective
   --     constructor-naming member contributes now (`import m.{T, C}`, and a record's
   --     `import m.{Cfg}`), not only the `(..)` spelling.
@@ -3740,10 +3660,10 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- O(N²)" here: this
   -- call site is the SECOND per-module scan of the same pool, so it doubles whatever
   -- that constant is.
-  -- A-3.2b (#1512): the SECOND consumer of the retired `universeDataDecls`, re-pointed
-  -- at stage K in lockstep with the `dataEnv` overlay — the two must stay on the same
-  -- pool ("keeps the two overlays in lockstep", above), and `mid` is this function's
-  -- own parameter, so the same loader-derived key reaches both.
+  -- The SECOND consumer of the whole-graph envelope pool, in lockstep with the `dataEnv`
+  -- overlay: the two must stay on the same pool ("keeps the two overlays in lockstep",
+  -- above), and `mid` is this function's own parameter, so the same loader-derived key
+  -- reaches both.
   let declEnvsHere = gctx.declEnvsRef.value
   -- `…FirstWins`: `oracleMap` is `omFromPairs (reverseL …)`, so the FIRST row wins and
   -- the `UseGroup` rows must come FIRST for an explicitly named member to outrank a
@@ -3783,19 +3703,18 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
   let (schemes, marked, mctx) =
     checkModuleFullImpl gctx runSeed mid seedVars accData accAll prog
-  -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
-  -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool (`types/tc_state.mdk`) and `moduleImplUniv`
-  -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
-  -- which population they take from it (`ceRowsOwnedBy` vs `ceRowsVisibleAt`).
+  -- The whole-graph `CE`, read at THIS module's ordinal — the same `declEnvsOrdOf mid` key
+  -- `seedCheckRun`'s overlay pool (`types/tc_state.mdk`) and `moduleImplUniv`
+  -- (`checkBodyImpl`) read at.  ONE env for both members; they differ only in which
+  -- population they take from it (`ceRowsOwnedBy` vs `ceRowsVisibleAt`).
   let ceHere = declEnvsHere.deIfaces
   let ordHere = declEnvsOrdOf mid declEnvsHere
-  -- #1557 A-3.5b: the whole-graph `IE`, read at the SAME `ordHere` — the same key
-  -- `ceHere` and `moduleImplUniv` (`checkBodyImpl`) already read at.
-  -- #1559 A-3.7: coherence reads the SAME whole-graph `IE` at the SAME `ordHere`, and
-  -- takes this module's OWN rows from it (`cohRowsOwnedBy`) — the population `prog`
-  -- named, derived in `checkCoherence`'s header.  This env came
-  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, so the module's rows
-  -- are also paired with the prelude's.
+  -- The whole-graph `IE`, read at the SAME `ordHere` — the same key `ceHere` and
+  -- `moduleImplUniv` (`checkBodyImpl`) read at.
+  -- Coherence reads the SAME whole-graph `IE` at the SAME `ordHere`, and takes this
+  -- module's OWN rows from it (`cohRowsOwnedBy`) — the population `prog` named, derived in
+  -- `checkCoherence`'s header.  This env came from `buildDeclEnvs`, which seats the prelude
+  -- at ordinal 0, so the module's rows are also paired with the prelude's.
   runFinalChecks
     mctx
     prog
@@ -3848,12 +3767,9 @@ selfNameRows prog old =
 -- the source-exact `(mid, name)` key every cross-module fn table is read under.
 --
 -- Used for all three of the fn-side qual snapshots: the constraint ARITIES
--- (`funConstraintsRef`), the slot-parallel IFACES (`funConstraintIfacesRef`) and, since
--- B-2.2-f (#1113), the per-entry DECLARED-PREFIX scalar.  It was two byte-identical
--- monomorphic copies (`attributeModuleArities` / `attributeModuleArrIfaces`), each
--- carrying a `rule-duplicate-body` disable deferred to #1201; the sidecar's SCALAR
--- payload does not fit a `List X` signature at all, so the payload is now `a` and both
--- disables are gone rather than joined by a third.
+-- (`funConstraintsRef`), the slot-parallel IFACES (`funConstraintIfacesRef`) and the
+-- per-entry DECLARED-PREFIX scalar.  The payload is polymorphic (`a`) because the sidecar's
+-- SCALAR payload does not fit a `List X` signature.
 attributeModuleEntries : String ->
   List Decl ->
   List (String, a) ->
@@ -3885,10 +3801,10 @@ attributeModuleEntries mid prog entries =
 --
 -- A module's contribution is what it declares *plus what it re-exports*, and the second
 -- half is not optional — it is the recurrence `.claude/workstreams/TYPECHECK.md` records for
--- #1283 and `renameAliasedMethods` (`types/typecheck.mdk`) already learned for the METHOD tables: "the
--- decl's origin names the DECLARING module and the import path names the RE-EXPORTER, so
--- the identity test misses."  Attributing only `declTopFnNames prog` means a pure
--- re-exporter (`export import lib.def.{f}`, whose `prog` has no function definitions at
+-- #1283 and `renameAliasedMethods` (`types/typecheck.mdk`) already learned for the METHOD
+-- tables: "the decl's origin names the DECLARING module and the import path names the
+-- RE-EXPORTER, so the identity test misses."  Attributing only `declTopFnNames prog` means
+-- a pure re-exporter (`export import lib.def.{f}`, whose `prog` has no function definitions at
 -- all) contributes NOTHING, so `import lib.reexp.{f}` found no entry and #845's whole
 -- failure came back one hop out — `check` 0, `build` 0, and the built binary SEGFAULTED.
 -- Adversarial review produced exactly that program; this arm is the answer to it.
