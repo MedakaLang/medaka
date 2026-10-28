@@ -78,23 +78,26 @@ impl Sz Int where
 codesOver : (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
   String ->
   List String
-codesOver check src =
-  let m = inRootScope (fresh ())
-  let ds = moduleDecls src
-  let (ce, ie) = envsOf m ds
-  check m ds ce ie
-  codesOf m
+codesOver check src = codesFrom codesOf check src
 
 -- The codes the warnings of a fresh module record hold after `check` over [src].
 warningCodesOver : (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
   String ->
   List String
 warningCodesOver check src =
+  codesFrom (m => map tcCode m.mcCells.matchWarnings.value) check src
+
+-- What [read] takes from a fresh module record after `check` ran over [src].
+codesFrom : (ModuleCtx -> List String) ->
+  (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
+  String ->
+  List String
+codesFrom read check src =
   let m = inRootScope (fresh ())
   let ds = moduleDecls src
   let (ce, ie) = envsOf m ds
   check m ds ce ie
-  map tcCode m.mcCells.matchWarnings.value
+  read m
 
 coherence : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
 coherence m _ _ ie = checkCoherence m ie moduleOrdinal
@@ -175,9 +178,16 @@ test "a module's coherence is checked against its own impls, not another module'
   checkCoherence m ie (moduleOrdinal + 1)
   expectEqual [] (codesOf m)
 
+-- Whether a coherence judgement found a hard conflict (two impls of one head) and a soft
+-- one (two incomparable overlapping heads).
+data Conflicts = Conflicts {
+  foundHard : Bool,
+  foundSoft : Bool,
+} deriving (Eq, Debug)
+
 -- The verdicts of the whole-graph sweep over the modules [sources], the first holding the
--- interface: whether it found a hard and a soft conflict.
-sweepVerdicts : List String -> (Bool, Bool)
+-- interface.
+sweepVerdicts : List String -> Conflicts
 sweepVerdicts sources =
   let m = inRootScope (fresh ())
   let (_, ie) =
@@ -185,7 +195,7 @@ sweepVerdicts sources =
       m
       (map (p => (fst p, declsOf "m" (snd p))) (zip ["a", "b"] sources))
   let (hard, soft) = globalCoherenceConflict m ie
-  (isSome hard, isSome soft)
+  Conflicts (isSome hard) (isSome soft)
 
 boxIntImpl : String
 boxIntImpl = """
@@ -212,23 +222,23 @@ impl Sz (Pair Int b) where
 """
 
 test "the whole-graph sweep finds a hard conflict between two modules' impls of one head" =
-  expectEqual (True, False) (sweepVerdicts [base, intImpl])
+  expectEqual (Conflicts True False) (sweepVerdicts [base, intImpl])
 
 test "the whole-graph sweep finds a soft conflict between two modules' incomparable heads" =
-  expectEqual (False, True) (sweepVerdicts [base ++ pairAInt, pairIntB])
+  expectEqual
+    (Conflicts False True)
+    (sweepVerdicts [base ++ pairAInt, pairIntB])
 
 test "the whole-graph sweep finds nothing in a specific head of one module beside a general head of another" =
   expectEqual
-    (False, False)
+    (Conflicts False False)
     (sweepVerdicts [base ++ parametricImpl, boxIntImpl])
 
 -- ── implHeadGround, implHeadParametric and implDeclLoc ────────────────────
 
 -- The first impl declaration of [src].
 firstImpl : String -> Option Decl
-firstImpl src = match filter isImplDecl (moduleDecls src)
-  d :: _ => Some d
-  [] => None
+firstImpl src = find isImplDecl (moduleDecls src)
 
 isImplDecl : Decl -> Bool
 isImplDecl (DImpl { tys = _ }) = True
@@ -658,27 +668,25 @@ pairsOf (x :: xs) = map (y => (x, y)) xs ++ pairsOf xs
 -- The verdict the coherence rules give, from the definitions above alone: a hard conflict when
 -- two heads are one head; a soft one when two heads can match one type and neither
 -- generalizes the other.
-modelVerdict : HeadCase -> (Bool, Bool)
+modelVerdict : HeadCase -> Conflicts
 modelVerdict (HeadCase heads) =
   let pairs = pairsOf heads
-  (
-    any (p => oneHead (fst p) (snd p)) pairs,
-    any
+  Conflicts
+    (any (p => oneHead (fst p) (snd p)) pairs)
+    (any
       (p =>
         unifiable (fst p) (snd p)
           && not (generalizes (fst p) (snd p))
           && not (generalizes (snd p) (fst p)))
-      pairs,
-  )
+      pairs)
 
 -- The verdict the checker gives a case: whether it pushed a hard conflict and a soft one.
-checkedVerdict : HeadCase -> (Bool, Bool)
+checkedVerdict : HeadCase -> Conflicts
 checkedVerdict c =
   let src = headsSource c
-  (
-    contains "T-CONFLICTING-IMPL" (codesOver coherence src),
-    contains "W-INCOMPARABLE-IMPLS" (warningCodesOver coherence src),
-  )
+  Conflicts
+    (contains "T-CONFLICTING-IMPL" (codesOver coherence src))
+    (contains "W-INCOMPARABLE-IMPLS" (warningCodesOver coherence src))
 
 -- Law: coherence finds a hard conflict exactly between two impls of one head and a soft one
 -- exactly between two that overlap with neither more specific.  Precondition (`overlapping`):
@@ -692,17 +700,17 @@ overlapping (HeadCase heads) =
   any (p => unifiable (fst p) (snd p)) (pairsOf heads)
 
 -- The verdict of a case and whether its heads overlap.
-verdicts : List HeadSpec -> ((Bool, Bool), Bool)
+verdicts : List HeadSpec -> (Conflicts, Bool)
 verdicts heads = (modelVerdict (HeadCase heads), overlapping (HeadCase heads))
 
 test "the model tells one head twice, incomparable heads, a specific head beside a general one and disjoint heads apart" =
   let box s = HeadSpec 0 s 0
   expectEqual
     [
-      ((True, False), True),
-      ((False, True), True),
-      ((False, False), True),
-      ((False, False), False),
+      (Conflicts True False, True),
+      (Conflicts False True, True),
+      (Conflicts False False, True),
+      (Conflicts False False, False),
     ]
     [
       verdicts [box 0, box 0],

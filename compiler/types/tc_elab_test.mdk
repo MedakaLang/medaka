@@ -646,7 +646,9 @@ opSiteAt : Route -> Mono -> String
 opSiteAt seed operand =
   let m = readerOfLib ()
   let tag = Ref seed
-  resolveOpSite (siteFor m) True "add" tag operand False "enc" (scopeIn m)
+  let isBinop = True
+  let inImpl = False
+  resolveOpSite (siteFor m) isBinop "add" tag operand inImpl "enc" (scopeIn m)
   routeTag tag.value
 
 test "an operator at a primitive operand keeps the route it was minted with" = expectAll
@@ -928,13 +930,15 @@ predOpAt : Route -> Mono -> String
 predOpAt seed mono =
   let m = readerOfLib ()
   let tag = Ref seed
+  let isBinop = True
+  let inImpl = False
   resolvePredicateOpSite
     (siteFor m)
-    True
+    isBinop
     "size"
     tag
     mono
-    False
+    inImpl
     (sizeablePred mono)
     "enc"
     (scopeIn m)
