@@ -1,0 +1,45 @@
+-- Guards on or-pattern arms follow Rust's RFC 2535: a guard that fails under one
+-- matching alternative is re-tried under the next, with that alternative's
+-- bindings, before control reaches the next arm.  `seen` prints each guard run,
+-- so the output shows how many times, and in which order, each guard ran.
+-- `seen` holds for 3, 9 and anything above 5.
+-- Expected, derived from the source:
+-- pick (-1, 5): the guard runs with x = -1 (fails), then x = 5 (passes on
+-- `x > 0`) -> `pick -1`, `pick 5`, `5`.
+-- pick (3, 9): x = 3 passes at once -> `pick 3`, `3`.
+-- pick (-1, -2): both runs fail, the next arm -> `pick -1`, `pick -2`, `0`.
+-- side (Rect 2 7): the guard-bind's alternatives are re-tried too: Sq misses,
+-- n = 2 fails, n = 7 passes -> `side 2`, `side 7`, `7`; side (Sq 9) ->
+-- `side 9`, `9`.
+-- order ((1, 2), (3, 4)): nested alternatives are tried leftmost slowest, so the
+-- guard sees 13, 14, 23, 24, and every run fails -> those four lines, then `0`.
+seen : String -> Int -> <IO> Bool
+seen tag x =
+  println "\{tag} \{x}"
+  x > 5 || x == 3 || x == 9
+
+data Shape = Sq Int | Rect Int Int
+
+pick : (Int, Int) -> <IO> Int
+pick p = match p
+  (x, _) | (_, x) if seen "pick" x || x > 0 => x
+  _ => 0
+
+side : Shape -> <IO> Int
+side s = match s
+  _ if (Sq n | Rect n _ | Rect _ n) <- s, seen "side" n => n
+  _ => 0
+
+order : ((Int, Int), (Int, Int)) -> <IO> Int
+order p = match p
+  ((x, _) | (_, x), (y, _) | (_, y)) if seen "order" (x * 10 + y) && False =>
+    x + y
+  _ => 0
+
+main =
+  println (pick (0 - 1, 5))
+  println (pick (3, 9))
+  println (pick (0 - 1, 0 - 2))
+  println (side (Rect 2 7))
+  println (side (Sq 9))
+  println (order ((1, 2), (3, 4)))

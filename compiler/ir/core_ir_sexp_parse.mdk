@@ -274,6 +274,7 @@ toPat (SList ((SAtom "PRng") :: [lo, hi, incl])) =
   PRng (toLit lo) (toLit hi) (toBool incl)
 toPat (SList ((SAtom "PRec") :: [name, SList fields, rest])) =
   PRec (toStr name) (map toRecPatField fields) (toBool rest)
+toPat (SList ((SAtom "POr") :: ps)) = POr (map toPat ps)
 toPat other = panic ("core_ir_sexp_parse: bad Pat: " ++ sexprToStr other)
 
 toAddr : SExp -> Addr
@@ -307,6 +308,8 @@ toCGuard other = panic ("core_ir_sexp_parse: bad CGuard: " ++ sexprToStr other)
 toArm : SExp -> CArm
 toArm (SList ((SAtom "arm") :: [pat, SList guards, body])) =
   CArm (toPat pat) (map toCGuard guards) (toCExpr body)
+toArm (SList ((SAtom "armalt") :: [pat, SList guards, owner])) =
+  CArmAlt (toPat pat) (map toCGuard guards) (toInt owner)
 toArm other = panic ("core_ir_sexp_parse: bad CArm: " ++ sexprToStr other)
 
 toCStmt : SExp -> CStmt

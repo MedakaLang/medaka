@@ -7,7 +7,7 @@
 -- module carries no backend-specific emit state.  The EMIT (destination-passing loop) stays
 -- backend-specific and lives in each emitter.
 
-import frontend.ast.{Pat(..), Route(..), Addr(..)}
+import frontend.ast.{Pat(..), Route(..), Addr(..), Lit(..)}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -143,6 +143,7 @@ freeVarsArms : List String -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body) :: rest) =
   freeVars (patVars pat ++ b) body ++ freeVarsArms b rest
+freeVarsArms b ((CArmAlt _ _ _) :: rest) = freeVarsArms b rest
 
 export
 freeVarsStmts : List String -> List CStmt -> List String
@@ -300,6 +301,8 @@ trmcArmsOk ic ar self arity ((CArm _ guards body) :: rest) =
   trmcGuardsSelfFree self guards
     && trmcBodyOk ic ar self arity body
     && trmcArmsOk ic ar self arity rest
+trmcArmsOk ic ar self arity ((CArmAlt _ guards _) :: rest) =
+  trmcGuardsSelfFree self guards && trmcArmsOk ic ar self arity rest
 
 -- every guard expr is self-free (guards run before the arm body, not in tail
 -- position — a self-call there can't be a tail leaf).
@@ -344,6 +347,8 @@ trmcArmsHaveCons _ _ _ _ [] = False
 trmcArmsHaveCons ic ar self arity ((CArm _ _ body) :: rest) =
   trmcBodyHasCons ic ar self arity body
     || trmcArmsHaveCons ic ar self arity rest
+trmcArmsHaveCons ic ar self arity ((CArmAlt _ _ _) :: rest) =
+  trmcArmsHaveCons ic ar self arity rest
 
 -- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
 -- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
@@ -554,6 +559,9 @@ mentionsSelfMethodArms method tag ((CArm _ guards body) :: rest) =
   mentionsSelfMethodGuards method tag guards
     || mentionsSelfMethod method tag body
     || mentionsSelfMethodArms method tag rest
+mentionsSelfMethodArms method tag ((CArmAlt _ guards _) :: rest) =
+  mentionsSelfMethodGuards method tag guards
+    || mentionsSelfMethodArms method tag rest
 
 export
 mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
@@ -666,6 +674,8 @@ mentionsSelfDictArms self ((CArm _ guards body) :: rest) =
   mentionsSelfDictGuards self guards
     || mentionsSelfDict self body
     || mentionsSelfDictArms self rest
+mentionsSelfDictArms self ((CArmAlt _ guards _) :: rest) =
+  mentionsSelfDictGuards self guards || mentionsSelfDictArms self rest
 
 mentionsSelfDictGuards : String -> List CGuard -> Bool
 mentionsSelfDictGuards _ [] = False
@@ -842,6 +852,8 @@ clauseBodyOf (CClause _ body) = body
 export
 armBody : CArm -> CExpr
 armBody (CArm _ _ body) = body
+-- an or-pattern candidate has no body of its own: its owner arm carries it
+armBody (CArmAlt _ _ _) = CLit LUnit
 
 -- only ordinary bool guards (a refutable guard binder would complicate the leaf
 -- rewrite — reject the group).
@@ -1297,6 +1309,7 @@ allCallHeads _ _ = []
 allArmHeads : (String -> String) -> CArm -> List String
 allArmHeads cf (CArm _ guards body) =
   flatMap (dispGuardHeads cf) guards ++ allCallHeads cf body
+allArmHeads cf (CArmAlt _ guards _) = flatMap (dispGuardHeads cf) guards
 
 dispGuardHeads : (String -> String) -> CGuard -> List String
 dispGuardHeads cf (CGBool c) = allCallHeads cf c
@@ -1550,6 +1563,11 @@ dispArmsOk cf isFn fa fnSet root ((CArm _ guards body) :: rest) found =
   else match dispLeavesOk cf isFn fa fnSet root body found
     None => None
     Some f2 => dispArmsOk cf isFn fa fnSet root rest f2
+dispArmsOk cf isFn fa fnSet root ((CArmAlt _ guards _) :: rest) found =
+  if allBoolGuards guards then
+    dispArmsOk cf isFn fa fnSet root rest found
+  else
+    None
 
 -- classify a single LEAF.  peeled spine cons bottoming in a saturated user-fn call
 -- ⇒ ok + the bottom fn joins the group.  bare saturated tail-call to a user fn ⇒ ok
@@ -1677,6 +1695,8 @@ dispArmNonTailHeads : (String -> String) ->
 dispArmNonTailHeads cf isFn fa memberSet (CArm _ guards body) =
   flatMap (dispGuardHeads cf) guards
     ++ dispNonTailHeads cf isFn fa memberSet body
+dispArmNonTailHeads cf _ _ _ (CArmAlt _ guards _) =
+  flatMap (dispGuardHeads cf) guards
 
 dispStmtNonTailHeads : (String -> String) ->
   (String -> Bool) ->

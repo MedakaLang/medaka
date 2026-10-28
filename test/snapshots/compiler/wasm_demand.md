@@ -1,5 +1,5 @@
 # META
-source_lines=2679
+source_lines=2701
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{
@@ -352,6 +352,14 @@ dField sc acc (CField _ _ e) = dExpr sc acc e
 dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
 dArm sc acc (CArm pat guards body) =
   dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
+dArm sc acc (CArmAlt pat guards _) =
+  dGuards (bindIn sc [pat]) (dPat acc pat) guards
+
+dGuards : DemandScope -> DemandAcc -> List CGuard -> DemandAcc
+dGuards _ acc [] = acc
+dGuards sc acc ((CGBool g) :: rest) = dGuards sc (dExpr sc acc g) rest
+dGuards sc acc ((CGBind p e) :: rest) =
+  dGuards (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest
 
 dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
 dGuarded sc acc [] body = dExpr sc acc body
@@ -900,6 +908,7 @@ armsStamp prog env ((CArm pat _ body) :: rest) =
   stampOrElse
     (cexprStamp prog (envBindPat pat env) body)
     (armsStamp prog env rest)
+armsStamp prog env ((CArmAlt _ _ _) :: rest) = armsStamp prog env rest
 
 export
 isPolyNumBinop : WasmTypeContext -> Env -> CExpr -> CExpr -> Bool
@@ -1585,17 +1594,30 @@ hStmts ctx refMode str acc env ((CSAssign _ x) :: rest) =
 
 hArm : WasmTypeContext -> Bool -> Bool -> Env -> HelperAcc -> CArm -> HelperAcc
 hArm ctx refMode str env acc (CArm pat guards b) =
-  let (acc, inner) =
-    fold
-      ((a, scope) g => match g
-        CGBool x => (hExpr ctx refMode str a scope x, scope)
-        CGBind p x => (
-          hExpr ctx refMode str (hPat refMode a p) scope x,
-          envBindPat p scope,
-        ))
-      (hPat refMode acc pat, envBindPat pat env)
-      guards
+  let (acc, inner) = hGuards ctx refMode str env acc pat guards
   hExpr ctx refMode str acc inner b
+hArm ctx refMode str env acc (CArmAlt pat guards _) =
+  fst (hGuards ctx refMode str env acc pat guards)
+
+-- an arm's pattern and guards, and the scope its body sees
+hGuards : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  Env ->
+  HelperAcc ->
+  Pat ->
+  List CGuard ->
+  (HelperAcc, Env)
+hGuards ctx refMode str env acc pat guards =
+  fold
+    ((a, scope) g => match g
+      CGBool x => (hExpr ctx refMode str a scope x, scope)
+      CGBind p x => (
+        hExpr ctx refMode str (hPat refMode a p) scope x,
+        envBindPat p scope,
+      ))
+    (hPat refMode acc pat, envBindPat pat env)
+    guards
 
 hTree : Bool -> HelperAcc -> CTree -> HelperAcc
 hTree True acc (CTFail (LetRefuted loc)) = locatedTrap acc loc
@@ -2804,6 +2826,11 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
 (DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
 (DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
+(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EApp (EApp (EVar "dGuards") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")))
+(DTypeSig false "dGuards" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "DemandAcc")))))
+(DFunDef false "dGuards" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "dGuards" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dGuards") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")))
+(DFunDef false "dGuards" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dGuards") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
 (DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
 (DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
@@ -3006,6 +3033,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "armsStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "RuntimeType")))))
 (DFunDef false "armsStamp" (PWild PWild (PList)) (EVar "RTValue"))
 (DFunDef false "armsStamp" ((PVar "prog") (PVar "env") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EApp (EApp (EVar "stampOrElse") (EApp (EApp (EApp (EVar "cexprStamp") (EVar "prog")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env"))) (EVar "body"))) (EApp (EApp (EApp (EVar "armsStamp") (EVar "prog")) (EVar "env")) (EVar "rest"))))
+(DFunDef false "armsStamp" ((PVar "prog") (PVar "env") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "armsStamp") (EVar "prog")) (EVar "env")) (EVar "rest")))
 (DTypeSig true "isPolyNumBinop" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "Bool"))))))
 (DFunDef false "isPolyNumBinop" ((PVar "prog") (PVar "env") (PVar "l") (PVar "r")) (EBinOp "||" (EApp (EApp (EApp (EVar "isPolyNumOperand") (EVar "prog")) (EVar "env")) (EVar "l")) (EApp (EApp (EApp (EVar "isPolyNumOperand") (EVar "prog")) (EVar "env")) (EVar "r"))))
 (DTypeSig false "isPolyNumOperand" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
@@ -3114,7 +3142,10 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hStmts" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCons (PCon "CSExpr" (PVar "x")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hStmts") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "env")) (EVar "rest")))
 (DFunDef false "hStmts" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCons (PCon "CSAssign" PWild (PVar "x")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hStmts") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "env")) (EVar "rest")))
 (DTypeSig false "hArm" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Env") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CArm") (TyCon "HelperAcc"))))))))
-(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "inner")) (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "a") (PVar "scope")) (PVar "g")) (EMatch (EVar "g") (arm (PCon "CGBool" (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "scope")) (EVar "x")) (EVar "scope"))) (arm (PCon "CGBind" (PVar "p") (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "a")) (EVar "p"))) (EVar "scope")) (EVar "x")) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "scope"))))))) (ETuple (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EVar "pat")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "inner")) (EVar "b")))))
+(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "inner")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hGuards") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "env")) (EVar "acc")) (EVar "pat")) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "inner")) (EVar "b")))))
+(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hGuards") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "env")) (EVar "acc")) (EVar "pat")) (EVar "guards"))))
+(DTypeSig false "hGuards" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Env") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyCon "HelperAcc") (TyCon "Env"))))))))))
+(DFunDef false "hGuards" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PVar "pat") (PVar "guards")) (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "a") (PVar "scope")) (PVar "g")) (EMatch (EVar "g") (arm (PCon "CGBool" (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "scope")) (EVar "x")) (EVar "scope"))) (arm (PCon "CGBind" (PVar "p") (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "a")) (EVar "p"))) (EVar "scope")) (EVar "x")) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "scope"))))))) (ETuple (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EVar "pat")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env")))) (EVar "guards")))
 (DTypeSig false "hTree" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTree") (TyCon "HelperAcc")))))
 (DFunDef false "hTree" ((PCon "True") (PVar "acc") (PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EApp (EVar "locatedTrap") (EVar "acc")) (EVar "loc")))
 (DFunDef false "hTree" ((PCon "True") (PVar "acc") (PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EApp (EVar "locatedNonexh") (EVar "acc")) (EVar "loc")))
@@ -3624,6 +3655,11 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
 (DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
 (DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
+(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EApp (EApp (EVar "dGuards") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")))
+(DTypeSig false "dGuards" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "DemandAcc")))))
+(DFunDef false "dGuards" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "dGuards" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dGuards") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")))
+(DFunDef false "dGuards" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dGuards") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
 (DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
 (DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
@@ -3826,6 +3862,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "armsStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "RuntimeType")))))
 (DFunDef false "armsStamp" (PWild PWild (PList)) (EVar "RTValue"))
 (DFunDef false "armsStamp" ((PVar "prog") (PVar "env") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EApp (EApp (EVar "stampOrElse") (EApp (EApp (EApp (EVar "cexprStamp") (EVar "prog")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env"))) (EVar "body"))) (EApp (EApp (EApp (EVar "armsStamp") (EVar "prog")) (EVar "env")) (EVar "rest"))))
+(DFunDef false "armsStamp" ((PVar "prog") (PVar "env") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "armsStamp") (EVar "prog")) (EVar "env")) (EVar "rest")))
 (DTypeSig true "isPolyNumBinop" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "Bool"))))))
 (DFunDef false "isPolyNumBinop" ((PVar "prog") (PVar "env") (PVar "l") (PVar "r")) (EBinOp "||" (EApp (EApp (EApp (EVar "isPolyNumOperand") (EVar "prog")) (EVar "env")) (EVar "l")) (EApp (EApp (EApp (EVar "isPolyNumOperand") (EVar "prog")) (EVar "env")) (EVar "r"))))
 (DTypeSig false "isPolyNumOperand" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
@@ -3934,7 +3971,10 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hStmts" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCons (PCon "CSExpr" (PVar "x")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hStmts") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "env")) (EVar "rest")))
 (DFunDef false "hStmts" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCons (PCon "CSAssign" PWild (PVar "x")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hStmts") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "env")) (EVar "rest")))
 (DTypeSig false "hArm" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Env") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CArm") (TyCon "HelperAcc"))))))))
-(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "inner")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "a") (PVar "scope")) (PVar "g")) (EMatch (EVar "g") (arm (PCon "CGBool" (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "scope")) (EVar "x")) (EVar "scope"))) (arm (PCon "CGBind" (PVar "p") (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "a")) (EVar "p"))) (EVar "scope")) (EVar "x")) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "scope"))))))) (ETuple (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EVar "pat")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "inner")) (EVar "b")))))
+(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "inner")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hGuards") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "env")) (EVar "acc")) (EVar "pat")) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "inner")) (EVar "b")))))
+(DFunDef false "hArm" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hGuards") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "env")) (EVar "acc")) (EVar "pat")) (EVar "guards"))))
+(DTypeSig false "hGuards" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Env") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyCon "HelperAcc") (TyCon "Env"))))))))))
+(DFunDef false "hGuards" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "env") (PVar "acc") (PVar "pat") (PVar "guards")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "a") (PVar "scope")) (PVar "g")) (EMatch (EVar "g") (arm (PCon "CGBool" (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "scope")) (EVar "x")) (EVar "scope"))) (arm (PCon "CGBind" (PVar "p") (PVar "x")) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "a")) (EVar "p"))) (EVar "scope")) (EVar "x")) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "scope"))))))) (ETuple (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EVar "pat")) (EApp (EApp (EVar "envBindPat") (EVar "pat")) (EVar "env")))) (EVar "guards")))
 (DTypeSig false "hTree" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTree") (TyCon "HelperAcc")))))
 (DFunDef false "hTree" ((PCon "True") (PVar "acc") (PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EApp (EVar "locatedTrap") (EVar "acc")) (EVar "loc")))
 (DFunDef false "hTree" ((PCon "True") (PVar "acc") (PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EApp (EVar "locatedNonexh") (EVar "acc")) (EVar "loc")))

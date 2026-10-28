@@ -1,5 +1,5 @@
 # META
-source_lines=776
+source_lines=779
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -278,6 +278,7 @@ toPat (SList ((SAtom "PRng") :: [lo, hi, incl])) =
   PRng (toLit lo) (toLit hi) (toBool incl)
 toPat (SList ((SAtom "PRec") :: [name, SList fields, rest])) =
   PRec (toStr name) (map toRecPatField fields) (toBool rest)
+toPat (SList ((SAtom "POr") :: ps)) = POr (map toPat ps)
 toPat other = panic ("core_ir_sexp_parse: bad Pat: " ++ sexprToStr other)
 
 toAddr : SExp -> Addr
@@ -311,6 +312,8 @@ toCGuard other = panic ("core_ir_sexp_parse: bad CGuard: " ++ sexprToStr other)
 toArm : SExp -> CArm
 toArm (SList ((SAtom "arm") :: [pat, SList guards, body])) =
   CArm (toPat pat) (map toCGuard guards) (toCExpr body)
+toArm (SList ((SAtom "armalt") :: [pat, SList guards, owner])) =
+  CArmAlt (toPat pat) (map toCGuard guards) (toInt owner)
 toArm other = panic ("core_ir_sexp_parse: bad CArm: " ++ sexprToStr other)
 
 toCStmt : SExp -> CStmt
@@ -879,6 +882,7 @@ toManifestString other =
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "toPat") (EVar "p"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRng"))) (PList (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EVar "PRng") (EApp (EVar "toLit") (EVar "lo"))) (EApp (EVar "toLit") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRec"))) (PList (PVar "name") (PCon "SList" (PVar "fields")) (PVar "rest"))))) (EApp (EApp (EApp (EVar "PRec") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toRecPatField")) (EVar "fields"))) (EApp (EVar "toBool") (EVar "rest"))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "POr"))) (PVar "ps")))) (EApp (EVar "POr") (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "ps"))))
 (DFunDef false "toPat" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Pat: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toAddr" (TyFun (TyCon "SExp") (TyCon "Addr")))
 (DFunDef false "toAddr" ((PCon "SAtom" (PLit (LString "AGlobal")))) (EVar "AGlobal"))
@@ -903,6 +907,7 @@ toManifestString other =
 (DFunDef false "toCGuard" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CGuard: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toArm" (TyFun (TyCon "SExp") (TyCon "CArm")))
 (DFunDef false "toArm" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "arm"))) (PList (PVar "pat") (PCon "SList" (PVar "guards")) (PVar "body"))))) (EApp (EApp (EApp (EVar "CArm") (EApp (EVar "toPat") (EVar "pat"))) (EApp (EApp (EVar "map") (EVar "toCGuard")) (EVar "guards"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toArm" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "armalt"))) (PList (PVar "pat") (PCon "SList" (PVar "guards")) (PVar "owner"))))) (EApp (EApp (EApp (EVar "CArmAlt") (EApp (EVar "toPat") (EVar "pat"))) (EApp (EApp (EVar "map") (EVar "toCGuard")) (EVar "guards"))) (EApp (EVar "toInt") (EVar "owner"))))
 (DFunDef false "toArm" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CArm: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCStmt" (TyFun (TyCon "SExp") (TyCon "CStmt")))
 (DFunDef false "toCStmt" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CSExpr"))) (PList (PVar "e"))))) (EApp (EVar "CSExpr") (EApp (EVar "toCExpr") (EVar "e"))))
@@ -1167,6 +1172,7 @@ toManifestString other =
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "toPat") (EVar "p"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRng"))) (PList (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EVar "PRng") (EApp (EVar "toLit") (EVar "lo"))) (EApp (EVar "toLit") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRec"))) (PList (PVar "name") (PCon "SList" (PVar "fields")) (PVar "rest"))))) (EApp (EApp (EApp (EVar "PRec") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toRecPatField")) (EVar "fields"))) (EApp (EVar "toBool") (EVar "rest"))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "POr"))) (PVar "ps")))) (EApp (EVar "POr") (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "ps"))))
 (DFunDef false "toPat" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Pat: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toAddr" (TyFun (TyCon "SExp") (TyCon "Addr")))
 (DFunDef false "toAddr" ((PCon "SAtom" (PLit (LString "AGlobal")))) (EVar "AGlobal"))
@@ -1191,6 +1197,7 @@ toManifestString other =
 (DFunDef false "toCGuard" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CGuard: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toArm" (TyFun (TyCon "SExp") (TyCon "CArm")))
 (DFunDef false "toArm" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "arm"))) (PList (PVar "pat") (PCon "SList" (PVar "guards")) (PVar "body"))))) (EApp (EApp (EApp (EVar "CArm") (EApp (EVar "toPat") (EVar "pat"))) (EApp (EApp (EMethodRef "map") (EVar "toCGuard")) (EVar "guards"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toArm" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "armalt"))) (PList (PVar "pat") (PCon "SList" (PVar "guards")) (PVar "owner"))))) (EApp (EApp (EApp (EVar "CArmAlt") (EApp (EVar "toPat") (EVar "pat"))) (EApp (EApp (EMethodRef "map") (EVar "toCGuard")) (EVar "guards"))) (EApp (EVar "toInt") (EVar "owner"))))
 (DFunDef false "toArm" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CArm: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCStmt" (TyFun (TyCon "SExp") (TyCon "CStmt")))
 (DFunDef false "toCStmt" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CSExpr"))) (PList (PVar "e"))))) (EApp (EVar "CSExpr") (EApp (EVar "toCExpr") (EVar "e"))))

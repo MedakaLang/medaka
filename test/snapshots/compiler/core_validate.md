@@ -1,5 +1,5 @@
 # META
-source_lines=1709
+source_lines=1745
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{validateWasmDemand}
@@ -1399,6 +1399,15 @@ walkArms ctx scope ((CArm pat guards body) :: rest) w =
     scope
     rest
     (walkGuarded ctx (bindPatScope pat scope) guards body w)
+walkArms ctx scope ((CArmAlt pat guards _) :: rest) w =
+  walkArms ctx scope rest (walkGuards ctx (bindPatScope pat scope) guards w)
+
+walkGuards : Ctx -> CallScope -> List CGuard -> Walk -> Walk
+walkGuards _ _ [] w = w
+walkGuards ctx scope ((CGBool c) :: rest) w =
+  walkGuards ctx scope rest (walkE ctx scope c w)
+walkGuards ctx scope ((CGBind pat e) :: rest) w =
+  walkGuards ctx (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
 walkGuarded ctx scope [] body w = walkE ctx scope body w
@@ -1424,7 +1433,8 @@ walkStmts ctx scope ((CSAssign _ e) :: rest) w =
 -- applies them, so the two can disagree.  Tail position starts at the body of a
 -- clause with a parameter and of a lambda, and passes through the branches of
 -- an `if`, the arms of a match, the body of a `let` or let-group and the last
--- statement of a block.
+-- statement of a block.  The same walk refuses an or-pattern candidate whose
+-- body index names no earlier `CArm` of its list.
 export
 validateTails : CProgram -> List String
 validateTails (CProgram groups _ _ impls _ _) =
@@ -1467,9 +1477,9 @@ tailE b tl (CLet _ _ rhs body) acc = tailE b tl body (tailE b False rhs acc)
 tailE b tl (CLetGroup binds body) acc =
   tailE b tl body (tailLocalBinds b binds acc)
 tailE b tl (CMatch scrut arms) acc =
-  tailArms b tl arms (tailE b False scrut acc)
+  tailArms b tl arms (armAltFaults b arms 0 arms (tailE b False scrut acc))
 tailE b tl (CDecision scrut arms _) acc =
-  tailArms b tl arms (tailE b False scrut acc)
+  tailArms b tl arms (armAltFaults b arms 0 arms (tailE b False scrut acc))
 tailE b tl (CIf c t f) acc = tailE b tl f (tailE b tl t (tailE b False c acc))
 tailE b _ (CBinPrim _ l r _ _) acc = tailList b [l, r] acc
 tailE b _ (CUnOp _ x) acc = tailE b False x acc
@@ -1536,6 +1546,32 @@ tailArms : String -> Bool -> List CArm -> List String -> List String
 tailArms _ _ [] acc = acc
 tailArms b tl ((CArm _ guards body) :: rest) acc =
   tailArms b tl rest (tailE b tl body (tailGuards b guards acc))
+tailArms b tl ((CArmAlt _ guards _) :: rest) acc =
+  tailArms b tl rest (tailGuards b guards acc)
+
+-- [arms] is the whole list, [i] the index of the head of [rest].
+armAltFaults : String ->
+  List CArm ->
+  Int ->
+  List CArm ->
+  List String ->
+  List String
+armAltFaults _ _ _ [] acc = acc
+armAltFaults b arms i ((CArmAlt _ _ owner) :: rest) acc =
+  let ok = owner < i && bodyArmAt arms owner
+  let acc2 =
+    if ok then
+      acc
+    else
+      "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
+        :: acc
+  armAltFaults b arms (i + 1) rest acc2
+armAltFaults b arms i (_ :: rest) acc = armAltFaults b arms (i + 1) rest acc
+
+bodyArmAt : List CArm -> Int -> Bool
+bodyArmAt ((CArm _ _ _) :: _) 0 = True
+bodyArmAt (_ :: rest) n = n > 0 && bodyArmAt rest (n - 1)
+bodyArmAt [] _ = False
 
 tailGuards : String -> List CGuard -> List String -> List String
 tailGuards _ [] acc = acc
@@ -2058,6 +2094,11 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "walkArms" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkArms" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w"))))
+(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w"))))
+(DTypeSig false "walkGuards" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
+(DFunDef false "walkGuards" (PWild PWild (PList) (PVar "w")) (EVar "w"))
+(DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
+(DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
 (DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PList) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w")))
 (DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
@@ -2090,8 +2131,8 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CLam" PWild (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "True")) (EVar "body")) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "rhs")) (EVar "acc"))))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailLocalBinds") (EVar "b")) (EVar "binds")) (EVar "acc"))))
-(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc"))))
-(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc"))))
+(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (ELit (LInt 0))) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc")))))
+(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (ELit (LInt 0))) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc")))))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc")))))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "l") (EVar "r"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CUnOp" PWild (PVar "x")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "x")) (EVar "acc")))
@@ -2130,6 +2171,15 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "tailArms" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "tailArms" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))
+(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))
+(DTypeSig false "armAltFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "armAltFaults" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2")))))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DTypeSig false "bodyArmAt" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "bodyArmAt" ((PCons (PCon "CArm" PWild PWild PWild) PWild) (PLit (LInt 0))) (EVar "True"))
+(DFunDef false "bodyArmAt" ((PCons PWild (PVar "rest")) (PVar "n")) (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "bodyArmAt") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
+(DFunDef false "bodyArmAt" ((PList) PWild) (EVar "False"))
 (DTypeSig false "tailGuards" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tailGuards" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc"))))
@@ -2536,6 +2586,11 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "walkArms" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkArms" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w"))))
+(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w"))))
+(DTypeSig false "walkGuards" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
+(DFunDef false "walkGuards" (PWild PWild (PList) (PVar "w")) (EVar "w"))
+(DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
+(DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
 (DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PList) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w")))
 (DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
@@ -2568,8 +2623,8 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CLam" PWild (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "True")) (EVar "body")) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "rhs")) (EVar "acc"))))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailLocalBinds") (EVar "b")) (EVar "binds")) (EVar "acc"))))
-(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc"))))
-(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc"))))
+(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (ELit (LInt 0))) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc")))))
+(DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (ELit (LInt 0))) (EVar "arms")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "scrut")) (EVar "acc")))))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc")))))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "l") (EVar "r"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CUnOp" PWild (PVar "x")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "x")) (EVar "acc")))
@@ -2608,6 +2663,15 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "tailArms" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "tailArms" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))
+(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))
+(DTypeSig false "armAltFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "armAltFaults" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2")))))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DTypeSig false "bodyArmAt" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "bodyArmAt" ((PCons (PCon "CArm" PWild PWild PWild) PWild) (PLit (LInt 0))) (EVar "True"))
+(DFunDef false "bodyArmAt" ((PCons PWild (PVar "rest")) (PVar "n")) (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "bodyArmAt") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
+(DFunDef false "bodyArmAt" ((PList) PWild) (EVar "False"))
 (DTypeSig false "tailGuards" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tailGuards" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc"))))

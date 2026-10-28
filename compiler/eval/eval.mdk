@@ -53,6 +53,10 @@ import frontend.ast.{
   fixedWidthMask,
   ifaceIdMatches,
   defaultReceiverDict,
+  patBindings,
+  paramCandidates,
+  armCandidates,
+  armHasOr,
 }
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
@@ -1054,7 +1058,25 @@ matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
 matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
   | inCharRange c lo hi incl = Some []
+-- the first alternative that matches, its bindings in the order the or-pattern
+-- binds them (its first alternative's), which the slots `annotate` numbers follow
+matchPat (POr alts) v =
+  map (orderBinds (patBindings (POr alts))) (matchFirstAlt alts v)
 matchPat _ _ = None
+
+matchFirstAlt : List Pat -> Value e -> Option (List (String, Value e))
+matchFirstAlt [] _ = None
+matchFirstAlt (p :: rest) v = match matchPat p v
+  Some binds => Some binds
+  None => matchFirstAlt rest v
+
+orderBinds : List String -> List (String, Value e) -> List (String, Value e)
+orderBinds names binds =
+  flatMap
+    (x => match lookupAssoc x binds
+      Some v => [(x, v)]
+      None => [])
+    names
 
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 inIntRange v lo hi incl = v >= lo && (if incl then v <= hi else v < hi)
@@ -2156,19 +2178,35 @@ funClauseToClause site (FunClause pats body) = (pats, body, site)
 -- carries the FIRST clause's site, so a partial application that has already
 -- dropped clause 1 still reports the function where it starts.
 groupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> <e> Value e
-groupValue env [(pats, body, site)]
+groupValue env clauses = clausesValue env (orClauses clauses)
+
+clausesValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> <e> Value e
+clausesValue env [(pats, body, site)]
   | isNullary pats = eval env body
   | otherwise = VClosure env pats body site
-groupValue env clauses =
+clausesValue env clauses =
   VMulti (map (clauseClosure env (groupSite clauses)) clauses)
+
+-- A function's clauses, each whose parameters hold or-patterns repeated once per
+-- candidate, so a guard chain that falls through under one alternative re-tries
+-- the next before the next clause.
+orClauses : List (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
+orClauses clauses = flatMap orClause clauses
+
+orClause : (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
+orClause (pats, body, site) =
+  map (ps => (ps, body, site)) (paramCandidates pats)
 
 -- top-level variant: a nullary binding becomes a deferred VThunk (forced on
 -- first lookup) so point-free defs can reference values/impls installed later
 topGroupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
-topGroupValue env [(pats, body, site)]
+topGroupValue env clauses = topClausesValue env (orClauses clauses)
+
+topClausesValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
+topClausesValue env [(pats, body, site)]
   | isNullary pats = VThunk (_ => eval env body)
   | otherwise = VClosure env pats body site
-topGroupValue env clauses =
+topClausesValue env clauses =
   VMulti (map (clauseClosure env (groupSite clauses)) clauses)
 
 groupSite : List (List Pat, Expr, Loc) -> Loc
@@ -2190,11 +2228,32 @@ evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
 evalMatch site _ _ [] =
   let _ = updateEvalLoc site
   runtimePanic ENonexhaustiveMatch "non-exhaustive match"
+evalMatch site env sv ((Arm pat guards body) :: rest)
+  | isNonEmptyL guards && armHasOr pat guards =
+    evalOrArm site env sv (armCandidates pat guards) body rest
 evalMatch site env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
   None => evalMatch site env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
     Some env2 => eval env2 body
     None => evalMatch site env sv rest
+
+-- A guarded or-pattern arm, one candidate at a time: a guard that fails under
+-- one alternative re-tries the next with its own bindings, and only after the
+-- last does the match move to the next arm.  An unguarded or-arm needs no
+-- re-try: its first matching alternative is `matchPat`'s.
+evalOrArm : Loc ->
+  EvalEnv (Value e) ->
+  Value e ->
+  List (Pat, List Guard) ->
+  Expr ->
+  List Arm ->
+  <e> Value e
+evalOrArm site env sv [] _ rest = evalMatch site env sv rest
+evalOrArm site env sv ((pat, guards) :: cands) body rest = match matchPat pat sv
+  None => evalOrArm site env sv cands body rest
+  Some binds => match runGuards (extendEnv env binds) guards
+    Some env2 => eval env2 body
+    None => evalOrArm site env sv cands body rest
 
 runGuards : EvalEnv (Value e) -> List Guard -> <e> Option (EvalEnv (Value e))
 runGuards env [] = Some env
@@ -2722,7 +2781,7 @@ declImplEntries dispositions env disp (DAttrib _ d) =
 -- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
 declImplEntries _ env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  map (implMethodEntry env disp o ifaceName typeArgs) methods
+  map (implMethodEntry env disp o ifaceName typeArgs) (flatMap orMethod methods)
 -- An interface installs one entry for each default per instance the disposition
 -- table says inherits it, all sharing one value closed over the INTERFACE module's
 -- env (the body's names resolve there), each tagged with the instance's head and
@@ -2737,6 +2796,12 @@ declImplEntries (Some dt) env disp (DInterface { name = ifaceName, ifaceOrigin =
 -- specialize for; an impl inheriting another module's default has no body for it
 -- here (the same limit the untyped Core-IR probes have).
 declImplEntries _ _ _ _ = []
+
+-- An impl method clause whose parameters hold or-patterns, once per candidate
+-- (`orClauses`).
+orMethod : ImplMethod -> List ImplMethod
+orMethod (ImplMethod mname pats body) =
+  map (ps => ImplMethod mname ps body) (paramCandidates pats)
 
 implMethodEntry : EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->

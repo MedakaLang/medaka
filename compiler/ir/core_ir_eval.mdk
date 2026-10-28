@@ -208,12 +208,31 @@ cevalIf env (VCon "False" []) _ e = ceval env e
 cevalIf _ _ _ _ = panic "if condition is not a Bool"
 
 cevalMatch : EvalEnv (Value e) -> Value e -> List CArm -> <e> Value e
-cevalMatch _ _ [] = panic "no matching clause in match"
-cevalMatch env sv ((CArm pat guards body) :: rest) = match matchPat pat sv
-  None => cevalMatch env sv rest
-  Some binds => match cevalGuards (extendEnv env binds) guards
-    Some env2 => ceval env2 body
-    None => cevalMatch env sv rest
+cevalMatch env sv arms = cevalMatchFrom env sv arms arms
+
+-- [rest] is the arms still to try; [arms] is the whole list, which an or-pattern
+-- candidate's body index points into.
+cevalMatchFrom : EvalEnv (Value e) ->
+  Value e ->
+  List CArm ->
+  List CArm ->
+  <e> Value e
+cevalMatchFrom _ _ _ [] = panic "no matching clause in match"
+cevalMatchFrom env sv arms (arm :: rest) = match cArmParts arms arm
+  Some (pat, guards, body) => match matchPat pat sv
+    None => cevalMatchFrom env sv arms rest
+    Some binds => match cevalGuards (extendEnv env binds) guards
+      Some env2 => ceval env2 body
+      None => cevalMatchFrom env sv arms rest
+  None => panic "core_ir match: or-pattern candidate names no arm"
+
+-- An arm's pattern, guards and body; a `CArmAlt` candidate's body is the one its
+-- index names in [arms].
+cArmParts : List CArm -> CArm -> Option (Pat, List CGuard, CExpr)
+cArmParts _ (CArm pat guards body) = Some (pat, guards, body)
+cArmParts arms (CArmAlt pat guards owner) = match nthArm arms owner
+  Some (CArm _ _ body) => Some (pat, guards, body)
+  _ => None
 
 cevalGuards : EvalEnv (Value e) -> List CGuard -> <e> Option (EvalEnv (Value e))
 cevalGuards env [] = Some env
@@ -265,9 +284,14 @@ cOccsTail (_ :: xs) = xs
 -- whole scrutinee (guaranteed to match — the tree path implies it) to recover
 -- its variable bindings, then evaluate its body.
 cevalArm : EvalEnv (Value e) -> Value e -> List CArm -> Int -> <e> Value e
-cevalArm env root arms i = match nthArm arms i
-  Some (CArm pat _ body) => cevalArmBody env root pat body
+cevalArm env root arms i = match nthArmParts arms i
+  Some (pat, _, body) => cevalArmBody env root pat body
   None => panic "core_ir decision tree: arm index out of range"
+
+nthArmParts : List CArm -> Int -> Option (Pat, List CGuard, CExpr)
+nthArmParts arms i = match nthArm arms i
+  Some arm => cArmParts arms arm
+  None => None
 
 cevalArmBody : EvalEnv (Value e) -> Value e -> Pat -> CExpr -> <e> Value e
 cevalArmBody env root pat body = match matchPat pat root
@@ -284,8 +308,8 @@ cevalGuardedArm : EvalEnv (Value e) ->
   Int ->
   CTree ->
   <e> Value e
-cevalGuardedArm env root arms occs i fail = match nthArm arms i
-  Some (CArm pat guards body) =>
+cevalGuardedArm env root arms occs i fail = match nthArmParts arms i
+  Some (pat, guards, body) =>
     cevalGuardedBody env root arms occs pat guards body fail
   None => panic "core_ir decision tree: guarded arm index out of range"
 

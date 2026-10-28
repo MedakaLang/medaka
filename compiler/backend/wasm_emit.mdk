@@ -2270,6 +2270,8 @@ scanArmValueUses : OrdMap Unit ->
 scanArmValueUses fnNames ctorArs locals (CArm _ guards body) =
   flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
     ++ scanExprValueUses fnNames ctorArs locals body
+scanArmValueUses fnNames ctorArs locals (CArmAlt _ guards _) =
+  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
 
 scanGuardValueUses : OrdMap Unit ->
   List (String, Int) ->
@@ -3087,6 +3089,7 @@ allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
     allArmsUnitGo prog cafs rest
   else
     False
+allArmsUnitGo prog cafs ((CArmAlt _ _ _) :: rest) = allArmsUnitGo prog cafs rest
 
 blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
 blockTailIsUnit _ _ [] = False
@@ -8605,6 +8608,7 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
     let (binds, env2) = bindPatRef prog env pat root
     let bodyCode = emitRefTail prog env2 arity body
     binds ++ bodyCode
+  Some (CArmAlt _ _ _) => orArmGap prog
   None => gapLP prog "ref-mode: tail decision arm index out of range"
 
 -- Like emitGuardArmRef, for guarded arms in tail position.
@@ -8633,6 +8637,7 @@ emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
         ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body)
         ++ ["end"]
     armCode ++ emitTreeTail prog env arity d root occs arms fail
+  Some (CArmAlt _ _ _) => orArmGap prog
   None => gapLP prog "ref-mode: tail guarded arm index out of range"
 
 emitSwitchTail : Prog ->
@@ -9365,6 +9370,8 @@ freeVarsArm : List String -> CArm -> List String
 freeVarsArm bound (CArm pat guards body) =
   let bound2 = patVars pat ++ bound
   flatMap (freeVarsGuard bound2) guards ++ freeVarsExpr bound2 body
+freeVarsArm bound (CArmAlt pat guards _) =
+  flatMap (freeVarsGuard (patVars pat ++ bound)) guards
 
 freeVarsGuard : List String -> CGuard -> List String
 freeVarsGuard bound (CGBool g) = freeVarsExpr bound g
@@ -9880,7 +9887,16 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
     let (binds, env2) = bindPatRef prog env pat root
     let bodyCode = emitRefExpr prog env2 d body
     binds ++ bodyCode ++ ["br " ++ decLabel]
+  Some (CArmAlt _ _ _) => orArmGap prog
   None => gapLP prog "ref-mode: decision arm index out of range"
+
+-- An or-pattern candidate arm shares another arm's body, which this emitter does
+-- not lower yet; it is refused, never emitted as something else.
+orArmGap : Prog -> List String
+orArmGap prog =
+  gapLP
+    prog
+    "ref-mode: or-pattern arm (CArmAlt, a candidate sharing another arm's body) is not lowered on wasm yet [in \{progBinding prog}]"
 
 -- a guarded arm: RE-MATCH the pattern, evaluate the guards; all-pass → body + br
 -- decLabel; any fail → the `fail` subtree (resumes at the same column context).
@@ -9919,6 +9935,7 @@ emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
             ++ ["br " ++ decLabel])
         ++ ["end"]
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
+  Some (CArmAlt _ _ _) => orArmGap prog
   None => gapLP prog "ref-mode: guarded arm index out of range"
 
 -- #379: the stash slot for a refutable pattern guard's right-hand side.  `patTestBind`
@@ -10611,6 +10628,8 @@ w7LocalKinds = [
 collectArmLocals : CArm -> List String
 collectArmLocals (CArm pat guards body) =
   patVars pat ++ flatMap collectGuardLocals guards ++ collectExprLocals body
+collectArmLocals (CArmAlt pat guards _) =
+  patVars pat ++ flatMap collectGuardLocals guards
 
 collectGuardLocals : CGuard -> List String
 collectGuardLocals (CGBool g) = collectExprLocals g

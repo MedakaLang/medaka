@@ -1,5 +1,5 @@
 # META
-source_lines=317
+source_lines=322
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Addr(..), Pat(..), RecPatField(..)}
@@ -130,6 +130,8 @@ patNames (PRec _ fs _) = flatMap fieldNames fs
 patNames PWild = []
 patNames (PLit _) = []
 patNames (PRng _ _ _) = []
+patNames (POr []) = []
+patNames (POr (p :: _)) = patNames p
 
 fieldNames : RecPatField -> List String
 fieldNames (RecPatField n _ _ None) = [n]
@@ -282,6 +284,9 @@ walkArm env scope (CArm pat guards body) =
   let inner = bindPatScope pat scope
   let (guards2, bodyScope) = walkGuards env inner guards
   CArm pat guards2 (walkExpr env bodyScope body)
+walkArm env scope (CArmAlt pat guards owner) =
+  let (guards2, _) = walkGuards env (bindPatScope pat scope) guards
+  CArmAlt pat guards2 owner
 
 walkGuards : ExternVisitor ->
   OrdMap Unit ->
@@ -361,6 +366,8 @@ externFactIndex =
 (DFunDef false "patNames" ((PCon "PWild")) (EListLit))
 (DFunDef false "patNames" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patNames" ((PCon "POr" (PList))) (EListLit))
+(DFunDef false "patNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patNames") (EVar "p")))
 (DTypeSig false "fieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldNames" ((PCon "RecPatField" (PVar "n") PWild PWild (PCon "None"))) (EListLit (EVar "n")))
 (DFunDef false "fieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
@@ -408,6 +415,7 @@ externFactIndex =
 (DFunDef false "walkExpr" (PWild PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
 (DTypeSig false "walkArm" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyCon "CArm")))))
 (DFunDef false "walkArm" ((PVar "env") (PVar "scope") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoLet false false (PTuple (PVar "guards2") (PVar "bodyScope")) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EVar "inner")) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EVar "guards2")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "bodyScope")) (EVar "body"))))))
+(DFunDef false "walkArm" ((PVar "env") (PVar "scope") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EBlock (DoLet false false (PTuple (PVar "guards2") PWild) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArmAlt") (EVar "pat")) (EVar "guards2")) (EVar "owner")))))
 (DTypeSig false "walkGuards" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "CGuard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "walkGuards" (PWild (PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope")))
 (DFunDef false "walkGuards" ((PVar "env") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "out")) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "CGBool") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "c"))) (EVar "rest2")) (EVar "out")))))
@@ -463,6 +471,8 @@ externFactIndex =
 (DFunDef false "patNames" ((PCon "PWild")) (EListLit))
 (DFunDef false "patNames" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patNames" ((PCon "POr" (PList))) (EListLit))
+(DFunDef false "patNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patNames") (EVar "p")))
 (DTypeSig false "fieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldNames" ((PCon "RecPatField" (PVar "n") PWild PWild (PCon "None"))) (EListLit (EVar "n")))
 (DFunDef false "fieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
@@ -510,6 +520,7 @@ externFactIndex =
 (DFunDef false "walkExpr" (PWild PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
 (DTypeSig false "walkArm" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyCon "CArm")))))
 (DFunDef false "walkArm" ((PVar "env") (PVar "scope") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoLet false false (PTuple (PVar "guards2") (PVar "bodyScope")) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EVar "inner")) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EVar "guards2")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "bodyScope")) (EVar "body"))))))
+(DFunDef false "walkArm" ((PVar "env") (PVar "scope") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EBlock (DoLet false false (PTuple (PVar "guards2") PWild) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArmAlt") (EVar "pat")) (EVar "guards2")) (EVar "owner")))))
 (DTypeSig false "walkGuards" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "CGuard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "walkGuards" (PWild (PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope")))
 (DFunDef false "walkGuards" ((PVar "env") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "out")) (EApp (EApp (EApp (EVar "walkGuards") (EVar "env")) (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "CGBool") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "c"))) (EVar "rest2")) (EVar "out")))))
