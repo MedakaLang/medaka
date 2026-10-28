@@ -252,7 +252,20 @@ test "leading continuation includes arithmetic and comparison, but not tight min
       "(1 + 2)", "(1 < 2)", "(8 - 3)",
       "error: unexpected `-`; this line is indented to column 2, which matches no enclosing block"
     ]
-    (map bodyShape ["1\n  + 2", "1\n  < 2", "8\n  - 3", "8\n  -3"])
+    (map bodyShape [
+      stringSlice 0 7 """1
+  + 2
+""",
+      stringSlice 0 7 """1
+  < 2
+""",
+      stringSlice 0 7 """8
+  - 3
+""",
+      stringSlice 0 6 """8
+  -3
+""",
+    ])
 
 -- A tight minus after a numeric head is subtraction; after any other head it
 -- is a negative argument.
@@ -321,9 +334,22 @@ test "match advice suppresses tabs and root type arrows" =
       "expected a match arm (`pattern => body`)",
     ]
     [
-      parseMsg "main =\n\tmatch f x\n            (a => a)\n        _ => 0\n",
-      parseMsg "main =\n  match f x\n      (a => a)\n    y : Int -> Int => 0\n",
-      parseMsg "-- \t\nmain =\n  match f x\n      (a => a)\n    _ => 0\n",
+      parseMsg """main =
+	match f x
+            (a => a)
+        _ => 0
+""",
+      parseMsg """main =
+  match f x
+      (a => a)
+    y : Int -> Int => 0
+""",
+      parseMsg
+        ("-- \t\n" ++ """main =
+  match f x
+      (a => a)
+    _ => 0
+"""),
     ]
 
 test "malformed operands retain their enclosing context" =
@@ -356,6 +382,35 @@ parseVerdict : String -> Option (Int, Int, String)
 parseVerdict src = match parseResult src
   Err e => Some (parseErrorLine e, parseErrorCol e, parseErrorMessage e)
   Ok _ => None
+
+test "match hint fallback retains diagnostic location" =
+  expectEqual
+    [
+      Some (3, 12, "expected a match arm (`pattern => body`)"),
+      Some (3, 6, "expected a match arm (`pattern => body`)"),
+      Some (
+        3,
+        6,
+        "expected a match arm (`pattern => body`); if this line continues the scrutinee, wrap the whole scrutinee in parentheses",
+      ),
+    ]
+    (map parseVerdict [
+      """main =
+	match f x
+            (a => a)
+        _ => 0
+""",
+      """main =
+  match f x
+      (a => a)
+    y : Int -> Int => 0
+""",
+      """main =
+  match f x
+      (a => a)
+    _ => 0
+""",
+    ])
 
 test "missing operand after an astral character is located at EOF" =
   expectEqual
