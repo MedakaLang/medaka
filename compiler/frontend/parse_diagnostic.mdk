@@ -1,3 +1,4 @@
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{Loc(..)}
 import support.source_index.{SourceIndex, offsetToSourcePosition}
 
@@ -61,49 +62,49 @@ public export data ParseDiagnosticKind =
   deriving (Eq)
 
 export
-diagnosticCode : ParseDiagnostic -> String
+diagnosticCode : ParseDiagnostic -> DiagCode
 diagnosticCode (ParseDiagnostic kind _ _) = problemCode kind
 
-problemCode : ParseDiagnosticKind -> String
-problemCode UnterminatedString = "L-UNTERMINATED-STRING"
-problemCode UnterminatedComment = "L-UNTERMINATED-COMMENT"
-problemCode UnterminatedChar = "L-BAD-CHAR-LITERAL"
-problemCode EmptyChar = "L-BAD-CHAR-LITERAL"
-problemCode IntegerOverflow = "L-INT-OVERFLOW"
-problemCode PositiveIntOverflow = "L-INT-OVERFLOW"
-problemCode FloatOverflow = "L-FLOAT-OVERFLOW"
-problemCode HsLambda = "L-HS-LAMBDA"
-problemCode HsDollar = "L-HS-DOLLAR"
-problemCode UnexpectedEnd = "P-UNEXPECTED-EOF"
-problemCode (UnexpectedEndExpected _) = "P-UNEXPECTED-EOF"
-problemCode BadNeq = "P-BAD-NEQ"
-problemCode HsCase = "P-HS-CASE"
-problemCode MatchWith = "P-OCAML-MATCH-WITH"
-problemCode NoPow = "P-NO-POW-OPERATOR"
-problemCode HsSignature = "P-HS-SIG"
-problemCode BlockComment = "L-BLOCKCOMMENT"
-problemCode BraceBlock = "P-BRACE-BLOCK"
-problemCode Semicolon = "L-SEMICOLON"
-problemCode MatchGuardBar = "P-GUARD-BAR-IN-MATCH"
-problemCode EquationGuardIf = "P-GUARD-IF-IN-EQUATION"
-problemCode (GenericParse _) = "P-PARSE"
-problemCode (InvalidEscape _ _) = "L-BAD-ESCAPE"
-problemCode (BadUnicodeEscape _) = "L-BAD-UNICODE-ESCAPE"
-problemCode (BareUnicodeEscape _ _) = "L-BARE-UNICODE-ESCAPE"
-problemCode (LongChar _) = "L-BAD-CHAR-LITERAL"
-problemCode (UnexpectedCharacter _) = "L-BAD-CHAR"
-problemCode (WidePattern _) = "L-INT-OVERFLOW"
-problemCode (MalformedRadix _ _ _) = "L-MALFORMED-RADIX"
-problemCode (MalformedFloat _ _ _) = "L-MALFORMED-FLOAT"
-problemCode (MissingWhere _) = "P-MISSING-WHERE"
-problemCode (WhereSameLine _) = "P-WHERE-BODY-SAME-LINE"
-problemCode (BlockEndsBinding _) = "P-DO-ENDS-IN-BINDING"
-problemCode (ReservedKeyword _) = "P-RESERVED-KEYWORD"
-problemCode (PublicDataOnly _) = "P-PARSE"
+problemCode : ParseDiagnosticKind -> DiagCode
+problemCode UnterminatedString = LUnterminatedString
+problemCode UnterminatedComment = LUnterminatedComment
+problemCode UnterminatedChar = LBadCharLiteral
+problemCode EmptyChar = LBadCharLiteral
+problemCode IntegerOverflow = LIntOverflow
+problemCode PositiveIntOverflow = LIntOverflow
+problemCode FloatOverflow = LFloatOverflow
+problemCode HsLambda = LHsLambda
+problemCode HsDollar = LHsDollar
+problemCode UnexpectedEnd = PUnexpectedEof
+problemCode (UnexpectedEndExpected _) = PUnexpectedEof
+problemCode BadNeq = PBadNeq
+problemCode HsCase = PHsCase
+problemCode MatchWith = POcamlMatchWith
+problemCode NoPow = PNoPowOperator
+problemCode HsSignature = PHsSig
+problemCode BlockComment = LBlockcomment
+problemCode BraceBlock = PBraceBlock
+problemCode Semicolon = LSemicolon
+problemCode MatchGuardBar = PGuardBarInMatch
+problemCode EquationGuardIf = PGuardIfInEquation
+problemCode (GenericParse _) = PParse
+problemCode (InvalidEscape _ _) = LBadEscape
+problemCode (BadUnicodeEscape _) = LBadUnicodeEscape
+problemCode (BareUnicodeEscape _ _) = LBareUnicodeEscape
+problemCode (LongChar _) = LBadCharLiteral
+problemCode (UnexpectedCharacter _) = LBadChar
+problemCode (WidePattern _) = LIntOverflow
+problemCode (MalformedRadix _ _ _) = LMalformedRadix
+problemCode (MalformedFloat _ _ _) = LMalformedFloat
+problemCode (MissingWhere _) = PMissingWhere
+problemCode (WhereSameLine _) = PWhereBodySameLine
+problemCode (BlockEndsBinding _) = PDoEndsInBinding
+problemCode (ReservedKeyword _) = PReservedKeyword
+problemCode (PublicDataOnly _) = PParse
 problemCode (ForeignKeyword word)
-  | word == "def" = "P-DEF-KEYWORD"
-  | word == "for" || word == "while" = "P-FOR-WHILE"
-  | otherwise = "P-PARSE"
+  | word == "def" = PDefKeyword
+  | word == "for" || word == "while" = PForWhile
+  | otherwise = PParse
 
 export
 diagnosticLoc : ParseDiagnostic -> Loc

@@ -12,6 +12,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_groups`, `tc_pat`,
 -- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{codeText}
 import types.tc_types.{
   SiteKind(..),
   OblProjection(..),
@@ -3652,7 +3653,12 @@ methodReturnProbeCodes prev ownedRow impls =
   let universe = buildImplUniverse impls
   mctx.mcCells.bodyImplEnvRef := buildFlatImplEnv impls
   checkCallObligationsU mctx True universe (wAll mctx.mcCells.implObls)
-  (map tcCode (reverseL mctx.mcCells.typeErrors.items.value), mctx)
+  (
+    map
+      (d => codeText (tcCode d))
+      (reverseL mctx.mcCells.typeErrors.items.value),
+    mctx,
+  )
 
 export
 methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)

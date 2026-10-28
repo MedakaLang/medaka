@@ -24,6 +24,7 @@
 -- `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`,
 -- `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   Provenance(..),
   PredicateSlotArgs(..),
@@ -332,16 +333,12 @@ reqWalkReported mctx _ (ReqOn walk) = Some walk
 reqWalkReported mctx loc (ReqCycle parentIface parentArgs iface args) =
   pushTypeErrorOncePerSite
     mctx
-    "T-REQUIRES-CYCLE"
+    TRequiresCycle
     loc
     (requiresCycleMsg mctx parentIface parentArgs iface args)
   None
 reqWalkReported mctx loc (ReqDeep iface args) =
-  pushTypeErrorOncePerSite
-    mctx
-    "T-REQUIRES-DEPTH"
-    loc
-    (requiresDepthMsg iface args)
+  pushTypeErrorOncePerSite mctx TRequiresDepth loc (requiresDepthMsg iface args)
   None
 
 -- After a candidate local generalized: the predicates its scheme quantifies become
@@ -1640,7 +1637,7 @@ reportUndeterminedNoImpl mctx iface [a] loc =
 reportUndeterminedNoImpl mctx iface args loc =
   pushTypeErrorOnceAt
     mctx
-    "T-NO-IMPL"
+    TNoImpl
     loc
     (undeterminedNoImplMsg mctx.mcGraph iface.irName args)
 
@@ -1882,7 +1879,7 @@ checkSigVarGoal mctx binder sigIds sigTvMaps o =
         && not (goalGivenAt mctx.mcGraph iface args o.uoScope) then
         pushTypeErrorOnceAt
           mctx
-          "T-MISSING-CONSTRAINT"
+          TMissingConstraint
           o.loc
           (sigVarGoalMsg binder sigTvMaps (map tyvarId own) iface args)
         -- The goal's other variables are explained by this report, so no later
@@ -2080,7 +2077,7 @@ unroutedGroundReqs sx univ iface args
   | implMatchesWithReqsU sx.sxModule univ iface args =
     pushTypeErrorOnceAt
       sx.sxModule
-      "T-REQUIRES-UNROUTED"
+      TRequiresUnrouted
       sx.sxSite
       (requiresUnroutedMsg iface args)
     []
@@ -2157,7 +2154,7 @@ numlitMismatchPush mctx args loc =
   let msg = numlitMismatchMsg mctx loc args
   pushTypeErrorHelpFixAt
     mctx
-    "T-TYPE-MISMATCH"
+    TTypeMismatch
     loc
     (if hint == "" then msg else "\{msg}; \{hint}")
     hint
@@ -2389,7 +2386,7 @@ checkSurvivorDispatchMonos mctx subject ownIface ownTyparams mty extraMap oiface
       else
         pushTypeErrorOnceAt
           mctx
-          "T-IMPL-TOO-SPECIFIC"
+          TImplTooSpecific
           loc
           (undeclaredConstraintMsg subject mty oiface vname)
     None => ()
@@ -3050,7 +3047,7 @@ unroutedResidual sx iface args
     args =
     pushTypeErrorOnceAt
       sx.sxModule
-      "T-REQUIRES-UNROUTED"
+      TRequiresUnrouted
       sx.sxSite
       (requiresUnroutedMsg iface args)
     []

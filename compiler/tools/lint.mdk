@@ -79,7 +79,7 @@ import frontend.parser.{
   ParseError,
 }
 import driver.diagnostics.{
-  Severity(..), Diag(..), ppSeverity, readFileSafe, parseErrDiag
+  Severity(..), Diag(..), DiagId(..), ppSeverity, readFileSafe, parseErrDiag
 }
 import support.util.{
   escStr,
@@ -1501,7 +1501,7 @@ isFindingError f = match f.severity
 export
 findingToDiag : Finding -> Diag
 findingToDiag f =
-  Diag f.severity f.rule "[\{f.rule}] \{f.message}" f.loc None None
+  Diag f.severity (LintRule f.rule) "[\{f.rule}] \{f.message}" f.loc None None
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file

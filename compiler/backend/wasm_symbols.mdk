@@ -20,6 +20,7 @@
 -- whichever of the two declared it.  Only an element entry may repeat: the
 -- element list is a set.
 
+import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
   OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
 }
@@ -275,12 +276,12 @@ elemNames reg = reverseL reg.elems
 -- ── rendering ───────────────────────────────────────────────────────────────
 
 export
-defectCode : SymbolDefect -> String
-defectCode (DuplicateDefinition _ _ _) = "E-PHYS-DUPLICATE"
-defectCode (ShapeMismatch _ _ _ _ _) = "E-PHYS-SHAPE"
-defectCode (UndefinedReference _ _) = "E-PHYS-UNDEFINED"
-defectCode (UndeclaredType _ _ _) = "E-PHYS-UNDECLARED-TYPE"
-defectCode (UndeclaredFuncRef _ _) = "E-PHYS-UNDECLARED-FUNCREF"
+defectCode : SymbolDefect -> DiagCode
+defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
+defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (UndefinedReference _ _) = EPhysUndefined
+defectCode (UndeclaredType _ _ _) = EPhysUndeclaredType
+defectCode (UndeclaredFuncRef _ _) = EPhysUndeclaredFuncref
 
 -- The binding and position the defect is reported at.
 export

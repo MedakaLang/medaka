@@ -1,3 +1,4 @@
+import support.diag_codes.{codeText}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{
@@ -22,7 +23,7 @@ flatCodes source =
     "prop_contract",
     desugar (parseLocated source),
   )
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 moduleCodes : String -> List String
 moduleCodes source =
@@ -33,7 +34,7 @@ moduleCodes source =
     ),
     ("prop_contract", desugar (parseLocated source)),
   ]
-  flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  flatMap ((_, (_, errors, _)) => map (d => codeText (tcCode d)) errors) results
 
 test "property result types are constrained in flat checking" =
   expectEqual

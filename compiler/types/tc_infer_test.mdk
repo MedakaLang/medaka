@@ -23,6 +23,7 @@
 -- effect a standalone's arrow performs at its call. `typecheck_test` drives whole checks and
 -- `drive_independence_test` the match-warning flag.
 
+import support.diag_codes.{codeText}
 import test.{Expectation, expectAll, expectEach, expectEqual, expectTrue}
 import frontend.ast.{
   Decl(..),
@@ -175,7 +176,8 @@ withMain m src k = match mainOf m src
 
 -- The codes of the match warnings [m] holds.
 warningCodes : ModuleCtx -> List String
-warningCodes m = reverse (map tcCode m.mcCells.matchWarnings.value)
+warningCodes m =
+  reverse (map (d => codeText (tcCode d)) m.mcCells.matchWarnings.value)
 
 -- The messages of the match warnings [m] holds.
 warningMessages : ModuleCtx -> List String

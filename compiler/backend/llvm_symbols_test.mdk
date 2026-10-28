@@ -5,6 +5,7 @@
 -- last rows drive whole prelude-free programs through `emitProgram` and
 -- `emitProgramRecord`, as `compiler/entries/llvm_emit_main.mdk` does.
 
+import support.diag_codes.{codeText}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
@@ -428,8 +429,8 @@ refusalFacts (Err defects) = map defectFacts defects
 
 defectFacts : SymbolDefect -> List String
 defectFacts (d@(DuplicateDefinition name (SymbolOrigin b2 _ _ _) (SymbolOrigin b1 _ _ _))) =
-  [defectCode d, name, b1, b2]
-defectFacts d = [defectCode d]
+  [codeText (defectCode d), name, b1, b2]
+defectFacts d = [codeText (defectCode d)]
 
 -- A single-module program mangles nothing, so the value global of `foo` is
 -- `@mdk_g_foo`, the name the function `g_foo` is emitted under.  `main`, emitted

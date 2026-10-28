@@ -31,6 +31,7 @@
 -- other than `moduleFormatVersion`, an unknown tag or a truncated list.
 import frontend.ast.{BinderId(..), EvTable, Loc(..)}
 import frontend.ast_codec.{decodeEvEntries, evEntriesSExp, sexpBinderId}
+import support.diag_codes.{codeOfText, codeText}
 import support.sexp_value.{
   SExp(..), SexpError(..), atomBool, atomInt, expectAtom, parseSExp, renderSExp
 }
@@ -89,7 +90,7 @@ locNode (Loc file a b c d) =
 
 diagNode : TcDiag -> SExp
 diagNode (TcDiag code severity loc message help fix) = tagged "tcdiag" [
-  SAtom code,
+  SAtom (codeText code),
   intNode severity,
   optionSExp locNode loc,
   SAtom message,
@@ -216,7 +217,10 @@ decLoc path node = misfit path [("loc", 5)] node
 
 decDiag : Reader TcDiag
 decDiag path (SList [SAtom "tcdiag", c, s, l, m, h, f]) = do
-  code <- expectAtom (at path "tcdiag" 1) c
+  name <- expectAtom (at path "tcdiag" 1) c
+  code <- match codeOfText name
+    Some known => Ok known
+    None => misfit (at path "tcdiag" 1) [("a live diagnostic code", 0)] c
   severity <- atomInt (at path "tcdiag" 2) s
   loc <- optionOfSExp decLoc (at path "tcdiag" 3) l
   message <- expectAtom (at path "tcdiag" 4) m

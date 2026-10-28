@@ -3,6 +3,7 @@
 -- `keyedDrive` with source keys, as the keyed callers do;
 -- each test uses module ids of its own, because the module cache is keyed by
 -- module id and lives for the process.
+import support.diag_codes.{DiagCode(..)}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectGreaterThan,
   expectSatisfies, expectTrue, fail, labelFail
@@ -155,14 +156,14 @@ withExtras mi = { mi |
     (
       "lib",
       TcDiag
-        "E1"
+        TTypeMismatch
         1
         (Some (Loc "lib.mdk" 1 2 3 4))
         "a \"quoted\" message\nover two lines"
         (Some "help")
         (Some (Loc "lib.mdk" 5 6 7 8, "fix")),
     ),
-    ("lib", TcDiag "W1" 2 None "plain" None None),
+    ("lib", TcDiag WNonexhaustive 2 None "plain" None None),
   ],
   miPatternAuth = [7, 8],
   miSerial = 41,

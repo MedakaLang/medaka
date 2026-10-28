@@ -12,6 +12,7 @@
 -- (`types/effect_domain.mdk`), so `"c*"` admits both `"c"` and `"c/m"`, while
 -- `"c"` does not admit `"c/m"` and `"c/*"` does not admit `"c"`.
 
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
@@ -31,7 +32,7 @@ import support.char.{isAlnum, isApos, isDigit}
 import string.{stripSuffix, toLower}
 
 -- One declaration diagnostic: its code, where it is reported, its message.
-public export data FfiDiag = FfiDiag String (Option Loc) String
+public export data FfiDiag = FfiDiag DiagCode (Option Loc) String
 
 -- The hosts a binding may name.
 ffiHosts : List String
@@ -49,7 +50,7 @@ ffiDeclarationDiags : Bool ->
   List FfiDiag
 ffiDeclarationDiags True d _ = match d.edBinds
   b :: _ =>
-    [FfiDiag "T-FFI-BUILTIN-BIND" (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
+    [FfiDiag TFfiBuiltinBind (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
   [] => []
 ffiDeclarationDiags False d row =
   let clauseDiags = ffiClauseDiags d.edName [] d.edBinds
@@ -60,7 +61,7 @@ ffiDeclarationDiags False d row =
   ffiLabelDiags d row ++ hostDiags ++ ffiBindDiags d
 
 isNotUnbound : FfiDiag -> Bool
-isNotUnbound (FfiDiag code _ _) = code /= "T-FFI-UNBOUND-HOST"
+isNotUnbound (FfiDiag code _ _) = code /= TFfiUnboundHost
 
 -- The row must name the foreign-call `FFI`, and the signature must have an
 -- arrow to carry a row at all.  A nullary extern is refused, not passed: the
@@ -70,14 +71,14 @@ ffiLabelDiags : ExternDecl -> Option (List EffAtomTy) -> List FfiDiag
 ffiLabelDiags d row =
   let fb = firstTyLoc d.edTy
   match row
-    None => [FfiDiag "T-FFI-NULLARY" fb (ffiNullaryMsg d.edName)]
+    None => [FfiDiag TFfiNullary fb (ffiNullaryMsg d.edName)]
     Some atoms =>
       if anyList isForeignCallAtom atoms then
         []
       else if anyList (a => a.eatLabel == "FFI") atoms then
-        [FfiDiag "T-FFI-UNLABELLED" fb (ffiDeclaredLabelMsg d.edName)]
+        [FfiDiag TFfiUnlabelled fb (ffiDeclaredLabelMsg d.edName)]
       else
-        [FfiDiag "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg d.edName)]
+        [FfiDiag TFfiUnlabelled fb (ffiUnlabelledMsg d.edName)]
 
 -- The foreign-call effect itself.  A label a module declares with `effect FFI`
 -- is spelled the same but is a user label, which the target check never gates,
@@ -102,15 +103,9 @@ ffiAtomHostDiags d a = match a.eatParam
       if anyList (b => b.ebHost == h) (externBindings d) then
         []
       else
-        [
-          FfiDiag
-            "T-FFI-UNBOUND-HOST"
-            (Some d.edLoc)
-            (ffiUnboundHostMsg d.edName h),
-        ]
-    None =>
-      [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName (Some p))]
-  _ => [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName None)]
+        [FfiDiag TFfiUnboundHost (Some d.edLoc) (ffiUnboundHostMsg d.edName h)]
+    None => [FfiDiag TFfiNoHost (Some d.edLoc) (ffiNoHostMsg d.edName (Some p))]
+  _ => [FfiDiag TFfiNoHost (Some d.edLoc) (ffiNoHostMsg d.edName None)]
 
 -- The host an `FFI` parameter names: a host alone, or a host, `/` and a
 -- non-empty library.
@@ -132,13 +127,10 @@ ffiClauseDiags : String -> List String -> List ExternBind -> List FfiDiag
 ffiClauseDiags _ _ [] = []
 ffiClauseDiags n seen (b :: rest)
   | not (contains b.ebHost ffiHosts) =
-    FfiDiag "T-FFI-UNKNOWN-HOST" (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
+    FfiDiag TFfiUnknownHost (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest
   | contains b.ebHost seen =
-    FfiDiag
-        "T-FFI-DUPLICATE-HOST"
-        (Some b.ebLoc)
-        (ffiDuplicateHostMsg n b.ebHost)
+    FfiDiag TFfiDuplicateHost (Some b.ebLoc) (ffiDuplicateHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest
   | otherwise = ffiClauseDiags n (b.ebHost :: seen) rest
 
@@ -148,14 +140,14 @@ ffiSymbolDiags d b = match b.ebHost
     if not (isIdentWith isCIdentStart isCIdentChar b.ebSymbol) then
       [
         FfiDiag
-          "T-FFI-C-SYMBOL"
+          TFfiCSymbol
           (Some b.ebLoc)
           (ffiCSymbolMsg d.edName b.ebSymbol (isEmptyBinds d)),
       ]
     else if startsWith "mdk_" b.ebSymbol then
       [
         FfiDiag
-          "T-FFI-RESERVED-NAME"
+          TFfiReservedName
           (Some b.ebLoc)
           (ffiReservedMsg d.edName b.ebSymbol (isEmptyBinds d)),
       ]
@@ -165,12 +157,7 @@ ffiSymbolDiags d b = match b.ebHost
     if isIdentWith isJsIdentStart isJsIdentChar b.ebSymbol then
       []
     else
-      [
-        FfiDiag
-          "T-FFI-JS-NAME"
-          (Some b.ebLoc)
-          (ffiJsNameMsg d.edName b.ebSymbol),
-      ]
+      [FfiDiag TFfiJsName (Some b.ebLoc) (ffiJsNameMsg d.edName b.ebSymbol)]
   _ => []
 
 isEmptyBinds : ExternDecl -> Bool

@@ -2,6 +2,7 @@
 -- builder to plain operands (names, counts, kinds, spans) and pins the text it returns, so
 -- none needs a minted `ModuleCtx`.
 
+import support.diag_codes.{DiagCode(..), codeText}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import types.publish.{TcDiag(..), tcCode, tcMsg}
 import frontend.ast.{Loc(..)}
@@ -116,7 +117,7 @@ test "writtenDiag strips a renamed binder's suffix from message and help, and ke
   let loc = siteA
   let raw =
     TcDiag
-      "T-PROBE"
+      TTypeMismatch
       1
       loc
       "x$m$3$lb has type Int"
@@ -125,17 +126,18 @@ test "writtenDiag strips a renamed binder's suffix from message and help, and ke
   let written = writtenDiag raw
   expectAll [
     expectEqual "x has type Int" (tcMsg written),
-    expectEqual "T-PROBE" (tcCode written),
+    expectEqual "T-TYPE-MISMATCH" (codeText (tcCode written)),
     expectEqual (Some "rename y") (match written
       TcDiag _ _ _ _ help _ => help),
     expectEqual
       "x$m$a$lb and y$m$$lb"
       (tcMsg
         (writtenDiag
-          (TcDiag "T-PROBE" 1 None "x$m$a$lb and y$m$$lb" None None))),
+          (TcDiag TTypeMismatch 1 None "x$m$a$lb and y$m$$lb" None None))),
     expectEqual
       "cost$5 and $x"
-      (tcMsg (writtenDiag (TcDiag "T-PROBE" 1 None "cost$5 and $x" None None))),
+      (tcMsg
+        (writtenDiag (TcDiag TTypeMismatch 1 None "cost$5 and $x" None None))),
   ]
 
 test "locKey spells a located site and is empty without one" = expectAll [
@@ -145,8 +147,9 @@ test "locKey spells a located site and is empty without one" = expectAll [
 ]
 
 test "prependDiagOpt adds a written diagnostic only when there is a message" =
-  let none = prependDiagOpt "T-PROBE" 1 None None []
-  let some = prependDiagOpt "T-PROBE" 1 (Some "h") (Some "q$m$1$lb is bad") []
+  let none = prependDiagOpt TTypeMismatch 1 None None []
+  let some =
+    prependDiagOpt TTypeMismatch 1 (Some "h") (Some "q$m$1$lb is bad") []
   expectAll [
     expectEqual [] (map tcMsg none),
     expectEqual ["q is bad"] (map tcMsg some),

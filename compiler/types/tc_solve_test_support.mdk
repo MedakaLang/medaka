@@ -6,6 +6,7 @@
 -- not import it; they build their inputs from `tc_test_support`.  No production module
 -- imports this file.
 
+import support.diag_codes.{codeText}
 import list.{sort, filter, sortOn, indexed}
 import test.{Expectation, expectEqual}
 import frontend.ast.{
@@ -58,7 +59,7 @@ checkDiagsOver core src =
     "probe",
     desugar (parseLocated src),
   )
-  map (d => (tcCode d, tcMsg d)) errors
+  map (d => (codeText (tcCode d), tcMsg d)) errors
 
 -- The codes of [checkDiags], in report order.
 export

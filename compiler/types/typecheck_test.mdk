@@ -2,6 +2,7 @@
 -- Every scope id is projected while its request graph is still live.  Tests
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
+import support.diag_codes.{codeText}
 import test.{
   Expectation,
   expectAll,
@@ -759,7 +760,7 @@ arithmeticErrorCodes source =
     "arithmetic_errors",
     desugar (parseLocated source),
   )
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 test "declared and inferred arithmetic retain one Num slot at finalized queries" =
   let cold = arithmeticSchemeObserved None arithmeticFunctionsSource
@@ -1142,7 +1143,7 @@ declaredNumErrorCodes source =
     "declared_numeric_errors",
     desugar (parseLocated source),
   )
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 test "declared numeric result retains its quantifier and given at finalized queries" =
   let cold = declaredNumSchemeObserved None declaredNumHelperSource
@@ -1520,7 +1521,7 @@ absentReturnCodes reverseImpls =
     "absent_return_ambiguity",
     desugar (parseLocated (absentReturnSource reverseImpls False)),
   )
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 test "absent return formal never fabricates a fresh instance parameter" = expectAll
   [
@@ -1574,7 +1575,7 @@ methodBodyCheck name source =
     name,
     desugar (parseLocated source),
   )
-  map (diag => (tcCode diag, methodBodyDiagLocated diag)) errors
+  map (diag => (codeText (tcCode diag), methodBodyDiagLocated diag)) errors
 
 methodBodyDiagLocated : TcDiag -> Bool
 methodBodyDiagLocated (TcDiag _ _ loc _ _ _) = isSome loc
@@ -2553,7 +2554,7 @@ localUseSiteObserved source =
     desugar (parseLocated source),
   )
   let entries = finishEvidenceObservation sink
-  (map tcCode errors, entries)
+  (map (d => codeText (tcCode d)) errors, entries)
 
 test "a generalized local is dictionary-abstracted: each use applies it to the given its own argument needs (#1082, #2095)" =
   let (codes, entries) =
@@ -2787,7 +2788,7 @@ placedNumCodes inherited =
   let program = desugar (parseLocated (placedNumSource inherited))
   let (errors, _) =
     checkOneDiags defaultDriveInputs [] core ("placed_num", program)
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 placedNumElaborated : Bool -> (List Decl, ProgramFacts)
 placedNumElaborated inherited =
@@ -3316,7 +3317,7 @@ ioJoinErrors results = flatMap moduleIoJoinErrors results
 
 moduleIoJoinErrors : ModDiags -> List (String, Int, String, String)
 moduleIoJoinErrors (mid, (_, errors, _)) =
-  map (d => (mid, diagLine d, tcCode d, tcMsg d)) errors
+  map (d => (mid, diagLine d, codeText (tcCode d), tcMsg d)) errors
 
 diagLine : TcDiag -> Int
 diagLine (TcDiag _ _ (Some (Loc _ line _ _ _)) _ _ _) = line
@@ -3564,7 +3565,7 @@ preludeOutcome prelude sources =
   let codes =
     flatMap
       (row => match row
-        (_, (_, errors, _)) => map tcCode errors)
+        (_, (_, errors, _)) => map (d => codeText (tcCode d)) errors)
       (checkModulesDiagsChain defaultDriveInputs None "" [] [] core modules)
   if isEmptyL codes then
     let elab = elaborateModules defaultDriveInputs [] core modules
@@ -4667,8 +4668,8 @@ closedGoalOutcome prelude lines =
   let residual = elab.erResidual
   let first = match residual
     (_, TcDiag code _ (Some (Loc _ line col _ _)) _ _ _) :: _ =>
-      (code, line, col)
-    (_, TcDiag code _ None _ _ _) :: _ => (code, 0, 0)
+      (codeText code, line, col)
+    (_, TcDiag code _ None _ _ _) :: _ => (codeText code, 0, 0)
     [] => ("", 0, 0)
   let sexp =
     cprogramToSexp
@@ -5872,7 +5873,7 @@ returnMemoModuleView : ModDiags ->
 returnMemoModuleView (moduleId, (schemes, errors, warnings)) = (
   moduleId,
   map (entry => (fst entry, ppScheme (snd entry).psScheme)) schemes,
-  map (diag => (tcCode diag, tcMsg diag)) (errors ++ warnings),
+  map (diag => (codeText (tcCode diag), tcMsg diag)) (errors ++ warnings),
 )
 
 returnMemoRelevant : MethodReturnMemoView -> Bool

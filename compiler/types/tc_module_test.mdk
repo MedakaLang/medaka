@@ -13,6 +13,7 @@
 -- the entry.  What a whole check elaborates is observed through `types.typecheck` in
 -- `typecheck_test`.
 
+import support.diag_codes.{DiagCode(..), codeText}
 import test.{
   expectAll,
   expectEach,
@@ -106,14 +107,14 @@ checkEach g seed ((mid, ds) :: rest) =
     checkModuleFullDiags g mid (plainModuleSeed seed) [] [] ds
   Checked {
       chSchemes = rendered b.mbSchemes,
-      chErrors = map tcCode errs,
-      chWarnings = map tcCode warns,
+      chErrors = map (d => codeText (tcCode d)) errs,
+      chWarnings = map (d => codeText (tcCode d)) warns,
     }
     :: checkEach g (seed ++ b.mbSchemes) rest
 
 -- What a drain reported: the module and code of each finding, in the order reported.
 findingsOf : List DrainFinding -> List (String, String)
-findingsOf = map (f => (f.dfModule, tcCode f.dfDiag))
+findingsOf = map (f => (f.dfModule, codeText (tcCode f.dfDiag)))
 
 -- The record of [m] after `checkBodyImpl` alone has checked the module "m" of [decls]: the
 -- body check queues no stamping context.
@@ -434,14 +435,18 @@ x = 1
 
 test "the errors an action pushes are returned oldest first and leave the record as it was" =
   let m = fresh ()
-  pushTypeError m "T-BEFORE" "kept"
+  pushTypeError m TNoImpl "kept"
   let taken = captureTypeErrors m (_ =>
-    pushTypeError m "T-ONE" "one"
-    pushTypeError m "T-TWO" "two")
-  expectEqual (["T-ONE", "T-TWO"], ["T-BEFORE"]) (map tcCode taken, codesOf m)
+    pushTypeError m TUnbound "one"
+    pushTypeError m TMissingField "two")
+  expectEqual
+    (["T-UNBOUND", "T-MISSING-FIELD"], ["T-NO-IMPL"])
+    (map (d => codeText (tcCode d)) taken, codesOf m)
 
 test "an action that pushes no error captures none" =
-  expectEqual [] (map tcCode (captureTypeErrors (fresh ()) (_ => ())))
+  expectEqual
+    []
+    (map (d => codeText (tcCode d)) (captureTypeErrors (fresh ()) (_ => ())))
 
 -- The verdict finding of module "mod" over [d], on a live span and on one that is not.
 liveVerdict : TcDiag -> DrainFinding
@@ -451,11 +456,11 @@ deadVerdict : TcDiag -> DrainFinding
 deadVerdict = verdictFinding "mod" False
 
 test "a verdict finding carries its module, its diagnostic and its liveness, and is a verdict" =
-  let d = TcDiag "T-X" 1 None "msg" None None
+  let d = TcDiag TUnknownField 1 None "msg" None None
   let f = liveVerdict d
   expectAll [
     expectEqual "mod" f.dfModule,
-    expectEqual "T-X" (tcCode f.dfDiag),
+    expectEqual "T-UNKNOWN-FIELD" (codeText (tcCode f.dfDiag)),
     expectTrue f.dfLive,
     expectTrue f.dfVerdict,
     expectFalse (deadVerdict d).dfLive,

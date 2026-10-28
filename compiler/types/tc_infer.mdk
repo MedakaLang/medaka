@@ -13,6 +13,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_elab`, `tc_global`,
 -- `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   AdmittedVerdict(..),
   BindingRole(..),
@@ -668,7 +669,7 @@ inferStmtAt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 -- cascade spurious `Unbound variable` errors (mirrors inferRecPatField).
 inferStmtAt env (DoBind pat e) =
   let t = infer env e
-  pushTypeError env.teDyn.dcModule "T-BIND-OUTSIDE-DO" bindOutsideDoMsg
+  pushTypeError env.teDyn.dcModule TBindOutsideDo bindOutsideDoMsg
   let lits = takePatLits env.teDyn.dcModule ()
   let pr = inferPat env pat
   bindFrom env.teDyn (fst pr) t
@@ -763,7 +764,7 @@ pushDiscardedValueDesc : ModuleCtx -> String -> Expr -> Unit
 pushDiscardedValueDesc mctx desc e =
   pushTypeErrorHelpFixAt
     mctx
-    "T-DISCARDED-VALUE"
+    TDiscardedValue
     (exprSpanLoc e)
     (discardedValueMsg desc)
     "bind it with `let _ = ...` if dropping the value is intentional"
@@ -901,10 +902,7 @@ unifyFieldAssignIdx : TcEnv ->
 unifyFieldAssignIdx env rname ri subst fn val =
   match omLookup fn (recordFieldMap ri)
     None =>
-      pushTypeError
-        env.teDyn.dcModule
-        "T-UNKNOWN-FIELD"
-        (unknownFieldMsg fn rname)
+      pushTypeError env.teDyn.dcModule TUnknownField (unknownFieldMsg fn rname)
     Some fm =>
       -- A supplied field flows into its slot at the value's span.
       let at = envAtIfSome (exprSpanLoc val) env
@@ -948,7 +946,7 @@ inferValueField env e = refStored env.teDyn (infer env e)
 
 unboundVarFresh : ModuleCtx -> String -> Mono
 unboundVarFresh mctx name =
-  pushTypeError mctx "T-UNBOUND" (unboundVarMsg name)
+  pushTypeError mctx TUnbound (unboundVarMsg name)
   freshVar mctx ()
 
 inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> EvId -> Mono
@@ -1161,7 +1159,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
       recordTypeError
         mctx
         (TcDiag
-          "L-INT-OVERFLOW"
+          LIntOverflow
           1
           at
           intMinLiteralMsg
@@ -1172,7 +1170,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
         recordTypeError
           mctx
           (TcDiag
-            "L-INT-OVERFLOW"
+            LIntOverflow
             1
             at
             "integer literal \{shown} does not fit U64 (\{u64RangeText})"
@@ -1183,7 +1181,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
         recordTypeError
           mctx
           (TcDiag
-            "L-INT-OVERFLOW"
+            LIntOverflow
             1
             at
             "integer literal \{shown} does not fit I64 (\{i64RangeText})"
@@ -1193,7 +1191,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
       recordTypeError
         mctx
         (TcDiag
-          "L-INT-OVERFLOW"
+          LIntOverflow
           1
           at
           "integer literal \{shown} does not fit \{tag}"
@@ -1203,7 +1201,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
       recordTypeError
         mctx
         (TcDiag
-          "L-INT-OVERFLOW"
+          LIntOverflow
           1
           at
           "integer literal \{shown} fits only `U64` or `I64`, and its type here is undetermined"
@@ -1228,7 +1226,7 @@ checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
           recordTypeError
             mctx
             (TcDiag
-              "L-INT-OVERFLOW"
+              LIntOverflow
               1
               (orElseLoc loc mctx.mcLoc)
               "integer literal \{n} does not fit \{tag} (\{lo}..\{hi})"
@@ -1239,7 +1237,7 @@ checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
           recordTypeError
             mctx
             (TcDiag
-              "L-INT-OVERFLOW"
+              LIntOverflow
               1
               (orElseLoc loc mctx.mcLoc)
               "integer literal \{n} does not fit U64 (\{u64RangeText})"
@@ -1366,7 +1364,7 @@ derefOp dyn t =
   if monoIsBool (normalize t) then
     pushTypeErrorHelpFixAt
       dyn.dcModule
-      "T-BANG-ON-BOOL"
+      TBangOnBool
       None
       bangOnBoolMsg
       bangOnBoolHelp
@@ -2459,7 +2457,7 @@ inferApp env appExpr ft xt =
           if isDoBind then doBindArgHint scalarTy else containerArgHint scalarTy
         pushTypeErrorHelpFixAt
           env.teDyn.dcModule
-          "T-TYPE-MISMATCH"
+          TTypeMismatch
           (orElseLoc (appArgLoc appExpr) env.teDyn.dcModule.mcLoc)
           msg
           hint
@@ -2561,12 +2559,12 @@ inferAppNotFunction mctx appExpr ft r =
       if takes >= 1 then
         pushTypeError
           (mctxAt loc mctx)
-          "T-NOT-A-FUNCTION"
+          TNotAFunction
           (overAppliedMsg name takes applied)
       else
         pushTypeErrorHelpFixAt
           mctx
-          "T-NOT-A-FUNCTION"
+          TNotAFunction
           loc
           (notAFunctionMsgFor (Some name) (ppMono (normalize ft)))
           (notAFunctionHint (Some name))
@@ -2574,7 +2572,7 @@ inferAppNotFunction mctx appExpr ft r =
     None =>
       pushTypeErrorHelpFixAt
         mctx
-        "T-NOT-A-FUNCTION"
+        TNotAFunction
         loc
         (notAFunctionMsg (ppMono (normalize ft)))
         (notAFunctionHint None)
@@ -3022,12 +3020,12 @@ checkMatchExhaustive mctx scrutTy arms =
       ()
     else
       mctx.mcCells.matchWarnings :=
-        writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 mctx.mcLoc msg help None)
+        writtenDiag (TcDiag WNonexhaustive 2 mctx.mcLoc msg help None)
           :: mctx.mcCells.matchWarnings.value
 
 warnedAt : Option Loc -> TcDiag -> Bool
 warnedAt loc (TcDiag code _ at _ _ _) =
-  code == "W-NONEXHAUSTIVE" && locKey loc /= "" && locKey at == locKey loc
+  code == WNonexhaustive && locKey loc /= "" && locKey at == locKey loc
 
 checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchRedundant mctx scrutTy arms =
@@ -3058,7 +3056,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
   if armUnreachable mctx col0 prec heads offCol dp then
     mctx.mcCells.matchWarnings :=
       TcDiag
-          "W-UNREACHABLE-ARM"
+          WUnreachableArm
           2
           (orElseLoc (exprLoc body) mctx.mcLoc)
           unreachableArmWarning

@@ -25,7 +25,7 @@
 -- matching and the run fails closed with the key it looked for — the loud half
 -- of the invariant above, not a wrong answer.
 
-import driver.diagnostics.{Diag(..), Severity(..)}
+import driver.diagnostics.{Diag(..), DiagId(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
   contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome
@@ -217,7 +217,7 @@ findingRuleOf f = f.rule
 
 export
 diagCodeOf : Diag -> String
-diagCodeOf (Diag _ code _ _ _ _) = code
+diagCodeOf (Diag _ code _ _ _ _) = diagIdText code
 
 promoteDiags : List String -> List Diag -> List Diag
 promoteDiags [] diags = diags
@@ -225,7 +225,7 @@ promoteDiags names diags = map (d => promoteDiag names d) diags
 
 promoteDiag : List String -> Diag -> Diag
 promoteDiag names (Diag sev code msg loc help fix)
-  | contains code names = Diag SevError code msg loc help fix
+  | contains (diagIdText code) names = Diag SevError code msg loc help fix
   | otherwise = Diag sev code msg loc help fix
 
 -- ── writing ─────────────────────────────────────────────────────────────────

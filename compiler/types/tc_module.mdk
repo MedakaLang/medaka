@@ -18,6 +18,7 @@
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`.
 
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
   BinderId(..),
   ConPayload(..),
@@ -947,7 +948,7 @@ runFinalChecks mctx cohDecls ownCe cycCe cohIe cycIe cur =
 ordinalSentinelGuard : ModuleCtx -> Int -> Unit
 ordinalSentinelGuard mctx cur
   | ordinalIsSentinel cur =
-    pushTypeError mctx "T-INTERNAL-ORDINAL" ordinalSentinelMsg
+    pushTypeError mctx TInternalOrdinal ordinalSentinelMsg
   | otherwise = ()
 
 -- is [cur] `declEnvsOrdOf`'s miss sentinel?  A real ordinal is an index into the list
@@ -976,7 +977,7 @@ checkOneIfaceCycle mctx prog ce cur done row =
         (mctxAt
           (cycleReportLoc mctx.mcGraph.declEnvsRef.value.deReach prog cur row)
           mctx)
-        "T-CYCLIC-SUPERINTERFACE")
+        TCyclicSuperinterface)
       (ifaceDfsCycle ce cur done [row] row)
 
 -- A cycle is reported at the name of the interface its walk started from when
@@ -2274,7 +2275,7 @@ reportUnsolvedExport mctx grouped seen (name, ids) =
       [] => None
     pushTypeErrorAt
       mctx
-      "T-EXPORT-UNSOLVED-AUTHORITY"
+      TExportUnsolvedAuthority
       loc
       "exported binding `\{name}` has an authority in its type that nothing in this module determines; give `\{name}`, or the value it uses, a type signature that names the authority"
     IdMap.union seen ids
@@ -4229,7 +4230,7 @@ holeDiags : String ->
   List (String, TcDiag)
 holeDiags mid loc inner row = match rowHoleWith inner row
   None => []
-  Some (_, msg) => [(mid, TcDiag "T-UNROUTED-DISPATCH" 1 loc msg None None)]
+  Some (_, msg) => [(mid, TcDiag TUnroutedDispatch 1 loc msg None None)]
 
 -- Read every queued binder's type cell into the graph's runtime-type table, now
 -- that the stampers have run and nothing left in the graph can refine a drained

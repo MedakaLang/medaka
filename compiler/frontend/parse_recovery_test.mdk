@@ -1,3 +1,4 @@
+import support.diag_codes.{codeText}
 import string.{repeat}
 import frontend.ast.{Decl(..), Loc(..)}
 import frontend.parse_recovery.{
@@ -41,7 +42,9 @@ after = 2
 """
   expectAll [
     expectEqual ["before", "after"] (map name (recoveredDecls r)),
-    expectEqual ["P-PARSE"] (map diagnosticCode (recoveredDiagnostics r)),
+    expectEqual
+      ["P-PARSE"]
+      (map (d => codeText (diagnosticCode d)) (recoveredDiagnostics r)),
     expectEqual [(11, 22)] (regionExtents (invalidRegions r)),
   ]
 
@@ -835,7 +838,7 @@ after = 2
       (["before"], ["L-UNTERMINATED-STRING"], "lexical")
       (
         map name (recoveredDecls literal),
-        map diagnosticCode (recoveredDiagnostics literal),
+        map (d => codeText (diagnosticCode d)) (recoveredDiagnostics literal),
         status (recoveredCompleteness literal),
       ),
     expectEqual
@@ -849,7 +852,7 @@ test "strict string EOF prerequisite is reflected in recovery" =
     (["before"], ["L-UNTERMINATED-STRING"], "lexical")
     (
       map name (recoveredDecls result),
-      map diagnosticCode (recoveredDiagnostics result),
+      map (d => codeText (diagnosticCode d)) (recoveredDiagnostics result),
       status (recoveredCompleteness result),
     )
 
@@ -867,7 +870,7 @@ after = 2
       (map name (recoveredDecls result)),
     expectEqual
       ["P-PARSE", "P-PARSE"]
-      (map diagnosticCode (recoveredDiagnostics result)),
+      (map (d => codeText (diagnosticCode d)) (recoveredDiagnostics result)),
     expectEqual [(11, 22), (33, 43)] (regionExtents (invalidRegions result)),
   ]
 
@@ -880,7 +883,7 @@ after = 2
     (["before", "after"], ["P-BAD-NEQ"], [(11, 27)])
     (
       map name (recoveredDecls result),
-      map diagnosticCode (recoveredDiagnostics result),
+      map (d => codeText (diagnosticCode d)) (recoveredDiagnostics result),
       regionExtents (invalidRegions result),
     )
 
@@ -891,7 +894,7 @@ editRow (ParseEdit loc old replacement applicability) =
 diagnosticRow : ParseDiagnostic ->
   (String, ExpectedSpan, List (ExpectedSpan, String, String, Bool))
 diagnosticRow diagnostic = (
-  diagnosticCode diagnostic,
+  codeText (diagnosticCode diagnostic),
   span (diagnosticLoc diagnostic),
   map editRow (diagnosticEdits diagnostic),
 )

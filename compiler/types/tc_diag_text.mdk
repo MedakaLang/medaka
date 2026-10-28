@@ -69,12 +69,14 @@ import types.tc_types.{
   MethodBodyKind(..),
   RecordInfo,
 }
-import types.publish.{TcDiag(..)}
+import support.diag_codes.{DiagCode(..)}
+import types.publish.{TcDiag(..), tcCode}
 import support.util.{
   contains,
   dedup,
   dedupBy,
   escStr,
+  filterList,
   isEmptyL,
   isNonEmptyL,
   joinWith,
@@ -1474,7 +1476,7 @@ findTupleCand key ((res, help, fix) :: rest)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 export
-prependDiagOpt : String ->
+prependDiagOpt : DiagCode ->
   Int ->
   Option String ->
   Option String ->
@@ -1483,3 +1485,19 @@ prependDiagOpt : String ->
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
   writtenDiag (TcDiag code sev None msg help None) :: ds
+
+-- prepend the global coherence conflict, when there is one, to a module's errors.
+export
+prependConflict : Option String -> List TcDiag -> List TcDiag
+prependConflict = prependDiagOpt TConflictingImpl 1 None
+
+-- prepend the incomparable-impls warning, when there is one, to a module's warnings.
+export
+prependIncomparable : Option String -> List TcDiag -> List TcDiag
+prependIncomparable =
+  prependDiagOpt WIncomparableImpls 2 (Some cohIncomparableHelp)
+
+-- the diagnostics of [ds] other than ambiguous-instance errors.
+export
+dropAmbiguity : List TcDiag -> List TcDiag
+dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)

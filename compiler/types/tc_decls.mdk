@@ -21,6 +21,7 @@
 -- `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`,
 -- `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   PredicateSlotArgs(..),
   AliasDecl(..),
@@ -954,7 +955,7 @@ emitCyclicAliasErrors mctx prog table (name :: rest) =
         named
   pushTypeErrorOnce
     (mctxAtIfSome loc mctx)
-    "T-RECURSIVE-ALIAS"
+    TRecursiveAlias
     ("type alias `"
       ++ name
       ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")

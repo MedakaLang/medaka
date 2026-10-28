@@ -11,6 +11,7 @@
 -- Validated by rendering pp_value of a program's `main` binding and diffing
 -- against dev/eval_probe.exe (Eval.eval_program ~prelude:false → Eval.pp_value).
 
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
   variantName,
   ifaceMethodName,
@@ -106,6 +107,7 @@ import types.private_mangle.{mangleCtorCollisions}
 -- cycle) — verified by grep before adding this import.
 import driver.diagnostics.{
   Diag(..),
+  DiagId(..),
   Severity(..),
   cjAllToJsonWith,
   flushRunEnvelope,
@@ -304,7 +306,7 @@ intSeqIncl lo hi
 -- place (tier ii) to shrink the diff, so their eval helper stays too.
 listNthAt : List (Value e) -> Int -> Int -> Value e
 listNthAt [] orig _ =
-  runtimePanic "E-INDEX-OOB" ("index " ++ intToString orig ++ " out of bounds")
+  runtimePanic EIndexOob ("index " ++ intToString orig ++ " out of bounds")
 listNthAt (x :: xs) orig i
   | i <= 0 = x
   | otherwise = listNthAt xs orig (i - 1)
@@ -828,7 +830,7 @@ forceMemo cell name f =
 blackholeCell : String -> Unit -> <e> Value e
 blackholeCell name _ =
   runtimePanic
-    "E-CYCLIC-VALUE"
+    ECyclicValue
     "`\{name}` refers to itself during its own initialization; a value cannot be defined in terms of itself"
 
 export
@@ -1144,7 +1146,7 @@ apply f x =
   let _ =
     if d > evalDepthLimit then
       runtimePanic
-        "E-STACK-OVERFLOW"
+        EStackOverflow
         "recursion too deep: evaluator call depth exceeded \{intToString evalDepthLimit}; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`"
   let r = applyDispatch f x
   evalDepthRef := d - 1
@@ -1155,7 +1157,7 @@ applyDispatch f x = match applyOpt f x
   Some v => v
   None =>
     let _ = markFunSite f
-    runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+    runtimePanic ENonexhaustiveMatch "non-exhaustive match"
 
 applyOpt : Value e -> Value e -> <e> Option (Value e)
 applyOpt (VClosure env pats body site) arg = applyClosure env pats body site arg
@@ -1169,7 +1171,7 @@ applyOpt (VMulti vs) arg =
       Some r => Some r
       None => noCandidateMatched vs
 applyOpt other _ =
-  runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
+  runtimePanic ENotAFunction ("applied non-function: " ++ ppValue other)
 
 -- Every candidate refused the argument.  The clauses of one user function
 -- fall through like a `match` (applyDispatch raises at the function's site);
@@ -1299,7 +1301,7 @@ reportIfUndecidable : String -> List (Value e) -> Unit
 reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
-      "E-AMBIGUOUS-DISPATCH"
+      EAmbiguousDispatch
       "dispatch on a receiver of type `\{typeTagName tag}` is undecidable: more than one impl is declared at that type head"
   | otherwise = ()
 
@@ -1939,7 +1941,7 @@ evalIndex _ _ = panic "index is not an Int"
 evalIndexInt : Value e -> Int -> Value e
 evalIndexInt (VArray a) i
   | i < 0 || i >= arrayLength a =
-    runtimePanic "E-INDEX-OOB" ("index " ++ intToString i ++ " out of bounds")
+    runtimePanic EIndexOob ("index " ++ intToString i ++ " out of bounds")
   | otherwise = arrayGetUnsafe i a
 evalIndexInt (VList vs) i = listNthAt vs i i
 evalIndexInt (VString s) i = stringIndexCp s i
@@ -1949,7 +1951,7 @@ evalIndexInt _ _ = panic "index on non-array/list/string"
 stringIndexCp : String -> Int -> Value e
 stringIndexCp s i
   | i < 0 || i >= stringLength s =
-    runtimePanic "E-INDEX-OOB" ("index " ++ intToString i ++ " out of bounds")
+    runtimePanic EIndexOob ("index " ++ intToString i ++ " out of bounds")
   | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
 
 export
@@ -1970,7 +1972,7 @@ sliceArray : Array (Value e) -> Int -> Int -> Value e
 sliceArray a lo hiX
   | lo < 0 || hiX > arrayLength a || hiX - lo < 0 =
     runtimePanic
-      "E-SLICE-OOB"
+      ESliceOob
       "slice [\{intToString lo}..\{intToString (hiX - 1)}] out of bounds"
   | otherwise =
     VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
@@ -2100,7 +2102,7 @@ blockLetLast site env pat e = match matchPat pat (eval env e)
 letRefuted : Loc -> a
 letRefuted site =
   let _ = updateEvalLoc site
-  runtimePanic "E-LET-REFUTE" "let pattern match failed"
+  runtimePanic ELetRefute "let pattern match failed"
 
 blockRecLet : EvalEnv (Value e) -> String -> Expr -> List DoStmt -> <e> Value e
 blockRecLet env f e rest =
@@ -2187,7 +2189,7 @@ isNullary _ = False
 evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
 evalMatch site _ _ [] =
   let _ = updateEvalLoc site
-  runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+  runtimePanic ENonexhaustiveMatch "non-exhaustive match"
 evalMatch site env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
   None => evalMatch site env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
@@ -2296,11 +2298,11 @@ evalArith "-" (VInt a) (VInt b)
   | otherwise = VInt (a - b)
 evalArith "*" (VInt a) (VInt b) = checkedInt "*" a b (checkedMul a b)
 evalArith "/" (VInt a) (VInt b)
-  | b == 0 = runtimePanic "E-DIV-ZERO" "division by zero"
+  | b == 0 = runtimePanic EDivZero "division by zero"
   | a == intMinBound && b == -1 = intOverflow (overflowOperands "/" a b)
   | otherwise = VInt (a / b)
 evalArith "%" (VInt a) (VInt b)
-  | b == 0 = runtimePanic "E-MOD-ZERO" "modulo by zero"
+  | b == 0 = runtimePanic EModZero "modulo by zero"
   | otherwise = VInt (a % b)
 -- An `Int` comparison is answered here, ahead of the boxed-shape arms below that
 -- every other operand pair has to pass; it is `valueCompare`'s `VInt` answer.
@@ -2345,10 +2347,10 @@ evalArithU64 "+" a b = u64Value (H.add a b)
 evalArithU64 "-" a b = u64Value (H.sub a b)
 evalArithU64 "*" a b = u64Value (H.mul a b)
 evalArithU64 "/" a b
-  | H.isZero b = runtimePanic "E-DIV-ZERO" "division by zero"
+  | H.isZero b = runtimePanic EDivZero "division by zero"
   | otherwise = u64Value (fst (H.divMod a b))
 evalArithU64 "%" a b
-  | H.isZero b = runtimePanic "E-MOD-ZERO" "modulo by zero"
+  | H.isZero b = runtimePanic EModZero "modulo by zero"
   | otherwise = u64Value (snd (H.divMod a b))
 evalArithU64 "==" a b = VBool (H.compareU64 a b == Eq)
 evalArithU64 "/=" a b = VBool (H.compareU64 a b /= Eq)
@@ -2369,10 +2371,10 @@ evalArithI64 "+" a b = i64Value (H.add a b)
 evalArithI64 "-" a b = i64Value (H.sub a b)
 evalArithI64 "*" a b = i64Value (H.mul a b)
 evalArithI64 "/" a b
-  | H.isZero b = runtimePanic "E-DIV-ZERO" "division by zero"
+  | H.isZero b = runtimePanic EDivZero "division by zero"
   | otherwise = i64Value (fst (H.divModI64 a b))
 evalArithI64 "%" a b
-  | H.isZero b = runtimePanic "E-MOD-ZERO" "modulo by zero"
+  | H.isZero b = runtimePanic EModZero "modulo by zero"
   | otherwise = i64Value (snd (H.divModI64 a b))
 evalArithI64 "==" a b = VBool (H.compareI64 a b == Eq)
 evalArithI64 "/=" a b = VBool (H.compareI64 a b /= Eq)
@@ -2404,8 +2406,7 @@ overflowOperand : Int -> String
 overflowOperand n = if n < 0 then "(\{n})" else intToString n
 
 intOverflow : String -> Value e
-intOverflow operation =
-  runtimePanic "E-INT-OVERFLOW" "\{operation} overflows Int"
+intOverflow operation = runtimePanic EIntOverflow "\{operation} overflows Int"
 
 -- An arithmetic operator whose operands typecheck grounded to the scalar head
 -- [tag].  At a fixed-width head (`U8`/`U16`/`U32`) the `Int` result is reduced
@@ -2969,7 +2970,7 @@ confined write mode (VList elems) path k =
   match confineFileBounds write entry (map unString elems) (unString path)
     None => k ()
     Some msg => match mode
-      FollowPanic => runtimePanic "E-PANIC" msg
+      FollowPanic => runtimePanic EPanic msg
       _ => VCon "Err" [VString msg]
 confined _ _ _ _ _ = panic "file extern: the granted authority is not a List"
 
@@ -3289,7 +3290,7 @@ startOrNext l next = if isNoLoc l then exprStartLoc next else l
 -- range,severity,source}]}]}) is byte-shape-identical to a compile-time
 -- diagnostic. With no source text, the serializer preserves Loc coordinates.
 export
-runtimePanic : String -> String -> a
+runtimePanic : DiagCode -> String -> a
 runtimePanic code msg = match !currentEvalLoc
   Loc f sl sc el ec =>
     let ff = if f == "" then !currentEvalFile else f
@@ -3297,7 +3298,8 @@ runtimePanic code msg = match !currentEvalLoc
     -- 0x01 sentinel so the `panic` abort primitive (mdk_panic) prints it verbatim
     -- rather than re-wrapping it in its native-user-panic `[E-PANIC]` banner.
     if !runJsonMode then
-      let diag = Diag SevError code msg (Some (Loc ff sl sc el ec)) None None
+      let diag =
+        Diag SevError (Coded code) msg (Some (Loc ff sl sc el ec)) None None
       -- `pendingRunDiags` FIRST, so the driver's pre-eval warnings and this runtime
       -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
       -- not stage anything, which makes this byte-identical to the old single-triple
@@ -3354,7 +3356,7 @@ pDiscard _ = VUnit
 -- catchable panics, see AGENTS.md).  Wiring the extern to the same host
 -- `panic` fixes both `explicit_panic`/`let_else_fail` fixtures.
 pPanic : Value e -> <e> a
-pPanic v = runtimePanic "E-PANIC" (unString v)
+pPanic v = runtimePanic EPanic (unString v)
 
 pRef : Value e -> <e> Value e
 pRef v = VRef (Ref v)
@@ -3659,7 +3661,7 @@ externBindings _ = [
   ("stashRunStdout", prim1M pStashRunStdout),
   ("enableRunStdoutFlush", prim1M pEnableRunStdoutFlush),
   ("panic", prim1 pPanic),
-  ("indexError", prim1 (s => runtimePanic "E-INDEX-OOB" (unString s))),
+  ("indexError", prim1 (s => runtimePanic EIndexOob (unString s))),
   ("indexErrorAt", prim1 pIndexErrorAt),
   ("indexErrorAtSite", prim2 pIndexErrorAtSite),
   ("panicAt", prim2 pPanicAt),
@@ -3726,13 +3728,13 @@ pBitXor _ _ = panic "bitXor: not Ints"
 -- the panic is located.
 pShiftLeft : Value e -> Value e -> <e> Value e
 pShiftLeft (VInt a) (VInt b)
-  | b < 0 = runtimePanic "E-PANIC" "shiftLeft: negative shift \{b}"
+  | b < 0 = runtimePanic EPanic "shiftLeft: negative shift \{b}"
   | otherwise = VInt (shiftLeft a b)
 pShiftLeft _ _ = panic "shiftLeft: not Ints"
 
 pShiftRight : Value e -> Value e -> <e> Value e
 pShiftRight (VInt a) (VInt b)
-  | b < 0 = runtimePanic "E-PANIC" "shiftRight: negative shift \{b}"
+  | b < 0 = runtimePanic EPanic "shiftRight: negative shift \{b}"
   | otherwise = VInt (shiftRight a b)
 pShiftRight _ _ = panic "shiftRight: not Ints"
 
@@ -3806,7 +3808,7 @@ getByte64 off arr i = match arrayGetUnsafe (off + i) arr
 pBytesToFloat64 : Value e -> Value e -> <e> Value e
 pBytesToFloat64 (VArray arr) (VInt off)
   | off < 0 || off > arrayLength arr - 8 =
-    runtimePanic "E-INDEX-OOB" ("index " ++ intToString off ++ " out of bounds")
+    runtimePanic EIndexOob ("index " ++ intToString off ++ " out of bounds")
 pBytesToFloat64 (VArray arr) (VInt off) =
   -- Build a host Array Int of 8 bytes, then delegate to the C bytesToFloat64.
   -- Avoids the 63-bit integer overflow that plagues assembleBits+intBitsToFloat
@@ -4121,7 +4123,7 @@ pStringSliceBytes _ _ _ = panic "stringSliceBytes: bad operands"
 -- fmt has not split across lines (test/diff_compiler_capability_matrix.sh).
 pIndexErrorAt : Value e -> <e> Value e
 pIndexErrorAt (VInt i) =
-  runtimePanic "E-INDEX-OOB" "index \{intToString i} out of bounds"
+  runtimePanic EIndexOob "index \{intToString i} out of bounds"
 pIndexErrorAt _ = panic "indexErrorAt: bad operand"
 
 -- indexErrorAtSite site idx: indexErrorAt for a native build's located read.
@@ -4139,7 +4141,7 @@ pPanicAt _ v = pPanic v
 pSliceError : Value e -> Value e -> <e> Value e
 pSliceError (VInt lo) (VInt hi) =
   runtimePanic
-    "E-SLICE-OOB"
+    ESliceOob
     "slice [\{intToString lo}..\{intToString hi}] out of bounds"
 pSliceError _ _ = panic "sliceError: bad operands"
 
@@ -4358,7 +4360,7 @@ evalMain prog = withFacts
   (_ =>
     match lookupBinding "main" (evalOneFacts emptyFacts [] ("__main__", prog))
       Some v => ppValue (force v)
-      None => runtimePanic "E-NO-MAIN" noMainMsg)
+      None => runtimePanic ENoMain noMainMsg)
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputRef) and return the captured stdout — diffs against === EVAL ===.
@@ -4396,7 +4398,7 @@ shadowedFun _ _ = False
 runMainForEffect : List (String, Value e) -> <e> Value e
 runMainForEffect binds = match lookupBinding "main" binds
   Some v => force v
-  None => runtimePanic "E-NO-MAIN" noMainMsg
+  None => runtimePanic ENoMain noMainMsg
 
 -- ── multi-module evaluation (per-module frames over a shared global) ───────
 -- The prelude (core) installs GLOBALLY

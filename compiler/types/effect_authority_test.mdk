@@ -1,6 +1,7 @@
 -- The anti-laundering matrix for named authorities: every negative beside its
 -- honest control, observed through production inference on tiny programs.
 -- The rows come from docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md.
+import support.diag_codes.{codeText}
 import test.{expectAll, expectEqual, expectTrue, expectFalse}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
@@ -36,7 +37,7 @@ codes source =
     "authority",
     desugar (parseLocated (prelude ++ source)),
   )
-  map tcCode errors
+  map (d => codeText (tcCode d)) errors
 
 schemeOf : String -> String -> String
 schemeOf source name =
@@ -632,7 +633,7 @@ claimCodes : String -> List String
 claimCodes body = moduleCodesOf provider body
 
 moduleCodes : ModDiags -> List String
-moduleCodes (_, (_, errors, _)) = map tcCode errors
+moduleCodes (_, (_, errors, _)) = map (d => codeText (tcCode d)) errors
 
 claimAccepts : String -> Bool
 claimAccepts body = match claimCodes body
@@ -1350,7 +1351,7 @@ libCodes : String -> List String
 libCodes body =
   flatMap
     (m => match m
-      (_, (_, errors, _)) => map tcCode errors)
+      (_, (_, errors, _)) => map (d => codeText (tcCode d)) errors)
     (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
       (parseLocated prelude)) [
       (

@@ -11,6 +11,7 @@
 -- `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`,
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_mono.{headTyconMono, headTyconNameMono, monoUnboundIds}
 import types.tc_state.{wPush}
 import frontend.ast.{
@@ -128,7 +129,7 @@ erredDuring mctx act =
 
 -- Push one type-error message at the span of the construct around it.
 export
-pushTypeError : ModuleCtx -> String -> String -> Unit
+pushTypeError : ModuleCtx -> DiagCode -> String -> Unit
 pushTypeError mctx code msg =
   recordTypeError mctx (TcDiag code 1 mctx.mcLoc msg None None)
 
@@ -144,7 +145,7 @@ pushTypeError mctx code msg =
 -- that parses without location state (every span degenerate and equal)
 -- still keeps one report per binding.
 export
-pushTypeErrorAt : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorAt : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
 pushTypeErrorAt mctx code loc msg =
   let at = orElseLoc loc mctx.mcLoc
   let key = "\{code}\t\{mctx.mcCells.currentFn.value}\t\{locKey at}\t\{msg}"
@@ -174,7 +175,7 @@ pushTypeErrorAt mctx code loc msg =
 -- both, so a key is present iff a diagnostic with that rendered message is in
 -- the channel.
 export
-pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
+pushTypeErrorOnce : ModuleCtx -> DiagCode -> String -> Unit
 pushTypeErrorOnce mctx code msg = pushTypeErrorOnceAt mctx code None msg
 
 -- The dedup funnel: record [d] unless [seen] says its duplicate is already in the
@@ -196,7 +197,7 @@ alreadyReportedAt mctx msg at =
 -- inference).  The short-circuit bumps the occurrence counter (see
 -- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 export
-pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorOnceAt : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt mctx code loc msg =
   recordUnlessSeen
     mctx
@@ -209,7 +210,7 @@ pushTypeErrorOnceAt mctx code loc msg =
 -- where two sites with identical text must each be reported.  An ambiguous goal
 -- folds on its span instead (`pushAmbiguityAt`).
 export
-pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite : ModuleCtx -> DiagCode -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite mctx code loc msg =
   let at = orElseLoc loc mctx.mcLoc
   recordUnlessSeen
@@ -227,7 +228,7 @@ export
 pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
 pushAmbiguityAt mctx namesGoal loc msg =
   let at = orElseLoc loc mctx.mcLoc
-  let code = "T-AMBIGUOUS-INSTANCE"
+  let code = TAmbiguousInstance
   if isNone at then
     pushTypeErrorOnceAt mctx code at msg
   else
@@ -296,7 +297,7 @@ pushBoundaryAmbiguity mctx rigidIds args loc msg =
 -- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
 export
 pushTypeErrorHelpFixAt : ModuleCtx ->
-  String ->
+  DiagCode ->
   Option Loc ->
   String ->
   String ->
@@ -410,7 +411,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
   Some (help, fix) =>
     pushTypeErrorHelpFixAt
       mctx
-      "T-NO-IMPL"
+      TNoImpl
       loc
       "\{noImplFoundMsg iface args}; \{help}"
       help
@@ -418,5 +419,5 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
   None =>
     let (msg, mhint) = noImplFoundMsgHinted mctx iface args
     match mhint
-      Some hint => pushTypeErrorHelpFixAt mctx "T-NO-IMPL" loc msg hint None
-      None => pushTypeErrorOnceAt mctx "T-NO-IMPL" loc msg
+      Some hint => pushTypeErrorHelpFixAt mctx TNoImpl loc msg hint None
+      None => pushTypeErrorOnceAt mctx TNoImpl loc msg

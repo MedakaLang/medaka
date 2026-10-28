@@ -17,6 +17,7 @@
 -- `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`,
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   AbsorptionEvent(..),
   MethodScope(..),
@@ -770,7 +771,7 @@ aliasMethodKeyApply mctx g (k :: rest) tab =
     _ =>
       pushTypeErrorOnceAt
         mctx
-        "T-AMBIGUOUS-ALIAS-METHOD"
+        TAmbiguousAliasMethod
         (aliasRowLastLoc hits)
         (aliasAmbiguityMsg k hits)
       tab
@@ -1736,7 +1737,7 @@ pushAmbiguousImports mctx _ _ [] = ()
 pushAmbiguousImports mctx depId loc ((n, mids) :: rest) =
   pushTypeErrorHelpFixAt
     mctx
-    "T-AMBIGUOUS-REEXPORT"
+    TAmbiguousReexport
     (Some loc)
     (ambigReexportMsg n depId mids)
     (ambigReexportHelp n depId mids)

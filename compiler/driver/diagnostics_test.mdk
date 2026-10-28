@@ -18,7 +18,7 @@ import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
   analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
   CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
-  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..),
+  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..), diagIdText,
   foldCachedIdentity, resolveCachedIdentity
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
@@ -340,7 +340,7 @@ test "a check drive built from a report holds that report's schemes after a late
 -- ── the front end carries every verdict ────────────────────────────────────
 
 diagText : Diag -> String
-diagText (Diag _ code msg _ _ _) = "\{code}: \{msg}"
+diagText (Diag _ code msg _ _ _) = "\{diagIdText code}: \{msg}"
 
 -- One single-file front-end run of [src] under `check`'s drive.
 frontOfFile : String -> String -> String -> FrontOutput CheckDump

@@ -34,7 +34,7 @@ import test.{expectEqual, expectTrue, expectEach, fail}
 import tools.lint_cache.{decodeEntry, LintEntry}
 import string.{replace}
 import support.util.{anyList, sortUniqS}
-import driver.diagnostics.{Diag(..)}
+import driver.diagnostics.{Diag(..), diagIdText}
 import tools.lint.{
   StdlibIndex, buildStdlibIndexResult, mergeCrossFileIntoTriples
 }
@@ -58,7 +58,7 @@ fixtureFiles = [
 ]
 
 diagCode : Diag -> String
-diagCode (Diag _ code _ _ _ _) = code
+diagCode (Diag _ code _ _ _ _) = diagIdText code
 
 tripleDiags : (String, String, List Diag) -> List Diag
 tripleDiags (_, _, diags) = diags
@@ -78,7 +78,7 @@ tripleKeysOne : (String, String, List Diag) -> List String
 tripleKeysOne (path, _, diags) = map (diagKeyOf path) diags
 
 diagKeyOf : String -> Diag -> String
-diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{code}::\{msg}"
+diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{diagIdText code}::\{msg}"
 
 dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)

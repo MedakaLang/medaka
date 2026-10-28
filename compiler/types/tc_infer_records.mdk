@@ -12,6 +12,7 @@
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_infer`, `tc_elab`,
 -- `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   CtorFieldConflict(..),
   DynCtx,
@@ -113,7 +114,7 @@ checkMissingFields mctx _ [] _ = ()
 checkMissingFields mctx rname (fname :: rest) supplied
   | omHasKey fname supplied = checkMissingFields mctx rname rest supplied
   | otherwise =
-    pushTypeError mctx "T-MISSING-FIELD" (missingFieldMsg fname rname)
+    pushTypeError mctx TMissingField (missingFieldMsg fname rname)
     checkMissingFields mctx rname rest supplied
 
 -- ── #2839: the stamp names the record by IDENTITY, not by a spelling ─────────
@@ -394,19 +395,16 @@ pushCtorFieldConflict : ModuleCtx ->
   CtorFieldConflict ->
   Unit
 pushCtorFieldConflict mctx fname tname (CtorWithholds sib) =
-  pushTypeError
-    mctx
-    "T-FIELD-NOT-IN-ALL-CTORS"
-    (fieldNotInAllCtorsMsg fname tname sib)
+  pushTypeError mctx TFieldNotInAllCtors (fieldNotInAllCtorsMsg fname tname sib)
 pushCtorFieldConflict mctx fname tname (CtorSlotsDiffer a i b j) =
   pushTypeError
     mctx
-    "T-FIELD-POSITION-DIFFERS"
+    TFieldPositionDiffers
     (fieldPositionDiffersMsg fname tname (a, i) (b, j))
 pushCtorFieldConflict mctx fname tname (CtorTypesDiffer a ta b tb) =
   pushTypeError
     mctx
-    "T-FIELD-TYPE-DIFFERS"
+    TFieldTypeDiffers
     (fieldTypeDiffersMsg fname tname a ta b tb)
 
 -- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
@@ -433,7 +431,7 @@ recordUpdateWellTyped mctx bt rname ri fn = match headTyconMono bt
       Some (ctors@(_ :: _ :: _)) =>
         pushTypeError
           mctx
-          "T-UPDATE-MULTI-CTOR"
+          TUpdateMultiCtor
           (updateMultiCtorMsg
             fn
             (optionOr rname (headTyconNameMono bt))
@@ -508,7 +506,7 @@ resolveFieldRecord mctx te fname = match headTyconNameMono te
       if omHasKey
         (receiverTypeWord te r)
         mctx.mcGraph.abstractRecordTypesRef.value then
-        pushTypeError mctx "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
+        pushTypeError mctx TAbstractField (abstractFieldMsg r fname)
         None
       else
         resolveFieldByOwners mctx te fname
@@ -774,12 +772,12 @@ resolveFieldUnknownReceiver mctx fname owners =
     [] => match owners
       [r] => pairRecordByName mctx r
       _ =>
-        pushTypeError mctx "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
+        pushTypeError mctx TAmbiguousField (ambiguousFieldMsg fname owners)
         None
     cands =>
       pushTypeError
         mctx
-        "T-AMBIGUOUS-FIELD"
+        TAmbiguousField
         (ambiguousFieldDeclsMsg fname owners cands)
       None
 
@@ -1107,7 +1105,7 @@ pairRecordByName mctx r = map (ri => (r, ri)) (lookupRecordByName mctx r)
 
 pushUnknownField : ModuleCtx -> String -> String -> Unit
 pushUnknownField mctx fname rname =
-  pushTypeError mctx "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
+  pushTypeError mctx TUnknownField (unknownFieldMsg fname rname)
 
 -- `declared`: the record's own field names, so a genuine typo (`aeg` for
 -- `age`) can be suggested (ERROR-QUALITY dim F).  When a close-enough
@@ -1130,11 +1128,11 @@ pushUnknownFieldMaybeSuggest : ModuleCtx ->
   Unit
 pushUnknownFieldMaybeSuggest mctx fname rname declared =
   match suggestField fname declared
-    None => pushTypeError mctx "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
+    None => pushTypeError mctx TUnknownField (unknownFieldMsg fname rname)
     Some sug =>
       pushTypeErrorHelpFixAt
         mctx
-        "T-UNKNOWN-FIELD"
+        TUnknownField
         mctx.mcLoc
         (unknownFieldMsg fname rname ++ "; did you mean `\{sug}`?")
         "did you mean `\{sug}`?"
@@ -1184,7 +1182,7 @@ keepBetterField c d (Some (bc, bd)) =
 export
 unknownRecordFresh : ModuleCtx -> String -> Mono
 unknownRecordFresh mctx name =
-  pushTypeError mctx "T-UNKNOWN-RECORD" (unknownRecordMsg name)
+  pushTypeError mctx TUnknownRecord (unknownRecordMsg name)
   freshVar mctx ()
 
 export
@@ -1249,7 +1247,7 @@ updateAuthority mctx rname fields assigned id source
     else
       pushTypeError
         mctx
-        "T-AUTHORITY-EXISTENTIAL-SCOPE"
+        TAuthorityExistentialScope
         (partialExistentialUpdateMsg rname mentioning)
       AVar (freshInferenceAuthvar mctx id source)
   | otherwise = AVar (freshInferenceAuthvar mctx id source)

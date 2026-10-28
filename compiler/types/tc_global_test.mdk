@@ -10,6 +10,7 @@
 -- the remaining callers of each check.  What a whole check rejects is observed
 -- through `types.typecheck` in `typecheck_test`.
 
+import support.diag_codes.{codeText}
 import test.{expectAll, expectEqual}
 import frontend.ast.{Decl(..), Loc(..), TabKey, Ty(..)}
 import types.tc_global.{
@@ -85,7 +86,10 @@ warningCodesOver : (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
   String ->
   List String
 warningCodesOver check src =
-  codesFrom (m => map tcCode m.mcCells.matchWarnings.value) check src
+  codesFrom
+    (m => map (d => codeText (tcCode d)) m.mcCells.matchWarnings.value)
+    check
+    src
 
 -- What [read] takes from a fresh module record after `check` ran over [src].
 codesFrom : (ModuleCtx -> List String) ->

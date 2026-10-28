@@ -348,8 +348,9 @@ import types.tc_env.{
   publicDataDecls,
 }
 import types.tc_diag_text.{
-  prependDiagOpt,
-  cohIncomparableHelp,
+  prependConflict,
+  prependIncomparable,
+  dropAmbiguity,
   stickyDiagsInPushOrder,
 }
 import types.tc_scope.{
@@ -2905,14 +2906,7 @@ cohOntoFull : Option String ->
   (List (String, PubScheme), List TcDiag, List TcDiag) ->
   (List (String, PubScheme), List TcDiag, List TcDiag)
 cohOntoFull hard soft (schemes, errs, warns) =
-  (schemes, cohHardOnto hard errs, cohSoftOnto soft warns)
-
-cohHardOnto : Option String -> List TcDiag -> List TcDiag
-cohHardOnto hard errs = prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs
-
-cohSoftOnto : Option String -> List TcDiag -> List TcDiag
-cohSoftOnto soft warns =
-  prependDiagOpt "W-INCOMPARABLE-IMPLS" 2 (Some cohIncomparableHelp) soft warns
+  (schemes, prependConflict hard errs, prependIncomparable soft warns)
 
 -- rewrite the LAST module's payload in a per-module diag list (the entry module is
 -- last in dependency-first order).
@@ -2982,7 +2976,7 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
         let reported = driveErrs findings perMod
         let kept =
           if anyList (d => inMainBinding entry (tcLoc d)) reported then
-            filterList (d => tcCode d /= "T-AMBIGUOUS-INSTANCE") diags
+            dropAmbiguity diags
           else
             diags
         (map (verdictFinding mid False) (mainUseDiags loc entry ++ kept), ev)

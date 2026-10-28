@@ -6,6 +6,7 @@
 -- no rows, effects, authority or predicate context, so none of #2555's four
 -- recorded deviations is asserted or contradicted here.
 
+import support.diag_codes.{codeText}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, elemIndex, filter, lookup, nub, reverse}
@@ -502,7 +503,10 @@ schemeOf name source =
     []
     prelude
     [("law", desugar (parseLocated source))]
-  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  let codes =
+    flatMap
+      ((_, (_, errors, _)) => map (d => codeText (tcCode d)) errors)
+      results
   let schemes = match reverse results
     (_, (own, _, _)) :: _ => map ((n, p) => (n, ppScheme p.psScheme)) own
     [] => []

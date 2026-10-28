@@ -20,6 +20,7 @@
 -- `readFile` call in a `test "…"` body fails to build under the eval
 -- engine and succeeds under `medaka test --native`.
 
+import support.diag_codes.{codeText}
 import test.{expectEach, expectEqual, expectTrue}
 import frontend.parser.{parse, parseLocated}
 import frontend.resolve.{
@@ -110,7 +111,9 @@ test "every ModuleExports export-namespace field has an ns* descriptor, derived 
 orphanMessages : String -> List String
 orphanMessages src =
   let errs = resolveProgram [] [] (parse src)
-  map ppResError (filterList (e => resErrorCode e == "R-ORPHAN-SIGNATURE") errs)
+  map
+    ppResError
+    (filterList (e => codeText (resErrorCode e) == "R-ORPHAN-SIGNATURE") errs)
 
 orphanMessage : String -> String
 orphanMessage n =
@@ -177,7 +180,7 @@ test "a signature whose name is bound is never an orphan" = expectEach [
 sigErrorSpans : String -> String -> List (Int, Int, Int)
 sigErrorSpans code src =
   let errs = resolveProgram [] [] (parseLocated src)
-  flatMap errorSpan (filterList (e => resErrorCode e == code) errs)
+  flatMap errorSpan (filterList (e => codeText (resErrorCode e) == code) errs)
 
 errorSpan : ResError -> List (Int, Int, Int)
 errorSpan e = match resErrorLoc e
@@ -219,7 +222,7 @@ test "an orphan signature's misspelling is its did-you-mean" =
     (map
       resErrorDidYouMean
       (filterList
-        (e => resErrorCode e == "R-ORPHAN-SIGNATURE")
+        (e => codeText (resErrorCode e) == "R-ORPHAN-SIGNATURE")
         (resolveProgram
           []
           []

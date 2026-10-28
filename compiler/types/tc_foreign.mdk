@@ -13,6 +13,7 @@
 -- `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`,
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
+import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   SigVars(..),
   GraphCtx,
@@ -311,7 +312,7 @@ ffiCheckShadowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: 
       None =>
         pushTypeErrorAt
           mctx
-          "T-FFI-BUILTIN-SHADOW"
+          TFfiBuiltinShadow
           (firstTyLoc ty)
           (ffiShadowMsg n (ppTy cat) (ppTy ty))
     None => ()
@@ -679,7 +680,7 @@ ffiCheckSpineRow mctx n ty catNames sub arrow cat decl =
     missing =>
       pushTypeErrorAt
         mctx
-        "T-FFI-CATALOG-NARROW"
+        TFfiCatalogNarrow
         (firstTyLoc ty)
         (ffiCatalogTailMsg n arrow missing)
 
@@ -729,7 +730,7 @@ ffiCheckCatalogRowOne mctx n ty arrow catRow catNames declRow =
     missing =>
       pushTypeErrorAt
         mctx
-        "T-FFI-CATALOG-NARROW"
+        TFfiCatalogNarrow
         (firstTyLoc ty)
         (ffiCatalogNarrowMsg n arrow catAtoms declAtoms missing)
 
@@ -854,7 +855,7 @@ ffiCheckExternPos mctx n fb t
   | otherwise =
     pushTypeErrorAt
       mctx
-      "T-FFI-NONCROSSABLE"
+      TFfiNoncrossable
       (orElseLoc (firstTyLoc t) fb)
       (ffiNonCrossableMsg n t)
 
