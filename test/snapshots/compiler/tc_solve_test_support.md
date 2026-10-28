@@ -1,5 +1,5 @@
 # META
-source_lines=246
+source_lines=247
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
@@ -10,6 +10,7 @@ stages=DESUGAR,MARK
 -- not import it; they build their inputs from `tc_test_support`.  No production module
 -- imports this file.
 
+import support.diag_codes.{codeText}
 import list.{sort, filter, sortOn, indexed}
 import test.{Expectation, expectEqual}
 import frontend.ast.{
@@ -62,7 +63,7 @@ checkDiagsOver core src =
     "probe",
     desugar (parseLocated src),
   )
-  map (d => (tcCode d, tcMsg d)) errors
+  map (d => (codeText (tcCode d), tcMsg d)) errors
 
 -- The codes of [checkDiags], in report order.
 export
@@ -249,6 +250,7 @@ valText (EvMethod iface arity r impls meths) =
 valText (EvLit f r) = "\{debug f} \{routeText r}"
 valText (EvHead h) = h
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false) (mem "filter" false) (mem "sortOn" false) (mem "indexed" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
@@ -270,7 +272,7 @@ valText (EvHead h) = h
 (DTypeSig true "checkDiags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "checkDiags" () (EApp (EVar "checkDiagsOver") (ELit (LString ""))))
 (DTypeSig true "checkDiagsOver" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "checkDiagsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "errors") PWild) (EApp (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "tcCode") (EVar "d")) (EApp (EVar "tcMsg") (EVar "d"))))) (EVar "errors")))))
+(DFunDef false "checkDiagsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "errors") PWild) (EApp (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))) (EApp (EVar "tcMsg") (EVar "d"))))) (EVar "errors")))))
 (DTypeSig true "checkCodes" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "checkCodes" ((PVar "src")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "checkDiags") (EVar "src"))))
 (DTypeSig true "expectChecks" (TyFun (TyCon "String") (TyCon "Expectation")))
@@ -336,6 +338,7 @@ valText (EvHead h) = h
 (DFunDef false "valText" ((PCon "EvLit" (PVar "f") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "f")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString ""))))
 (DFunDef false "valText" ((PCon "EvHead" (PVar "h"))) (EVar "h"))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false) (mem "filter" false) (mem "sortOn" false) (mem "indexed" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
@@ -357,7 +360,7 @@ valText (EvHead h) = h
 (DTypeSig true "checkDiags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "checkDiags" () (EApp (EVar "checkDiagsOver") (ELit (LString ""))))
 (DTypeSig true "checkDiagsOver" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "checkDiagsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "errors") PWild) (EApp (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "tcCode") (EVar "d")) (EApp (EVar "tcMsg") (EVar "d"))))) (EVar "errors")))))
+(DFunDef false "checkDiagsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "errors") PWild) (EApp (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src")))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))) (EApp (EVar "tcMsg") (EVar "d"))))) (EVar "errors")))))
 (DTypeSig true "checkCodes" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "checkCodes" ((PVar "src")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "checkDiags") (EVar "src"))))
 (DTypeSig true "expectChecks" (TyFun (TyCon "String") (TyCon "Expectation")))

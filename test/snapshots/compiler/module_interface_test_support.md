@@ -1,10 +1,11 @@
 # META
-source_lines=129
+source_lines=130
 stages=DESUGAR,MARK
 # SOURCE
 -- Helpers the tests of the module interface cache share (`module_interface_test`,
 -- `module_interface_sexp_test`, `typecheck_test`): a keyed drive over named
 -- sources, the fixture chain leaf, mid, entry, and the rendering of a report.
+import support.diag_codes.{codeText}
 import frontend.ast.{Decl}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -130,8 +131,9 @@ renderRow (mid, (schemes, errs, warns)) =
 
 export
 diagCode : TcDiag -> String
-diagCode (TcDiag code _ _ _ _ _) = code
+diagCode (TcDiag code _ _ _ _ _) = codeText code
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
@@ -164,8 +166,9 @@ diagCode (TcDiag code _ _ _ _ _) = code
 (DTypeSig true "renderRow" (TyFun (TyCon "ModDiags") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderRow" ((PTuple (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppPubScheme") (EApp (EVar "snd") (EVar "s"))))) (ELit (LString ""))))) (EVar "schemes")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString " error "))) (EApp (EVar "display") (EApp (EVar "diagCode") (EVar "d")))) (ELit (LString ""))))) (EVar "errs"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString " warning "))) (EApp (EVar "display") (EApp (EVar "diagCode") (EVar "d")))) (ELit (LString ""))))) (EVar "warns"))))
 (DTypeSig true "diagCode" (TyFun (TyCon "TcDiag") (TyCon "String")))
-(DFunDef false "diagCode" ((PCon "TcDiag" (PVar "code") PWild PWild PWild PWild PWild)) (EVar "code"))
+(DFunDef false "diagCode" ((PCon "TcDiag" (PVar "code") PWild PWild PWild PWild PWild)) (EApp (EVar "codeText") (EVar "code")))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
@@ -198,4 +201,4 @@ diagCode (TcDiag code _ _ _ _ _) = code
 (DTypeSig true "renderRow" (TyFun (TyCon "ModDiags") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderRow" ((PTuple (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppPubScheme") (EApp (EVar "snd") (EVar "s"))))) (ELit (LString ""))))) (EVar "schemes")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString " error "))) (EApp (EMethodRef "display") (EApp (EVar "diagCode") (EVar "d")))) (ELit (LString ""))))) (EVar "errs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString " warning "))) (EApp (EMethodRef "display") (EApp (EVar "diagCode") (EVar "d")))) (ELit (LString ""))))) (EVar "warns"))))
 (DTypeSig true "diagCode" (TyFun (TyCon "TcDiag") (TyCon "String")))
-(DFunDef false "diagCode" ((PCon "TcDiag" (PVar "code") PWild PWild PWild PWild PWild)) (EVar "code"))
+(DFunDef false "diagCode" ((PCon "TcDiag" (PVar "code") PWild PWild PWild PWild PWild)) (EApp (EVar "codeText") (EVar "code")))

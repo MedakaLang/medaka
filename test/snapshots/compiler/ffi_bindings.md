@@ -1,5 +1,5 @@
 # META
-source_lines=341
+source_lines=328
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration rules for a user `extern`'s host bindings and declared row,
@@ -16,6 +16,7 @@ stages=DESUGAR,MARK
 -- (`types/effect_domain.mdk`), so `"c*"` admits both `"c"` and `"c/m"`, while
 -- `"c"` does not admit `"c/m"` and `"c/*"` does not admit `"c"`.
 
+import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
@@ -35,7 +36,7 @@ import support.char.{isAlnum, isApos, isDigit}
 import string.{stripSuffix, toLower}
 
 -- One declaration diagnostic: its code, where it is reported, its message.
-public export data FfiDiag = FfiDiag String (Option Loc) String
+public export data FfiDiag = FfiDiag DiagCode (Option Loc) String
 
 -- The hosts a binding may name.
 ffiHosts : List String
@@ -53,7 +54,7 @@ ffiDeclarationDiags : Bool ->
   List FfiDiag
 ffiDeclarationDiags True d _ = match d.edBinds
   b :: _ =>
-    [FfiDiag "T-FFI-BUILTIN-BIND" (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
+    [FfiDiag TFfiBuiltinBind (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
   [] => []
 ffiDeclarationDiags False d row =
   let clauseDiags = ffiClauseDiags d.edName [] d.edBinds
@@ -64,7 +65,7 @@ ffiDeclarationDiags False d row =
   ffiLabelDiags d row ++ hostDiags ++ ffiBindDiags d
 
 isNotUnbound : FfiDiag -> Bool
-isNotUnbound (FfiDiag code _ _) = code /= "T-FFI-UNBOUND-HOST"
+isNotUnbound (FfiDiag code _ _) = code /= TFfiUnboundHost
 
 -- The row must name the foreign-call `FFI`, and the signature must have an
 -- arrow to carry a row at all.  A nullary extern is refused, not passed: the
@@ -74,14 +75,14 @@ ffiLabelDiags : ExternDecl -> Option (List EffAtomTy) -> List FfiDiag
 ffiLabelDiags d row =
   let fb = firstTyLoc d.edTy
   match row
-    None => [FfiDiag "T-FFI-NULLARY" fb (ffiNullaryMsg d.edName)]
+    None => [FfiDiag TFfiNullary fb (ffiNullaryMsg d.edName)]
     Some atoms =>
       if anyList isForeignCallAtom atoms then
         []
       else if anyList (a => a.eatLabel == "FFI") atoms then
-        [FfiDiag "T-FFI-UNLABELLED" fb (ffiDeclaredLabelMsg d.edName)]
+        [FfiDiag TFfiUnlabelled fb (ffiDeclaredLabelMsg d.edName)]
       else
-        [FfiDiag "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg d.edName)]
+        [FfiDiag TFfiUnlabelled fb (ffiUnlabelledMsg d.edName)]
 
 -- The foreign-call effect itself.  A label a module declares with `effect FFI`
 -- is spelled the same but is a user label, which the target check never gates,
@@ -106,15 +107,9 @@ ffiAtomHostDiags d a = match a.eatParam
       if anyList (b => b.ebHost == h) (externBindings d) then
         []
       else
-        [
-          FfiDiag
-            "T-FFI-UNBOUND-HOST"
-            (Some d.edLoc)
-            (ffiUnboundHostMsg d.edName h),
-        ]
-    None =>
-      [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName (Some p))]
-  _ => [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName None)]
+        [FfiDiag TFfiUnboundHost (Some d.edLoc) (ffiUnboundHostMsg d.edName h)]
+    None => [FfiDiag TFfiNoHost (Some d.edLoc) (ffiNoHostMsg d.edName (Some p))]
+  _ => [FfiDiag TFfiNoHost (Some d.edLoc) (ffiNoHostMsg d.edName None)]
 
 -- The host an `FFI` parameter names: a host alone, or a host, `/` and a
 -- non-empty library.
@@ -136,13 +131,10 @@ ffiClauseDiags : String -> List String -> List ExternBind -> List FfiDiag
 ffiClauseDiags _ _ [] = []
 ffiClauseDiags n seen (b :: rest)
   | not (contains b.ebHost ffiHosts) =
-    FfiDiag "T-FFI-UNKNOWN-HOST" (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
+    FfiDiag TFfiUnknownHost (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest
   | contains b.ebHost seen =
-    FfiDiag
-        "T-FFI-DUPLICATE-HOST"
-        (Some b.ebLoc)
-        (ffiDuplicateHostMsg n b.ebHost)
+    FfiDiag TFfiDuplicateHost (Some b.ebLoc) (ffiDuplicateHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest
   | otherwise = ffiClauseDiags n (b.ebHost :: seen) rest
 
@@ -152,14 +144,14 @@ ffiSymbolDiags d b = match b.ebHost
     if not (isIdentWith isCIdentStart isCIdentChar b.ebSymbol) then
       [
         FfiDiag
-          "T-FFI-C-SYMBOL"
+          TFfiCSymbol
           (Some b.ebLoc)
           (ffiCSymbolMsg d.edName b.ebSymbol (isEmptyBinds d)),
       ]
     else if startsWith "mdk_" b.ebSymbol then
       [
         FfiDiag
-          "T-FFI-RESERVED-NAME"
+          TFfiReservedName
           (Some b.ebLoc)
           (ffiReservedMsg d.edName b.ebSymbol (isEmptyBinds d)),
       ]
@@ -169,12 +161,7 @@ ffiSymbolDiags d b = match b.ebHost
     if isIdentWith isJsIdentStart isJsIdentChar b.ebSymbol then
       []
     else
-      [
-        FfiDiag
-          "T-FFI-JS-NAME"
-          (Some b.ebLoc)
-          (ffiJsNameMsg d.edName b.ebSymbol),
-      ]
+      [FfiDiag TFfiJsName (Some b.ebLoc) (ffiJsNameMsg d.edName b.ebSymbol)]
   _ => []
 
 isEmptyBinds : ExternDecl -> Bool
@@ -344,6 +331,7 @@ paramIsTopDomain (PSet None) = True
 paramIsTopDomain (p@(PProduct _)) = isSubTop p
 paramIsTopDomain _ = False
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternBind" true) (mem "ExternDecl" true) (mem "Loc" false) (mem "Ty" false) (mem "TyConOrigin" true) (mem "externBindings" false) (mem "firstTyLoc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "isSubTop" false))))
@@ -351,23 +339,23 @@ paramIsTopDomain _ = False
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isApos" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "toLower" false))))
-(DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
+(DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "DiagCode") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
 (DTypeSig false "ffiHosts" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ffiHosts" () (EListLit (ELit (LString "c")) (ELit (LString "js"))))
 (DTypeSig true "ffiDeclarationDiags" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
-(DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-BUILTIN-BIND"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
+(DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiBuiltinBind")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
 (DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "clauseDiags") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds"))) (DoLet false false (PVar "hostDiags") (EMatch (EVar "clauseDiags") (arm (PList) () (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "filterList") (EVar "isNotUnbound")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EVar "hostDiags")) (EApp (EVar "ffiBindDiags") (EVar "d"))))))
 (DTypeSig false "isNotUnbound" (TyFun (TyCon "FfiDiag") (TyCon "Bool")))
-(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (ELit (LString "T-FFI-UNBOUND-HOST"))))
+(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (EVar "TFfiUnboundHost")))
 (DTypeSig false "ffiLabelDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
+(DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNullary")) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnlabelled")) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnlabelled")) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
 (DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
 (DFunDef false "isForeignCallAtom" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatOrigin") (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))))
 (DTypeSig false "ffiRowHostDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
 (DFunDef false "ffiRowHostDiags" (PWild (PCon "None")) (EListLit))
 (DFunDef false "ffiRowHostDiags" ((PVar "d") (PCon "Some" (PVar "atoms"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "ffiAtomHostDiags") (EVar "d"))) (EApp (EApp (EVar "filterList") (EVar "isForeignCallAtom")) (EVar "atoms"))))
 (DTypeSig false "ffiAtomHostDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiAtomHostDiags" ((PVar "d") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPLit" (PLit (LString ""))) () (EListLit)) (arm (PCon "EPLit" (PVar "p")) () (EMatch (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "ffiHosts")) (arm (PCon "Some" (PVar "h")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "d"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNBOUND-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiUnboundHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "h")))))) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NO-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EApp (EVar "Some") (EVar "p")))))))) (arm PWild () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NO-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "None")))))))
+(DFunDef false "ffiAtomHostDiags" ((PVar "d") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPLit" (PLit (LString ""))) () (EListLit)) (arm (PCon "EPLit" (PVar "p")) () (EMatch (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "ffiHosts")) (arm (PCon "Some" (PVar "h")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "d"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnboundHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiUnboundHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "h")))))) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNoHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EApp (EVar "Some") (EVar "p")))))))) (arm PWild () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNoHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "None")))))))
 (DTypeSig false "ffiParamHost" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "ffiParamHost" (PWild (PList)) (EVar "None"))
 (DFunDef false "ffiParamHost" ((PVar "p") (PCons (PVar "h") (PVar "hs"))) (EIf (EBinOp "==" (EVar "p") (EVar "h")) (EApp (EVar "Some") (EVar "h")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "h"))) (ELit (LString "/")))) (EVar "p")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "p")) (EBinOp "+" (EApp (EVar "stringLength") (EVar "h")) (ELit (LInt 1))))) (EApp (EVar "Some") (EVar "h")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "hs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -375,9 +363,9 @@ paramIsTopDomain _ = False
 (DFunDef false "ffiBindDiags" ((PVar "d")) (EBinOp "++" (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds")) (EApp (EApp (EVar "flatMap") (EApp (EVar "ffiSymbolDiags") (EVar "d"))) (EApp (EVar "externBindings") (EVar "d")))))
 (DTypeSig false "ffiClauseDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "ExternBind")) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
 (DFunDef false "ffiClauseDiags" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ffiClauseDiags" ((PVar "n") (PVar "seen") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "ffiHosts"))) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNKNOWN-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiUnknownHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-DUPLICATE-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiDuplicateHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EBinOp "::" (EFieldAccess (EVar "b") "ebHost") (EVar "seen"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "ffiClauseDiags" ((PVar "n") (PVar "seen") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "ffiHosts"))) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnknownHost")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiUnknownHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiDuplicateHost")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiDuplicateHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EBinOp "::" (EFieldAccess (EVar "b") "ebHost") (EVar "seen"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ffiSymbolDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyCon "ExternBind") (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiSymbolDiags" ((PVar "d") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "ebHost") (arm (PLit (LString "c")) () (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isCIdentStart")) (EVar "isCIdentChar")) (EFieldAccess (EVar "b") "ebSymbol"))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-C-SYMBOL"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiCSymbolMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-RESERVED-NAME"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiReservedMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EListLit)))) (arm (PLit (LString "js")) () (EIf (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isJsIdentStart")) (EVar "isJsIdentChar")) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-JS-NAME"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiJsNameMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")))))) (arm PWild () (EListLit))))
+(DFunDef false "ffiSymbolDiags" ((PVar "d") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "ebHost") (arm (PLit (LString "c")) () (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isCIdentStart")) (EVar "isCIdentChar")) (EFieldAccess (EVar "b") "ebSymbol"))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiCSymbol")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiCSymbolMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiReservedName")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiReservedMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EListLit)))) (arm (PLit (LString "js")) () (EIf (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isJsIdentStart")) (EVar "isJsIdentChar")) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiJsName")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiJsNameMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")))))) (arm PWild () (EListLit))))
 (DTypeSig false "isEmptyBinds" (TyFun (TyCon "ExternDecl") (TyCon "Bool")))
 (DFunDef false "isEmptyBinds" ((PVar "d")) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isIdentWith" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -439,6 +427,7 @@ paramIsTopDomain _ = False
 (DFunDef false "paramIsTopDomain" ((PAs "p" (PCon "PProduct" PWild))) (EApp (EVar "isSubTop") (EVar "p")))
 (DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternBind" true) (mem "ExternDecl" true) (mem "Loc" false) (mem "Ty" false) (mem "TyConOrigin" true) (mem "externBindings" false) (mem "firstTyLoc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "isSubTop" false))))
@@ -446,23 +435,23 @@ paramIsTopDomain _ = False
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isApos" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "toLower" false))))
-(DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
+(DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "DiagCode") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
 (DTypeSig false "ffiHosts" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ffiHosts" () (EListLit (ELit (LString "c")) (ELit (LString "js"))))
 (DTypeSig true "ffiDeclarationDiags" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
-(DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-BUILTIN-BIND"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
+(DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiBuiltinBind")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
 (DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "clauseDiags") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds"))) (DoLet false false (PVar "hostDiags") (EMatch (EVar "clauseDiags") (arm (PList) () (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "filterList") (EVar "isNotUnbound")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EVar "hostDiags")) (EApp (EVar "ffiBindDiags") (EVar "d"))))))
 (DTypeSig false "isNotUnbound" (TyFun (TyCon "FfiDiag") (TyCon "Bool")))
-(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (ELit (LString "T-FFI-UNBOUND-HOST"))))
+(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (EVar "TFfiUnboundHost")))
 (DTypeSig false "ffiLabelDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
+(DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNullary")) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnlabelled")) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnlabelled")) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
 (DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
 (DFunDef false "isForeignCallAtom" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatOrigin") (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))))
 (DTypeSig false "ffiRowHostDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
 (DFunDef false "ffiRowHostDiags" (PWild (PCon "None")) (EListLit))
 (DFunDef false "ffiRowHostDiags" ((PVar "d") (PCon "Some" (PVar "atoms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ffiAtomHostDiags") (EVar "d"))) (EApp (EApp (EVar "filterList") (EVar "isForeignCallAtom")) (EVar "atoms"))))
 (DTypeSig false "ffiAtomHostDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiAtomHostDiags" ((PVar "d") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPLit" (PLit (LString ""))) () (EListLit)) (arm (PCon "EPLit" (PVar "p")) () (EMatch (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "ffiHosts")) (arm (PCon "Some" (PVar "h")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "d"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNBOUND-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiUnboundHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "h")))))) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NO-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EApp (EVar "Some") (EVar "p")))))))) (arm PWild () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NO-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "None")))))))
+(DFunDef false "ffiAtomHostDiags" ((PVar "d") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPLit" (PLit (LString ""))) () (EListLit)) (arm (PCon "EPLit" (PVar "p")) () (EMatch (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "ffiHosts")) (arm (PCon "Some" (PVar "h")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "d"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnboundHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiUnboundHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "h")))))) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNoHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EApp (EVar "Some") (EVar "p")))))))) (arm PWild () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiNoHost")) (EApp (EVar "Some") (EFieldAccess (EVar "d") "edLoc"))) (EApp (EApp (EVar "ffiNoHostMsg") (EFieldAccess (EVar "d") "edName")) (EVar "None")))))))
 (DTypeSig false "ffiParamHost" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "ffiParamHost" (PWild (PList)) (EVar "None"))
 (DFunDef false "ffiParamHost" ((PVar "p") (PCons (PVar "h") (PVar "hs"))) (EIf (EBinOp "==" (EVar "p") (EVar "h")) (EApp (EVar "Some") (EVar "h")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "/")))) (EVar "p")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "p")) (EBinOp "+" (EApp (EVar "stringLength") (EVar "h")) (ELit (LInt 1))))) (EApp (EVar "Some") (EVar "h")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ffiParamHost") (EVar "p")) (EVar "hs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -470,9 +459,9 @@ paramIsTopDomain _ = False
 (DFunDef false "ffiBindDiags" ((PVar "d")) (EBinOp "++" (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ffiSymbolDiags") (EVar "d"))) (EApp (EVar "externBindings") (EVar "d")))))
 (DTypeSig false "ffiClauseDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "ExternBind")) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
 (DFunDef false "ffiClauseDiags" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ffiClauseDiags" ((PVar "n") (PVar "seen") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "ffiHosts"))) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNKNOWN-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiUnknownHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-DUPLICATE-HOST"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiDuplicateHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EBinOp "::" (EFieldAccess (EVar "b") "ebHost") (EVar "seen"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "ffiClauseDiags" ((PVar "n") (PVar "seen") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "ffiHosts"))) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiUnknownHost")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiUnknownHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "b") "ebHost")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiDuplicateHost")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiDuplicateHostMsg") (EVar "n")) (EFieldAccess (EVar "b") "ebHost"))) (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EVar "seen")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EVar "n")) (EBinOp "::" (EFieldAccess (EVar "b") "ebHost") (EVar "seen"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ffiSymbolDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyCon "ExternBind") (TyApp (TyCon "List") (TyCon "FfiDiag")))))
-(DFunDef false "ffiSymbolDiags" ((PVar "d") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "ebHost") (arm (PLit (LString "c")) () (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isCIdentStart")) (EVar "isCIdentChar")) (EFieldAccess (EVar "b") "ebSymbol"))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-C-SYMBOL"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiCSymbolMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-RESERVED-NAME"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiReservedMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EListLit)))) (arm (PLit (LString "js")) () (EIf (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isJsIdentStart")) (EVar "isJsIdentChar")) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-JS-NAME"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiJsNameMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")))))) (arm PWild () (EListLit))))
+(DFunDef false "ffiSymbolDiags" ((PVar "d") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "ebHost") (arm (PLit (LString "c")) () (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isCIdentStart")) (EVar "isCIdentChar")) (EFieldAccess (EVar "b") "ebSymbol"))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiCSymbol")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiCSymbolMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiReservedName")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EApp (EVar "ffiReservedMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")) (EApp (EVar "isEmptyBinds") (EVar "d"))))) (EListLit)))) (arm (PLit (LString "js")) () (EIf (EApp (EApp (EApp (EVar "isIdentWith") (EVar "isJsIdentStart")) (EVar "isJsIdentChar")) (EFieldAccess (EVar "b") "ebSymbol")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (EVar "TFfiJsName")) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EApp (EVar "ffiJsNameMsg") (EFieldAccess (EVar "d") "edName")) (EFieldAccess (EVar "b") "ebSymbol")))))) (arm PWild () (EListLit))))
 (DTypeSig false "isEmptyBinds" (TyFun (TyCon "ExternDecl") (TyCon "Bool")))
 (DFunDef false "isEmptyBinds" ((PVar "d")) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isIdentWith" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool")))))

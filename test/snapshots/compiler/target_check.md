@@ -1,7 +1,8 @@
 # META
-source_lines=509
+source_lines=510
 stages=DESUGAR,MARK
 # SOURCE
+import support.diag_codes.{DiagCode(..)}
 import types.capability_manifest.{
   CapabilityManifest(..), ManifestRequest(..), ManifestLookup(..),
   InvocationProtocol(..), FrozenAtom(..), lookupManifest
@@ -68,16 +69,16 @@ import string.{trim}
 import list.{lookup}
 
 export
-targetCapabilityCode : String
-targetCapabilityCode = "T-TARGET-CAPABILITY"
+targetCapabilityCode : DiagCode
+targetCapabilityCode = TTargetCapability
 
 export
-targetNoBindingCode : String
-targetNoBindingCode = "T-TARGET-NO-BINDING"
+targetNoBindingCode : DiagCode
+targetNoBindingCode = TTargetNoBinding
 
 export
-targetNotProvidedCode : String
-targetNotProvidedCode = "T-TARGET-NOT-PROVIDED"
+targetNotProvidedCode : DiagCode
+targetNotProvidedCode = TTargetNotProvided
 
 -- The refusals of the program whose entry file is `file`; `[]` admits it.
 -- `paths` maps each module to its file, where a refused extern is located.  A
@@ -512,6 +513,7 @@ firstOr : String -> List String -> String
 firstOr d [] = d
 firstOr _ (x :: _) = x
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" true) (mem "ManifestRequest" true) (mem "ManifestLookup" true) (mem "InvocationProtocol" true) (mem "FrozenAtom" true) (mem "lookupManifest" false))))
 (DUse false (UseGroup ("types" "capability_policy") ((mem "manifestAllowed" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "mainEntryKey" false))))
@@ -532,12 +534,12 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false))))
-(DTypeSig true "targetCapabilityCode" (TyCon "String"))
-(DFunDef false "targetCapabilityCode" () (ELit (LString "T-TARGET-CAPABILITY")))
-(DTypeSig true "targetNoBindingCode" (TyCon "String"))
-(DFunDef false "targetNoBindingCode" () (ELit (LString "T-TARGET-NO-BINDING")))
-(DTypeSig true "targetNotProvidedCode" (TyCon "String"))
-(DFunDef false "targetNotProvidedCode" () (ELit (LString "T-TARGET-NOT-PROVIDED")))
+(DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
+(DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
+(DTypeSig true "targetNoBindingCode" (TyCon "DiagCode"))
+(DFunDef false "targetNoBindingCode" () (EVar "TTargetNoBinding"))
+(DTypeSig true "targetNotProvidedCode" (TyCon "DiagCode"))
+(DFunDef false "targetNotProvidedCode" () (EVar "TTargetNotProvided"))
 (DTypeSig true "targetRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))))))))))
 (DTypeSig true "targetDiagFile" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))
@@ -643,6 +645,7 @@ firstOr _ (x :: _) = x
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "firstOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" true) (mem "ManifestRequest" true) (mem "ManifestLookup" true) (mem "InvocationProtocol" true) (mem "FrozenAtom" true) (mem "lookupManifest" false))))
 (DUse false (UseGroup ("types" "capability_policy") ((mem "manifestAllowed" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "mainEntryKey" false))))
@@ -663,12 +666,12 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false))))
-(DTypeSig true "targetCapabilityCode" (TyCon "String"))
-(DFunDef false "targetCapabilityCode" () (ELit (LString "T-TARGET-CAPABILITY")))
-(DTypeSig true "targetNoBindingCode" (TyCon "String"))
-(DFunDef false "targetNoBindingCode" () (ELit (LString "T-TARGET-NO-BINDING")))
-(DTypeSig true "targetNotProvidedCode" (TyCon "String"))
-(DFunDef false "targetNotProvidedCode" () (ELit (LString "T-TARGET-NOT-PROVIDED")))
+(DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
+(DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
+(DTypeSig true "targetNoBindingCode" (TyCon "DiagCode"))
+(DFunDef false "targetNoBindingCode" () (EVar "TTargetNoBinding"))
+(DTypeSig true "targetNotProvidedCode" (TyCon "DiagCode"))
+(DFunDef false "targetNotProvidedCode" () (EVar "TTargetNotProvided"))
 (DTypeSig true "targetRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))))))))))
 (DTypeSig true "targetDiagFile" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))

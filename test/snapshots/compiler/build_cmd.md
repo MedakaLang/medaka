@@ -1,5 +1,5 @@
 # META
-source_lines=2717
+source_lines=2718
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -28,6 +28,7 @@ stages=DESUGAR,MARK
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
+import support.diag_codes.{DiagCode(..)}
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
@@ -1196,8 +1197,8 @@ effectiveKeepIr cliFlag = cliFlag || envOr "MEDAKA_KEEP_IR" "" /= ""
 -- The diagnostic code a failed keep-IR copy reports under.  Registered in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md alongside R-BUILD-FAILED.
 export
-keepIrFailedCode : String
-keepIrFailedCode = "W-KEEP-IR-FAILED"
+keepIrFailedCode : DiagCode
+keepIrFailedCode = WKeepIrFailed
 
 -- Best-effort: a kept-IR write failure must never fail an otherwise-good
 -- build, so its outcome becomes report DATA either way — the destination path
@@ -2720,6 +2721,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
     let _ = cleanupTempDir tmpDir
     res
 # DESUGAR
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
@@ -2945,8 +2947,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "programModuleName" () (ELit (LString "source_filename = \"program.ll\"\n")))
 (DTypeSig false "effectiveKeepIr" (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "effectiveKeepIr" ((PVar "cliFlag")) (EBinOp "||" (EVar "cliFlag") (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_KEEP_IR"))) (ELit (LString ""))) (ELit (LString "")))))
-(DTypeSig true "keepIrFailedCode" (TyCon "String"))
-(DFunDef false "keepIrFailedCode" () (ELit (LString "W-KEEP-IR-FAILED")))
+(DTypeSig true "keepIrFailedCode" (TyCon "DiagCode"))
+(DFunDef false "keepIrFailedCode" () (EVar "WKeepIrFailed"))
 (DTypeSig false "keepIrOutcome" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "keepIrOutcome" ((PVar "path") (PVar "contents")) (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "contents")) (arm (PCon "Ok" PWild) () (ETuple (EApp (EVar "Some") (EVar "path")) (EListLit))) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "None") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (EVar "keepIrFailedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not keep IR at ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "None")))))))
 (DTypeSig true "runBuild" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "BuildTarget") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))
@@ -3062,6 +3064,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "emitRtObjGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))
 (DFunDef false "emitRtObjGo" ((PVar "cc") (PVar "root") (PVar "outObjPath")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the runtime compile: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EMatch (EApp (EApp (EVar "detectGC") (EVar "cc")) (EVar "tmpDir")) (arm (PCon "None") () (EApp (EVar "buildErr") (EApp (EVar "libgcMissingError") (ELit LUnit)))) (arm (PCon "Some" (PTuple (PVar "gcCflags") (PVar "_gcLibs"))) () (EBlock (DoLet false false (PVar "optFlag") (EVar "clangOptFlag")) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EApp (EVar "ltoCflags") (EApp (EVar "detectLto") (EVar "cc")))) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "outObjPath")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommandOk") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: compiling runtime object failed\n")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "buildOk") (EBinOp "++" (EBinOp "++" (ELit (LString "compiled runtime object -> ")) (EApp (EVar "display") (EVar "outObjPath"))) (ELit (LString ""))))))))))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 # MARK
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
@@ -3287,8 +3290,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "programModuleName" () (ELit (LString "source_filename = \"program.ll\"\n")))
 (DTypeSig false "effectiveKeepIr" (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "effectiveKeepIr" ((PVar "cliFlag")) (EBinOp "||" (EVar "cliFlag") (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_KEEP_IR"))) (ELit (LString ""))) (ELit (LString "")))))
-(DTypeSig true "keepIrFailedCode" (TyCon "String"))
-(DFunDef false "keepIrFailedCode" () (ELit (LString "W-KEEP-IR-FAILED")))
+(DTypeSig true "keepIrFailedCode" (TyCon "DiagCode"))
+(DFunDef false "keepIrFailedCode" () (EVar "WKeepIrFailed"))
 (DTypeSig false "keepIrOutcome" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "keepIrOutcome" ((PVar "path") (PVar "contents")) (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "contents")) (arm (PCon "Ok" PWild) () (ETuple (EApp (EVar "Some") (EVar "path")) (EListLit))) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "None") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (EVar "keepIrFailedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not keep IR at ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "None")))))))
 (DTypeSig true "runBuild" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "BuildTarget") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))

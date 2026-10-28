@@ -1,5 +1,5 @@
 # META
-source_lines=1485
+source_lines=1503
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -73,12 +73,14 @@ import types.tc_types.{
   MethodBodyKind(..),
   RecordInfo,
 }
-import types.publish.{TcDiag(..)}
+import support.diag_codes.{DiagCode(..)}
+import types.publish.{TcDiag(..), tcCode}
 import support.util.{
   contains,
   dedup,
   dedupBy,
   escStr,
+  filterList,
   isEmptyL,
   isNonEmptyL,
   joinWith,
@@ -1478,7 +1480,7 @@ findTupleCand key ((res, help, fix) :: rest)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 export
-prependDiagOpt : String ->
+prependDiagOpt : DiagCode ->
   Int ->
   Option String ->
   Option String ->
@@ -1487,13 +1489,30 @@ prependDiagOpt : String ->
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
   writtenDiag (TcDiag code sev None msg help None) :: ds
+
+-- prepend the global coherence conflict, when there is one, to a module's errors.
+export
+prependConflict : Option String -> List TcDiag -> List TcDiag
+prependConflict = prependDiagOpt TConflictingImpl 1 None
+
+-- prepend the incomparable-impls warning, when there is one, to a module's warnings.
+export
+prependIncomparable : Option String -> List TcDiag -> List TcDiag
+prependIncomparable =
+  prependDiagOpt WIncomparableImpls 2 (Some cohIncomparableHelp)
+
+-- the diagnostics of [ds] other than ambiguous-instance errors.
+export
+dropAmbiguity : List TcDiag -> List TcDiag
+dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authIsTop" false) (mem "Authority" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
@@ -1932,16 +1951,23 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig true "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
+(DTypeSig true "prependConflict" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DFunDef false "prependConflict" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "TConflictingImpl")) (ELit (LInt 1))) (EVar "None")))
+(DTypeSig true "prependIncomparable" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DFunDef false "prependIncomparable" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "WIncomparableImpls")) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))))
+(DTypeSig true "dropAmbiguity" (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
+(DFunDef false "dropAmbiguity" () (EApp (EVar "filterList") (ELam ((PVar "d")) (EBinOp "/=" (EApp (EVar "tcCode") (EVar "d")) (EVar "TAmbiguousInstance")))))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authIsTop" false) (mem "Authority" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
@@ -2380,6 +2406,12 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig true "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
+(DTypeSig true "prependConflict" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DFunDef false "prependConflict" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "TConflictingImpl")) (ELit (LInt 1))) (EVar "None")))
+(DTypeSig true "prependIncomparable" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DFunDef false "prependIncomparable" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "WIncomparableImpls")) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))))
+(DTypeSig true "dropAmbiguity" (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
+(DFunDef false "dropAmbiguity" () (EApp (EVar "filterList") (ELam ((PVar "d")) (EBinOp "/=" (EApp (EVar "tcCode") (EVar "d")) (EVar "TAmbiguousInstance")))))
