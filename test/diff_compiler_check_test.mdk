@@ -689,7 +689,7 @@ cycleSiteRun = match cycleSiteScratch
             "b.mdk:1:0: cyclic dependency: a → b → a",
             "1 | import a.{foo}",
           ]
-      let _ = runVerb "rm" ["-rf", dir]
+      let _ = cleanupScratchBestEffort dir
       result
 
 test "a two-module import cycle is located at the import that closes it" =
@@ -728,7 +728,7 @@ cycleTreeRun tag files args needles = match scratchDir
               (a => if startsWith "@" a then "\{dir}/\{drop 1 a}" else a)
               args)
             needles
-        let _ = runVerb "rm" ["-rf", dir]
+        let _ = cleanupScratchBestEffort dir
         result
 
 test "a cycle located by check --json names the importer file with a range" =
@@ -985,7 +985,7 @@ selfNamedRun = match selfNamedScratch
           medakaBin
           ["check", "\{dir}/use_nt.mdk"]
           ["unbound variable `NT`"]
-      let _ = runVerb "rm" ["-rf", dir]
+      let _ = cleanupScratchBestEffort dir
       result
 
 test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
@@ -1350,3 +1350,64 @@ test "run keeps the unknown-module message for a bare name with no file" =
     1
     (_ err => startsWith "unknown module: nosuchmod" err)
     "unknown module"
+
+stringEofCases : List (String, String)
+stringEofCases = [
+  ("triple.mdk", "main = \"\"\"oops\nafter = 2\n"),
+  ("interp.mdk", "main = \"a\\{1}tail\nafter = 2\n"),
+  ("triple_interp.mdk", "main = \"\"\"a\\{1}tail\nafter = 2\n"),
+]
+
+cleanupScratchBestEffort : String -> <Exec, IO> Unit
+cleanupScratchBestEffort dir =
+  let _ = runVerb "rm" ["-rf", dir]
+  ()
+
+stringEofRun : <Exec, FileWrite, IO> Expectation
+stringEofRun = match scratchDir
+  Err e => fail "could not make scratch directory: \{e}"
+  Ok dir => match writeAll dir stringEofCases
+    Err e => fail "could not write string EOF cases: \{e}"
+    Ok () =>
+      let result =
+        expectEach
+          (flatMap
+            ((name, _) =>
+              map
+                ((verb, args) => (
+                  name ++ verb,
+                  expectSpawnFailsAll medakaBin (verb
+                    :: args ++ ["\{dir}/\{name}"]) [
+                    "unterminated string literal",
+                  ],
+                ))
+                [("check", []), ("run", []), ("build", [])])
+            stringEofCases)
+      let _ = cleanupScratchBestEffort dir
+      result
+
+test "unterminated string EOF fails strict CLI verbs" = stringEofRun
+
+recoveryStrictRun : <Exec, FileWrite, IO> Expectation
+recoveryStrictRun = match scratchDir
+  Err e => fail "could not make scratch directory: \{e}"
+  Ok dir =>
+    let _ = runVerb "mkdir" ["-p", dir]
+    match writeAll dir [("broken.mdk", "before = 1\nbroken = )\nafter = 2\n")]
+      Err e => fail "could not write broken source: \{e}"
+      Ok () =>
+        let result =
+          expectEach
+            (map
+              (verb => (
+                verb,
+                expectSpawnFailsAll
+                  medakaBin
+                  [verb, "\{dir}/broken.mdk"]
+                  ["expected an expression"],
+              ))
+              ["check", "run", "build"])
+        let _ = cleanupScratchBestEffort dir
+        result
+
+test "recovered declarations never enter strict CLI verbs" = recoveryStrictRun

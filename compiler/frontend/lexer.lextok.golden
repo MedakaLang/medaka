@@ -4328,20 +4328,10 @@ IDENT "p"
 GEQ
 IDENT "len"
 EQUAL
-UPPER "RTok"
-LPAREN
-UPPER "TInterpEnd"
-IDENT "acc"
-RPAREN
+IDENT "lexErrorTok"
 IDENT "p"
 IDENT "p"
-CONS
-IDENT "scan"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-IDENT "depth"
-INT 0
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "isQuote"
@@ -4880,27 +4870,10 @@ IDENT "p"
 GEQ
 IDENT "len"
 EQUAL
-INDENT
-UPPER "RTok"
-LPAREN
-UPPER "TString"
-LPAREN
-IDENT "maybeStrip"
-IDENT "leadingNl"
-IDENT "acc"
-RPAREN
-RPAREN
-IDENT "startQ"
+IDENT "lexErrorTok"
 IDENT "p"
-CONS
-IDENT "scan"
-IDENT "src"
-IDENT "len"
 IDENT "p"
-IDENT "depth"
-IDENT "id"
-NEWLINE
-DEDENT
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "isTripleAt"
@@ -5494,20 +5467,10 @@ IDENT "p"
 GEQ
 IDENT "len"
 EQUAL
-UPPER "RTok"
-LPAREN
-UPPER "TInterpEnd"
-IDENT "acc"
-RPAREN
+IDENT "lexErrorTok"
 IDENT "p"
 IDENT "p"
-CONS
-IDENT "scan"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-IDENT "depth"
-INT 0
+UPPER "UnterminatedString"
 NEWLINE
 PIPE
 IDENT "isTripleAt"

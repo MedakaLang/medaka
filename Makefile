@@ -184,6 +184,9 @@ inlang-support-sexp-value-test:
 	./medaka test compiler/support/source_index_test.mdk
 	./medaka test compiler/tools/lsp_positions_test.mdk
 	./medaka test compiler/tools/lsp_diagnostics_test.mdk
+	./medaka test compiler/tools/source_snapshot_test.mdk
+	./medaka test compiler/tools/snapshot_syntax_test.mdk
+	./medaka test compiler/tools/syntax_queries_test.mdk
 
 inlang-support-symbol-origin-test:
 	./medaka test compiler/support/symbol_origin_test.mdk
@@ -488,6 +491,7 @@ inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
 	./medaka test compiler/frontend/parse_engine_test.mdk
 	./medaka test compiler/frontend/parse_diagnostic_test.mdk
+	./medaka test compiler/frontend/parse_recovery_test.mdk
 
 ## compiler/frontend/ast_codec.mdk is imported only by types.prelude_elab; this
 ## step runs its own sibling test by name.

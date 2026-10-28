@@ -417,6 +417,7 @@ parseRhsExpr : ParserE <> Expr
 parseSectionOp : String -> ParserE <> Expr
 parseSource : String -> Result ParseDiagnostic ParsedSource
 parseSourcePairs : String -> List Token -> List (Int, Int) -> Result ParseDiagnostic ParsedSource
+parseSourcePairsWithIndex : String -> List Token -> List (Int, Int) -> (Unit -> SourceIndex) -> Result ParseDiagnostic ParsedSource
 parseSourceSyntaxPairs : String -> List Token -> List (Int, Int) -> Option ParsedSource
 parseStmt : ParserE <> (List DoStmt)
 parseStmts : ParserE <> (List DoStmt)
@@ -461,6 +462,7 @@ postfixTail : Expr -> ParserE <> Expr
 postfixTailR : Expr -> ParseContext -> Int -> PR Expr
 prescanError : String -> (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> Option ParseError
 prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
+prescanErrorPairsWithIndex : String -> List Token -> List (Int, Int) -> (Unit -> SourceIndex) -> Option ParseError
 prescanIdentHit : Array Token -> Int -> String -> Int -> Bool -> PrescanHits -> PrescanHits
 prescanInlineLet : Array Token -> Int -> PrescanHits -> PrescanHits
 prescanLexError : Array Token -> Int -> Option (Int, ParseDiagnosticKind)

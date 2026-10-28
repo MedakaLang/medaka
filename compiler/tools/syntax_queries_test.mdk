@@ -1,0 +1,78 @@
+import tools.snapshot_syntax.{PreparedSyntax, parseSnapshotSyntax}
+import json.{Json, get, asString}
+import tools.source_snapshot.{SourceRevision(..)}
+import tools.syntax_queries.{
+  symbolsFromRecovered, strictDocumentSymbols, jRange
+}
+import test.{expectAll, expectEqual, expectTrue, expectOkThen}
+
+symbolName : Json -> Option String
+symbolName symbol = andThen (get "name" symbol) asString
+
+querySymbols : SourceRevision -> PreparedSyntax -> Result String (List Json)
+querySymbols revision syntax = match symbolsFromRecovered revision syntax
+  Ok symbols => Ok symbols
+  Err _ => Err "snapshot mismatch"
+
+test "projection uses recovered current declarations" =
+  let source = """before = 1
+broken = )
+after = 2
+"""
+  let snapshot = SourceRevision "file:///a" (Some 2) 2 source
+  expectOkThen
+    (symbols =>
+      expectEqual [Some "before", Some "after"] (map symbolName symbols))
+    (querySymbols snapshot (parseSnapshotSyntax snapshot))
+
+test "projection rejects stale identity or version" =
+  let snapshot = SourceRevision "file:///a" (Some 1) 1 """before = 1
+"""
+  let syntax = parseSnapshotSyntax snapshot
+  let stale =
+    symbolsFromRecovered
+      (SourceRevision "file:///a" (Some 1) 2 """after = 1
+""")
+      syntax
+  let wrongVersion =
+    symbolsFromRecovered
+      (SourceRevision "file:///a" (Some 2) 1 """after = 1
+""")
+      syntax
+  expectAll [
+    expectTrue (isErr stale),
+    expectTrue (isErr wrongVersion),
+    expectOkThen
+      (symbols =>
+        expectEqual
+          (map symbolName (strictDocumentSymbols """before = 1
+"""))
+          (map symbolName symbols))
+      (querySymbols snapshot syntax),
+  ]
+
+test "discarded declarations separate same-name clauses" =
+  let broken =
+    SourceRevision "file:///a" None 1 """f : Int -> Int
+broken = )
+f x = x
+"""
+  let valid = SourceRevision "file:///a" None 1 """f : Int -> Int
+f x = x
+"""
+  expectAll [
+    expectOkThen
+      (symbols => expectAll [
+        expectEqual [Some "f", Some "f"] (map symbolName symbols),
+        expectEqual
+          [Some (jRange 0 0 1 0), Some (jRange 2 0 3 0)]
+          (map (get "range") symbols),
+      ])
+      (querySymbols broken (parseSnapshotSyntax broken)),
+    expectOkThen
+      (symbols => expectAll [
+        expectEqual [Some "f"] (map symbolName symbols),
+        expectEqual [Some (jRange 0 0 2 0)] (map (get "range") symbols),
+      ])
+      (querySymbols valid (parseSnapshotSyntax valid)),
+  ]

@@ -1,0 +1,937 @@
+import string.{repeat}
+import frontend.ast.{Decl(..), Loc(..)}
+import frontend.parse_recovery.{
+  parseRecovering, parseRecoveringWith, parseRecoveringWithIndex,
+  RecoveryLimits(..)
+}
+import frontend.recovery_result.{
+  InvalidRegion, recoveredDecls, recoveredDiagnostics, invalidRegions,
+  invalidExtent, recoveredCompleteness, recoveredStats,
+  RecoveryCompleteness(..), RecoveryStop(..), RecoveryStats(..),
+  SourceExtent(..)
+}
+import frontend.parse_diagnostic.{
+  ParseDiagnostic, diagnosticCode, diagnosticLoc, diagnosticEdits,
+  ParseEdit(..), EditApplicability(..)
+}
+import support.source_index.{indexSource}
+import test.{Expectation, expectAll, expectEqual, expectEach}
+
+name : Decl -> String
+name (DFunDef _ n _ _ _ _) = n
+name (DData { dataName = n }) = n
+name (DInterface { name = n }) = "interface:" ++ n
+name (DImpl { iface = n }) = "impl:" ++ n
+name (DTypeSig _ n _ _) = "signature:" ++ n
+name _ = "other"
+
+extent : SourceExtent -> (Int, Int)
+extent (SourceExtent start end) = (start, end)
+
+withoutFinalLf : String -> String
+withoutFinalLf source = stringSlice 0 (stringLength source - 1) source
+
+regionExtents : List InvalidRegion -> List (Int, Int)
+regionExtents regions = map (region => extent (invalidExtent region)) regions
+
+test "recovery retains declarations on both sides of damage" =
+  let r = parseRecovering """before = 1
+broken = )
+after = 2
+"""
+  expectAll [
+    expectEqual ["before", "after"] (map name (recoveredDecls r)),
+    expectEqual ["P-PARSE"] (map diagnosticCode (recoveredDiagnostics r)),
+    expectEqual [(11, 22)] (regionExtents (invalidRegions r)),
+  ]
+
+test "unclosed delimiters do not promote nested declarations" =
+  let r = parseRecovering """before = 1
+broken = (
+hidden = 9
+after = 2
+"""
+  expectEqual ["before"] (map name (recoveredDecls r))
+
+test "recovery matrix retains the expected current declarations" =
+  expectEach
+    (map
+      ((label, src, expected) => (
+        label,
+        expectEqual expected (map name (recoveredDecls (parseRecovering src))),
+      ))
+      [
+        (
+          "valid",
+          """before = 1
+middle = 3
+after = 2
+""",
+          ["before", "middle", "after"],
+        ),
+        (
+          "rhs-close",
+          """before = 1
+broken = )
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "deleted-equal",
+          """before = 1
+broken 3
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "missing-rhs",
+          """before = 1
+broken =
+after = 2
+""",
+          ["before", "after"],
+        ),
+        ("missing-close", """before = 1
+broken = (3
+after = 2
+""", ["before"]),
+        (
+          "missing-list-close",
+          """before = 1
+broken = [3,
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "missing-record-close",
+          """before = 1
+broken = { field = 3
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "missing-projection-close",
+          """before = 1
+broken = value.{field
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "mismatched-close",
+          """before = 1
+broken = ([3)
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "extra-close",
+          """before = 1
+broken = 3 )
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "indent-nested",
+          """before = 1
+broken = do
+  local = )
+  hidden = 9
+  local
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "dedent",
+          """before = 1
+broken = do
+  local = )
+ hidden = 9
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "continuation",
+          """before = 1
+broken = 1 +
+  hidden = 9
+after = 2
+""",
+          ["before", "after"],
+        ),
+        ("top-level-indent", """  before = 1
+  broken = )
+  after = 2
+""", []),
+        (
+          "nested-col-zero",
+          """before = 1
+broken = (
+hidden = 9
+)
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "nested-unclosed-zero",
+          """before = 1
+broken = (
+hidden = 9
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "nested-brace-zero",
+          """before = 1
+broken = {
+hidden = 9
+}
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "nested-interpolation",
+          """before = 1
+broken = \"\\{
+hidden = 9
+}\"
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "closed-string-control",
+          """before = 1
+text = \"fake = 9\"
+nope = )
+after = 2
+""",
+          ["before", "text", "after"],
+        ),
+        (
+          "closed-comment-control",
+          """before = 1
+{-
+fake = 9
+-}
+broken = )
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "line-comment-control",
+          """before = 1
+-- fake = 9
+broken = )
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "unterminated-string-middle",
+          """before = 1
+broken = \"oops
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "unterminated-string-eof",
+          withoutFinalLf """before = 1
+broken = \"oops
+""",
+          ["before"],
+        ),
+        (
+          "unterminated-comment",
+          """before = 1
+{- oops
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "unterminated-char",
+          """before = 1
+broken = 'x
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "bad-character-middle",
+          """before = 1
+broken = $
+after = 2
+""",
+          ["before"],
+        ),
+        (
+          "bad-character-eof",
+          withoutFinalLf """before = 1
+broken = $
+""",
+          ["before"],
+        ),
+        ("bad-escape", """before = 1
+broken = \"\\q\"
+after = 2
+""", ["before"]),
+        (
+          "two-errors",
+          """before = 1
+broken = )
+middle = 3
+other = ]
+after = 2
+""",
+          ["before", "middle", "after"],
+        ),
+        (
+          "removed-prescan",
+          """before = 1
+broken = 1 != 2
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "prefix-export",
+          """before = 1
+export
+kept = 4
+broken = )
+after = 2
+""",
+          ["before", "kept", "after"],
+        ),
+        (
+          "missing-equal-next-line",
+          """before = 1
+broken
+= 3
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "unicode-locations",
+          """-- 😀
+before = 1
+broken = )
+after = 2
+""",
+          ["before", "after"],
+        ),
+        (
+          "crlf",
+          stringJoin "\r\n" ["before = 1", "broken = )", "after = 2", ""],
+          ["before", "after"],
+        ),
+        (
+          "long-errors",
+          """before = 1
+"""
+            ++ stringConcat
+              (map (i => "b" ++ intToString i ++ """ = )
+""") [0..=999])
+            ++ """after = 2
+""",
+          ["before"],
+        ),
+        (
+          "deep-unmatched",
+          "before = 1\nbroken = " ++ repeat 5000 "(" ++ "\nafter = 2\n",
+          ["before"],
+        ),
+        (
+          "eof-missing-close",
+          withoutFinalLf """before = 1
+broken = (3
+""",
+          ["before"],
+        ),
+        (
+          "eof-missing-rhs",
+          withoutFinalLf """before = 1
+broken =
+""",
+          ["before"],
+        ),
+        (
+          "unicode-eof",
+          withoutFinalLf """before = 1
+broken = (\"😀\"
+""",
+          ["before"],
+        ),
+        (
+          "edit-0",
+          """before = 1
+middle = (3 + 4)
+after = 2
+""",
+          ["before", "middle", "after"],
+        ),
+        ("edit-1", """before = 1
+middle = (3 + 4
+after = 2
+""", ["before"]),
+        (
+          "edit-2",
+          """before = 1
+middle = 3 + 4
+after = 2
+""",
+          ["before", "middle", "after"],
+        ),
+        (
+          "edit-3",
+          """before = 1
+middle 3 + 4
+after = 2
+""",
+          ["before", "after"],
+        ),
+        ("edit-4", """before = 1
+middle = )
+after = 2
+""", ["before", "after"]),
+        ("edit-5", """before = 1
+middle = \"bad
+after = 2
+""", ["before"]),
+        (
+          "edit-6",
+          """before = 1
+middle = 3 + 4
+after = 2
+""",
+          ["before", "middle", "after"],
+        ),
+        (
+          "real-edit-0",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          [
+            "interface:Shape", "Color", "Point", "impl:Shape", "other",
+            "interface:Wrap", "Box", "impl:Wrap", "interface:Access",
+            "impl:Access"
+          ],
+        ),
+        (
+          "real-edit-1",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          [
+            "interface:Shape", "Color", "impl:Shape", "other", "interface:Wrap",
+            "Box", "impl:Wrap", "interface:Access", "impl:Access"
+          ],
+        ),
+        (
+          "real-edit-2",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          ["interface:Shape", "Color"],
+        ),
+        (
+          "real-edit-3",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = )
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          [
+            "interface:Shape", "Color", "Point", "other", "interface:Wrap",
+            "Box", "impl:Wrap", "interface:Access", "impl:Access"
+          ],
+        ),
+        (
+          "real-edit-4",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = )
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          [
+            "interface:Shape", "Color", "impl:Shape", "other", "interface:Wrap",
+            "Box", "impl:Wrap", "interface:Access", "impl:Access"
+          ],
+        ),
+        (
+          "real-edit-5",
+          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+-- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
+-- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
+-- name-column. Columns are 0-based; hand-verified in child_spans.golden.
+interface Shape a where
+  area : a -> Float
+  perim : a -> Float
+  describe a = \"a shape\"
+
+data Color =
+  | Red
+  | Green
+  | Blue
+
+data Point = { px : Int, py : Int, pz : Int }
+
+impl Shape Color where
+  area c = 1.0
+  perim c = 2.0
+  describe c = \"color\"
+
+let rec spin n = spin n
+
+-- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
+-- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
+-- land on a later BARE type argument (a depth-0-only scan matches `Int`
+-- instead of the parenthesized `Box`). Columns hand-verified below.
+interface Wrap a where
+  unwrap : a -> Int
+
+data Box a = Box a
+
+impl Wrap (Box a) where
+  unwrap b = 0
+
+interface Access a b where
+  get2 : a -> b -> Int
+
+impl Access (Box a) Int where
+  get2 b i = i
+""",
+          [
+            "interface:Shape", "Color", "Point", "impl:Shape", "other",
+            "interface:Wrap", "Box", "impl:Wrap", "interface:Access",
+            "impl:Access"
+          ],
+        ),
+      ])
+
+status : RecoveryCompleteness -> String
+status Complete = "complete"
+status (Partial ReachedEnd) = "reached"
+status (Partial StoppedLexically) = "lexical"
+status (Partial StoppedDelimiter) = "delimiter"
+status (Partial StoppedBoundary) = "boundary"
+status (Partial ExhaustedBudget) = "budget"
+
+counts : RecoveryStats -> (Int, Int, Int)
+counts (RecoveryStats tokens attempts diagnostics) =
+  (tokens, attempts, diagnostics)
+
+test "budgets bound diagnostics and declaration attempts" =
+  let errors = parseRecovering ("""before = 1
+""" ++ repeat 1000 """bad = )
+""")
+  let many = parseRecovering ("""bad = )
+""" ++ repeat 5000 """ok = 1
+""")
+  let (_, errorAttempts, diagnostics) = counts (recoveredStats errors)
+  let (_, attempts, _) = counts (recoveredStats many)
+  expectAll [
+    expectEqual
+      ("budget", 33, 32)
+      (status (recoveredCompleteness errors), errorAttempts, diagnostics),
+    expectEqual
+      ("budget", 4096, 4095)
+      (
+        status (recoveredCompleteness many),
+        attempts,
+        length (recoveredDecls many),
+      ),
+  ]
+
+test "source and token admission stop before parsing" =
+  let source = parseRecovering ("-- " ++ repeat 8388608 "x")
+  let tokens = parseRecovering (repeat 125001 """a = 1
+""")
+  let (_, sourceAttempts, _) = counts (recoveredStats source)
+  let (_, tokenAttempts, _) = counts (recoveredStats tokens)
+  expectEqual
+    ("budget", 0, "budget", 0)
+    (
+      status (recoveredCompleteness source),
+      sourceAttempts,
+      status (recoveredCompleteness tokens),
+      tokenAttempts,
+    )
+
+test "zero diagnostic limit does not publish a diagnostic" =
+  let result = parseRecoveringWith (RecoveryLimits 1000 1000 1000 0) "bad = )"
+  expectEqual
+    ("budget", 0)
+    (
+      status (recoveredCompleteness result),
+      length (recoveredDiagnostics result),
+    )
+
+test "independent recovery results do not share invocation state" =
+  let p = """before = 1
+broken = )
+after = 2
+"""
+  let first = parseRecovering p
+  let other = parseRecovering """other = 3
+"""
+  let again = parseRecovering p
+  expectAll [
+    expectEqual ["other"] (map name (recoveredDecls other)),
+    expectEqual
+      (
+        map name (recoveredDecls first),
+        regionExtents (invalidRegions first),
+      )
+      (
+        map name (recoveredDecls again),
+        regionExtents (invalidRegions again),
+      ),
+  ]
+
+data ExpectedSpan = ExpectedSpan Int Int Int Int deriving (Eq, Debug)
+
+span : Loc -> ExpectedSpan
+span (Loc _ sl sc el ec) = ExpectedSpan sl sc el ec
+
+neqSpan : Int -> ExpectedSpan
+neqSpan line = ExpectedSpan line 8 line 10
+
+test "synthetic tail diagnostic uses real emoji EOF" =
+  let result = parseRecovering (withoutFinalLf """before = 1
+broken = (\"😀\"
+""")
+  expectAll [
+    expectEqual ["before"] (map name (recoveredDecls result)),
+    expectEqual
+      [ExpectedSpan 2 13 2 13]
+      (map (d => span (diagnosticLoc d)) (recoveredDiagnostics result)),
+    expectEqual [(11, 24)] (regionExtents (invalidRegions result)),
+  ]
+
+test "terminal string errors and deep delimiters stop the suffix" =
+  let literal = parseRecovering """before = 1
+broken = \"oops
+after = 2
+"""
+  let deep =
+    parseRecovering
+      ("before = 1\nbroken = " ++ repeat 5000 "(" ++ "\nafter = 2\n")
+  expectAll [
+    expectEqual
+      (["before"], ["L-UNTERMINATED-STRING"], "lexical")
+      (
+        map name (recoveredDecls literal),
+        map diagnosticCode (recoveredDiagnostics literal),
+        status (recoveredCompleteness literal),
+      ),
+    expectEqual
+      (["before"], "delimiter")
+      (map name (recoveredDecls deep), status (recoveredCompleteness deep)),
+  ]
+
+test "strict string EOF prerequisite is reflected in recovery" =
+  let result = parseRecovering "before = 1\nbroken = \"\"\"oops\nafter = 2\n"
+  expectEqual
+    (["before"], ["L-UNTERMINATED-STRING"], "lexical")
+    (
+      map name (recoveredDecls result),
+      map diagnosticCode (recoveredDiagnostics result),
+      status (recoveredCompleteness result),
+    )
+
+test "separate islands preserve typed diagnostics and original extents" =
+  let result =
+    parseRecovering """before = 1
+broken = )
+middle = 3
+other = ]
+after = 2
+"""
+  expectAll [
+    expectEqual
+      ["before", "middle", "after"]
+      (map name (recoveredDecls result)),
+    expectEqual
+      ["P-PARSE", "P-PARSE"]
+      (map diagnosticCode (recoveredDiagnostics result)),
+    expectEqual [(11, 22), (33, 43)] (regionExtents (invalidRegions result)),
+  ]
+
+test "prescan diagnostic remains typed on a rejected island" =
+  let result = parseRecovering """before = 1
+broken = 1 != 2
+after = 2
+"""
+  expectEqual
+    (["before", "after"], ["P-BAD-NEQ"], [(11, 27)])
+    (
+      map name (recoveredDecls result),
+      map diagnosticCode (recoveredDiagnostics result),
+      regionExtents (invalidRegions result),
+    )
+
+editRow : ParseEdit -> (ExpectedSpan, String, String, Bool)
+editRow (ParseEdit loc old replacement applicability) =
+  (span loc, old, replacement, applicability == MachineApplicable)
+
+diagnosticRow : ParseDiagnostic ->
+  (String, ExpectedSpan, List (ExpectedSpan, String, String, Bool))
+diagnosticRow diagnostic = (
+  diagnosticCode diagnostic,
+  span (diagnosticLoc diagnostic),
+  map editRow (diagnosticEdits diagnostic),
+)
+
+indexedCoordinateCase : String ->
+  Int ->
+  List ExpectedSpan ->
+  (String, Expectation)
+indexedCoordinateCase newline count spans =
+  let src =
+    stringConcat ["-- 😀", newline, repeat count ("bad = 1 != 2" ++ newline)]
+  let expected =
+    map (loc => ("P-BAD-NEQ", loc, [(loc, "!=", "/=", True)])) spans
+  let raw = parseRecovering src
+  let indexed = parseRecoveringWithIndex (indexSource src) src
+  (
+    newline ++ intToString count,
+    expectAll [
+      expectEqual expected (map diagnosticRow (recoveredDiagnostics raw)),
+      expectEqual expected (map diagnosticRow (recoveredDiagnostics indexed)),
+    ],
+  )
+
+test "shared diagnostic index preserves coordinates and edits" = expectEach [
+  indexedCoordinateCase "\n" 1 [neqSpan 2],
+  indexedCoordinateCase "\r\n" 2 [neqSpan 2, neqSpan 3],
+  indexedCoordinateCase "\r" 4 [
+    neqSpan 2,
+    neqSpan 3,
+    neqSpan 4,
+    neqSpan 5,
+  ],
+  indexedCoordinateCase "\n" 8 [
+    neqSpan 2,
+    neqSpan 3,
+    neqSpan 4,
+    neqSpan 5,
+    neqSpan 6,
+    neqSpan 7,
+    neqSpan 8,
+    neqSpan 9,
+  ],
+]

@@ -35,6 +35,11 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 - **A8** — a new frontend subsystem is a new module, as `parse_cache` and `desugar_cache` were.
 
 ## Boundaries and checks
+- Planned recovery owns current-source partial syntax in `parse_recovery` and
+  immutable `recovery_result` values. It drives the strict declaration grammar
+  at trustworthy root fences, stops at ambiguous delimiters or terminal lexical
+  errors, and never sends partial results to semantic or execution pipelines.
+  Snapshot identity and UTF-16 projection remain tool responsibilities.
 - `test/arch_boundaries_test.mdk` pins layering edges, module-level cells, the hooks record and the leaf-module import closures.
 - `test/arch_goldens/closure.frontend.ast.golden` is the closure of `ast.mdk`; `layering.golden` and `cells.golden` are the repo-wide counts.
 - `test/arch_ratchet.sh` fails a rise in any pinned number unless a commit trailer names it.

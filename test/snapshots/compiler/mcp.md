@@ -1,7 +1,19 @@
 # META
-source_lines=1940
+source_lines=1988
 stages=DESUGAR,MARK
 # SOURCE
+import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
+import tools.snapshot_syntax.{
+  parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
+}
+import tools.syntax_queries.{symbolsFromRecovered, jPosition}
+import tools.lsp_diagnostics.{diagnosticJsonOr}
+import driver.parse_diag_adapter.{parseDiagnosticToDiag}
+import frontend.recovery_result.{
+  SourceExtent(..), InvalidReason(..), RecoveryStop(..),
+  RecoveryCompleteness(..), invalidExtent, invalidReason, invalidRegions,
+  recoveredDiagnostics, recoveredCompleteness
+}
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
 --
 -- Foundation for the `medaka mcp` workstream (#246 / #247): a JSON-RPC 2.0
@@ -40,7 +52,7 @@ import json.{
 import string.{stripCR}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
-  clampSourcePositionToOffset
+  clampSourcePositionToOffset, sourceEndUtf16Position
 }
 import driver.diagnostics.{
   stdlibExportsReader,
@@ -371,7 +383,7 @@ mcpTools = [
     runTypeAtTool,
   McpTool
     "medaka_symbols"
-    "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list."
+    "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. Incomplete source returns recoverable declarations; structuredContent reports completeness, invalid regions and diagnostics."
     medakaSymbolsSchema
     runSymbolsTool,
   McpTool
@@ -455,7 +467,10 @@ syntheticSourceName = "<source>"
 
 -- Wrap a text payload as an MCP tool result: { content:[{type:text,text}], isError }.
 toolTextResult : String -> Bool -> Json
-toolTextResult text isErr = jObject [
+toolTextResult text isErr = jObject (toolTextFields text isErr)
+
+toolTextFields : String -> Bool -> List (String, Json)
+toolTextFields text isErr = [
   (
     "content",
     jArray [jObject [("type", JString "text"), ("text", JString text)]],
@@ -812,48 +827,81 @@ medakaSymbolsSchema = jObject [
   ("required", jArray [JString "file"]),
 ]
 
--- Turn resolved source into a symbols result.  Parse FIRST (via parseResult, the
--- same located-diagnostic path medaka_fmt uses) so a genuinely empty/no-decl file
--- (empty `[]`, isError:false) is DISTINGUISHABLE from one that failed to parse
--- (#300 part 1): a parse failure yields a distinct structured note
--- `{"parseError":true, line, col, message}` with isError:true, instead of the same
--- `[]` an empty file returns.  documentSymbols itself is parse-only and returns
--- `[]` on unparseable input, which is exactly the ambiguity we resolve here.
-symbolsResult : String -> Json
-symbolsResult src = match parseResult src
-  Err e =>
-    let index = indexSource src
-    let position =
-      offsetToUtf16Position
-        index
-        (clampSourcePositionToOffset index (parseErrorLine e) (parseErrorCol e))
-    toolTextResult
-      (stringify
-        (jObject [
-          ("parseError", JBool True),
-          (
-            "line",
-            match position
-              Some (line, _) => JInt line
-              None => JNull,
-          ),
-          (
-            "col",
-            match position
-              Some (_, col) => JInt col
-              None => JNull,
-          ),
-          ("message", JString (parseErrorMessage e)),
-        ]))
-      True
-  Ok _ => toolTextResult (stringify (jArray (documentSymbols src))) False
+reasonName : InvalidReason -> String
+reasonName InvalidDeclaration = "invalidDeclaration"
+reasonName TerminalLexError = "terminalLexError"
+reasonName UnclosedDelimiter = "unclosedDelimiter"
+reasonName MismatchedDelimiter = "mismatchedDelimiter"
+reasonName UntrustedBoundary = "untrustedBoundary"
+reasonName RecoveryBudget = "recoveryBudget"
 
--- medaka_symbols handler: read `file` from disk and return its top-level decl
--- symbols (tools.lsp.documentSymbols), serialized as a JSON array in a text
--- content block.  Parse-only (no typecheck) — never errors on an ill-typed
--- file, only on a missing/unreadable one.  A file that fails to PARSE returns a
--- distinct isError parseError note (symbolsResult), NOT the empty `[]` an empty
--- file returns — so a caller can tell 'no decls' from 'parser bailed' (#300 p1).
+stopName : RecoveryStop -> String
+stopName ReachedEnd = "reachedEnd"
+stopName StoppedLexically = "stoppedLexically"
+stopName StoppedDelimiter = "stoppedDelimiter"
+stopName StoppedBoundary = "stoppedBoundary"
+stopName ExhaustedBudget = "exhaustedBudget"
+
+regionPosition : SourceIndex -> Int -> Json
+regionPosition index off = match offsetToUtf16Position index off
+  Some (line, col) => jPosition line col
+  None => JNull
+
+symbolsResult : String -> String -> Json
+symbolsResult path src =
+  let revision = SourceRevision (uriOfPath path) None 0 src
+  let syntax = parseSnapshotSyntax revision
+  let result = snapshotSyntaxResult syntax
+  let (completeness, stop) = match recoveredCompleteness result
+    Complete => ("complete", JNull)
+    Partial why => ("partial", JString (stopName why))
+  let (regions, diagnostics) = match snapshotSyntaxSnapshot syntax
+    None =>
+      let (line, col) = sourceEndUtf16Position src
+      (
+        [
+          jObject [
+            ("start", jObject [("line", JInt 0), ("character", JInt 0)]),
+            ("end", jObject [("line", JInt line), ("character", JInt col)]),
+            ("reason", JString "recoveryBudget"),
+          ],
+        ],
+        [],
+      )
+    Some (SourceSnapshot _ _ _ _ index) => (
+      map
+        (region => match invalidExtent region
+          SourceExtent start end => jObject [
+            ("start", regionPosition index start),
+            ("end", regionPosition index end),
+            ("reason", JString (reasonName (invalidReason region))),
+          ])
+        (invalidRegions result),
+      map
+        (d => diagnosticJsonOr index JNull (parseDiagnosticToDiag path d))
+        (recoveredDiagnostics result),
+    )
+  let metadata = jObject [
+    (
+      "origin",
+      jObject [
+        ("uri", JString (uriOfPath path)),
+        ("version", JNull),
+        ("generation", JInt 0),
+      ],
+    ),
+    ("completeness", JString completeness),
+    ("stop", stop),
+    ("invalidRegions", jArray regions),
+    ("diagnostics", jArray diagnostics),
+  ]
+  match symbolsFromRecovered revision syntax
+    Err _ => toolArgError "medaka_symbols: snapshot mismatch"
+    Ok symbols =>
+      jObject
+        (toolTextFields (stringify (jArray symbols)) False
+          ++ [("structuredContent", metadata)])
+
 runSymbolsTool : String -> String -> String -> Json -> <IO> Json
 runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
   None =>
@@ -863,7 +911,7 @@ runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
     Err e =>
       toolArgError
         (stringConcat ["medaka_symbols: cannot read file '", path, "': ", e])
-    Ok src => symbolsResult src
+    Ok src => symbolsResult path src
 
 -- ── medaka_definition tool ───────────────────────────────────────────────────
 
@@ -1943,9 +1991,15 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
   serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 # DESUGAR
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
+(DUse false (UseGroup ("tools" "syntax_queries") ((mem "symbolsFromRecovered" false) (mem "jPosition" false))))
+(DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false))))
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
+(DUse false (UseGroup ("frontend" "recovery_result") ((mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "invalidExtent" false) (mem "invalidReason" false) (mem "invalidRegions" false) (mem "recoveredDiagnostics" false) (mem "recoveredCompleteness" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "definitionResultsWithIndex" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
@@ -1997,7 +2051,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "toolsListResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "tools")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "toolDescriptor")) (EVar "mcpTools")))))))
 (DData Private "McpTool" () ((variant "McpTool" (ConPos (TyCon "String") (TyCon "String") (TyCon "Json") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json"))))))))) ())
 (DTypeSig false "mcpTools" (TyApp (TyCon "List") (TyCon "McpTool")))
-(DFunDef false "mcpTools" () (EListLit (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_check"))) (ELit (LString "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns structured JSON using zero-based UTF-16 positions (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."))) (EVar "medakaCheckSchema")) (EVar "runCheckTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_type_at"))) (ELit (LString "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaTypeAtSchema")) (EVar "runTypeAtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_symbols"))) (ELit (LString "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list."))) (EVar "medakaSymbolsSchema")) (EVar "runSymbolsTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_definition"))) (ELit (LString "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaDefinitionSchema")) (EVar "runDefinitionTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_references"))) (ELit (LString "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line` and UTF-16 `col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."))) (EVar "medakaReferencesSchema")) (EVar "runReferencesTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_fmt"))) (ELit (LString "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)."))) (EVar "medakaFmtSchema")) (EVar "runFmtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_lint"))) (ELit (LString "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`."))) (EVar "medakaLintSchema")) (EVar "runLintTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_test"))) (EVar "mcpTestDescription")) (EVar "medakaTestSchema")) (EVar "runTestTool"))))
+(DFunDef false "mcpTools" () (EListLit (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_check"))) (ELit (LString "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns structured JSON using zero-based UTF-16 positions (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."))) (EVar "medakaCheckSchema")) (EVar "runCheckTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_type_at"))) (ELit (LString "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaTypeAtSchema")) (EVar "runTypeAtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_symbols"))) (ELit (LString "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. Incomplete source returns recoverable declarations; structuredContent reports completeness, invalid regions and diagnostics."))) (EVar "medakaSymbolsSchema")) (EVar "runSymbolsTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_definition"))) (ELit (LString "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaDefinitionSchema")) (EVar "runDefinitionTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_references"))) (ELit (LString "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line` and UTF-16 `col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."))) (EVar "medakaReferencesSchema")) (EVar "runReferencesTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_fmt"))) (ELit (LString "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)."))) (EVar "medakaFmtSchema")) (EVar "runFmtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_lint"))) (ELit (LString "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`."))) (EVar "medakaLintSchema")) (EVar "runLintTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_test"))) (EVar "mcpTestDescription")) (EVar "medakaTestSchema")) (EVar "runTestTool"))))
 (DTypeSig false "toolDescriptor" (TyFun (TyCon "McpTool") (TyCon "Json")))
 (DFunDef false "toolDescriptor" ((PCon "McpTool" (PVar "name") (PVar "desc") (PVar "schema") PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (EVar "desc"))) (ETuple (ELit (LString "inputSchema")) (EVar "schema")))))
 (DTypeSig false "callTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Json")))))))))
@@ -2010,7 +2064,9 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "syntheticSourceName" (TyCon "String"))
 (DFunDef false "syntheticSourceName" () (ELit (LString "<source>")))
 (DTypeSig false "toolTextResult" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "Json"))))
-(DFunDef false "toolTextResult" ((PVar "text") (PVar "isErr")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EVar "text")))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "isErr"))))))
+(DFunDef false "toolTextResult" ((PVar "text") (PVar "isErr")) (EApp (EVar "jObject") (EApp (EApp (EVar "toolTextFields") (EVar "text")) (EVar "isErr"))))
+(DTypeSig false "toolTextFields" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "toolTextFields" ((PVar "text") (PVar "isErr")) (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EVar "text")))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "isErr")))))
 (DTypeSig false "toolArgError" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "toolArgError" ((PVar "msg")) (EApp (EApp (EVar "toolTextResult") (EVar "msg")) (EVar "True")))
 (DTypeSig false "runCheckTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
@@ -2056,10 +2112,25 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "typeAtColLine" ((PVar "col") (PCon "None")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol")))))
 (DTypeSig false "medakaSymbolsSchema" (TyCon "Json"))
 (DFunDef false "medakaSymbolsSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file to list symbols for.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
-(DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyCon "Json")))
-(DFunDef false "symbolsResult" ((PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "position") (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EApp (EApp (EApp (EVar "clampSourcePositionToOffset") (EVar "index")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EApp (EVar "parseErrorCol") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "parseError")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "line")) (EMatch (EVar "position") (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EVar "JInt") (EVar "line"))) (arm (PCon "None") () (EVar "JNull")))) (ETuple (ELit (LString "col")) (EMatch (EVar "position") (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (EApp (EVar "JInt") (EVar "col"))) (arm (PCon "None") () (EVar "JNull")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EApp (EVar "parseErrorMessage") (EVar "e")))))))) (EVar "True"))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EVar "documentSymbols") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "reasonName" (TyFun (TyCon "InvalidReason") (TyCon "String")))
+(DFunDef false "reasonName" ((PCon "InvalidDeclaration")) (ELit (LString "invalidDeclaration")))
+(DFunDef false "reasonName" ((PCon "TerminalLexError")) (ELit (LString "terminalLexError")))
+(DFunDef false "reasonName" ((PCon "UnclosedDelimiter")) (ELit (LString "unclosedDelimiter")))
+(DFunDef false "reasonName" ((PCon "MismatchedDelimiter")) (ELit (LString "mismatchedDelimiter")))
+(DFunDef false "reasonName" ((PCon "UntrustedBoundary")) (ELit (LString "untrustedBoundary")))
+(DFunDef false "reasonName" ((PCon "RecoveryBudget")) (ELit (LString "recoveryBudget")))
+(DTypeSig false "stopName" (TyFun (TyCon "RecoveryStop") (TyCon "String")))
+(DFunDef false "stopName" ((PCon "ReachedEnd")) (ELit (LString "reachedEnd")))
+(DFunDef false "stopName" ((PCon "StoppedLexically")) (ELit (LString "stoppedLexically")))
+(DFunDef false "stopName" ((PCon "StoppedDelimiter")) (ELit (LString "stoppedDelimiter")))
+(DFunDef false "stopName" ((PCon "StoppedBoundary")) (ELit (LString "stoppedBoundary")))
+(DFunDef false "stopName" ((PCon "ExhaustedBudget")) (ELit (LString "exhaustedBudget")))
+(DTypeSig false "regionPosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyCon "Json"))))
+(DFunDef false "regionPosition" ((PVar "index") (PVar "off")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "off")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col"))) (arm (PCon "None") () (EVar "JNull"))))
+(DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))
+(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PTuple (PVar "regions") (PVar "diagnostics")) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "line") (PVar "col")) (EApp (EVar "sourceEndUtf16Position") (EVar "src"))) (DoExpr (ETuple (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (ELit (LInt 0)))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "end")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (ELit (LString "recoveryBudget"))))))) (EListLit))))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index"))) () (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EVar "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result"))))))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EBinOp "++" (EApp (EApp (EVar "toolTextFields") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))) (EVar "False")) (EListLit (ETuple (ELit (LString "structuredContent")) (EVar "metadata"))))))))))
 (DTypeSig false "runSymbolsTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "symbolsResult") (EVar "src")))))))
+(DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "symbolsResult") (EVar "path")) (EVar "src")))))))
 (DTypeSig false "medakaDefinitionSchema" (TyCon "Json"))
 (DFunDef false "medakaDefinitionSchema" () (EVar "medakaTypeAtSchema"))
 (DTypeSig false "positionParams" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))
@@ -2196,9 +2267,15 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false PWild (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
 # MARK
+(DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true))))
+(DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false))))
+(DUse false (UseGroup ("tools" "syntax_queries") ((mem "symbolsFromRecovered" false) (mem "jPosition" false))))
+(DUse false (UseGroup ("tools" "lsp_diagnostics") ((mem "diagnosticJsonOr" false))))
+(DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
+(DUse false (UseGroup ("frontend" "recovery_result") ((mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "invalidExtent" false) (mem "invalidReason" false) (mem "invalidRegions" false) (mem "recoveredDiagnostics" false) (mem "recoveredCompleteness" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "definitionResultsWithIndex" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
@@ -2250,7 +2327,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "toolsListResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "tools")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "toolDescriptor")) (EVar "mcpTools")))))))
 (DData Private "McpTool" () ((variant "McpTool" (ConPos (TyCon "String") (TyCon "String") (TyCon "Json") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json"))))))))) ())
 (DTypeSig false "mcpTools" (TyApp (TyCon "List") (TyCon "McpTool")))
-(DFunDef false "mcpTools" () (EListLit (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_check"))) (ELit (LString "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns structured JSON using zero-based UTF-16 positions (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."))) (EVar "medakaCheckSchema")) (EVar "runCheckTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_type_at"))) (ELit (LString "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaTypeAtSchema")) (EVar "runTypeAtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_symbols"))) (ELit (LString "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list."))) (EVar "medakaSymbolsSchema")) (EVar "runSymbolsTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_definition"))) (ELit (LString "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaDefinitionSchema")) (EVar "runDefinitionTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_references"))) (ELit (LString "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line` and UTF-16 `col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."))) (EVar "medakaReferencesSchema")) (EVar "runReferencesTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_fmt"))) (ELit (LString "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)."))) (EVar "medakaFmtSchema")) (EVar "runFmtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_lint"))) (ELit (LString "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`."))) (EVar "medakaLintSchema")) (EVar "runLintTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_test"))) (EVar "mcpTestDescription")) (EVar "medakaTestSchema")) (EVar "runTestTool"))))
+(DFunDef false "mcpTools" () (EListLit (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_check"))) (ELit (LString "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns structured JSON using zero-based UTF-16 positions (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."))) (EVar "medakaCheckSchema")) (EVar "runCheckTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_type_at"))) (ELit (LString "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaTypeAtSchema")) (EVar "runTypeAtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_symbols"))) (ELit (LString "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. Incomplete source returns recoverable declarations; structuredContent reports completeness, invalid regions and diagnostics."))) (EVar "medakaSymbolsSchema")) (EVar "runSymbolsTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_definition"))) (ELit (LString "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based UTF-16 code units) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."))) (EVar "medakaDefinitionSchema")) (EVar "runDefinitionTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_references"))) (ELit (LString "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line` and UTF-16 `col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."))) (EVar "medakaReferencesSchema")) (EVar "runReferencesTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_fmt"))) (ELit (LString "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)."))) (EVar "medakaFmtSchema")) (EVar "runFmtTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_lint"))) (ELit (LString "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`."))) (EVar "medakaLintSchema")) (EVar "runLintTool")) (EApp (EApp (EApp (EApp (EVar "McpTool") (ELit (LString "medaka_test"))) (EVar "mcpTestDescription")) (EVar "medakaTestSchema")) (EVar "runTestTool"))))
 (DTypeSig false "toolDescriptor" (TyFun (TyCon "McpTool") (TyCon "Json")))
 (DFunDef false "toolDescriptor" ((PCon "McpTool" (PVar "name") (PVar "desc") (PVar "schema") PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (EVar "desc"))) (ETuple (ELit (LString "inputSchema")) (EVar "schema")))))
 (DTypeSig false "callTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Json")))))))))
@@ -2263,7 +2340,9 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "syntheticSourceName" (TyCon "String"))
 (DFunDef false "syntheticSourceName" () (ELit (LString "<source>")))
 (DTypeSig false "toolTextResult" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "Json"))))
-(DFunDef false "toolTextResult" ((PVar "text") (PVar "isErr")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EVar "text")))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "isErr"))))))
+(DFunDef false "toolTextResult" ((PVar "text") (PVar "isErr")) (EApp (EVar "jObject") (EApp (EApp (EVar "toolTextFields") (EVar "text")) (EVar "isErr"))))
+(DTypeSig false "toolTextFields" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "toolTextFields" ((PVar "text") (PVar "isErr")) (EListLit (ETuple (ELit (LString "content")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "text")))) (ETuple (ELit (LString "text")) (EApp (EVar "JString") (EVar "text")))))))) (ETuple (ELit (LString "isError")) (EApp (EVar "JBool") (EVar "isErr")))))
 (DTypeSig false "toolArgError" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "toolArgError" ((PVar "msg")) (EApp (EApp (EVar "toolTextResult") (EVar "msg")) (EVar "True")))
 (DTypeSig false "runCheckTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
@@ -2309,10 +2388,25 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "typeAtColLine" ((PVar "col") (PCon "None")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol")))))
 (DTypeSig false "medakaSymbolsSchema" (TyCon "Json"))
 (DFunDef false "medakaSymbolsSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file to list symbols for.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
-(DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyCon "Json")))
-(DFunDef false "symbolsResult" ((PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "position") (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EApp (EApp (EApp (EVar "clampSourcePositionToOffset") (EMethodRef "index")) (EApp (EVar "parseErrorLine") (EVar "e"))) (EApp (EVar "parseErrorCol") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "parseError")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "line")) (EMatch (EVar "position") (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EVar "JInt") (EVar "line"))) (arm (PCon "None") () (EVar "JNull")))) (ETuple (ELit (LString "col")) (EMatch (EVar "position") (arm (PCon "Some" (PTuple PWild (PVar "col"))) () (EApp (EVar "JInt") (EVar "col"))) (arm (PCon "None") () (EVar "JNull")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EApp (EVar "parseErrorMessage") (EVar "e")))))))) (EVar "True"))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EVar "documentSymbols") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "reasonName" (TyFun (TyCon "InvalidReason") (TyCon "String")))
+(DFunDef false "reasonName" ((PCon "InvalidDeclaration")) (ELit (LString "invalidDeclaration")))
+(DFunDef false "reasonName" ((PCon "TerminalLexError")) (ELit (LString "terminalLexError")))
+(DFunDef false "reasonName" ((PCon "UnclosedDelimiter")) (ELit (LString "unclosedDelimiter")))
+(DFunDef false "reasonName" ((PCon "MismatchedDelimiter")) (ELit (LString "mismatchedDelimiter")))
+(DFunDef false "reasonName" ((PCon "UntrustedBoundary")) (ELit (LString "untrustedBoundary")))
+(DFunDef false "reasonName" ((PCon "RecoveryBudget")) (ELit (LString "recoveryBudget")))
+(DTypeSig false "stopName" (TyFun (TyCon "RecoveryStop") (TyCon "String")))
+(DFunDef false "stopName" ((PCon "ReachedEnd")) (ELit (LString "reachedEnd")))
+(DFunDef false "stopName" ((PCon "StoppedLexically")) (ELit (LString "stoppedLexically")))
+(DFunDef false "stopName" ((PCon "StoppedDelimiter")) (ELit (LString "stoppedDelimiter")))
+(DFunDef false "stopName" ((PCon "StoppedBoundary")) (ELit (LString "stoppedBoundary")))
+(DFunDef false "stopName" ((PCon "ExhaustedBudget")) (ELit (LString "exhaustedBudget")))
+(DTypeSig false "regionPosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyCon "Json"))))
+(DFunDef false "regionPosition" ((PVar "index") (PVar "off")) (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "off")) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col"))) (arm (PCon "None") () (EVar "JNull"))))
+(DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))
+(DFunDef false "symbolsResult" ((PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoLet false false (PVar "syntax") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PTuple (PVar "completeness") (PVar "stop")) (EMatch (EApp (EVar "recoveredCompleteness") (EVar "result")) (arm (PCon "Complete") () (ETuple (ELit (LString "complete")) (EVar "JNull"))) (arm (PCon "Partial" (PVar "why")) () (ETuple (ELit (LString "partial")) (EApp (EVar "JString") (EApp (EVar "stopName") (EVar "why"))))))) (DoLet false false (PTuple (PVar "regions") (PVar "diagnostics")) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "line") (PVar "col")) (EApp (EVar "sourceEndUtf16Position") (EVar "src"))) (DoExpr (ETuple (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (ELit (LInt 0)))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "end")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "character")) (EApp (EVar "JInt") (EVar "col")))))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (ELit (LString "recoveryBudget"))))))) (EListLit))))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index"))) () (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "region")) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") (PVar "end")) () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "start")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "start"))) (ETuple (ELit (LString "end")) (EApp (EApp (EVar "regionPosition") (EMethodRef "index")) (EVar "end"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EApp (EVar "reasonName") (EApp (EVar "invalidReason") (EVar "region"))))))))))) (EApp (EVar "invalidRegions") (EVar "result"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EVar "JNull")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EVar "d"))))) (EApp (EVar "recoveredDiagnostics") (EVar "result"))))))) (DoLet false false (PVar "metadata") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "origin")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "version")) (EVar "JNull")) (ETuple (ELit (LString "generation")) (EApp (EVar "JInt") (ELit (LInt 0))))))) (ETuple (ELit (LString "completeness")) (EApp (EVar "JString") (EVar "completeness"))) (ETuple (ELit (LString "stop")) (EVar "stop")) (ETuple (ELit (LString "invalidRegions")) (EApp (EVar "jArray") (EVar "regions"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diagnostics")))))) (DoExpr (EMatch (EApp (EApp (EVar "symbolsFromRecovered") (EVar "revision")) (EVar "syntax")) (arm (PCon "Err" PWild) () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: snapshot mismatch")))) (arm (PCon "Ok" (PVar "symbols")) () (EApp (EVar "jObject") (EBinOp "++" (EApp (EApp (EVar "toolTextFields") (EApp (EVar "stringify") (EApp (EVar "jArray") (EVar "symbols")))) (EVar "False")) (EListLit (ETuple (ELit (LString "structuredContent")) (EVar "metadata"))))))))))
 (DTypeSig false "runSymbolsTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "symbolsResult") (EVar "src")))))))
+(DFunDef false "runSymbolsTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_symbols: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_symbols: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "symbolsResult") (EVar "path")) (EVar "src")))))))
 (DTypeSig false "medakaDefinitionSchema" (TyCon "Json"))
 (DFunDef false "medakaDefinitionSchema" () (EVar "medakaTypeAtSchema"))
 (DTypeSig false "positionParams" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json"))))

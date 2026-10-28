@@ -128,6 +128,11 @@ Any other backslash-letter (`\d`, `\q`, `\v`) is a lex error in every string for
 triple-quoted, and the text after an interpolation in either. It is never silently decoded to
 the bare letter.
 
+Every plain or triple-quoted string, including the final text segment after an
+interpolation, requires its matching closing quote delimiter. EOF before that
+delimiter is `L-UNTERMINATED-STRING`; it does not supply an implicit closing
+string or interpolation-end token.
+
 **The unicode escape is *always* braced.** The fixed-width `\uXXXX` spelling other
 languages use (no braces, exactly four hex digits) is **not** Medaka syntax — only
 `\u{HEX}` is. A bare `\u` followed by a hex digit is a lex error

@@ -1,0 +1,48 @@
+import tools.snapshot_syntax.{
+  parseSnapshotSyntax, snapshotSyntaxMatches, snapshotSyntaxResult
+}
+import tools.source_snapshot.{SourceRevision(..)}
+import frontend.recovery_result.{recoveredDecls}
+import frontend.ast.{Decl(..)}
+import test.{expectAll, expectEqual, expectTrue, expectFalse}
+
+declName : Decl -> Option String
+declName (DFunDef _ n _ _ _ _) = Some n
+declName _ = None
+
+test "snapshot syntax keeps its binding across edits" =
+  let original = SourceRevision "file:///a" (Some 7) 1 "before = 1\n"
+  let syntax = parseSnapshotSyntax original
+  let later = SourceRevision "file:///a" (Some 7) 2 "after = 2\n"
+  expectAll [
+    expectTrue (snapshotSyntaxMatches original syntax),
+    expectFalse (snapshotSyntaxMatches later syntax),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///b" (Some 7) 1 "before = 1\n")
+        syntax),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///a" (Some 8) 1 "before = 1\n")
+        syntax),
+    expectFalse
+      (snapshotSyntaxMatches
+        (SourceRevision "file:///a" None 1 "before = 1\n")
+        syntax),
+    expectEqual
+      [Some "before"]
+      (map declName (recoveredDecls (snapshotSyntaxResult syntax))),
+  ]
+
+test "versionless and reused versions still require generation" =
+  let versionless = SourceRevision "file:///a" None 3 "before = 1\n"
+  let syntax = parseSnapshotSyntax versionless
+  let reused = SourceRevision "file:///a" None 4 "before = 1\n"
+  let versioned = SourceRevision "file:///a" (Some 2) 5 "before = 1\n"
+  let old = parseSnapshotSyntax versioned
+  let reopened = SourceRevision "file:///a" (Some 2) 6 "after = 2\n"
+  expectAll [
+    expectTrue (snapshotSyntaxMatches versionless syntax),
+    expectFalse (snapshotSyntaxMatches reused syntax),
+    expectFalse (snapshotSyntaxMatches reopened old),
+  ]

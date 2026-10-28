@@ -1,0 +1,58 @@
+import frontend.parse_recovery.{
+  parseRecoveringWithIndex, defaultRecoveryAdmission
+}
+import frontend.recovery_result.{RecoveredSource}
+import tools.source_snapshot.{
+  SourceRevision(..), SourceSnapshot(..), SnapshotId(..), revisionId,
+  snapshotFromRevision
+}
+
+public export data SnapshotMismatch = SnapshotMismatch SnapshotId SnapshotId
+export data SnapshotSyntax =
+  SnapshotSyntax SnapshotId (Option Int) RecoveredSource
+export data PreparedSyntax =
+  PreparedSyntax (Option SourceSnapshot) SnapshotSyntax
+
+export
+parseSnapshotSyntax : SourceRevision -> PreparedSyntax
+parseSnapshotSyntax (revision@(SourceRevision _ version _ text)) =
+  match defaultRecoveryAdmission text
+    Some result =>
+      PreparedSyntax None (SnapshotSyntax (revisionId revision) version result)
+    None =>
+      let snapshot = snapshotFromRevision revision
+      match snapshot
+        SourceSnapshot _ _ _ _ index =>
+          PreparedSyntax
+            (Some snapshot)
+            (SnapshotSyntax
+              (revisionId revision)
+              version
+              (parseRecoveringWithIndex index text))
+
+export
+snapshotSyntaxId : PreparedSyntax -> SnapshotId
+snapshotSyntaxId (PreparedSyntax _ (SnapshotSyntax id _ _)) = id
+
+export
+snapshotSyntaxVersion : PreparedSyntax -> Option Int
+snapshotSyntaxVersion (PreparedSyntax _ (SnapshotSyntax _ version _)) = version
+
+export
+snapshotSyntaxResult : PreparedSyntax -> RecoveredSource
+snapshotSyntaxResult (PreparedSyntax _ (SnapshotSyntax _ _ result)) = result
+
+export
+snapshotSyntaxMatches : SourceRevision -> PreparedSyntax -> Bool
+snapshotSyntaxMatches (revision@(SourceRevision _ version _ _)) syntax = match (
+  revisionId revision,
+  snapshotSyntaxId syntax,
+)
+  (SnapshotId uri generation, SnapshotId otherUri otherGeneration) =>
+    uri == otherUri
+      && generation == otherGeneration
+      && version == snapshotSyntaxVersion syntax
+
+export
+snapshotSyntaxSnapshot : PreparedSyntax -> Option SourceSnapshot
+snapshotSyntaxSnapshot (PreparedSyntax snapshot _) = snapshot
