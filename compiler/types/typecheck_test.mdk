@@ -6592,3 +6592,15 @@ test "an integer literal at a type with no Num instance is a type mismatch" =
   expectEqual
     ["T-TYPE-MISMATCH"]
     (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))
+
+test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
+  let first = Some (Loc "probe.mdk" 3 1 3 5)
+  let second = Some (Loc "probe.mdk" 9 1 9 5)
+  expectAll [
+    expectEqual [] (spanKeys [None, None]),
+    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
+    expectNotEqual (spanKeys [first]) (spanKeys [second]),
+    expectEqual
+      (spanKeys [first] ++ spanKeys [second])
+      (spanKeys [first, None, second]),
+  ]

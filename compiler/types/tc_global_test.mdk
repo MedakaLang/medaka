@@ -1,0 +1,703 @@
+-- Tests of `types.tc_global`'s own API, each over the tables a hand-written module builds below
+-- the whole check: the class table and impl table of its declarations, and a fresh module record
+-- that collects the diagnostics.  `checkCoherence` and `globalCoherenceConflict` (overlapping
+-- impl heads), `checkImplCompletenessMap`, `checkPhantomMethods`, `checkSuperImpls`,
+-- `checkGradedImplHeads`, the impl-head projections and `implDeclLoc`, the bodies of interface
+-- defaults and of impls without a requirement (`inferDefaultBodiesIfEnabled`,
+-- `inferImplBodies`), and the Num-obligation synthesis of the call window (`numCallObls`,
+-- `calleeNumObls`).  Not driven here: `nestedRequireGoals` (its goals come from occurrences the
+-- mark pass mints), the bodies of an impl with a requirement (they read marked sites, and
+-- inference stops on an unminted one), the dictionary-application half of `calleeNumObls`, and
+-- `foreachUnit`'s callers beyond the checks above.  What a whole check rejects is observed
+-- through `types.typecheck` in `typecheck_test`.
+
+import test.{expectAll, expectEqual}
+import frontend.ast.{Decl(..), Loc(..), TabKey, Ty(..)}
+import types.tc_global.{
+  checkCoherence,
+  checkGradedImplHeads,
+  checkImplCompletenessMap,
+  checkPhantomMethods,
+  checkSuperImpls,
+  globalCoherenceConflict,
+  implDeclLoc,
+  implHeadGround,
+  implHeadParametric,
+  calleeNumObls,
+  numCallObls,
+  inferDefaultBodiesIfEnabled,
+  inferImplBodies,
+}
+import list.{range, take, zip}
+import support.util.{contains, joinNl, joinWith}
+import types.tc_env.{tyTabKey}
+import types.repr.{Mono, ppMono}
+import types.tc_solve.{uOblArgs}
+import types.tc_types.{
+  ClassEnv,
+  ImplEnv,
+  Kind(..),
+  ModuleCtx(..),
+  UObligation(..),
+}
+import types.tc_state.{probeGraphCtx, wPushAll}
+import types.publish.{tcCode}
+import types.tc_test_support.{
+  codesOf,
+  declsOf,
+  envsOf,
+  envsOfModules,
+  fresh,
+  ifaceOf,
+  inRootScope,
+  intM,
+  boolM,
+  moduleDecls,
+  moduleOrdinal,
+  oblOver,
+  scopedWith,
+  envWithData,
+}
+
+-- ── fixtures ──────────────────────────────────────────────────────────────
+
+-- An interface `Sz` with one required method, two data types to head impls with, and the impl
+-- at `Int` every source below builds on.
+base : String
+base =
+  """
+interface Sz a where
+  sz : a -> Int
+data Box a = Box a
+data Pair a b = Pair a b
+impl Sz Int where
+  sz n = n
+"""
+
+-- The codes of the diagnostics `check` leaves in a fresh module record over [src], the module
+-- "m" at ordinal 0.
+codesOver : (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
+  String ->
+  List String
+codesOver check src =
+  let m = inRootScope (fresh ())
+  let ds = moduleDecls src
+  let (ce, ie) = envsOf m ds
+  check m ds ce ie
+  codesOf m
+
+-- The codes the warnings of a fresh module record hold after `check` over [src].
+warningCodesOver : (ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit) ->
+  String ->
+  List String
+warningCodesOver check src =
+  let m = inRootScope (fresh ())
+  let ds = moduleDecls src
+  let (ce, ie) = envsOf m ds
+  check m ds ce ie
+  map tcCode m.mcCells.matchWarnings.value
+
+coherence : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
+coherence m _ _ ie = checkCoherence m ie moduleOrdinal
+
+-- ── checkCoherence and globalCoherenceConflict ────────────────────────────
+
+sameHead : String
+sameHead = """
+\{base}
+impl Sz Int where
+  sz n = 2
+"""
+
+variableHeads : String
+variableHeads =
+  """
+\{base}
+impl Sz (Box a) where
+  sz _ = 1
+impl Sz (Box b) where
+  sz _ = 2
+"""
+
+specificBeside : String
+specificBeside =
+  """
+\{base}
+impl Sz (Box a) where
+  sz _ = 1
+impl Sz (Box Int) where
+  sz _ = 2
+"""
+
+disjointHeads : String
+disjointHeads =
+  """
+\{base}
+impl Sz Bool where
+  sz _ = 2
+impl Sz (Box a) where
+  sz _ = 3
+"""
+
+incomparableHeads : String
+incomparableHeads =
+  """
+\{base}
+impl Sz (Pair a Int) where
+  sz _ = 1
+impl Sz (Pair Int b) where
+  sz _ = 2
+"""
+
+test "two impls of one head are a conflicting impl, whether the head is ground or a variable" = expectAll
+  [
+    expectEqual ["T-CONFLICTING-IMPL"] (codesOver coherence sameHead),
+    expectEqual ["T-CONFLICTING-IMPL"] (codesOver coherence variableHeads),
+  ]
+
+test "a specific head beside a general one, and disjoint heads, are coherent" = expectAll
+  [
+    expectEqual [] (codesOver coherence specificBeside),
+    expectEqual [] (codesOver coherence disjointHeads),
+    expectEqual [] (codesOver coherence base),
+  ]
+
+test "two heads that overlap with neither more specific are a warning, not an error" =
+  expectEqual
+    ([], ["W-INCOMPARABLE-IMPLS"])
+    (
+      codesOver coherence incomparableHeads,
+      warningCodesOver coherence incomparableHeads,
+    )
+
+test "a module's coherence is checked against its own impls, not another module's" =
+  let m = inRootScope (fresh ())
+  let (_, ie) = envsOf m (moduleDecls sameHead)
+  checkCoherence m ie (moduleOrdinal + 1)
+  expectEqual [] (codesOf m)
+
+-- The verdicts of the whole-graph sweep over the modules [mods], the first holding the
+-- interface: whether it found a hard and a soft conflict.
+sweepVerdicts : List String -> (Bool, Bool)
+sweepVerdicts sources =
+  let m = inRootScope (fresh ())
+  let (_, ie) =
+    envsOfModules
+      m
+      (map (p => (fst p, declsOf "m" (snd p))) (zip ["a", "b"] sources))
+  let (hard, soft) = globalCoherenceConflict m ie
+  (isSome hard, isSome soft)
+
+boxIntImpl : String
+boxIntImpl = """
+impl Sz (Box Int) where
+  sz _ = 2
+"""
+
+intImpl : String
+intImpl = """
+impl Sz Int where
+  sz n = 3
+"""
+
+pairAInt : String
+pairAInt = """
+impl Sz (Pair a Int) where
+  sz _ = 1
+"""
+
+pairIntB : String
+pairIntB = """
+impl Sz (Pair Int b) where
+  sz _ = 2
+"""
+
+test "the whole-graph sweep finds a hard conflict between two modules' impls of one head" =
+  expectEqual (True, False) (sweepVerdicts [base, intImpl])
+
+test "the whole-graph sweep finds a soft conflict between two modules' incomparable heads" =
+  expectEqual (False, True) (sweepVerdicts [base ++ pairAInt, pairIntB])
+
+test "the whole-graph sweep finds nothing in a specific head of one module beside a general head of another" =
+  expectEqual
+    (False, False)
+    (sweepVerdicts [base ++ parametricImpl, boxIntImpl])
+
+-- ── implHeadGround, implHeadParametric and implDeclLoc ────────────────────
+
+-- The first impl declaration of [src].
+firstImpl : String -> Option Decl
+firstImpl src = match filter isImplDecl (moduleDecls src)
+  d :: _ => Some d
+  [] => None
+
+isImplDecl : Decl -> Bool
+isImplDecl (DImpl { tys = _ }) = True
+isImplDecl _ = False
+
+-- The projection [f] of the first impl of [src], `None` when it declares none.
+overImpl : (Decl -> a) -> String -> Option a
+overImpl f src = map f (firstImpl src)
+
+groundImpl : String
+groundImpl = """
+impl Sz Int where
+  sz n = n
+"""
+
+parametricImpl : String
+parametricImpl = """
+impl Sz (Box a) where
+  sz _ = 1
+"""
+
+-- Whether an impl is ground and whether it is parametric.
+headKinds : Decl -> (Bool, Bool)
+headKinds d = (implHeadGround d, implHeadParametric d)
+
+test "an impl is ground exactly when its head has no type variable, and parametric exactly otherwise" =
+  expectEqual
+    (
+      Some (True, False),
+      Some (False, True),
+    )
+    (
+      overImpl headKinds groundImpl,
+      overImpl headKinds parametricImpl,
+    )
+
+test "a declaration that is no impl is neither ground nor parametric" =
+  expectEqual
+    [(False, False), (False, False)]
+    (map
+      headKinds
+      (moduleDecls
+        """
+interface Sz a where
+  sz : a -> Int
+data Box a = Box a
+"""))
+
+-- Whether the interface-name span of an impl is recorded; `None` when the declaration is no impl.
+spanRecorded : Decl -> Option Bool
+spanRecorded d = map isSome (implDeclLoc d)
+
+-- The first impl of [src] with the span of its interface name taken away, as a derived impl
+-- has none.
+derivedImpl : String -> Option Decl
+derivedImpl src = match firstImpl src
+  Some (d@(DImpl { implIfaceLoc = _ })) =>
+    Some DImpl { d | implIfaceLoc = None }
+  _ => None
+
+test "an impl records the span of its interface name unless it is derived, and any other declaration has none" =
+  expectEqual
+    (Some (Some True), Some (Some False), [None, None])
+    (
+      overImpl spanRecorded base,
+      map spanRecorded (derivedImpl base),
+      map spanRecorded (take 2 (moduleDecls base)),
+    )
+
+test "an attributed impl answers as the impl it wraps" =
+  expectEqual
+    (Some (Some True))
+    (overImpl (d => spanRecorded (DAttrib [] d)) base)
+
+-- ── checkImplCompletenessMap ──────────────────────────────────────────────
+
+twoRequired : String
+twoRequired =
+  """
+interface Two a where
+  first : a -> Int
+  second : a -> Int
+impl Two Bool where
+  first _ = 1
+"""
+
+withDefault : String
+withDefault =
+  """
+interface Dflt a where
+  first : a -> Int
+  second : a -> Int
+  second x = first x
+impl Dflt Bool where
+  first _ = 1
+"""
+
+unknownInterface : String
+unknownInterface = """
+impl Missing Bool where
+  nothing _ = 1
+"""
+
+completeness : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
+completeness m ds ce _ = checkImplCompletenessMap m ce moduleOrdinal ds
+
+test "an impl that leaves a required method undefined is an incomplete impl" =
+  expectEqual ["T-INCOMPLETE-IMPL"] (codesOver completeness twoRequired)
+
+test "an impl may leave a method that has a default to it, and an impl of an unknown interface is skipped" =
+  expectEqual
+    ([], [])
+    (
+      codesOver completeness withDefault,
+      codesOver completeness unknownInterface,
+    )
+
+test "an impl that defines every required method is complete" =
+  expectEqual [] (codesOver completeness base)
+
+-- ── checkPhantomMethods ───────────────────────────────────────────────────
+
+phantom : String
+phantom = """
+interface Ghost a where
+  real : a -> Int
+  imagined x = 0
+"""
+
+phantomCheck : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
+phantomCheck m _ ce _ = checkPhantomMethods m ce moduleOrdinal
+
+test "an interface that gives a default to a method it never declares has a phantom method" =
+  expectEqual ["T-PHANTOM-METHOD"] (codesOver phantomCheck phantom)
+
+test "an interface whose defaults are all of declared methods has none" =
+  expectEqual [] (codesOver phantomCheck withDefault)
+
+-- ── checkSuperImpls ───────────────────────────────────────────────────────
+
+withSuper : String
+withSuper = """
+\{base}
+interface Sub a requires Sz a where
+  sub : a -> Int
+"""
+
+subWithoutSuper : String
+subWithoutSuper = """
+\{withSuper}
+impl Sub Bool where
+  sub _ = 0
+"""
+
+subWithSuper : String
+subWithSuper = """
+\{subWithoutSuper}
+impl Sz Bool where
+  sz _ = 1
+"""
+
+supers : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Unit
+supers m ds ce ie = checkSuperImpls m ds ce ie moduleOrdinal
+
+test "an impl of a sub-interface at a type its super has no impl for is a missing super impl" =
+  expectEqual ["T-MISSING-SUPER-IMPL"] (codesOver supers subWithoutSuper)
+
+test "an impl of a sub-interface beside its super's impl at that type is accepted" =
+  expectEqual [] (codesOver supers subWithSuper)
+
+-- ── checkGradedImplHeads ──────────────────────────────────────────────────
+
+gradedWrongKind : String
+gradedWrongKind =
+  """
+data Q a b = MkQ a b
+
+interface Graded (f : Effect -> Type -> Type) where
+  gthen : f e a -> (a -> <e> f e b) -> f e b
+
+impl Graded Q where
+  gthen q f = gthen q f
+"""
+
+gradedRightKind : String
+gradedRightKind =
+  """
+data Q e a = MkQ a
+
+interface Graded (f : Effect -> Type -> Type) where
+  gthen : f e a -> (a -> <e> f e b) -> f e b
+
+impl Graded Q where
+  gthen q f = gthen q f
+"""
+
+gradedTuple : String
+gradedTuple =
+  """
+interface Graded (f : Effect -> Type -> Type) where
+  gthen : f e a -> (a -> <e> f e b) -> f e b
+
+impl Graded (a, b) where
+  gthen q f = gthen q f
+"""
+
+-- The check over `Q` taken to have the parameter kinds [kinds], keyed by the identity the impl
+-- head names it by; `[]` stands for a head whose kinds nothing recorded.
+gradedWith : List (List Kind) ->
+  ModuleCtx ->
+  List Decl ->
+  ClassEnv ->
+  ImplEnv ->
+  Unit
+gradedWith recorded m ds ce _ =
+  m.mcCells.dataParamKindsRef := flatMap (kindsOfQ ds) recorded
+  checkGradedImplHeads m ce moduleOrdinal ds
+
+-- The table row naming `Q`, as the impl head of [ds] names it, with the kinds [kinds].
+kindsOfQ : List Decl -> List Kind -> List (TabKey, List Kind)
+kindsOfQ ds kinds =
+  flatMap
+    (d => match d
+      DImpl { tys = [TyCon { tyConOrigin = o, ... }] } =>
+        [(tyTabKey o "Q", kinds)]
+      _ => [])
+    ds
+
+test "an impl head whose free parameter is not a row is rejected for a graded interface" =
+  expectEqual
+    ["T-IMPL-KIND-MISMATCH"]
+    (codesOver (gradedWith [[KType, KType]]) gradedWrongKind)
+
+test "an impl head whose free parameters are the interface's row and type is accepted" =
+  expectEqual [] (codesOver (gradedWith [[KRow, KType]]) gradedRightKind)
+
+test "an impl head with no recorded kinds is not judged" =
+  expectEqual [] (codesOver (gradedWith []) gradedWrongKind)
+
+test "a saturated tuple heading an impl of a graded interface is rejected, there being no row to give it" =
+  expectEqual ["T-IMPL-KIND-MISMATCH"] (codesOver (gradedWith []) gradedTuple)
+
+-- ── inferDefaultBodiesIfEnabled and inferImplBodies ───────────────────────
+
+mismatchedDefault : String
+mismatchedDefault = """
+interface Bad a where
+  bad : a -> Int
+  bad x = True
+"""
+
+mistypedImpl : String
+mistypedImpl = """
+\{base}
+impl Sz Bool where
+  sz _ = True
+"""
+
+-- The codes left by inferring the default bodies of [src]'s interfaces, in an environment over
+-- its data types.
+defaultCodes : String -> List String
+defaultCodes src =
+  let m = scopedWith src
+  let ds = moduleDecls src
+  inferDefaultBodiesIfEnabled (envWithData m src) ds
+  codesOf m
+
+-- Each impl of [ds] with the span of its interface name, as the impl-body driver takes them.
+implEntries : List Decl -> List (Option Loc, Decl)
+implEntries ds =
+  flatMap
+    (d => match implDeclLoc d
+      Some loc => [(loc, d)]
+      None => [])
+    ds
+
+-- The codes left by inferring the impl bodies of [src], in an environment over its data types.
+implCodes : String -> List String
+implCodes src =
+  let m = scopedWith src
+  let ds = moduleDecls src
+  let (ce, _) = envsOf m ds
+  inferImplBodies (envWithData m src) [] ce moduleOrdinal (implEntries ds)
+  codesOf m
+
+test "a default body of the wrong type for its method is rejected, and one of the right type is not" =
+  expectEqual
+    (["T-METHOD-MISMATCH"], [])
+    (defaultCodes mismatchedDefault, defaultCodes withDefault)
+
+test "an impl method body of the wrong type for its method is rejected, and one of the right type is not" =
+  expectEqual (["T-TYPE-MISMATCH"], []) (implCodes mistypedImpl, implCodes base)
+
+-- ── numCallObls and calleeNumObls ─────────────────────────────────────────
+
+-- An obligation of the interface [name] over the argument monos [args].
+oblOf : String -> List Mono -> UObligation
+oblOf name args = oblOver (ifaceOf name) args
+
+-- The argument monos of each obligation `numCallObls` hands back for [obls], rendered.
+numArgs : List UObligation -> List (String, List String)
+numArgs obls =
+  let g = probeGraphCtx ()
+  map
+    (o => (o.pred.iface.irName, map ppMono (uOblArgs g o)))
+    (numCallObls g obls)
+
+test "a Num obligation over one type is carried as a numeric method occurrence over that type" =
+  expectEqual
+    [("Num", ["Int"]), ("Num", ["Bool"])]
+    (numArgs [oblOf "Num" [intM], oblOf "Num" [boolM]])
+
+test "an obligation of another interface, or a Num one over several types, is not carried" =
+  expectEqual
+    []
+    (numArgs [oblOf "Eq" [intM], oblOf "Num" [intM, boolM], oblOf "Num" []])
+
+-- The interface and argument monos of each Num obligation `calleeNumObls` raises over the
+-- window of the call obligations recorded since mark [mark], in a module that recorded the
+-- obligations [recorded] in order; the channel hands its window back newest first.
+calleeNumAt : List UObligation -> Int -> List (String, List String)
+calleeNumAt recorded mark =
+  let m = inRootScope (fresh ())
+  wPushAll m.mcCells.obls recorded
+  map
+    (o => (o.pred.iface.irName, map ppMono (uOblArgs m.mcGraph o)))
+    (calleeNumObls m mark 0)
+
+test "a callee's Num obligations are those of the call obligations recorded since the mark" =
+  let recorded = [oblOf "Num" [intM], oblOf "Eq" [boolM], oblOf "Num" [boolM]]
+  expectEqual
+    (
+      [("Num", ["Bool"]), ("Num", ["Int"])],
+      [("Num", ["Bool"])],
+      [],
+    )
+    (
+      calleeNumAt recorded 0,
+      calleeNumAt recorded 2,
+      calleeNumAt [] 0,
+    )
+
+-- ── properties ────────────────────────────────────────────────────────────
+
+-- An impl head of `Sz` as a constructor (0 is `Box`, 1 is `Pair`) and the kind of each of its
+-- two argument slots (0 a type variable, 1 `Int`, 2 `Bool`); `Box` uses the first slot only.
+data HeadSpec = HeadSpec Int Int Int
+
+impl Arbitrary HeadSpec where
+  arbitrary () = HeadSpec (randomInt 0 1) (randomInt 0 2) (randomInt 0 2)
+
+-- A set of two to four heads, in declaration order.
+data HeadCase = HeadCase (List HeadSpec)
+
+impl Arbitrary HeadCase where
+  arbitrary () = HeadCase (drawN (randomInt 2 4))
+  shrink (HeadCase heads) = match heads
+    _ :: rest if length rest >= 2 => [HeadCase rest]
+    _ => []
+
+-- The slots a head spells: the first only for `Box`, both for `Pair`.
+headSlots : HeadSpec -> List Int
+headSlots (HeadSpec 0 a _) = [a]
+headSlots (HeadSpec _ a b) = [a, b]
+
+headCtor : HeadSpec -> Int
+headCtor (HeadSpec c _ _) = c
+
+-- The slot at position [i] of kind [k] as source: a variable named by its position, or a type.
+slotSource : Int -> Int -> String
+slotSource i 0 = if i == 0 then "a" else "b"
+slotSource _ 1 = "Int"
+slotSource _ _ = "Bool"
+
+-- The head as source: each variable slot a variable of its own.
+headSource : HeadSpec -> String
+headSource h =
+  let args =
+    map (p => slotSource (fst p) (snd p)) (zip (range 0 2) (headSlots h))
+  match headCtor h
+    0 => "Box " ++ joinWith " " args
+    _ => "Pair " ++ joinWith " " args
+
+-- The program of a case: the base declarations and one impl per head.
+headsSource : HeadCase -> String
+headsSource (HeadCase heads) =
+  joinNl
+    (base
+      :: flatMap
+        (h => ["impl Sz (" ++ headSource h ++ ") where", "  sz _ = 1"])
+        heads)
+
+-- Two heads can match one type: the same constructor, and slots that agree where both are
+-- types.
+unifiable : HeadSpec -> HeadSpec -> Bool
+unifiable x y =
+  headCtor x == headCtor y
+    && all
+      (p => fst p == 0 || snd p == 0 || fst p == snd p)
+      (zip (headSlots x) (headSlots y))
+
+-- [g] matches every type [s] does: its slots are variables or the same type.
+generalizes : HeadSpec -> HeadSpec -> Bool
+generalizes g s =
+  headCtor g == headCtor s
+    && all (p => fst p == 0 || fst p == snd p) (zip (headSlots g) (headSlots s))
+
+-- Two heads are one head up to the names of their variables.
+oneHead : HeadSpec -> HeadSpec -> Bool
+oneHead x y = generalizes x y && generalizes y x
+
+-- Every two elements of a list, the earlier first.
+pairsOf : List a -> List (a, a)
+pairsOf [] = []
+pairsOf (x :: xs) = map (y => (x, y)) xs ++ pairsOf xs
+
+-- The verdict the coherence rules give, from the definitions above alone: a hard conflict when
+-- two heads are one head; a soft one when two heads can match one type and neither
+-- generalizes the other.
+modelVerdict : HeadCase -> (Bool, Bool)
+modelVerdict (HeadCase heads) =
+  let pairs = pairsOf heads
+  (
+    any (p => oneHead (fst p) (snd p)) pairs,
+    any
+      (p =>
+        unifiable (fst p) (snd p)
+          && not (generalizes (fst p) (snd p))
+          && not (generalizes (snd p) (fst p)))
+      pairs,
+  )
+
+-- The verdict the checker gives a case: whether it pushed a hard conflict and a soft one.
+checkedVerdict : HeadCase -> (Bool, Bool)
+checkedVerdict c =
+  let src = headsSource c
+  (
+    contains "T-CONFLICTING-IMPL" (codesOver coherence src),
+    contains "W-INCOMPARABLE-IMPLS" (warningCodesOver coherence src),
+  )
+
+-- Law: coherence finds a hard conflict exactly between two impls of one head and a soft one
+-- exactly between two that overlap with neither more specific.  Precondition (`overlapping`):
+-- some two heads can match one type, so the sweep has something to judge.
+prop "the coherence verdict is the overlap of the impl heads" (c : HeadCase) =
+  checkedVerdict c == modelVerdict c
+
+-- Whether some two heads of a case can match one type.
+overlapping : HeadCase -> Bool
+overlapping (HeadCase heads) =
+  any (p => unifiable (fst p) (snd p)) (pairsOf heads)
+
+-- The verdict of a case and whether its heads overlap.
+verdicts : List HeadSpec -> ((Bool, Bool), Bool)
+verdicts heads = (modelVerdict (HeadCase heads), overlapping (HeadCase heads))
+
+test "the model tells one head twice, incomparable heads, a specific head beside a general one and disjoint heads apart" =
+  let box s = HeadSpec 0 s 0
+  expectEqual
+    [
+      ((True, False), True),
+      ((False, True), True),
+      ((False, False), True),
+      ((False, False), False),
+    ]
+    [
+      verdicts [box 0, box 0],
+      verdicts [HeadSpec 1 0 1, HeadSpec 1 1 0],
+      verdicts [box 0, box 1],
+      verdicts [box 1, box 2],
+    ]
