@@ -20,6 +20,7 @@ algorithm, the late-bound hooks seam (A6) and the process-wide counters (A7).
 | `cli_targets.mdk` | The shared walk from a CLI path argument to the `.mdk` files a verb works on (lint, fmt, codemod, test, snapshot) | `expandLintTarget` |
 | `sexp_value.mdk` | S-expression values, one rendering, a fail-closed reader | `renderSExp`, `parseSExp` |
 | `symbol_origin.mdk` | Where an emitter wrote or used a physical symbol, shared by both backends' symbol registries and the emit driver | `SymbolOrigin`, `placeOf` |
+| `diag_codes.mdk` | The closed `DiagCode` type: one constructor per live diagnostic code, its text, its family (`DiagKind`) and the inverse lookup | `DiagCode`, `codeText`, `codeOfText` |
 | `hooks.mdk` | The late-bound hooks seam: a contract header plus `hookUnset`; the `Hooks` record is not yet written | `hookUnset` |
 | `stage_count.mdk` | Per-process stage call counters, write-only, dumped to stderr | `stageBump`, `stageCountInit`, `stageDump` |
 | `opcount.mdk` | A deterministic per-stage operation counter that sees a quadratic scan; write-only | `opBump` |
@@ -49,7 +50,7 @@ counting on or off. Counting is on when `MEDAKA_STAGE_COUNTS` is non-empty; the 
 - `test/arch_boundaries_test.mdk`: layering, cells and the hooks reader allowlist.
 - `test/arch_goldens/hooks.golden` (`hooks.fields`), raised only with a `Hooks-Field:` commit trailer via `test/arch_ratchet.sh`.
 - `test/stage_counts_test.mdk` with `test/arch_goldens/stage_counts.golden`.
-- Module tests: `util_test.mdk`, `ordmap_test.mdk`, `scc_test.mdk`, `sexp_value_test.mdk`, `symbol_origin_test.mdk`.
+- Module tests: `util_test.mdk`, `ordmap_test.mdk`, `scc_test.mdk`, `sexp_value_test.mdk`, `symbol_origin_test.mdk`, `diag_codes_test.mdk`.
 
 ## Where the design lives
 - `ARCHITECTURE.md` A6 and A7; `ARCHITECTURE-PLAYBOOK.md` decision D2 and the G2b row.
