@@ -253,8 +253,8 @@ for required in \
   'let _ = forEachU (registerW emit) (declarePlannedHelpers physical)' \
   'let _ = seedDemandW emit physical.representation' \
   'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "$__sdivr" else divrLocal prog d) site' \
-  'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
-  'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
+  'wasmTrap emit ENonexhaustiveMatch "non-exhaustive match"' \
+  'wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "'; do
   has_wasm_pin "$required" || {
     echo "FAIL WASM-DEMAND-RENDER: missing $required"
     exit 1
