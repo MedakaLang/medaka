@@ -131,6 +131,7 @@ import types.typecheck.{
   tcMsg,
   spanKeys,
 }
+import string as S
 import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
@@ -1721,6 +1722,34 @@ loweredMethodArity source bindName method =
     elaborateOneFacts defaultDriveInputs [] core ("method_arity", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   bindMethodArity bindName method binds
+
+-- The Core of the bind [name] in [source], elaborated and lowered, as text.
+loweredBindText : String -> String -> String
+loweredBindText source name =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let (elaborated, elabFacts) =
+    elaborateOneFacts defaultDriveInputs [] core ("grant_join", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
+  joinNl
+    (map
+      (b => cprogramToSexp (CProgram [b] [] [] [] [] noDeclFacts))
+      (filter (b => bindNameOf b == name) binds))
+
+bindNameOf : CBind -> String
+bindNameOf (CBind n _ _ _) = n
+
+test "the join of two authority variables lists them in the order the signature quantifies them" =
+  expectTrue
+    (S.contains
+      "(CBinPrim \"++\" (CBinPrim \"++\" (CList) (CVar \"$auth_inner_0\" AGlobal)) (CVar \"$auth_inner_1\" AGlobal))"
+      (loweredBindText
+        (joinNl [
+          "inner : (a : String) -> (b : String) -> <FileRead a, FileRead b> Unit",
+          "inner a b = ()",
+          "main = inner \"a\" \"b\"",
+        ])
+        "inner"))
 
 test "method occurrence freezes declared arity before higher-order specialization" =
   expectEqual

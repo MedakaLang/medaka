@@ -498,6 +498,16 @@ test "a file extern used as a value becomes a function of the arguments still mi
       Some (x == y)
     _ => None)
 
+-- The strings bound by the chain of lets [e] opens with, outermost first.
+letValues : Expr -> List String
+letValues (ELet _ _ _ (ELit (LString s)) body) = s :: letValues body
+letValues _ = []
+
+test "a partial use binds the arguments it was given in the order the program wrote them" =
+  expectEqual
+    ["a", "b"]
+    (letValues (granted (applied "writeFileMode" [str "a", str "b"])))
+
 test "the bodies of every kind of declaration are granted and a signature is left alone" =
   let call = applied "readFile" [str "p"]
   let done = applied "readFile" [str "p", EListLit []]
