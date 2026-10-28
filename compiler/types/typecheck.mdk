@@ -171,12 +171,12 @@ export import types.publish.{
   TcDiag(..),
   tcCode,
   tcMsg,
-  tcLoc,
   ModDiags,
-  PubScheme(..),
   pubSchemes,
 }
 import types.publish.{
+  PubScheme(..),
+  tcLoc,
   TcReport,
   PartialAnalysis,
   EntryTables(..),
@@ -1033,7 +1033,6 @@ driveInputsFor profile flatEntry mods = { defaultDriveInputs |
 -- The summary's operations over the view of the entry the drive [o] checked.  The
 -- field instantiation runs in a graph record of its own, whose effect-variable
 -- counter continues from the drive's (`doEffvarNext`).
-export
 lastInvocationOps : DriveOutputs -> InvocationOps
 lastInvocationOps o = match o.doInvocationView
   InvocationView ctors pols kinds =>
@@ -3266,7 +3265,6 @@ dropModSchemes (mid, (_, errs, warns)) = (mid, (errs, warns))
 -- front of the accumulated list, which differs only on a graph that has both a
 -- conflict and an imported-module type error — a graph whose caller has already
 -- reported errors and exited.
-export
 checkModulesEntryFromDiags : List ModDiags ->
   (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFromDiags [] = ([], [], [])
@@ -3328,7 +3326,6 @@ checkModulesDiagsChain inputs preludeKey chainKey stepKeys runtimeDecls coreDecl
 
 -- `checkModulesDiagsChain` for a caller that passes its value-main candidate
 -- (`autoPrintWanted`).
-export
 checkModulesDiagsChainFor : DriveInputs ->
   Bool ->
   Option (Int, Int) ->
@@ -4000,11 +3997,6 @@ autoPrintEvidence mctx mid scope iface tau =
   g.evTable := EvEntry ev (EvMany routes) :: g.evTable.value
   ev
 
--- the entry module is last in dependency-first order
-export
-entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
-entryOwnSchemes = publishedEntrySchemes
-
 -- ── multi-module `check` CLI report (DRIVER-COLLAPSE Phase 4, OPTION A) ─────
 -- The unified `medaka check` path for IMPORT-BEARING files: the caller loads the
 -- entry + its transitive imports (loadProgram), then this typechecks the whole
@@ -4070,7 +4062,6 @@ checkModulesEntryFullK inputs preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the prelude interface (see `checkCoreMemoized`);
 -- `None` = unkeyed, no cache.
-export
 checkModulesEntryFullSplitK : DriveInputs ->
   Bool ->
   Option (Int, Int) ->
@@ -4178,7 +4169,6 @@ checkModulesEntryReportOut inputs runtimeDecls coreDecls modules =
 
 -- exit-code predicate analog of checkHasErrors: any type error in ANY module of
 -- the resolved graph (entry or imported — see checkModulesEntryFromDiags).
-export
 checkModulesEntryHasErrors : DriveInputs ->
   List Decl ->
   List Decl ->
@@ -4285,7 +4275,6 @@ checkOneDiagsGraph args =
 
 -- `checkOneDiags` with the prelude key for the prelude interface — same contract as
 -- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
-export
 checkOneDiagsK : DriveInputs ->
   Bool ->
   Option (Int, Int) ->
@@ -4412,7 +4401,8 @@ checkModulesEntryLines : DriveInputs ->
 checkModulesEntryLines inputs runtimeDecls coreDecls modules =
   joinNl
     (schemeLines
-      (entryOwnSchemes (checkModules inputs runtimeDecls coreDecls modules)))
+      (publishedEntrySchemes
+        (checkModules inputs runtimeDecls coreDecls modules)))
 
 -- Emit EVERY module's bindings in one pass, each section preceded by a
 -- `## MODULE <mid>` marker line.  A single full-closure run can then cover many

@@ -73,7 +73,7 @@ import frontend.marker.{
 import types.repr.{Scheme}
 import types.publish.{
   PubScheme(..), pubSchemes, TcReport(..), PartialAnalysis(..), partialAnalysis,
-  noEntryTables
+  noEntryTables, publishedEntrySchemes
 }
 import types.typecheck.{
   TcDiag(..),
@@ -83,7 +83,6 @@ import types.typecheck.{
   checkModulesPartialK,
   driveInputsFor,
   dropModSchemes,
-  entryOwnSchemes,
   entrySplit,
   ModDiags,
   schemeLines,
@@ -744,7 +743,7 @@ graphCheckDrive : TcReport ->
   CheckDrive
 graphCheckDrive r outputs modPairs paths = CheckDrive {
   cdEntrySchemes =
-    pubSchemes (entryOwnSchemes (map modOwnSchemes r.trDiagnostics)),
+    pubSchemes (publishedEntrySchemes (map modOwnSchemes r.trDiagnostics)),
   cdCoreSchemes = pubSchemes r.trPartial.paCore,
   cdOutputs = outputs,
   cdMods = modPairs,
@@ -1752,7 +1751,7 @@ projectEntrySchemes : Ref (List (String, String)) ->
   <IO> Option (List (String, PubScheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   map
-    (pa => entryOwnSchemes pa.paSchemes)
+    (pa => publishedEntrySchemes pa.paSchemes)
     (projectEntryAnalysis
       cacheRef
       parseCacheRef

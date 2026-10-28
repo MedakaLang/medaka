@@ -1,5 +1,5 @@
 # META
-source_lines=3481
+source_lines=3480
 stages=DESUGAR,MARK
 # SOURCE
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
@@ -77,7 +77,7 @@ import frontend.marker.{
 import types.repr.{Scheme}
 import types.publish.{
   PubScheme(..), pubSchemes, TcReport(..), PartialAnalysis(..), partialAnalysis,
-  noEntryTables
+  noEntryTables, publishedEntrySchemes
 }
 import types.typecheck.{
   TcDiag(..),
@@ -87,7 +87,6 @@ import types.typecheck.{
   checkModulesPartialK,
   driveInputsFor,
   dropModSchemes,
-  entryOwnSchemes,
   entrySplit,
   ModDiags,
   schemeLines,
@@ -748,7 +747,7 @@ graphCheckDrive : TcReport ->
   CheckDrive
 graphCheckDrive r outputs modPairs paths = CheckDrive {
   cdEntrySchemes =
-    pubSchemes (entryOwnSchemes (map modOwnSchemes r.trDiagnostics)),
+    pubSchemes (publishedEntrySchemes (map modOwnSchemes r.trDiagnostics)),
   cdCoreSchemes = pubSchemes r.trPartial.paCore,
   cdOutputs = outputs,
   cdMods = modPairs,
@@ -1756,7 +1755,7 @@ projectEntrySchemes : Ref (List (String, String)) ->
   <IO> Option (List (String, PubScheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   map
-    (pa => entryOwnSchemes pa.paSchemes)
+    (pa => publishedEntrySchemes pa.paSchemes)
     (projectEntryAnalysis
       cacheRef
       parseCacheRef
@@ -3499,8 +3498,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entryOwnSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -3602,7 +3601,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DData Public "CheckDrive" () ((variant "CheckDrive" (ConNamed (field "cdEntrySchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "cdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "cdOutputs" (TyCon "DriveOutputs")) (field "cdMods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "cdPaths" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "CheckDump" () ((variant "CheckDump" (ConNamed (field "cdLines" (TyApp (TyCon "List") (TyCon "String"))) (field "cdDrive" (TyCon "CheckDrive"))))) ())
 (DTypeSig true "graphCheckDrive" (TyFun (TyCon "TcReport") (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "CheckDrive"))))))
-(DFunDef false "graphCheckDrive" ((PVar "r") (PVar "outputs") (PVar "modPairs") (PVar "paths")) (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EVar "map") (EVar "modOwnSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EFieldAccess (EFieldAccess (EVar "r") "trPartial") "paCore"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EVar "modPairs")) (fa "cdPaths" (EVar "paths")))))
+(DFunDef false "graphCheckDrive" ((PVar "r") (PVar "outputs") (PVar "modPairs") (PVar "paths")) (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EApp (EVar "publishedEntrySchemes") (EApp (EApp (EVar "map") (EVar "modOwnSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EFieldAccess (EFieldAccess (EVar "r") "trPartial") "paCore"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EVar "modPairs")) (fa "cdPaths" (EVar "paths")))))
 (DTypeSig false "modOwnSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "modOwnSchemes" ((PTuple (PVar "mid") (PTuple (PVar "schemes") PWild PWild))) (ETuple (EVar "mid") (EVar "schemes")))
 (DTypeSig true "checkReportOf" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))
@@ -3715,7 +3714,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
 (DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EVar "entryOwnSchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
+(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
 (DTypeSig true "projectEntryAnalysis" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))))))
 (DFunDef false "projectEntryAnalysis" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
 (DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))))))))
@@ -4019,8 +4018,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entryOwnSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "TcReport" true) (mem "PartialAnalysis" true) (mem "partialAnalysis" false) (mem "noEntryTables" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" true) (mem "chainFullKey" false) (mem "checkModulesChainReportFor" false) (mem "checkModulesEntryFullReportK" false) (mem "checkModulesPartialK" false) (mem "driveInputsFor" false) (mem "dropModSchemes" false) (mem "entrySplit" false) (mem "ModDiags" false) (mem "schemeLines" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
@@ -4122,7 +4121,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DData Public "CheckDrive" () ((variant "CheckDrive" (ConNamed (field "cdEntrySchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "cdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "cdOutputs" (TyCon "DriveOutputs")) (field "cdMods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "cdPaths" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "CheckDump" () ((variant "CheckDump" (ConNamed (field "cdLines" (TyApp (TyCon "List") (TyCon "String"))) (field "cdDrive" (TyCon "CheckDrive"))))) ())
 (DTypeSig true "graphCheckDrive" (TyFun (TyCon "TcReport") (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "CheckDrive"))))))
-(DFunDef false "graphCheckDrive" ((PVar "r") (PVar "outputs") (PVar "modPairs") (PVar "paths")) (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EMethodRef "map") (EVar "modOwnSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EFieldAccess (EFieldAccess (EVar "r") "trPartial") "paCore"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EVar "modPairs")) (fa "cdPaths" (EVar "paths")))))
+(DFunDef false "graphCheckDrive" ((PVar "r") (PVar "outputs") (PVar "modPairs") (PVar "paths")) (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EApp (EVar "publishedEntrySchemes") (EApp (EApp (EMethodRef "map") (EVar "modOwnSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EFieldAccess (EFieldAccess (EVar "r") "trPartial") "paCore"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EVar "modPairs")) (fa "cdPaths" (EVar "paths")))))
 (DTypeSig false "modOwnSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "modOwnSchemes" ((PTuple (PVar "mid") (PTuple (PVar "schemes") PWild PWild))) (ETuple (EVar "mid") (EVar "schemes")))
 (DTypeSig true "checkReportOf" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))
@@ -4235,7 +4234,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
 (DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EVar "entryOwnSchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
+(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
 (DTypeSig true "projectEntryAnalysis" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))))))
 (DFunDef false "projectEntryAnalysis" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
 (DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))))))))
