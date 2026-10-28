@@ -167,6 +167,36 @@ lowered src =
     emptyFacts
     (annotateProgram (grantWholeDomain (desugar (parse src))))
 
+-- The first test of the file, on purpose: `emissionRefused` re-executes this
+-- probe once per route and victim, and a child runs every test ahead of this
+-- one before it reaches its victim, so a test placed above it is repeated in
+-- each of the hundreds of children.
+test "gateway emission seams refuse F1-F6 and a mismatched target before returning output" =
+  match getEnv emissionProbeVar
+    Some selected => match split "/" selected
+      [route, victim] =>
+        let text = emissionText route victim
+        let _ = match getEnv "MEDAKA_EMISSION_DESTINATION"
+          Some destination => writeFile destination text
+          None => Ok ()
+        let _ = putStrLn ("EMISSION_RETURNED_SENTINEL" ++ text)
+        pass
+      _ => fail "invalid emission probe selector"
+    None =>
+      expectEach
+        (flatMap
+            (route =>
+              map
+                (victim => ("\{route}/\{victim}", emissionRefused route victim))
+                [
+                  "F1", "F2", "F3", "F4", "F5", "F6", "target", "missing-domain"
+                ])
+            emissionRoutes
+          ++ map
+            (route =>
+              ("\{route}/not-provided", emissionRefused route "not-provided"))
+            ["llvm-strict", "wasm-strict", "wasm-unchecked"])
+
 test "missing-extern-abi is a fatal metadata defect before target gaps" =
   let (cp@(CProgram groups ca ct impls mc facts)) =
     lowered "main = intToString 42"
@@ -2502,32 +2532,6 @@ emissionRefusedAt destination route victim = match boundedVerbSeconds 90 "env" [
       ("no analyze marker", expectFalse (contains "__MEDAKA_ANALYZE__" out)),
       ("no stats", expectFalse (contains "EMISSION_STATS_SENTINEL" out)),
     ]
-
-test "gateway emission seams refuse F1-F6 and a mismatched target before returning output" =
-  match getEnv emissionProbeVar
-    Some selected => match split "/" selected
-      [route, victim] =>
-        let text = emissionText route victim
-        let _ = match getEnv "MEDAKA_EMISSION_DESTINATION"
-          Some destination => writeFile destination text
-          None => Ok ()
-        let _ = putStrLn ("EMISSION_RETURNED_SENTINEL" ++ text)
-        pass
-      _ => fail "invalid emission probe selector"
-    None =>
-      expectEach
-        (flatMap
-            (route =>
-              map
-                (victim => ("\{route}/\{victim}", emissionRefused route victim))
-                [
-                  "F1", "F2", "F3", "F4", "F5", "F6", "target", "missing-domain"
-                ])
-            emissionRoutes
-          ++ map
-            (route =>
-              ("\{route}/not-provided", emissionRefused route "not-provided"))
-            ["llvm-strict", "wasm-strict", "wasm-unchecked"])
 
 test "all global corruptions refuse before output on every renderer and playground composition" =
   match getEnv emissionProbeVar
