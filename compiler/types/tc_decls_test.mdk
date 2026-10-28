@@ -443,16 +443,16 @@ test "constraintNameMonos keeps the monos of the names that have one, in the nam
 -- ── the graph pre-pass ────────────────────────────────────────────────────
 
 -- The type constructor each impl head among the declarations names; a head that is not a bare
--- constructor reads as its own marker.
-implHeads : List Decl -> List String
+-- constructor reads as `None`.
+implHeads : List Decl -> List (Option String)
 implHeads [] = []
 implHeads ((DImpl { tys = ts, ... }) :: rest) =
   map headName ts ++ implHeads rest
 implHeads (_ :: rest) = implHeads rest
 
-headName : Ty -> String
-headName (TyCon { tyConName = c, ... }) = c
-headName _ = "not a constructor"
+headName : Ty -> Option String
+headName (TyCon { tyConName = c, ... }) = Some c
+headName _ = None
 
 test "an impl head that names an alias is rewritten to the type the alias stands for" =
   let (_, mods) = stampGraphDecls [] [
@@ -469,8 +469,8 @@ impl Sz A where
 """,
     ),
   ]
-  expectEqual ["Int"] (implHeads (flatMap snd mods))
+  expectEqual [Some "Int"] (implHeads (flatMap snd mods))
 
 test "a graph with no alias keeps the heads it came with" =
   let (core, mods) = stampGraphDecls [] [("m", declsOf "m" sizeable)]
-  expectEqual ([], ["Int"]) (implHeads core, implHeads (flatMap snd mods))
+  expectEqual ([], [Some "Int"]) (implHeads core, implHeads (flatMap snd mods))

@@ -91,6 +91,10 @@ prepared mods =
   let _ = markSetsOf g noPreludeFacts [] decls (flatMap snd decls)
   (m, decls)
 
+-- The schemes [bs] as (name, rendered type).
+rendered : List (String, Scheme) -> List (String, String)
+rendered = map (q => (fst q, ppScheme (snd q)))
+
 -- Each module checked in the graph, later ones seeded with the schemes of the earlier ones.
 checkEach : GraphCtx ->
   List (String, Scheme) ->
@@ -101,7 +105,7 @@ checkEach g seed ((mid, ds) :: rest) =
   let (b, _, errs, warns, _) =
     checkModuleFullDiags g mid (plainModuleSeed seed) [] [] ds
   Checked {
-      chSchemes = map (q => (fst q, ppScheme (snd q))) b.mbSchemes,
+      chSchemes = rendered b.mbSchemes,
       chErrors = map tcCode errs,
       chWarnings = map tcCode warns,
     }
@@ -110,6 +114,20 @@ checkEach g seed ((mid, ds) :: rest) =
 -- What a drain reported: the module and code of each finding, in the order reported.
 findingsOf : List DrainFinding -> List (String, String)
 findingsOf = map (f => (f.dfModule, tcCode f.dfDiag))
+
+-- The record of [m] after `checkBodyImpl` alone has checked the module "m" of [decls]: the
+-- body check queues no stamping context.
+bodyChecked : ModuleCtx -> List (String, List Decl) -> ModuleCtx
+bodyChecked m decls =
+  let (_, _, ctx) =
+    checkBodyImpl
+      m.mcGraph
+      (checkRunResidue m)
+      (plainModuleSeed [])
+      "m"
+      []
+      (flatMap snd decls)
+  ctx
 
 -- The modules [mods] checked in one graph, then the graph drained.
 driven : List (String, String) -> (List Checked, List (String, String))
@@ -281,7 +299,13 @@ f A = 1
 f B = 2
 """,
     ),
-    ("k", "f : Int\nf = A"),
+    (
+      "k",
+      """
+f : Int
+f = A
+""",
+    ),
   ]
   expectEqual
     [([], []), ([("f", "T -> Int")], []), ([("f", "Int")], ["T-TYPE-MISMATCH"])]
@@ -313,8 +337,22 @@ export impl Sz Int where
   sz x = x
 """,
     ),
-    ("n", "import m.{Sz(..)}\ny : Int\ny = sz True\n"),
-    ("o", "import m.{Sz(..)}\ny : Int\ny = sz False\n"),
+    (
+      "n",
+      """
+import m.{Sz(..)}
+y : Int
+y = sz True
+""",
+    ),
+    (
+      "o",
+      """
+import m.{Sz(..)}
+y : Int
+y = sz False
+""",
+    ),
   ]
   expectEqual
     [("n", "T-UNROUTED-DISPATCH"), ("o", "T-UNROUTED-DISPATCH")]
@@ -326,6 +364,13 @@ test "a drain reports a finding once, so a second drain over the same graph find
   let first = findingsOf (drainStampQueue m)
   let second = findingsOf (drainStampQueue m)
   expectEqual ([("m", "T-UNROUTED-DISPATCH")], []) (first, second)
+
+test "a drain empties the stamp queue the module check filled" =
+  let (m, decls) = prepared [("m", callingSz "1")]
+  let _ = checkEach m.mcGraph [] decls
+  let queued = length m.mcGraph.graphRun.stampCtxs.value
+  let _ = drainStampQueue m
+  expectEqual (True, 0) (queued > 0, length m.mcGraph.graphRun.stampCtxs.value)
 
 -- A module of its own interface `name` with no impl, and a call of the method at a type that
 -- has none.
@@ -356,27 +401,13 @@ test "the module check queues its stamping, so the drain routes a method call to
 
 test "the body check alone queues no stamping, so a drain leaves the method call unrouted" =
   let (m, decls) = prepared [("m", callingSz "1")]
-  let (_, _, ctx) =
-    checkBodyImpl
-      m.mcGraph
-      (checkRunResidue m)
-      (plainModuleSeed [])
-      "m"
-      []
-      (flatMap snd decls)
+  let ctx = bodyChecked m decls
   let _ = drainStampQueue ctx
   expectEqual ["none"] (methodRoutes m.mcGraph)
 
 test "an evidence hole is found by a drain whether or not a stamping context was queued" =
   let (m, decls) = prepared [("m", callingSz "True")]
-  let (_, _, ctx) =
-    checkBodyImpl
-      m.mcGraph
-      (checkRunResidue m)
-      (plainModuleSeed [])
-      "m"
-      []
-      (flatMap snd decls)
+  let ctx = bodyChecked m decls
   expectEqual
     (["T-NO-IMPL"], [("m", "T-UNROUTED-DISPATCH")])
     (codesOf ctx, findingsOf (drainStampQueue ctx))
@@ -392,16 +423,17 @@ test "the elaborating check is the module check over an impl universe" =
   let prog = flatMap snd decls
   let (b, _, ctx) = elabModuleStamp m "m" [] [] prog prog
   expectEqual (onlyModule src) (
-    Checked (map (q => (fst q, ppScheme (snd q))) b.mbSchemes) (codesOf ctx) [],
+    Checked (rendered b.mbSchemes) (codesOf ctx) [],
     findingsOf (drainStampQueue ctx),
   )
 
 test "the core pass publishes its declarations and raises no error" =
-  let (m, decls) = prepared [("m", "x : Int\nx = 1\n")]
+  let (m, decls) = prepared [("m", """
+x : Int
+x = 1
+""")]
   let (b, _, ctx) = checkModuleFull m [] [] (flatMap snd decls)
-  expectEqual
-    ([("x", "Int")], [])
-    (map (q => (fst q, ppScheme (snd q))) b.mbSchemes, codesOf ctx)
+  expectEqual ([("x", "Int")], []) (rendered b.mbSchemes, codesOf ctx)
 
 -- ── errors captured out of a record ───────────────────────────────────────
 
@@ -416,15 +448,22 @@ test "the errors an action pushes are returned oldest first and leave the record
 test "an action that pushes no error captures none" =
   expectEqual [] (map tcCode (captureTypeErrors (fresh ()) (_ => ())))
 
+-- The verdict finding of module "mod" over [d], on a live span and on one that is not.
+liveVerdict : TcDiag -> DrainFinding
+liveVerdict = verdictFinding "mod" True
+
+deadVerdict : TcDiag -> DrainFinding
+deadVerdict = verdictFinding "mod" False
+
 test "a verdict finding carries its module, its diagnostic and its liveness, and is a verdict" =
   let d = TcDiag "T-X" 1 None "msg" None None
-  let f = verdictFinding "mod" True d
+  let f = liveVerdict d
   expectAll [
     expectEqual "mod" f.dfModule,
     expectEqual "T-X" (tcCode f.dfDiag),
     expectTrue f.dfLive,
     expectTrue f.dfVerdict,
-    expectFalse (verdictFinding "mod" False d).dfLive,
+    expectFalse (deadVerdict d).dfLive,
   ]
 
 -- ── what a module exports and what a graph is stamped with ───────────────
@@ -435,9 +474,18 @@ test "a public signature and its public definition each name the binding, a priv
       "public",
       expectEqual
         ["f", "f"]
-        (publicValNames (declsOf "m" "export f : Int\nexport f = 1")),
+        (publicValNames (declsOf "m" """
+export f : Int
+export f = 1
+""")),
     ),
-    ("private", expectEqual [] (publicValNames (declsOf "m" "g : Int\ng = 2"))),
+    (
+      "private",
+      expectEqual [] (publicValNames (declsOf "m" """
+g : Int
+g = 2
+""")),
+    ),
   ]
 
 test "a public interface names its methods and a private one does not" = expectEach
@@ -447,13 +495,19 @@ test "a public interface names its methods and a private one does not" = expectE
       expectEqual
         ["q"]
         (publicValNames
-          (declsOf "m" "export interface Q a where\n  q : a -> Int")),
+          (declsOf "m" """
+export interface Q a where
+  q : a -> Int
+""")),
     ),
     (
       "private",
       expectEqual
         []
-        (publicValNames (declsOf "m" "interface R a where\n  r : a -> Int")),
+        (publicValNames (declsOf "m" """
+interface R a where
+  r : a -> Int
+""")),
     ),
   ]
 
@@ -465,8 +519,7 @@ test "a public extern is named" =
 test "the schemes of the externs among a module's declarations are those and no others" =
   expectEqual
     [("foo", "Int -> Int")]
-    (map
-      (p => (fst p, ppScheme (snd p)))
+    (rendered
       (externSchemesGo
         (fresh ())
         (declsOf "m" """

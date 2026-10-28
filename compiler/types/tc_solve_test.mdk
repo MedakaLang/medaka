@@ -359,11 +359,15 @@ commitRow = ImplRow 0 (InstRef "probe" 0 0) (ifaceOf "A") [] [] [] None
 filedUnder : ModuleCtx -> List Int
 filedUnder m = sort (IdMap.keys m.mcCells.determinedRowsRef.value)
 
+-- The id `idOf` answers for a mono that is not a variable; no variable has it.
+notAVariable : Int
+notAVariable = 0 - 1
+
 -- The id of the variable [t] is, read through any link.
 idOf : Mono -> Int
 idOf t = match normalize t
   TVar cell => tyvarId cell
-  _ => 0 - 1
+  _ => notAVariable
 
 -- [a] and [b] fresh variables, one commit filed under [a] with the goal argument [a].
 filedUnderA : Unit -> (ModuleCtx, Mono, Mono)
