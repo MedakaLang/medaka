@@ -1587,7 +1587,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # Full history, trees and blobs fetched on demand: test/arch_ratchet.sh proves its
+      # BASE..HEAD range complete, and unshallowing a depth-1 clone inside the step fails
+      # on runner images that ship git 2.56 (#4563).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # Toolchain still needed (clang builds the typecheck oracle; the fixpoint
       # gate cold-bootstraps from the seed on its own); the BINARY comes from
