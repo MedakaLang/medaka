@@ -76,7 +76,7 @@ main = ()
 """),
       ),
     ]
-  let (_, _, _, _, table, _, _) = elab
+  let table = elab.erEvidence
   let checked = option emptyFacts factsOfChecked report.trChecked
   let sourceFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab table
@@ -193,7 +193,7 @@ outcomeFacts =
       []
       entryOutcomePrelude
       [("entry", desugar (parseLocated "main = 1"))]
-  let (_, _, _, _, table, _, _) = elab
+  let table = elab.erEvidence
   let checked = match report.trChecked
     Some program => factsOfChecked program
     None => emptyFacts
@@ -261,7 +261,7 @@ test "source-aware checked facts retain module ownership and checked alias heads
         desugar (parseLocated "extern shared : Float -> <FFI \"c\"> Float\n"),
       ),
     ]
-  let (_, _, _, _, table, _, _) = elab
+  let table = elab.erEvidence
   let facts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab table
   let rows = optionOr [] facts.pfExternSources

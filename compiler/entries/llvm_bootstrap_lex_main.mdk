@@ -63,7 +63,9 @@ runEmit inputs runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
   let (elab, _, outputs) =
     elaborateModulesWithReport inputs False None runtimeDecls coreDecls modules
-  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let coreE = elab.erCore
+  let modulesE = elab.erModules
+  let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE

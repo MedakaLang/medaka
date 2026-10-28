@@ -18,7 +18,7 @@ import types.route_key.{EvIndex, evIndexOf}
 import types.disposition.{DispositionTable}
 import types.runtime_types.{BinderTypeTable}
 import types.publish.{CheckedProgram(..), EntryOutcome}
-import types.tc_types.{DriveOutputs, ElabResult, ElabFacts(..)}
+import types.tc_types.{DriveOutputs, ElabResult(..), ElabFacts(..)}
 import types.capability_manifest.{CapabilityManifest}
 
 -- `Option` fields are `None` for a program that was never typechecked, so an
@@ -60,17 +60,17 @@ factsOfChecked c = ProgramFacts {
 -- `factsOfElabWith` and the table the mangle returned.
 export
 factsOfElab : ElabResult -> ProgramFacts
-factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
+factsOfElab elab = factsOfElabWith elab.erEvidence elab
 
 -- [elab]'s facts with [table] as its evidence.
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
-factsOfElabWith table (_, _, _, _, _, dispositions, facts) = ProgramFacts {
-  pfManifests = facts.efManifests,
+factsOfElabWith table elab = ProgramFacts {
+  pfManifests = elab.erFacts.efManifests,
   pfEvidence = evIndexOf table,
-  pfDispositions = Some dispositions,
-  pfBinders = Some facts.efBinders,
-  pfEntryOutcome = Some facts.efEntryOutcome,
+  pfDispositions = Some elab.erDispositions,
+  pfBinders = Some elab.erFacts.efBinders,
+  pfEntryOutcome = Some elab.erFacts.efEntryOutcome,
   pfExternSources = None,
 }
 
@@ -80,12 +80,12 @@ factsOfElabSources : (DriveOutputs -> List (String, List Decl) -> ExternHeadRows
   ElabResult ->
   EvTable ->
   ProgramFacts
-factsOfElabSources project outputs (elab@(core, modules, _, _, _, _, _)) table =
+factsOfElabSources project outputs elab table =
   withCheckedExternSources
     project
     outputs
-    core
-    modules
+    elab.erCore
+    elab.erModules
     (factsOfElabWith table elab)
 
 export
@@ -135,7 +135,7 @@ factsNow _ = match !currentFacts
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" false) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
 (DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
@@ -143,11 +143,11 @@ factsNow _ = match !currentFacts
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfElab" ((PAs "elab" (PTuple PWild PWild PWild PWild (PVar "table") PWild PWild))) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab")))
+(DFunDef false "factsOfElab" ((PVar "elab")) (EApp (EApp (EVar "factsOfElabWith") (EFieldAccess (EVar "elab") "erEvidence")) (EVar "elab")))
 (DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
-(DFunDef false "factsOfElabWith" ((PVar "table") (PTuple PWild PWild PWild PWild PWild (PVar "dispositions") (PVar "facts"))) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "facts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "facts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "facts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElabSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "ElabResult") (TyFun (TyCon "EvTable") (TyCon "ProgramFacts"))))))
-(DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PAs "elab" (PTuple (PVar "core") (PVar "modules") PWild PWild PWild PWild PWild)) (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EVar "core")) (EVar "modules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
+(DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PVar "elab") (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EFieldAccess (EVar "elab") "erCore")) (EFieldAccess (EVar "elab") "erModules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
 (DTypeSig true "withCheckedExternSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts")))))))
 (DFunDef false "withCheckedExternSources" ((PVar "project") (PVar "outputs") (PVar "core") (PVar "modules") (PVar "facts")) (EBlock (DoLet false false (PVar "sources") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EVar "sourceExterns") (EVar "CheckedSource")) (EVar "mid")) (EApp (EApp (EVar "project") (EVar "outputs")) (EListLit (ETuple (EVar "mid") (EVar "decls"))))) (EVar "decls")))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EVar "modules")))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfExternSources" (EApp (EVar "Some") (EVar "sources"))))))))
 (DTypeSig true "factsWithEvidence" (TyFun (TyCon "EvTable") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
@@ -165,7 +165,7 @@ factsNow _ = match !currentFacts
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" false) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
 (DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
@@ -173,11 +173,11 @@ factsNow _ = match !currentFacts
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfElab" ((PAs "elab" (PTuple PWild PWild PWild PWild (PVar "table") PWild PWild))) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab")))
+(DFunDef false "factsOfElab" ((PVar "elab")) (EApp (EApp (EVar "factsOfElabWith") (EFieldAccess (EVar "elab") "erEvidence")) (EVar "elab")))
 (DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
-(DFunDef false "factsOfElabWith" ((PVar "table") (PTuple PWild PWild PWild PWild PWild (PVar "dispositions") (PVar "facts"))) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "facts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "facts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "facts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElabSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "ElabResult") (TyFun (TyCon "EvTable") (TyCon "ProgramFacts"))))))
-(DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PAs "elab" (PTuple (PVar "core") (PVar "modules") PWild PWild PWild PWild PWild)) (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EVar "core")) (EVar "modules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
+(DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PVar "elab") (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EFieldAccess (EVar "elab") "erCore")) (EFieldAccess (EVar "elab") "erModules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
 (DTypeSig true "withCheckedExternSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts")))))))
 (DFunDef false "withCheckedExternSources" ((PVar "project") (PVar "outputs") (PVar "core") (PVar "modules") (PVar "facts")) (EBlock (DoLet false false (PVar "sources") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EVar "sourceExterns") (EVar "CheckedSource")) (EVar "mid")) (EApp (EApp (EVar "project") (EVar "outputs")) (EListLit (ETuple (EVar "mid") (EVar "decls"))))) (EVar "decls")))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EVar "modules")))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfExternSources" (EApp (EVar "Some") (EVar "sources"))))))))
 (DTypeSig true "factsWithEvidence" (TyFun (TyCon "EvTable") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))

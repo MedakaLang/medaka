@@ -59,6 +59,7 @@ import types.repr.{
 }
 import types.tc_types.{
   AssumptionTraceEntry(..),
+  ElabResult(..),
   AssumptionTraceKind(..),
   EvidenceObservationEntry(..),
   EvidenceOutcomeKind(..),
@@ -2594,7 +2595,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
 -- numbers underneath the test.
 dispositionsAfter : List (String, String) -> DispositionTable
 dispositionsAfter sources =
-  let (_, _, _, _, _, dispositions, _) =
+  let ElabResult { erDispositions = dispositions, ... } =
     elaborateModules
       defaultDriveInputs
       []
@@ -3567,7 +3568,8 @@ preludeOutcome prelude sources =
       (checkModulesDiagsChain defaultDriveInputs None "" [] [] core modules)
   if isEmptyL codes then
     let elab = elaborateModules defaultDriveInputs [] core modules
-    let (coreD, elaborated, _, _, _, _, _) = elab
+    let coreD = elab.erCore
+    let elaborated = elab.erModules
     let rootId = optionOr "" (map fst (last sources))
     let facts = factsOfElab elab
     withFacts facts (_ =>
@@ -4660,7 +4662,9 @@ closedGoalOutcome prelude lines =
   let elab = elaborateModules defaultDriveInputs [] (desugar (parse prelude)) [
     ("closed_goal", desugar (parseLocated (joinNl lines))),
   ]
-  let (coreD, modules, _, residual, _, _, _) = elab
+  let coreD = elab.erCore
+  let modules = elab.erModules
+  let residual = elab.erResidual
   let first = match residual
     (_, TcDiag code _ (Some (Loc _ line col _ _)) _ _ _) :: _ =>
       (code, line, col)
@@ -4792,7 +4796,7 @@ elaborateSpans _ = fst (elaborateSpansGraph ())
 -- `elaborateSpans` beside the graph record of its drive.
 elaborateSpansGraph : Unit -> ((Int, Int), GraphCtx)
 elaborateSpansGraph _ =
-  let ((_, _, _, _, table, _, _), gctx) =
+  let (ElabResult { erEvidence = table, ... }, gctx) =
     elaborateModulesGraph
       (driveArgs defaultDriveInputs False None [] (desugar
         (parse numericPreludeSource)) [
@@ -5272,7 +5276,7 @@ elaborateOneEvidence : DriveInputs ->
   (String, List Decl) ->
   (List Decl, EvTable)
 elaborateOneEvidence inputs runtimeDecls coreDecls prog =
-  let (coreE, modulesE, _, _, evidence, _, _) =
+  let ElabResult { erCore = coreE, erModules = modulesE, erEvidence = evidence, ... } =
     elaborateModules inputs runtimeDecls coreDecls [prog]
   (coreE ++ flatMap snd modulesE, evidence)
 

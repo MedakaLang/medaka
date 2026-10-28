@@ -51,7 +51,8 @@ run runtimeP coreP entry roots = match readFile runtimeP
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
   let elab = elaborateModules defaultDriveInputs runtimeDecls coreDecls modules
-  let (coreE, modulesE, _, _, _, _, _) = elab
+  let coreE = elab.erCore
+  let modulesE = elab.erModules
   putStr (evalModulesOutputFacts (factsOfElab elab) coreE modulesE)
 
 main = oracleMain ()

@@ -8,7 +8,7 @@ import frontend.ast.{Decl}
 import list.{filter}
 import support.util.{joinNl}
 import types.publish.{ppPubScheme, PartialAnalysis(..)}
-import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
+import types.tc_types.{ElabResult(..), GraphCtx(..), ModuleCtx(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
   chainArgs, checkModulesK, elaborateModulesWithReport, hadTypeErrors,
@@ -71,7 +71,7 @@ mods ms = map ((m, s) => (m, desugar (parseLocated s))) ms
 -- The tree arm's verdict: (had type errors, residual error count).
 elab : List (String, String) -> (Bool, Int)
 elab ms =
-  let ((_, _, _, residual, _, _, _), _, o) =
+  let (ElabResult { erResidual = residual, ... }, _, o) =
     elaborateModulesWithReport
       defaultDriveInputs
       False

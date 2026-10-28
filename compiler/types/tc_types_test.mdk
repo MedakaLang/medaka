@@ -1,0 +1,154 @@
+-- Sibling tests for `tc_types.mdk`: the records and sums the module owns, built
+-- by hand so no drive has to run.
+
+import test.{expectEqual, expectFalse}
+import support.ordmap.{omEmpty}
+import types.disposition.{emptyDispositionTable}
+import types.publish.{TcDiag(..), EntryOutcome(..), noEntryOutcome}
+import types.runtime_types.{emptyBinderTypes}
+import types.tc_types.{
+  Accumulate(..),
+  CDeclaredPrefix(..),
+  ElabFacts(..),
+  ElabResult(..),
+  FoldPlan(..),
+  Kind(..),
+  ModuleBindings(..),
+  ModulePlace(..),
+  Polarity(..),
+  PredicateSlotArgs(..),
+}
+
+sampleFacts : ElabFacts
+sampleFacts = ElabFacts {
+  efManifests = [],
+  efBinders = emptyBinderTypes,
+  efEntryOutcome = noEntryOutcome,
+}
+
+sampleDiag : TcDiag
+sampleDiag = TcDiag "E1" 0 None "boom" None None
+
+sampleElab : ElabResult
+sampleElab = ElabResult {
+  erCore = [],
+  erModules = [("m", []), ("n", [])],
+  erPerModule = [("m", ([sampleDiag], []))],
+  erResidual = [("m", sampleDiag)],
+  erEvidence = [],
+  erDispositions = emptyDispositionTable,
+  erFacts = sampleFacts,
+}
+
+placeName : ModulePlace -> String
+placeName LastModule = "last"
+placeName NotLastModule = "not-last"
+
+accumulateName : Accumulate -> String
+accumulateName AccumulateNone = "none"
+accumulateName AccumulateBoth = "both"
+
+kindName : Kind -> String
+kindName KType = "type"
+kindName KRow = "row"
+kindName (KAuth _ star) = if star then "auth*" else "auth"
+
+polarityName : Polarity -> String
+polarityName PCo = "co"
+polarityName PContra = "contra"
+polarityName PInv = "inv"
+polarityName PPhantom = "phantom"
+
+slotArgsLen : PredicateSlotArgs -> Int
+slotArgsLen PSArgsUnknown = 0 - 1
+slotArgsLen (PSArgsKnown args) = length args
+
+prefixLen : CDeclaredPrefix -> Int
+prefixLen CDPUnknown = 0 - 1
+prefixLen (CDPLen n) = n
+
+samplePlan : FoldPlan Int (List String)
+samplePlan = FoldPlan {
+  fpAccumulate = AccumulateBoth,
+  fpWorker =
+    prev _ _ _ _ _ => (
+      ModuleBindings { mbSchemes = [], mbStandaloneSchemes = omEmpty },
+      0,
+      prev,
+    ),
+  fpCollect = place mid _ rest => "\{mid}:\{placeName place}" :: rest,
+  fpBaseSeed = [],
+  fpCoreV = [],
+}
+
+test "ElabResult: erModules reads the elaborated modules in order" =
+  expectEqual ["m", "n"] (map fst sampleElab.erModules)
+
+test "ElabResult: erResidual and erPerModule are separate channels" =
+  expectEqual
+    (1, 1)
+    (length sampleElab.erResidual, length sampleElab.erPerModule)
+
+test "ElabResult: an update changes only the named field" =
+  let updated = { sampleElab | erResidual = [] }
+  expectEqual
+    (0, 2, 1)
+    (
+      length updated.erResidual,
+      length updated.erModules,
+      length updated.erPerModule,
+    )
+
+test "ElabResult: erFacts carries the entry outcome it was built with" =
+  expectFalse sampleElab.erFacts.efEntryOutcome.eoMainIsUnit
+
+test "ElabFacts: an update of the entry outcome leaves the manifests alone" =
+  let facts = { sampleFacts |
+    efEntryOutcome = { noEntryOutcome | eoMainIsUnit = True },
+  }
+  expectEqual
+    (True, 0)
+    (facts.efEntryOutcome.eoMainIsUnit, length facts.efManifests)
+
+test "ModulePlace: the two constructors are told apart by a match" =
+  expectEqual ["last", "not-last"] (map placeName [LastModule, NotLastModule])
+
+test "Accumulate: the two constructors are told apart by a match" =
+  expectEqual
+    ["none", "both"]
+    (map accumulateName [AccumulateNone, AccumulateBoth])
+
+test "FoldPlan: fpCollect receives the place it is handed" =
+  expectEqual
+    ["a:last", "b:not-last"]
+    (samplePlan.fpCollect
+      LastModule
+      "a"
+      0
+      (samplePlan.fpCollect NotLastModule "b" 0 []))
+
+test "FoldPlan: fpAccumulate and the seed rows read back as built" =
+  expectEqual
+    ("both", 0, 0)
+    (
+      accumulateName samplePlan.fpAccumulate,
+      length samplePlan.fpBaseSeed,
+      length samplePlan.fpCoreV,
+    )
+
+test "Kind: KType and KRow are told apart by a match" =
+  expectEqual ["type", "row"] (map kindName [KType, KRow])
+
+test "Polarity: the four variances are distinct names" =
+  expectEqual
+    ["co", "contra", "inv", "phantom"]
+    (map polarityName [PCo, PContra, PInv, PPhantom])
+
+test "PredicateSlotArgs and CDeclaredPrefix: known forms carry their length" =
+  expectEqual
+    (0 - 1, 0, 2)
+    (
+      slotArgsLen PSArgsUnknown,
+      slotArgsLen (PSArgsKnown []),
+      prefixLen (CDPLen 2),
+    )

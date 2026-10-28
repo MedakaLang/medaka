@@ -1,5 +1,5 @@
 # META
-source_lines=3594
+source_lines=3631
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -3335,7 +3335,15 @@ public export data ElabFacts = ElabFacts {
   efEntryOutcome : EntryOutcome,
 }
 
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, ElabFacts)
+public export data ElabResult = ElabResult {
+  erCore : List Decl,
+  erModules : List (String, List Decl),
+  erPerModule : List (String, (List TcDiag, List TcDiag)),
+  erResidual : List (String, TcDiag),
+  erEvidence : EvTable,
+  erDispositions : DispositionTable,
+  erFacts : ElabFacts,
+}
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both
@@ -3509,6 +3517,20 @@ public export data MarkSets = MarkSets {
   msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
 }
 
+-- What `graphPreamble` returns: the runtime seed rows, the prelude's schemes, its
+-- published rows (present only when the pass closed core), its contexts, its
+-- shipped trees (empty on the diags arm), the mark sets, and the record the core
+-- pass leaves current, which the drive's first module starts from.
+public export data GraphPreamble = GraphPreamble {
+  gpRuntimeSeed : List (String, Scheme),
+  gpCoreSchemes : ModuleBindings,
+  gpCorePub : Option (List (String, PubScheme)),
+  gpCoreContexts : OrdMap (List VecObl),
+  gpCoreTree : List Decl,
+  gpMarkSets : MarkSets,
+  gpCoreCtx : ModuleCtx,
+}
+
 -- The prelude-only half of `markSetsOf`'s inputs.  Every field is a pure value
 -- of `coreDecls` alone, holding only `String`/`Int`/`IfaceRef` rows -- see
 -- `PreludePreamble` for why nothing decl-shaped may live here.
@@ -3576,9 +3598,9 @@ public export data PassMethod = PassMethod String Route (List Route)
 --               next depEnv) plus its driver-specific payload `extra`.  [prev] is the
 --               record current before the module; [mctx] the one it was checked in,
 --               which the next module starts from and the fold returns last.
---   * collect : isLast mid extra restResult -> result — a foldr combiner, where
+--   * collect : place mid extra restResult -> result — a foldr combiner, where
 --               restResult is the fold over the REMAINING modules (`base` for []).
---               `isLast` is True only for the terminal (entry) module — the one
+--               `place` is `LastModule` only for the terminal (entry) module — the one
 --               place checkModulesEntryFull keeps the module's OWN schemes/warns
 --               rather than the recursion's.
 --   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
@@ -3596,6 +3618,21 @@ public export data PassMethod = PassMethod String Route (List Route)
 -- each is extended (`accData ++ publicDataDecls prog`, `accAll ++ prog`).  No
 -- worker reads one accumulator without the other.
 public export data Accumulate = AccumulateNone | AccumulateBoth
+
+-- Where a module sits in the fold's right-to-left `collect`: the terminal (entry)
+-- module, or any earlier one.
+public export data ModulePlace = LastModule | NotLastModule
+
+-- What `foldModules` and `workModules` take unchanged for every module: the
+-- accumulator policy, the per-module worker, the combiner `collect` applies to the
+-- payloads, the base seed rows, and the prelude's export bindings (`coreV`).
+public export data FoldPlan e acc = FoldPlan {
+  fpAccumulate : Accumulate,
+  fpWorker : ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx),
+  fpCollect : ModulePlace -> String -> e -> acc -> acc,
+  fpBaseSeed : List (String, Scheme),
+  fpCoreV : List (String, ExportBinding),
+}
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
@@ -3807,7 +3844,7 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "ServeStep" ("e") ((variant "ServeHit" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyVar "e") (TyApp (TyCon "ModuleServe") (TyVar "e")))) (variant "ServeCheck" (ConPos (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyApp (TyCon "ModuleServe") (TyVar "e"))))))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx")) (field "gdOutputs" (TyCon "DriveOutputs"))))) ())
 (DData Public "ElabFacts" () ((variant "ElabFacts" (ConNamed (field "efManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "efBinders" (TyCon "BinderTypeTable")) (field "efEntryOutcome" (TyCon "EntryOutcome"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "ElabFacts")))
+(DData Public "ElabResult" () ((variant "ElabResult" (ConNamed (field "erCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "erModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "erPerModule" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))) (field "erResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "erEvidence" (TyCon "EvTable")) (field "erDispositions" (TyCon "DispositionTable")) (field "erFacts" (TyCon "ElabFacts"))))) ())
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3815,11 +3852,14 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scModuleCtx" (TyCon "ModuleCtx")) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route"))))) (field "scLiveLocs" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "DrainFinding" () ((variant "DrainFinding" (ConNamed (field "dfModule" (TyCon "String")) (field "dfDiag" (TyCon "TcDiag")) (field "dfVerdict" (TyCon "Bool")) (field "dfLive" (TyCon "Bool"))))) ())
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
+(DData Public "GraphPreamble" () ((variant "GraphPreamble" (ConNamed (field "gpRuntimeSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "gpCoreSchemes" (TyCon "ModuleBindings")) (field "gpCorePub" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))) (field "gpCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gpCoreTree" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gpMarkSets" (TyCon "MarkSets")) (field "gpCoreCtx" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Public "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
 (DData Public "PassMethod" () ((variant "PassMethod" (ConPos (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "Accumulate" () ((variant "AccumulateNone" (ConPos)) (variant "AccumulateBoth" (ConPos))) ())
+(DData Public "ModulePlace" () ((variant "LastModule" (ConPos)) (variant "NotLastModule" (ConPos))) ())
+(DData Public "FoldPlan" ("e" "acc") ((variant "FoldPlan" (ConNamed (field "fpAccumulate" (TyCon "Accumulate")) (field "fpWorker" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyVar "e") (TyCon "ModuleCtx"))))))))) (field "fpCollect" (TyFun (TyCon "ModulePlace") (TyFun (TyCon "String") (TyFun (TyVar "e") (TyFun (TyVar "acc") (TyVar "acc")))))) (field "fpBaseSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "fpCoreV" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
@@ -4031,7 +4071,7 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "ServeStep" ("e") ((variant "ServeHit" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyVar "e") (TyApp (TyCon "ModuleServe") (TyVar "e")))) (variant "ServeCheck" (ConPos (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyApp (TyCon "ModuleServe") (TyVar "e"))))))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx")) (field "gdOutputs" (TyCon "DriveOutputs"))))) ())
 (DData Public "ElabFacts" () ((variant "ElabFacts" (ConNamed (field "efManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "efBinders" (TyCon "BinderTypeTable")) (field "efEntryOutcome" (TyCon "EntryOutcome"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "ElabFacts")))
+(DData Public "ElabResult" () ((variant "ElabResult" (ConNamed (field "erCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "erModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "erPerModule" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))) (field "erResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "erEvidence" (TyCon "EvTable")) (field "erDispositions" (TyCon "DispositionTable")) (field "erFacts" (TyCon "ElabFacts"))))) ())
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -4039,8 +4079,11 @@ public export data Accumulate = AccumulateNone | AccumulateBoth
 (DData Public "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scModuleCtx" (TyCon "ModuleCtx")) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route"))))) (field "scLiveLocs" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "DrainFinding" () ((variant "DrainFinding" (ConNamed (field "dfModule" (TyCon "String")) (field "dfDiag" (TyCon "TcDiag")) (field "dfVerdict" (TyCon "Bool")) (field "dfLive" (TyCon "Bool"))))) ())
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
+(DData Public "GraphPreamble" () ((variant "GraphPreamble" (ConNamed (field "gpRuntimeSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "gpCoreSchemes" (TyCon "ModuleBindings")) (field "gpCorePub" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))) (field "gpCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gpCoreTree" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gpMarkSets" (TyCon "MarkSets")) (field "gpCoreCtx" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Public "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
 (DData Public "PassMethod" () ((variant "PassMethod" (ConPos (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "Accumulate" () ((variant "AccumulateNone" (ConPos)) (variant "AccumulateBoth" (ConPos))) ())
+(DData Public "ModulePlace" () ((variant "LastModule" (ConPos)) (variant "NotLastModule" (ConPos))) ())
+(DData Public "FoldPlan" ("e" "acc") ((variant "FoldPlan" (ConNamed (field "fpAccumulate" (TyCon "Accumulate")) (field "fpWorker" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyVar "e") (TyCon "ModuleCtx"))))))))) (field "fpCollect" (TyFun (TyCon "ModulePlace") (TyFun (TyCon "String") (TyFun (TyVar "e") (TyFun (TyVar "acc") (TyVar "acc")))))) (field "fpBaseSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "fpCoreV" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))) ())

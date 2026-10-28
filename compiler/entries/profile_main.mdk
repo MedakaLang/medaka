@@ -293,7 +293,9 @@ runStaged on targetPath rsrc csrc tsrc =
       rDecls
       livePrelude
       (("__user__", desugared) :: [])
-  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let coreE = elab.erCore
+  let modulesE = elab.erModules
+  let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE

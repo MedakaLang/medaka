@@ -1,5 +1,5 @@
 # META
-source_lines=248
+source_lines=246
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
@@ -91,12 +91,10 @@ routeWordsOf = routeWordsOver ""
 export
 routeWordsOver : String -> String -> List String
 routeWordsOver core src =
-  let (_, _, _, _, evidence, _, _) = elaborateModules
-    defaultDriveInputs
-    []
-    (desugar (parse core))
-    [("probe", desugar (parseLocated src))]
-  sort (flatMap evidenceWords evidence)
+  let elab = elaborateModules defaultDriveInputs [] (desugar (parse core)) [
+    ("probe", desugar (parseLocated src)),
+  ]
+  sort (flatMap evidenceWords elab.erEvidence)
 
 evidenceWords : EvEntry -> List String
 evidenceWords (EvEntry _ val) = match val
@@ -282,7 +280,7 @@ valText (EvHead h) = h
 (DTypeSig true "routeWordsOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "routeWordsOf" () (EApp (EVar "routeWordsOver") (ELit (LString ""))))
 (DTypeSig true "routeWordsOver" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "routeWordsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple PWild PWild PWild PWild (PVar "evidence") PWild PWild) (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (EListLit (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src"))))))) (DoExpr (EApp (EVar "sort") (EApp (EApp (EVar "flatMap") (EVar "evidenceWords")) (EVar "evidence"))))))
+(DFunDef false "routeWordsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (EListLit (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src"))))))) (DoExpr (EApp (EVar "sort") (EApp (EApp (EVar "flatMap") (EVar "evidenceWords")) (EFieldAccess (EVar "elab") "erEvidence"))))))
 (DTypeSig false "evidenceWords" (TyFun (TyCon "EvEntry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "evidenceWords" ((PCon "EvEntry" PWild (PVar "val"))) (EMatch (EVar "val") (arm (PCon "EvOne" (PVar "r")) () (EApp (EVar "routeWords") (EVar "r"))) (arm (PCon "EvMany" (PVar "rs")) () (EApp (EApp (EVar "flatMap") (EVar "routeWords")) (EVar "rs"))) (arm (PCon "EvMethod" PWild PWild (PVar "r") (PVar "pre") (PVar "post")) () (EBinOp "++" (EApp (EVar "routeWords") (EVar "r")) (EApp (EApp (EVar "flatMap") (EVar "routeWords")) (EBinOp "++" (EVar "pre") (EVar "post"))))) (arm (PCon "EvLit" PWild (PVar "r")) () (EApp (EVar "routeWords") (EVar "r"))) (arm (PCon "EvHead" PWild) () (EListLit))))
 (DTypeSig false "routeWords" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
@@ -369,7 +367,7 @@ valText (EvHead h) = h
 (DTypeSig true "routeWordsOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "routeWordsOf" () (EApp (EVar "routeWordsOver") (ELit (LString ""))))
 (DTypeSig true "routeWordsOver" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "routeWordsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PTuple PWild PWild PWild PWild (PVar "evidence") PWild PWild) (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (EListLit (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src"))))))) (DoExpr (EApp (EVar "sort") (EApp (EApp (EDictApp "flatMap") (EVar "evidenceWords")) (EVar "evidence"))))))
+(DFunDef false "routeWordsOver" ((PVar "core") (PVar "src")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "core")))) (EListLit (ETuple (ELit (LString "probe")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "src"))))))) (DoExpr (EApp (EVar "sort") (EApp (EApp (EDictApp "flatMap") (EVar "evidenceWords")) (EFieldAccess (EVar "elab") "erEvidence"))))))
 (DTypeSig false "evidenceWords" (TyFun (TyCon "EvEntry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "evidenceWords" ((PCon "EvEntry" PWild (PVar "val"))) (EMatch (EVar "val") (arm (PCon "EvOne" (PVar "r")) () (EApp (EVar "routeWords") (EVar "r"))) (arm (PCon "EvMany" (PVar "rs")) () (EApp (EApp (EDictApp "flatMap") (EVar "routeWords")) (EVar "rs"))) (arm (PCon "EvMethod" PWild PWild (PVar "r") (PVar "pre") (PVar "post")) () (EBinOp "++" (EApp (EVar "routeWords") (EVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "routeWords")) (EBinOp "++" (EVar "pre") (EVar "post"))))) (arm (PCon "EvLit" PWild (PVar "r")) () (EApp (EVar "routeWords") (EVar "r"))) (arm (PCon "EvHead" PWild) () (EListLit))))
 (DTypeSig false "routeWords" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))

@@ -649,7 +649,8 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   match targetRefusalOf written paths analysis
     [] =>
       let elab = analysis.eaElab
-      let (coreE, modulesE, _, _, _, _, _) = elab
+      let coreE = elab.erCore
+      let modulesE = elab.erModules
       let executed =
         executedTrees
           outputs.doEntryOutcome
@@ -724,7 +725,7 @@ runEmit : Bool ->
   (List Decl, List (String, List Decl)) ->
   <IO> Unit
 runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
-  let (_, _, _, _, evTable, _, _) = elab
+  let evTable = elab.erEvidence
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed

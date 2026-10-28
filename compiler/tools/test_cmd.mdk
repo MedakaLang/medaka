@@ -88,7 +88,7 @@ import types.typecheck.{
   elaborateModulesChainReport,
   elaborateModulesWithReport,
 }
-import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult}
+import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult(..)}
 import types.publish.{TcReport}
 import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
@@ -995,7 +995,7 @@ pairOfElab : String ->
   ElabResult ->
   TestPair
 pairOfElab rsrc csrc modules elaborated = match elaborated
-  (coreE, modulesE, _, _, _, _, _) =>
+  ElabResult { erCore = coreE, erModules = modulesE, ... } =>
     uncurryPair
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
@@ -1084,7 +1084,7 @@ forceInjected rsrc csrc chainKey mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
   let (elab, _, _) = keyedElab rsrc csrc chainKey mods False injected
   match elab
-    (_, _, perModule, _, _, _, _) =>
+    ElabResult { erPerModule = perModule, ... } =>
       injectedExampleDiags := exampleDiagLines perModule
       pairOfElab rsrc csrc injected elab
 
@@ -1865,7 +1865,9 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
     livePrelude) runtimeDecls livePrelude [
     (rootId, allUser),
   ]
-  let (coreE, modulesE, perModule, _, _, _, _) = elab
+  let coreE = elab.erCore
+  let modulesE = elab.erModules
+  let perModule = elab.erPerModule
   let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
   let rendered = withFacts facts (_ =>
@@ -2074,7 +2076,7 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
   let elab =
     elaborateModules (testDriveInputs coreDecls) runtimeDecls coreDecls modules
   match elab
-    (coreE, modulesE, perModule, residual, _, _, _) => (
+    ElabResult { erCore = coreE, erModules = modulesE, erPerModule = perModule, erResidual = residual, ... } => (
       mangleCtorCollisionsPair (coreE, modulesE),
       factsOfElab elab,
       residual ++ perModuleErrors perModule [],
@@ -3600,7 +3602,7 @@ helperElabDiags : List Decl ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
   match elaborateModules (testDriveInputs rawCoreM) runtimeM rawCoreM rawM
-    (_, _, perModule, residual, _, _, _) =>
+    ElabResult { erPerModule = perModule, erResidual = residual, ... } =>
       residual ++ perModuleErrors perModule []
 
 perModuleErrors : List (String, (List TcDiag, List TcDiag)) ->

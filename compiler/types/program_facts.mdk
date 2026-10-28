@@ -14,7 +14,7 @@ import types.route_key.{EvIndex, evIndexOf}
 import types.disposition.{DispositionTable}
 import types.runtime_types.{BinderTypeTable}
 import types.publish.{CheckedProgram(..), EntryOutcome}
-import types.tc_types.{DriveOutputs, ElabResult, ElabFacts(..)}
+import types.tc_types.{DriveOutputs, ElabResult(..), ElabFacts(..)}
 import types.capability_manifest.{CapabilityManifest}
 
 -- `Option` fields are `None` for a program that was never typechecked, so an
@@ -56,17 +56,17 @@ factsOfChecked c = ProgramFacts {
 -- `factsOfElabWith` and the table the mangle returned.
 export
 factsOfElab : ElabResult -> ProgramFacts
-factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
+factsOfElab elab = factsOfElabWith elab.erEvidence elab
 
 -- [elab]'s facts with [table] as its evidence.
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
-factsOfElabWith table (_, _, _, _, _, dispositions, facts) = ProgramFacts {
-  pfManifests = facts.efManifests,
+factsOfElabWith table elab = ProgramFacts {
+  pfManifests = elab.erFacts.efManifests,
   pfEvidence = evIndexOf table,
-  pfDispositions = Some dispositions,
-  pfBinders = Some facts.efBinders,
-  pfEntryOutcome = Some facts.efEntryOutcome,
+  pfDispositions = Some elab.erDispositions,
+  pfBinders = Some elab.erFacts.efBinders,
+  pfEntryOutcome = Some elab.erFacts.efEntryOutcome,
   pfExternSources = None,
 }
 
@@ -76,12 +76,12 @@ factsOfElabSources : (DriveOutputs -> List (String, List Decl) -> ExternHeadRows
   ElabResult ->
   EvTable ->
   ProgramFacts
-factsOfElabSources project outputs (elab@(core, modules, _, _, _, _, _)) table =
+factsOfElabSources project outputs elab table =
   withCheckedExternSources
     project
     outputs
-    core
-    modules
+    elab.erCore
+    elab.erModules
     (factsOfElabWith table elab)
 
 export

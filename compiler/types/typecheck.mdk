@@ -114,6 +114,8 @@ import types.tc_types.{
   GoalPayload(..),
   DeclaringBinder(..),
   Accumulate(..),
+  ModulePlace(..),
+  FoldPlan(..),
   siteFor,
   DeclEnvModule(..),
   DeclEnvs(..),
@@ -138,7 +140,8 @@ import types.tc_types.{
   GraphOut(..),
   ModuleServe(..),
   GraphDrive(..),
-  ElabResult,
+  GraphPreamble(..),
+  ElabResult(..),
   ElabFacts(..),
   DrainFinding(..),
   MarkSets(..),
@@ -701,7 +704,8 @@ elaborateOneFacts : DriveInputs ->
   (List Decl, ProgramFacts)
 elaborateOneFacts inputs runtimeDecls coreDecls (rootId, prog) =
   let elab = elaborateModules inputs runtimeDecls coreDecls [(rootId, prog)]
-  let (coreD, modules, _, _, _, _, _) = elab
+  let coreD = elab.erCore
+  let modules = elab.erModules
   (coreD ++ flatMap snd modules, factsOfElab elab)
 
 -- #415 item 3: the ONLY writer of dictEligibleRef / dictEligibleSetRef.  The set is
@@ -1590,44 +1594,26 @@ reexportSeed coreV ((DUse True path _) :: rest) depEnv =
       importFormSchemes depEnv path depSchemes ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 
-foldModules : Accumulate ->
-  (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
+foldModules : FoldPlan e acc ->
   Option (ModuleServe e) ->
-  (Bool -> String -> e -> acc -> acc) ->
   acc ->
-  List (String, Scheme) ->
-  List (String, ExportBinding) ->
   List (String, List (String, ExportBinding)) ->
   List Decl ->
   List Decl ->
   ModuleCtx ->
   List (String, List Decl) ->
   (acc, Option (ModuleServe e), ModuleCtx)
-foldModules acc worker serve collect base baseSeed coreV depEnv accData accAll prev modules =
+foldModules plan serve base depEnv accData accAll prev modules =
   let (done, served, last) =
-    workModules
-      acc
-      worker
-      serve
-      baseSeed
-      coreV
-      depEnv
-      accData
-      accAll
-      []
-      prev
-      modules
-  (collectModules collect base done, served, last)
+    workModules plan serve depEnv accData accAll [] prev modules
+  (collectModules plan.fpCollect base done, served, last)
 
 -- `foldModules`' loop: runs the worker over [modules] head-first, threading the
 -- accumulators, the record and the serve policy, and returns each module's payload,
 -- newest first.  The recursive call is a tail call: a frame waiting on the rest would
 -- keep its module's record reachable until the graph end.
-workModules : Accumulate ->
-  (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
+workModules : FoldPlan e acc ->
   Option (ModuleServe e) ->
-  List (String, Scheme) ->
-  List (String, ExportBinding) ->
   List (String, List (String, ExportBinding)) ->
   List Decl ->
   List Decl ->
@@ -1635,19 +1621,20 @@ workModules : Accumulate ->
   ModuleCtx ->
   List (String, List Decl) ->
   (List (String, e), Option (ModuleServe e), ModuleCtx)
-workModules _ _ serve _ _ _ _ _ done prev [] = (done, serve, prev)
-workModules _ worker serve baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
-  let seed = moduleSeedFor prev baseSeed coreV mid prog depEnv
-  let (_, extra, next) = worker prev mid seed accData accAll prog
+workModules _ serve _ _ _ done prev [] = (done, serve, prev)
+workModules plan serve depEnv accData accAll done prev [(mid, prog)] =
+  let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog depEnv
+  let (_, extra, next) = plan.fpWorker prev mid seed accData accAll prog
   ((mid, extra) :: done, serve, next)
-workModules acc worker serve baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
+workModules plan serve depEnv accData accAll done prev ((mid, prog) :: rest) =
   let step = map (policy => policy.msStep mid prog prev) serve
   let (own, done2, serve2, next) = match step
     Some (ServeHit own extra policy) =>
       (own, (mid, extra) :: done, Some policy, prev)
     _ =>
-      let seed = moduleSeedFor prev baseSeed coreV mid prog depEnv
-      let (schemes, extra, next) = worker prev mid seed accData accAll prog
+      let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog depEnv
+      let (schemes, extra, next) =
+        plan.fpWorker prev mid seed accData accAll prog
       let own = publicModuleExports prog schemes
       match step
         Some (ServeCheck after) =>
@@ -1655,16 +1642,13 @@ workModules acc worker serve baseSeed coreV depEnv accData accAll done prev ((mi
           (own, done3, Some policy, next)
         _ => (own, (mid, extra) :: done, serve, next)
   workModules
-    acc
-    worker
+    plan
     serve2
-    baseSeed
-    coreV
-    ((mid, own ++ reexportSeed coreV prog depEnv) :: depEnv)
-    (match acc
+    ((mid, own ++ reexportSeed plan.fpCoreV prog depEnv) :: depEnv)
+    (match plan.fpAccumulate
       AccumulateBoth => accData ++ publicDataDecls prog
       AccumulateNone => accData)
-    (match acc
+    (match plan.fpAccumulate
       AccumulateBoth => accAll ++ prog
       AccumulateNone => accAll)
     done2
@@ -1688,13 +1672,16 @@ moduleSeedFor prev baseSeed coreV mid prog depEnv =
 
 -- The right fold of `collect` over the payloads [done] (newest first): the last module
 -- first, the only one `collect` sees as last, onto [base].
-collectModules : (Bool -> String -> e -> acc -> acc) ->
+collectModules : (ModulePlace -> String -> e -> acc -> acc) ->
   acc ->
   List (String, e) ->
   acc
 collectModules _ base [] = base
 collectModules collect base ((mid, extra) :: older) =
-  fold (acc (m, x) => collect False m x acc) (collect True mid extra base) older
+  fold
+    (acc (m, x) => collect NotLastModule m x acc)
+    (collect LastModule mid extra base)
+    older
 
 -- The core pass, through the prelude interface (`types/prelude_interface.mdk`).
 -- Under the caller's prelude key a hit is the cached interface whose section lists
@@ -1828,7 +1815,7 @@ tcConfigOf domains inputs = TcConfig {
 
 -- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
 -- the drive's graph, or `omEmpty` on a drive that does not rename.  The last
--- component is the record the core pass leaves current, which the drive's first
+-- `gpCoreCtx` is the record the core pass leaves current, which the drive's first
 -- module starts from.
 graphPreamble : DriveInputs ->
   OrdMap (List (String, String)) ->
@@ -1837,7 +1824,7 @@ graphPreamble : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets, ModuleCtx)
+  GraphPreamble
 graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
@@ -1993,7 +1980,15 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
         let (bindings, tree, coreCtx) =
           elabModuleStamp initial "" runtimeSeed [] coreDecls coreDecls
         (bindings, None, coreOwnContexts coreCtx, tree, coreCtx)
-  (runtimeSeed, coreSchemes, corePub, coreContexts, coreTree, ms, coreCtx)
+  GraphPreamble {
+    gpRuntimeSeed = runtimeSeed,
+    gpCoreSchemes = coreSchemes,
+    gpCorePub = corePub,
+    gpCoreContexts = coreContexts,
+    gpCoreTree = coreTree,
+    gpMarkSets = ms,
+    gpCoreCtx = coreCtx,
+  }
 
 -- The prelude's shipped trees for a tree-arm drive (`types/prelude_elab.mdk`), moved
 -- onto the binders of [coreDecls], the drive's own desugar of core: held for the
@@ -2025,7 +2020,7 @@ checkModulesPreambleK : DriveInputs ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, ModuleCtx)
 checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
-  let (runtimeSeed, coreSchemes, _, _, _, _, coreCtx) =
+  let pre =
     graphPreamble
       inputs
       omEmpty
@@ -2034,7 +2029,7 @@ checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
       runtimeDecls
       coreDecls
       modules
-  (runtimeSeed, coreSchemes, coreCtx)
+  (pre.gpRuntimeSeed, pre.gpCoreSchemes, pre.gpCoreCtx)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
 -- `schemes` twice — once as the pubV source foldModules needs, once as the payload
@@ -2151,7 +2146,7 @@ checkModulesPartialLast : DriveInputs ->
   (PartialAnalysis, ModuleCtx)
 checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _, coreCtx) =
+  let GraphPreamble { gpRuntimeSeed = runtimeSeed, gpCoreSchemes = coreSchemes, gpCorePub = coreClosed, gpCoreContexts = coreContexts, gpCoreCtx = coreCtx, ... } =
     graphPreamble
       inputs
       omEmpty
@@ -2185,13 +2180,16 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
   -- drains nothing.
   let (rows, _, lastCtx) =
     foldModules
-      AccumulateNone
-      cmCheckWorker
+      FoldPlan {
+        fpAccumulate = AccumulateNone,
+        fpWorker = cmCheckWorker,
+        fpCollect = _place mid schemes rest => (mid, schemes) :: rest,
+        fpBaseSeed = runtimeSeed ++ coreSchemes.mbSchemes,
+        fpCoreV =
+          tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes,
+      }
       None
-      (_last mid schemes rest => (mid, schemes) :: rest)
       []
-      (runtimeSeed ++ coreSchemes.mbSchemes)
-      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       []
       []
       []
@@ -2315,14 +2313,14 @@ graphModuleWorker capture sel prev mid seed accData accAll prog =
 -- (same last-wins entry-module rule; dependency-first order puts the entry last).
 graphCollect : GraphCtx ->
   GraphOut ->
-  Bool ->
+  ModulePlace ->
   String ->
   (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) ->
   (List (String, List Decl), List ModDiags, List (String, InvocationView)) ->
   (List (String, List Decl), List ModDiags, List (String, InvocationView))
-graphCollect gctx sel isLast mid (marked, schemes, errs, warns, view) (markedRest, diagsRest, views) =
+graphCollect gctx sel place mid (marked, schemes, errs, warns, view) (markedRest, diagsRest, views) =
   match sel
-    GOutDiags => setMainSchemeIfEntry gctx isLast schemes
+    GOutDiags => setMainSchemeIfEntry gctx place schemes
     GOutTrees => ()
   -- The DIAGS selection keeps no tree: its `driveGraphK` arm returns
   -- `gdModules = []`, and its worker puts none in the payload (`graphModuleWorker`).
@@ -2375,9 +2373,12 @@ entryReportFromDiags perMod = match checkModulesEntryFromDiags perMod
 -- The SET-OR-CLEAR write itself, on the terminal (entry) module only.  Split out of
 -- `graphCollect` so the "never a partial write" property is one two-clause
 -- function rather than an inline conditional.
-setMainSchemeIfEntry : GraphCtx -> Bool -> List (String, PubScheme) -> Unit
-setMainSchemeIfEntry gctx False _ = ()
-setMainSchemeIfEntry gctx True schemes =
+setMainSchemeIfEntry : GraphCtx ->
+  ModulePlace ->
+  List (String, PubScheme) ->
+  Unit
+setMainSchemeIfEntry gctx NotLastModule _ = ()
+setMainSchemeIfEntry gctx LastModule schemes =
   gctx.mainSchemeRef := map (p => p.psScheme) (lookupAssoc "main" schemes)
 
 -- The prelude generation pair plus the chain key: the driver's pass caches
@@ -2687,7 +2688,7 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
-  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms, coreCtx) =
+  let GraphPreamble { gpRuntimeSeed = runtimeSeed, gpCoreSchemes = coreSchemes, gpCorePub = coreClosed, gpCoreContexts = coreContexts, gpCoreTree = coreTree, gpMarkSets = ms, gpCoreCtx = coreCtx } =
     graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
   let capture =
     requestedWrapperViewModules
@@ -2709,13 +2710,16 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   let coreView = coreCtx.mcCells.invocationViewRef.value
   let ((modules2, perModRaw, views), served, lastCtx) =
     foldModules
-      AccumulateBoth
-      (graphModuleWorker capture sel)
+      FoldPlan {
+        fpAccumulate = AccumulateBoth,
+        fpWorker = graphModuleWorker capture sel,
+        fpCollect = graphCollect coreCtx.mcGraph sel,
+        fpBaseSeed = runtimeSeed ++ coreSchemes.mbSchemes,
+        fpCoreV =
+          tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes,
+      }
       serve
-      (graphCollect coreCtx.mcGraph sel)
       ([], [], [])
-      (runtimeSeed ++ coreSchemes.mbSchemes)
-      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       []
       (publicDataDecls coreDecls)
       coreDecls
@@ -3644,19 +3648,19 @@ elabTreesDrive args = elabDriveResult (driveGraphK GOutTrees args)
 elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elabDriveResult g = (
   (
-    (
-      g.gdCore,
-      g.gdModules,
-      map dropModSchemes g.gdPerMod,
-      g.gdResidual,
-      g.gdEvTable,
-      g.gdDispositions,
-      ElabFacts {
+    ElabResult {
+      erCore = g.gdCore,
+      erModules = g.gdModules,
+      erPerModule = map dropModSchemes g.gdPerMod,
+      erResidual = g.gdResidual,
+      erEvidence = g.gdEvTable,
+      erDispositions = g.gdDispositions,
+      erFacts = ElabFacts {
         efManifests = g.gdOutputs.doManifests,
         efBinders = g.gdBinders,
         efEntryOutcome = g.gdOutputs.doEntryOutcome,
       },
-    ),
+    },
     g.gdReport,
     g.gdOutputs,
   ),

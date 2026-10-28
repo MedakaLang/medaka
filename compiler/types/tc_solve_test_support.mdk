@@ -87,12 +87,10 @@ routeWordsOf = routeWordsOver ""
 export
 routeWordsOver : String -> String -> List String
 routeWordsOver core src =
-  let (_, _, _, _, evidence, _, _) = elaborateModules
-    defaultDriveInputs
-    []
-    (desugar (parse core))
-    [("probe", desugar (parseLocated src))]
-  sort (flatMap evidenceWords evidence)
+  let elab = elaborateModules defaultDriveInputs [] (desugar (parse core)) [
+    ("probe", desugar (parseLocated src)),
+  ]
+  sort (flatMap evidenceWords elab.erEvidence)
 
 evidenceWords : EvEntry -> List String
 evidenceWords (EvEntry _ val) = match val
