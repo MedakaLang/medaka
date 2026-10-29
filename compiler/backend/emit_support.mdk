@@ -120,6 +120,10 @@ eagerVarsArms : OrdMap Unit -> List CArm -> List String
 eagerVarsArms _ [] = []
 eagerVarsArms b ((CArm pat gs body) :: rest) =
   eagerVarsGuarded (omFromNames (patVars pat) b) gs body ++ eagerVarsArms b rest
+-- a candidate's body is its owner arm's, read there
+eagerVarsArms b ((CArmAlt pat gs _) :: rest) =
+  eagerVarsGuarded (omFromNames (patVars pat) b) gs (CLit LUnit)
+    ++ eagerVarsArms b rest
 
 -- an arm's guard chain + body.  A guard is EAGER — it runs when the arm is
 -- tested, so a global it reads is a real init-order edge (dropping the whole
@@ -353,6 +357,11 @@ bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
+export
+guardVars : CGuard -> List String
+guardVars (CGBind p _) = patVars p
+guardVars (CGBool _) = []
+
 -- Effectful left-to-right fold over a list, for its side effects only.
 export
 forEachU : (a -> Unit) -> List a -> Unit
@@ -468,6 +477,8 @@ armsHaveMethod : List CArm -> Bool
 armsHaveMethod [] = False
 armsHaveMethod ((CArm _ gs body) :: rest) =
   guardsHaveMethod gs || eagerHasMethod body || armsHaveMethod rest
+armsHaveMethod ((CArmAlt _ gs _) :: rest) =
+  guardsHaveMethod gs || armsHaveMethod rest
 
 guardsHaveMethod : List CGuard -> Bool
 guardsHaveMethod [] = False
@@ -650,6 +661,8 @@ labelFallthroughArm (CArm p gs b) label =
     p
     (map (g => labelFallthroughGuard g label) gs)
     (labelFallthrough b label)
+labelFallthroughArm (CArmAlt p gs owner) label =
+  CArmAlt p (map (g => labelFallthroughGuard g label) gs) owner
 
 labelFallthroughGuard : CGuard -> String -> CGuard
 labelFallthroughGuard (CGBool e) label = CGBool (labelFallthrough e label)

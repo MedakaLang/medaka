@@ -234,3 +234,67 @@ test "a second signature for one name is located at its name" =
     (sigErrorSpans
       "R-DUPLICATE-SIGNATURE"
       "f : a -> a\nf x = x\nf : b -> b\nmain = 1\n")
+
+-- ── or-patterns ──────────────────────────────────────────────────────────
+
+orPatternMessages : String -> List String
+orPatternMessages src =
+  let errs = resolveProgram [] [] (parse src)
+  map
+    ppResError
+    (filterList (e => startsWithOrPattern (codeText (resErrorCode e))) errs)
+
+startsWithOrPattern : String -> Bool
+startsWithOrPattern code = match stripPrefix "R-OR-PATTERN-" code
+  Some _ => True
+  None => False
+
+test "alternatives that bind the same names resolve cleanly" = expectEach [
+  (
+    "constructors",
+    expectEqual
+      []
+      (orPatternMessages
+        """data T = A Int | B Int
+f t = match t
+  A x | B x => x
+"""),
+  ),
+  (
+    "different order",
+    expectEqual
+      []
+      (orPatternMessages
+        """f p = match p
+  (x, y, 0) | (y, x, 1) => x
+  _ => 0
+"""),
+  ),
+]
+
+test "alternatives that bind different names are a located binder error" =
+  expectEqual
+    [
+      "the alternatives of an or-pattern must bind the same names, but one binds `x` and another binds `y`",
+    ]
+    (orPatternMessages
+      """data T = A Int | B Int
+f t = match t
+  A x | B y => x
+""")
+
+test "a bare identifier alternative adds the if steer to the binder error" =
+  expectEqual
+    [
+      "the alternatives of an or-pattern must bind the same names, but one binds `n` and another binds `otherwise`; a match-arm guard uses `if`, not `|`",
+    ]
+    (orPatternMessages """f n = match n
+  n | otherwise => 1
+""")
+
+test "an or-pattern outside a binding position is misplaced" =
+  expectEqual
+    [
+      "an or-pattern `(a | b)` is only allowed in a binding position: a lambda or function-clause parameter, a `let` left-hand side, a do-block bind or a match pattern",
+    ]
+    (orPatternMessages "f t = (t | t)\n")

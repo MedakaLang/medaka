@@ -126,6 +126,8 @@ patNames (PRec _ fs _) = flatMap fieldNames fs
 patNames PWild = []
 patNames (PLit _) = []
 patNames (PRng _ _ _) = []
+patNames (POr []) = []
+patNames (POr (p :: _)) = patNames p
 
 fieldNames : RecPatField -> List String
 fieldNames (RecPatField n _ _ None) = [n]
@@ -278,6 +280,9 @@ walkArm env scope (CArm pat guards body) =
   let inner = bindPatScope pat scope
   let (guards2, bodyScope) = walkGuards env inner guards
   CArm pat guards2 (walkExpr env bodyScope body)
+walkArm env scope (CArmAlt pat guards owner) =
+  let (guards2, _) = walkGuards env (bindPatScope pat scope) guards
+  CArmAlt pat guards2 owner
 
 walkGuards : ExternVisitor ->
   OrdMap Unit ->

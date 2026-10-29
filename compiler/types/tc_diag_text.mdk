@@ -596,6 +596,11 @@ existentialScopeMsg name =
   "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
 
 export
+orTooManyMsg : Int -> Int -> String
+orTooManyMsg n cap =
+  "the or-patterns here expand to \{intToString n} alternatives, over the limit of \{intToString cap}; split the pattern into nested matches"
+
+export
 discardedValueMsg : String -> String
 discardedValueMsg desc =
   "this statement's value (\{desc}) is discarded; only a `Unit` expression may stand alone as a statement"
@@ -898,6 +903,13 @@ export
 unreachableArmWarning : String
 unreachableArmWarning =
   "Warning: unreachable match arm; an earlier arm already covers this pattern"
+
+-- An alternative of an or-pattern that earlier arms, or the alternatives before it,
+-- already cover (W-UNREACHABLE-ALT); [k] counts from 1.
+export
+unreachableAltWarning : Int -> String
+unreachableAltWarning k =
+  "Warning: unreachable or-pattern alternative \{intToString k}; earlier arms or alternatives already cover it"
 
 -- Name the scrutinee type (skip the synthetic tuple type names, which aren't
 -- user-facing — the witness pattern already reads as a tuple).

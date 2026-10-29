@@ -800,6 +800,7 @@ patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
 patBoundNames (PTuple ps) = flatMap patBoundNames ps
 patBoundNames (PList ps) = flatMap patBoundNames ps
 patBoundNames (PAs x _ _ p) = x :: patBoundNames p
+patBoundNames (POr (p :: _)) = patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
 patBoundNames _ = []
 
@@ -818,8 +819,128 @@ patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
 patBindings (PAs x _ _ p) = x :: patBindings p
+patBindings (POr []) = []
+patBindings (POr (p :: _)) = patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+
+-- Whether [p] contains an or-pattern anywhere.
+export
+patHasOr : Pat -> Bool
+patHasOr (POr _) = True
+patHasOr (PCon _ ps) = any patHasOr ps
+patHasOr (PCons a b) = patHasOr a || patHasOr b
+patHasOr (PTuple ps) = any patHasOr ps
+patHasOr (PList ps) = any patHasOr ps
+patHasOr (PAs _ _ _ p) = patHasOr p
+patHasOr (PRec _ fields _) = any recFieldHasOr fields
+patHasOr _ = False
+
+recFieldHasOr : RecPatField -> Bool
+recFieldHasOr (RecPatField _ _ _ (Some p)) = patHasOr p
+recFieldHasOr _ = False
+
+-- The or-pattern-free patterns [p] stands for, in the order a match tries them:
+-- the alternatives left to right, and across several or-patterns the leftmost
+-- one varying slowest.  A pattern with no or-pattern is its own one candidate.
+-- Every candidate binds the same names under the same binder ids.
+export
+orCandidates : Pat -> List Pat
+orCandidates p = if patHasOr p then orExpand p else [p]
+
+-- How many candidates `orCandidates` would build for [p], counted without
+-- building them; saturates at `orCountCeiling` so the count itself never overflows.
+export
+orCount : Pat -> Int
+orCount (POr ps) = fold (n p => satAdd n (orCount p)) 0 ps
+orCount (PCon _ ps) = orCountProduct ps
+orCount (PCons h t) = satMul (orCount h) (orCount t)
+orCount (PTuple ps) = orCountProduct ps
+orCount (PList ps) = orCountProduct ps
+orCount (PAs _ _ _ p) = orCount p
+orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
+orCount _ = 1
+
+-- The candidate count of a parameter list, as `paramCandidates` would build it.
+export
+orCountProduct : List Pat -> Int
+orCountProduct ps = fold (n p => satMul n (orCount p)) 1 ps
+
+recFieldCount : RecPatField -> Int
+recFieldCount (RecPatField _ _ _ (Some p)) = orCount p
+recFieldCount _ = 1
+
+orCountCeiling : Int
+orCountCeiling = 1000000
+
+satAdd : Int -> Int -> Int
+satAdd a b = min orCountCeiling (a + b)
+
+satMul : Int -> Int -> Int
+satMul a b = min orCountCeiling (a * b)
+
+orExpand : Pat -> List Pat
+orExpand (POr ps) = flatMap orExpand ps
+orExpand (PCon c ps) = map (PCon c) (orProduct ps)
+orExpand (PCons h t) =
+  let ts = orExpand t
+  flatMap (h2 => map (PCons h2) ts) (orExpand h)
+orExpand (PTuple ps) = map PTuple (orProduct ps)
+orExpand (PList ps) = map PList (orProduct ps)
+orExpand (PAs x l bid p) = map (PAs x l bid) (orExpand p)
+orExpand (PRec c fields open) =
+  map (fs => PRec c fs open) (recFieldProduct fields)
+orExpand p = [p]
+
+orProduct : List Pat -> List (List Pat)
+orProduct [] = [[]]
+orProduct (p :: ps) =
+  let rest = orProduct ps
+  flatMap (q => map (q :: _) rest) (orExpand p)
+
+recFieldProduct : List RecPatField -> List (List RecPatField)
+recFieldProduct [] = [[]]
+recFieldProduct (f :: fs) =
+  let rest = recFieldProduct fs
+  flatMap (g => map (g :: _) rest) (recFieldCandidates f)
+
+recFieldCandidates : RecPatField -> List RecPatField
+recFieldCandidates (RecPatField n l bid (Some p)) =
+  map (q => RecPatField n l bid (Some q)) (orExpand p)
+recFieldCandidates f = [f]
+
+-- The parameter lists a clause stands for, in try order, when its parameters
+-- hold or-patterns; the leftmost parameter varies slowest.
+export
+paramCandidates : List Pat -> List (List Pat)
+paramCandidates ps = if any patHasOr ps then orProduct ps else [ps]
+
+-- The (pattern, guards) rows a match arm stands for, in try order: the pattern's
+-- candidates and, under each, the candidates of its guard-bind patterns.  A
+-- failing guard moves to the next row, so a guard re-runs under each matching
+-- alternative before control leaves the arm.
+export
+armCandidates : Pat -> List Guard -> List (Pat, List Guard)
+armCandidates pat guards =
+  let gss = guardCandidates guards
+  flatMap (p => map (gs => (p, gs)) gss) (orCandidates pat)
+
+guardCandidates : List Guard -> List (List Guard)
+guardCandidates [] = [[]]
+guardCandidates ((GBool e) :: qs) = map (GBool e :: _) (guardCandidates qs)
+guardCandidates ((GBind p e) :: qs) =
+  let rest = guardCandidates qs
+  flatMap (q => map (GBind q e :: _) rest) (orCandidates p)
+
+-- Whether a match arm's pattern or one of its guard-bind patterns holds an
+-- or-pattern.
+export
+armHasOr : Pat -> List Guard -> Bool
+armHasOr pat guards = patHasOr pat || any guardHasOr guards
+
+guardHasOr : Guard -> Bool
+guardHasOr (GBind p _) = patHasOr p
+guardHasOr (GBool _) = False
 
 export
 recFieldBindings : RecPatField -> List String
@@ -1480,6 +1601,10 @@ public export data Pat =
   | PTuple (List Pat)
   | PList (List Pat)
   | PAs String Loc BinderId Pat
+  -- alternatives, left to right: at least two, none of them itself a POr.
+  -- Every alternative binds the same names; binders and bound names read the
+  -- first alternative.
+  | POr (List Pat)
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
 
@@ -1621,6 +1746,9 @@ public export data Expr =
   -- which exprToPat lowers to PAs.  Elsewhere resolve would reject it, so it
   -- never survives into a typed program (the reference's `EAsPat`).
   | EAsPat String Expr
+  -- `(e1 | e2 | ...)` in a binding LHS; exprToPat lowers it to POr.  Produced
+  -- only inside parentheses, so a bare `|` stays a guard.
+  | EOrPat (List Expr)
   -- Method_marker output (the parser never produces these; the typecheck-filled
   -- ref the reference carries is irrelevant pre-typecheck, so just the name).
   | EMethodRef String
@@ -2667,6 +2795,9 @@ mapTyInExpr f (ESetLit n es) =
 mapTyInExpr f (EAsPat n e0) =
   let (e0b, c) = mapTyInExpr f e0
   (EAsPat n e0b, c)
+mapTyInExpr f (EOrPat es) =
+  let (es2, c) = mapExprsB f es
+  (EOrPat es2, c)
 mapTyInExpr _ (EMethodRef n) = (EMethodRef n, False)
 mapTyInExpr _ (EDictApp n) = (EDictApp n, False)
 mapTyInExpr _ (EVarAt n a) = (EVarAt n a, False)

@@ -1,5 +1,5 @@
 # META
-source_lines=700
+source_lines=713
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -124,6 +124,10 @@ eagerVarsArms : OrdMap Unit -> List CArm -> List String
 eagerVarsArms _ [] = []
 eagerVarsArms b ((CArm pat gs body) :: rest) =
   eagerVarsGuarded (omFromNames (patVars pat) b) gs body ++ eagerVarsArms b rest
+-- a candidate's body is its owner arm's, read there
+eagerVarsArms b ((CArmAlt pat gs _) :: rest) =
+  eagerVarsGuarded (omFromNames (patVars pat) b) gs (CLit LUnit)
+    ++ eagerVarsArms b rest
 
 -- an arm's guard chain + body.  A guard is EAGER — it runs when the arm is
 -- tested, so a global it reads is a real init-order edge (dropping the whole
@@ -357,6 +361,11 @@ bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
+export
+guardVars : CGuard -> List String
+guardVars (CGBind p _) = patVars p
+guardVars (CGBool _) = []
+
 -- Effectful left-to-right fold over a list, for its side effects only.
 export
 forEachU : (a -> Unit) -> List a -> Unit
@@ -472,6 +481,8 @@ armsHaveMethod : List CArm -> Bool
 armsHaveMethod [] = False
 armsHaveMethod ((CArm _ gs body) :: rest) =
   guardsHaveMethod gs || eagerHasMethod body || armsHaveMethod rest
+armsHaveMethod ((CArmAlt _ gs _) :: rest) =
+  guardsHaveMethod gs || armsHaveMethod rest
 
 guardsHaveMethod : List CGuard -> Bool
 guardsHaveMethod [] = False
@@ -654,6 +665,8 @@ labelFallthroughArm (CArm p gs b) label =
     p
     (map (g => labelFallthroughGuard g label) gs)
     (labelFallthrough b label)
+labelFallthroughArm (CArmAlt p gs owner) label =
+  CArmAlt p (map (g => labelFallthroughGuard g label) gs) owner
 
 labelFallthroughGuard : CGuard -> String -> CGuard
 labelFallthroughGuard (CGBool e) label = CGBool (labelFallthrough e label)
@@ -746,6 +759,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsArms" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "gs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EApp (EVar "CLit") (EVar "LUnit"))) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "body")))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EVar "b")) (EVar "rest")) (EVar "body"))))
@@ -810,6 +824,9 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
+(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -864,6 +881,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig false "armsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))
 (DFunDef false "armsHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "armsHaveMethod" ((PCons (PCon "CArm" PWild (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "guardsHaveMethod") (EVar "gs")) (EApp (EVar "eagerHasMethod") (EVar "body"))) (EApp (EVar "armsHaveMethod") (EVar "rest"))))
+(DFunDef false "armsHaveMethod" ((PCons (PCon "CArmAlt" PWild (PVar "gs") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EVar "guardsHaveMethod") (EVar "gs")) (EApp (EVar "armsHaveMethod") (EVar "rest"))))
 (DTypeSig false "guardsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "guardsHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "c")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
@@ -920,6 +938,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "labelFallthroughStmt" ((PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "label")) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DTypeSig false "labelFallthroughArm" (TyFun (TyCon "CArm") (TyFun (TyCon "String") (TyCon "CArm"))))
 (DFunDef false "labelFallthroughArm" ((PCon "CArm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "label")) (EApp (EApp (EApp (EVar "CArm") (EVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "g")) (EApp (EApp (EVar "labelFallthroughGuard") (EVar "g")) (EVar "label")))) (EVar "gs"))) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
+(DFunDef false "labelFallthroughArm" ((PCon "CArmAlt" (PVar "p") (PVar "gs") (PVar "owner")) (PVar "label")) (EApp (EApp (EApp (EVar "CArmAlt") (EVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "g")) (EApp (EApp (EVar "labelFallthroughGuard") (EVar "g")) (EVar "label")))) (EVar "gs"))) (EVar "owner")))
 (DTypeSig false "labelFallthroughGuard" (TyFun (TyCon "CGuard") (TyFun (TyCon "String") (TyCon "CGuard"))))
 (DFunDef false "labelFallthroughGuard" ((PCon "CGBool" (PVar "e")) (PVar "label")) (EApp (EVar "CGBool") (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DFunDef false "labelFallthroughGuard" ((PCon "CGBind" (PVar "p") (PVar "e")) (PVar "label")) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
@@ -985,6 +1004,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsArms" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "gs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EApp (EVar "CLit") (EVar "LUnit"))) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "body")))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EVar "b")) (EVar "rest")) (EVar "body"))))
@@ -1049,6 +1069,9 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
+(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -1103,6 +1126,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig false "armsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))
 (DFunDef false "armsHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "armsHaveMethod" ((PCons (PCon "CArm" PWild (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "guardsHaveMethod") (EVar "gs")) (EApp (EVar "eagerHasMethod") (EVar "body"))) (EApp (EVar "armsHaveMethod") (EVar "rest"))))
+(DFunDef false "armsHaveMethod" ((PCons (PCon "CArmAlt" PWild (PVar "gs") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EVar "guardsHaveMethod") (EVar "gs")) (EApp (EVar "armsHaveMethod") (EVar "rest"))))
 (DTypeSig false "guardsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "guardsHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "c")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
@@ -1159,6 +1183,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "labelFallthroughStmt" ((PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "label")) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DTypeSig false "labelFallthroughArm" (TyFun (TyCon "CArm") (TyFun (TyCon "String") (TyCon "CArm"))))
 (DFunDef false "labelFallthroughArm" ((PCon "CArm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "label")) (EApp (EApp (EApp (EVar "CArm") (EVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "g")) (EApp (EApp (EVar "labelFallthroughGuard") (EVar "g")) (EVar "label")))) (EVar "gs"))) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
+(DFunDef false "labelFallthroughArm" ((PCon "CArmAlt" (PVar "p") (PVar "gs") (PVar "owner")) (PVar "label")) (EApp (EApp (EApp (EVar "CArmAlt") (EVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "g")) (EApp (EApp (EVar "labelFallthroughGuard") (EVar "g")) (EVar "label")))) (EVar "gs"))) (EVar "owner")))
 (DTypeSig false "labelFallthroughGuard" (TyFun (TyCon "CGuard") (TyFun (TyCon "String") (TyCon "CGuard"))))
 (DFunDef false "labelFallthroughGuard" ((PCon "CGBool" (PVar "e")) (PVar "label")) (EApp (EVar "CGBool") (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DFunDef false "labelFallthroughGuard" ((PCon "CGBind" (PVar "p") (PVar "e")) (PVar "label")) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))

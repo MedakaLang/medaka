@@ -9,12 +9,31 @@ import frontend.parser.{parse}
 import ir.core_ir_lower.{
   noInlineFnNames, methodResultFacts, lowerProgramEmitWith, leadingDictParams
 }
-import ir.core_ir.{CProgram(..), EntryFact(..), MethodResultFact(..)}
-import frontend.ast.{Decl(..), Pat(..), TyConOrigin(..), noDeclLoc, noBinderId}
+import ir.core_ir.{
+  CArm(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CGuard,
+  CProgram(..),
+  EntryFact(..),
+  MethodResultFact(..),
+}
+import frontend.ast.{
+  Decl(..),
+  Lit(..),
+  Pat(..),
+  TyConOrigin(..),
+  noDeclLoc,
+  noBinderId,
+  orCandidates,
+  paramCandidates,
+}
+import ir.sexp.{patSexp}
 import types.annotate.{annotateProgram}
 import types.program_facts.{ProgramFacts(..), emptyFacts}
 import types.publish.{EntryOutcome(..)}
-import support.util.{joinNl}
+import support.util.{isEmptyL, joinNl}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -233,3 +252,154 @@ test "leadingDictParams counts only the leading dict witnesses" =
     expectEqual 1 (leadingDictParams [var "$dict_a", var "x", var "$dict_b"]),
     expectEqual 0 (leadingDictParams []),
   ]
+
+-- ── or-patterns ──────────────────────────────────────────────────────────────
+-- An or-pattern reaches no engine: lowering expands an arm into its candidates,
+-- the first a `CArm` carrying the body, the rest `CArmAlt`s naming its index.
+
+orLowered : String -> CProgram
+orLowered source =
+  lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse source)))
+
+orClauses : String -> CProgram -> List CClause
+orClauses name (CProgram groups _ _ _ _ _) =
+  flatMap
+    (b => match b
+      CBind n cs _ _ => if n == name then cs else [])
+    groups
+
+-- One word per arm of a clause body's decision: `arm` for an arm with its own
+-- body, `alt<i>` for a candidate sharing arm i's, `?` when it is guarded.
+armShapes : CExpr -> List String
+armShapes (CDecision _ arms _) = map armShape arms
+armShapes _ = []
+
+armShape : CArm -> String
+armShape (CArm _ gs _) = "arm" ++ guardMark gs
+armShape (CArmAlt _ gs i) = "alt\{intToString i}" ++ guardMark gs
+
+guardMark : List CGuard -> String
+guardMark gs = if isEmptyL gs then "" else "?"
+
+armPatText : CArm -> String
+armPatText (CArm p _ _) = patSexp p
+armPatText (CArmAlt p _ _) = patSexp p
+
+decisionArms : CExpr -> List CArm
+decisionArms (CDecision _ arms _) = arms
+decisionArms _ = []
+
+clauseBody : CClause -> CExpr
+clauseBody (CClause _ body) = body
+
+clauseParams : CClause -> List String
+clauseParams (CClause pats _) = map patSexp pats
+
+orColors : String
+orColors = """
+data C = A | B | D
+"""
+
+test "orCandidates expands alternatives left to right, the leftmost slowest" =
+  let x = PVar "x" noDeclLoc noBinderId
+  let pat =
+    PTuple [POr [PCon "A" [x], PCon "B" [x]], POr [PLit (LInt 1), PWild]]
+  expectAll [
+    expectEqual
+      [
+        "(PTuple (PCon \"A\" (PVar \"x\")) (PLit (LInt 1)))",
+        "(PTuple (PCon \"A\" (PVar \"x\")) PWild)",
+        "(PTuple (PCon \"B\" (PVar \"x\")) (PLit (LInt 1)))",
+        "(PTuple (PCon \"B\" (PVar \"x\")) PWild)",
+      ]
+      (map patSexp (orCandidates pat)),
+    expectEqual [patSexp x] (map patSexp (orCandidates x)),
+    expectEqual
+      [["(PCon \"A\")", "PWild"], ["(PCon \"B\")", "PWild"]]
+      (map
+        (ps => map patSexp ps)
+        (paramCandidates [POr [PCon "A" [], PCon "B" []], PWild])),
+  ]
+
+test "an or-pattern arm lowers to candidates sharing the first one's body" =
+  let source = orColors ++ """
+f c = match c
+  A | B => 1
+  D => 2
+"""
+  let bodies = map clauseBody (orClauses "f" (orLowered source))
+  expectAll [
+    expectEqual [["arm", "alt0", "arm"]] (map armShapes bodies),
+    expectEqual
+      [["(PCon \"A\")", "(PCon \"B\")", "(PCon \"D\")"]]
+      (map (b => map armPatText (decisionArms b)) bodies),
+  ]
+
+test "a guarded arm's candidates each carry the guard, nested ones leftmost slowest" =
+  let source =
+    """
+g p = match p
+  ((x, _) | (_, x), (y, _) | (_, y)) if x > y => x
+  _ => 0
+"""
+  let bodies = map clauseBody (orClauses "g" (orLowered source))
+  expectAll [
+    expectEqual
+      [["arm?", "alt0?", "alt0?", "alt0?", "arm"]]
+      (map armShapes bodies),
+    expectEqual
+      [
+        [
+          "(PTuple (PTuple (PVar \"x\") PWild) (PTuple (PVar \"y\") PWild))",
+          "(PTuple (PTuple (PVar \"x\") PWild) (PTuple PWild (PVar \"y\")))",
+          "(PTuple (PTuple PWild (PVar \"x\")) (PTuple (PVar \"y\") PWild))",
+          "(PTuple (PTuple PWild (PVar \"x\")) (PTuple PWild (PVar \"y\")))",
+          "PWild",
+        ],
+      ]
+      (map (b => map armPatText (decisionArms b)) bodies),
+  ]
+
+test "a guard-bind through an or-pattern expands the arm over its alternatives" =
+  let source = orColors ++ """
+h c = match c
+  _ if (A | B) <- c => 1
+  _ => 0
+"""
+  expectEqual
+    [["arm?", "alt0?", "arm"]]
+    (map (c => armShapes (clauseBody c)) (orClauses "h" (orLowered source)))
+
+test "an unguarded or-pattern parameter is tested by a decision over a fresh one" =
+  let source = orColors ++ """
+k (A | B) = 1
+k D = 2
+"""
+  let clauses = orClauses "k" (orLowered source)
+  expectAll [
+    expectEqual
+      [["(PVar \"$or0\")"], ["(PCon \"D\")"]]
+      (map clauseParams clauses),
+    expectEqual
+      [["arm", "alt0", "arm"], []]
+      (map (c => armShapes (clauseBody c)) clauses),
+  ]
+
+test "a guarded or-pattern parameter repeats its clause once per alternative" =
+  let source = orColors ++ """
+m (A | B) | 1 > 0 = 1
+m _ = 2
+"""
+  expectEqual
+    [["(PCon \"A\")"], ["(PCon \"B\")"], ["PWild"]]
+    (map clauseParams (orClauses "m" (orLowered source)))
+
+test "a match without or-patterns lowers to arms only" =
+  let source = orColors ++ """
+n c = match c
+  A => 1
+  _ => 2
+"""
+  expectEqual
+    [["arm", "arm"]]
+    (map (c => armShapes (clauseBody c)) (orClauses "n" (orLowered source)))

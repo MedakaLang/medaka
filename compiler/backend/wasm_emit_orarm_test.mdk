@@ -1,0 +1,99 @@
+-- Sibling test for `compiler/backend/wasm_emit.mdk`'s or-pattern arms ([P-TEST-SIBLING]).
+--
+-- An or-pattern arm reaches the emitter as one candidate arm per alternative, all
+-- sharing one body.  Both tree engines emit that body once, after the arm's shared
+-- block, however many candidate leaves branch to it.  The control is the same walker
+-- with the alternatives written as separate arms, which emits the body once per arm.
+-- Each program is emitted through `emitProgramRecord` as
+-- `compiler/entries/wasm_emit_modules_main.mdk` does for its lowered program.  Runtime
+-- behaviour is pinned by `test/engine_fixtures/or_pattern_*.mdk` on all three engines.
+
+import backend.wasm_emit_test_support_test.{watOf, funcBlock, linesWith}
+import test.{expectAll, labelFail, expectEqual}
+
+-- the shared body's distinctive constant, as the emitter writes it
+bodyConst : String
+bodyConst = "i32.const 7777777"
+
+-- `walk` matches in tail position (the tail engine); `walkV` matches in value
+-- position (the value engine).  Ten alternatives share the body `n + 7777777`.
+orSrc : String
+orSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+-- the same walkers with the ten alternatives written as ten arms
+splitSrc : String
+splitSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n => n + 7777777
+  C3 n => n + 7777777
+  C4 n => n + 7777777
+  C5 n => n + 7777777
+  C6 n => n + 7777777
+  C7 n => n + 7777777
+  C8 n => n + 7777777
+  C9 n => n + 7777777
+  C10 n => n + 7777777
+  C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n => n + 7777777
+    C3 n => n + 7777777
+    C4 n => n + 7777777
+    C5 n => n + 7777777
+    C6 n => n + 7777777
+    C7 n => n + 7777777
+    C8 n => n + 7777777
+    C9 n => n + 7777777
+    C10 n => n + 7777777
+    C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+test "an or-pattern arm's body is emitted once on both tree engines" =
+  let wat = watOf orSrc
+  expectAll [
+    labelFail
+      "tail engine (walk)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walk" wat))),
+    labelFail
+      "value engine (walkV)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walkV" wat))),
+  ]
+
+test "control: ten separate arms emit the body ten times" =
+  let wat = watOf splitSrc
+  expectAll [
+    labelFail
+      "tail engine (walk)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walk" wat))),
+    labelFail
+      "value engine (walkV)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walkV" wat))),
+  ]

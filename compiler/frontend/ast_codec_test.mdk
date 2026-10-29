@@ -38,7 +38,7 @@ sampleSize : Int
 sampleSize = 40
 
 sampleSeed : Int
-sampleSeed = 4394
+sampleSeed = 4395
 
 -- A linear congruential step; the sample is a function of the seed and the
 -- directory listing, so a failure replays.
@@ -721,6 +721,7 @@ dumpPat (PAs a0 a1 a2 a3) = SList [
 ]
 dumpPat (PRng a0 a1 a2) =
   SList [SAtom "ctor:Pat.PRng", dumpLit a0, dumpLit a1, dumpBool a2]
+dumpPat (POr a0) = SList [SAtom "ctor:Pat.POr", dumpList dumpPat a0]
 dumpPat (PRec a0 a1 a2) = SList [
   SAtom "ctor:Pat.PRec",
   dumpString a0,
@@ -894,6 +895,7 @@ dumpExpr (ESetLit a0 a1) =
   SList [SAtom "ctor:Expr.ESetLit", dumpString a0, dumpList dumpExpr a1]
 dumpExpr (EAsPat a0 a1) =
   SList [SAtom "ctor:Expr.EAsPat", dumpString a0, dumpExpr a1]
+dumpExpr (EOrPat a0) = SList [SAtom "ctor:Expr.EOrPat", dumpList dumpExpr a0]
 dumpExpr (EMethodRef a0) = SList [SAtom "ctor:Expr.EMethodRef", dumpString a0]
 dumpExpr (EDictApp a0) = SList [SAtom "ctor:Expr.EDictApp", dumpString a0]
 dumpExpr (EVarAt a0 a1) =

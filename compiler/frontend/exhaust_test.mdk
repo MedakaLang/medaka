@@ -6,13 +6,31 @@
    fixture's warnings are sorted and compared against its `.expected`. Does
    NOT cover the same fixtures' `.analyze.golden` (the diagnostics row). -}
 
-import frontend.exhaust.{exhaustToLines}
+import frontend.ast.{Lit(..), Pat(..)}
+import frontend.exhaust.{
+  Oracle,
+  buildOracle,
+  desugarPat,
+  exhaustToLines,
+  patHasRange,
+  patUnreachable,
+  renderWitness,
+  usefulWitness,
+}
 import frontend.parser.{parse}
 import fs.{fixtureFiles}
 import list.{sort, somes}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
-import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+import support.util.{joinWith}
+import test.{
+  Expectation,
+  expectAll,
+  expectAtLeast,
+  expectEqual,
+  expectNoFindings,
+  fail,
+}
 
 sortedWarnings : String -> String
 sortedWarnings text = trim (unlines (sort (lines text)))
@@ -41,3 +59,108 @@ check = match fixtureFiles "test/exhaust_fixtures"
     ]
 
 test "exhaust: guard warnings match each fixture's .expected" = check
+
+-- ── or-patterns, read natively ────────────────────────────────────────────
+
+colourOracle : Oracle
+colourOracle =
+  buildOracle
+    (parse """
+data C = Red | Green | Blue
+data Box a = Empty | Full a
+""")
+
+con : String -> Pat
+con c = PCon c []
+
+full : Pat -> Pat
+full p = PCon "Full" [p]
+
+orRows : List Pat -> List (List Pat)
+orRows pats = map (p => [desugarPat colourOracle p]) pats
+
+witnessOf : List Pat -> Option String
+witnessOf pats =
+  map
+    (ws => joinWith ", " (map renderWitness ws))
+    (usefulWitness colourOracle None (orRows pats) 1)
+
+test "an or-pattern arm covers the union of its alternatives" =
+  expectEqual
+    (None, Some "Blue")
+    (
+      witnessOf [POr [con "Red", con "Green"], con "Blue"],
+      witnessOf [POr [con "Red", con "Green"]],
+    )
+
+test "the witness for a nested or-pattern names the constructor it leaves out" =
+  expectEqual
+    (Some "Full Blue", Some "Empty")
+    (
+      witnessOf [con "Empty", full (POr [con "Red", con "Green"])],
+      witnessOf [full (POr [con "Red", con "Green", con "Blue"])],
+    )
+
+test "an alternative already covered by an earlier arm is unreachable" =
+  let prec = orRows [con "Red"]
+  expectEqual
+    (True, False)
+    (
+      patUnreachable
+        colourOracle
+        None
+        prec
+        (desugarPat colourOracle (con "Red")),
+      patUnreachable
+        colourOracle
+        None
+        prec
+        (desugarPat colourOracle (POr [con "Red", con "Green"])),
+    )
+
+test "an or-pattern arm is unreachable only when every alternative is covered" =
+  let prec = orRows [con "Red", con "Green"]
+  expectEqual
+    (True, False)
+    (
+      patUnreachable
+        colourOracle
+        None
+        prec
+        (desugarPat colourOracle (POr [con "Red", con "Green"])),
+      patUnreachable
+        colourOracle
+        None
+        prec
+        (desugarPat colourOracle (POr [con "Red", con "Blue"])),
+    )
+
+test "a range inside an alternative is seen by patHasRange" =
+  expectEqual
+    (True, False)
+    (
+      patHasRange (POr [PLit (LInt 1), PRng (LInt 2) (LInt 3) True]),
+      patHasRange (POr [PLit (LInt 1), PLit (LInt 2)]),
+    )
+
+-- ── ranges cover only what they name ──────────────────────────────────────
+
+rng : Pat
+rng = PRng (LInt 97) (LInt 122) True
+
+test "a range-only column leaves a witness" =
+  expectEqual (Some "_") (witnessOf [rng])
+
+test "a range plus a literal still leaves a witness" =
+  expectEqual (Some "_") (witnessOf [rng, PLit (LInt 65)])
+
+test "a range plus a catch-all is exhaustive" =
+  expectEqual None (witnessOf [rng, PWild])
+
+test "a range in an or-pattern behaves like the separate arms" =
+  expectEqual
+    (witnessOf [rng, PLit (LInt 65)])
+    (witnessOf [POr [rng, PLit (LInt 65)]])
+
+test "a range does not cover a constructor field" =
+  expectEqual (Some "Full _") (witnessOf [con "Empty", full rng])

@@ -1,19 +1,24 @@
 anyExistential : GraphCtx -> List Int -> Bool
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
+checkOrCandidateCap : TcEnv -> List Pat -> Unit
 closeExistentialScope : ModuleCtx -> ExistentialScope -> Mono -> Option Loc -> Unit
 ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
+inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
+inferOrPat : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
 inferPatAs : TcEnv -> String -> Loc -> BinderId -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
 inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
 inferPatList : TcEnv -> List Pat -> (Mono, List (String, Scheme))
+inferPatNode : TcEnv -> Pat -> (Mono, List (String, Scheme))
 inferPatRec : TcEnv -> String -> List RecPatField -> (Mono, List (String, Scheme))
 inferPatRecWith : TcEnv -> String -> RecordInfo -> List RecPatField -> (Mono, List (String, Scheme))
 inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
 inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
+inferPatsNode : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
 inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> BinderId -> Option Pat -> List (String, Scheme)
 inferRecPatFieldWith : TcEnv -> Mono -> String -> BinderId -> Option Pat -> List (String, Scheme)
 inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> List (String, Scheme)
@@ -22,6 +27,7 @@ instantiateCtorPattern : ModuleCtx -> Scheme -> Mono
 instantiateRecordOpening : ModuleCtx -> RecordInfo -> ((Mono, List (String, Mono)), List (Ref Authvar))
 openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
 openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
+orCandidateCap : Int
 parkOpenedExistentials : ModuleCtx -> Unit -> Unit
 patOpensExistentials : TcEnv -> Pat -> Bool
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
@@ -38,3 +44,4 @@ settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit
 substField : GraphCtx -> List (Int, Mono) -> List (Int, Authority) -> (String, Mono) -> (String, Mono)
 takeOpenedExistentials : ModuleCtx -> Unit -> List (Ref Authvar)
 takePatLits : ModuleCtx -> Unit -> List (Mono, Int, Option Loc)
+unifyOrBinder : TcEnv -> Int -> List (String, Scheme) -> (String, Scheme) -> Unit

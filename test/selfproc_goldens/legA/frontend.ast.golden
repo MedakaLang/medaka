@@ -1,3 +1,5 @@
+armCandidates : Pat -> List Guard -> List (Pat, List Guard)
+armHasOr : Pat -> List Guard -> Bool
 authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
 authTermsSurface : (String -> String) -> List EffParamTy -> String
@@ -31,6 +33,8 @@ fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
+guardCandidates : List Guard -> List (List Guard)
+guardHasOr : Guard -> Bool
 hostRows : String -> List (String, (List (String, String), a)) -> List (String, (String, a))
 hostSymbol : String -> List (String, String) -> Option String
 identOriginBuiltin : IdentOrigin
@@ -87,17 +91,31 @@ mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 negateLiteral : Int -> Int
 noBinderId : BinderId
 noDeclLoc : Loc
+orCandidates : Pat -> List Pat
+orCount : Pat -> Int
+orCountCeiling : Int
+orCountProduct : List Pat -> Int
 orElseLoc : Option Loc -> Option Loc -> Option Loc
+orExpand : Pat -> List Pat
+orProduct : List Pat -> List (List Pat)
+paramCandidates : List Pat -> List (List Pat)
 patBindings : Pat -> List String
 patBoundNames : Pat -> List String
+patHasOr : Pat -> Bool
 patternMark : Bool -> String
 propParamName : PropParam -> String
 qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String
 recFieldBindings : RecPatField -> List String
+recFieldCandidates : RecPatField -> List RecPatField
+recFieldCount : RecPatField -> Int
+recFieldHasOr : RecPatField -> Bool
+recFieldProduct : List RecPatField -> List (List RecPatField)
 recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
+satAdd : Int -> Int -> Int
+satMul : Int -> Int -> Int
 setDeclNameLoc : Loc -> Decl -> Decl
 startsWithAt : Array Char -> Bool
 stripLocE : Expr -> Expr

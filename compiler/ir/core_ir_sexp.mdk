@@ -227,6 +227,11 @@ export
 carmSexp : SexpMode -> CArm -> String
 carmSexp m (CArm pat guards body) =
   node "arm" [patSexp pat, slist (map (cguardSexp m) guards), cexprSexp m body]
+carmSexp m (CArmAlt pat guards owner) = node "armalt" [
+  patSexp pat,
+  slist (map (cguardSexp m) guards),
+  intToString owner,
+]
 
 export
 cguardSexp : SexpMode -> CGuard -> String

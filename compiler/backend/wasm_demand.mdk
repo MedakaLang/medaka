@@ -348,6 +348,14 @@ dField sc acc (CField _ _ e) = dExpr sc acc e
 dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
 dArm sc acc (CArm pat guards body) =
   dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
+dArm sc acc (CArmAlt pat guards _) =
+  dGuards (bindIn sc [pat]) (dPat acc pat) guards
+
+dGuards : DemandScope -> DemandAcc -> List CGuard -> DemandAcc
+dGuards _ acc [] = acc
+dGuards sc acc ((CGBool g) :: rest) = dGuards sc (dExpr sc acc g) rest
+dGuards sc acc ((CGBind p e) :: rest) =
+  dGuards (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest
 
 dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
 dGuarded sc acc [] body = dExpr sc acc body
@@ -896,6 +904,7 @@ armsStamp prog env ((CArm pat _ body) :: rest) =
   stampOrElse
     (cexprStamp prog (envBindPat pat env) body)
     (armsStamp prog env rest)
+armsStamp prog env ((CArmAlt _ _ _) :: rest) = armsStamp prog env rest
 
 export
 isPolyNumBinop : WasmTypeContext -> Env -> CExpr -> CExpr -> Bool
@@ -1581,17 +1590,30 @@ hStmts ctx refMode str acc env ((CSAssign _ x) :: rest) =
 
 hArm : WasmTypeContext -> Bool -> Bool -> Env -> HelperAcc -> CArm -> HelperAcc
 hArm ctx refMode str env acc (CArm pat guards b) =
-  let (acc, inner) =
-    fold
-      ((a, scope) g => match g
-        CGBool x => (hExpr ctx refMode str a scope x, scope)
-        CGBind p x => (
-          hExpr ctx refMode str (hPat refMode a p) scope x,
-          envBindPat p scope,
-        ))
-      (hPat refMode acc pat, envBindPat pat env)
-      guards
+  let (acc, inner) = hGuards ctx refMode str env acc pat guards
   hExpr ctx refMode str acc inner b
+hArm ctx refMode str env acc (CArmAlt pat guards _) =
+  fst (hGuards ctx refMode str env acc pat guards)
+
+-- an arm's pattern and guards, and the scope its body sees
+hGuards : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  Env ->
+  HelperAcc ->
+  Pat ->
+  List CGuard ->
+  (HelperAcc, Env)
+hGuards ctx refMode str env acc pat guards =
+  fold
+    ((a, scope) g => match g
+      CGBool x => (hExpr ctx refMode str a scope x, scope)
+      CGBind p x => (
+        hExpr ctx refMode str (hPat refMode a p) scope x,
+        envBindPat p scope,
+      ))
+    (hPat refMode acc pat, envBindPat pat env)
+    guards
 
 hTree : Bool -> HelperAcc -> CTree -> HelperAcc
 hTree True acc (CTFail (LetRefuted loc)) = locatedTrap acc loc

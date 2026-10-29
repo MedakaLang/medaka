@@ -1,5 +1,5 @@
 # META
-source_lines=2267
+source_lines=2268
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -1230,6 +1230,7 @@ patVarsTc (PCons h t) = patVarsTc h ++ patVarsTc t
 patVarsTc (PTuple ps) = patVarsListTc ps
 patVarsTc (PList ps) = patVarsListTc ps
 patVarsTc (PAs x _ _ p) = x :: patVarsTc p
+patVarsTc (POr (p :: _)) = patVarsTc p
 patVarsTc (PRec _ fields _) = flatMap recPatFieldVarsTc fields
 patVarsTc _ = []
 
@@ -2601,6 +2602,7 @@ implDeclWithReqs _ = []
 (DFunDef false "patVarsTc" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsTc") (EVar "p"))))
+(DFunDef false "patVarsTc" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsTc") (EVar "p")))
 (DFunDef false "patVarsTc" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldVarsTc")) (EVar "fields")))
 (DFunDef false "patVarsTc" (PWild) (EListLit))
 (DTypeSig true "patVarsListTc" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -3199,6 +3201,7 @@ implDeclWithReqs _ = []
 (DFunDef false "patVarsTc" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsTc") (EVar "p"))))
+(DFunDef false "patVarsTc" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsTc") (EVar "p")))
 (DFunDef false "patVarsTc" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldVarsTc")) (EVar "fields")))
 (DFunDef false "patVarsTc" (PWild) (EListLit))
 (DTypeSig true "patVarsListTc" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))

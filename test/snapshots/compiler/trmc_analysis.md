@@ -1,5 +1,5 @@
 # META
-source_lines=1734
+source_lines=1754
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 -- module carries no backend-specific emit state.  The EMIT (destination-passing loop) stays
 -- backend-specific and lives in each emitter.
 
-import frontend.ast.{Pat(..), Route(..), Addr(..)}
+import frontend.ast.{Pat(..), Route(..), Addr(..), Lit(..)}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -147,6 +147,7 @@ freeVarsArms : List String -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body) :: rest) =
   freeVars (patVars pat ++ b) body ++ freeVarsArms b rest
+freeVarsArms b ((CArmAlt _ _ _) :: rest) = freeVarsArms b rest
 
 export
 freeVarsStmts : List String -> List CStmt -> List String
@@ -304,6 +305,8 @@ trmcArmsOk ic ar self arity ((CArm _ guards body) :: rest) =
   trmcGuardsSelfFree self guards
     && trmcBodyOk ic ar self arity body
     && trmcArmsOk ic ar self arity rest
+trmcArmsOk ic ar self arity ((CArmAlt _ guards _) :: rest) =
+  trmcGuardsSelfFree self guards && trmcArmsOk ic ar self arity rest
 
 -- every guard expr is self-free (guards run before the arm body, not in tail
 -- position — a self-call there can't be a tail leaf).
@@ -348,6 +351,8 @@ trmcArmsHaveCons _ _ _ _ [] = False
 trmcArmsHaveCons ic ar self arity ((CArm _ _ body) :: rest) =
   trmcBodyHasCons ic ar self arity body
     || trmcArmsHaveCons ic ar self arity rest
+trmcArmsHaveCons ic ar self arity ((CArmAlt _ _ _) :: rest) =
+  trmcArmsHaveCons ic ar self arity rest
 
 -- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
 -- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
@@ -558,6 +563,9 @@ mentionsSelfMethodArms method tag ((CArm _ guards body) :: rest) =
   mentionsSelfMethodGuards method tag guards
     || mentionsSelfMethod method tag body
     || mentionsSelfMethodArms method tag rest
+mentionsSelfMethodArms method tag ((CArmAlt _ guards _) :: rest) =
+  mentionsSelfMethodGuards method tag guards
+    || mentionsSelfMethodArms method tag rest
 
 export
 mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
@@ -670,6 +678,8 @@ mentionsSelfDictArms self ((CArm _ guards body) :: rest) =
   mentionsSelfDictGuards self guards
     || mentionsSelfDict self body
     || mentionsSelfDictArms self rest
+mentionsSelfDictArms self ((CArmAlt _ guards _) :: rest) =
+  mentionsSelfDictGuards self guards || mentionsSelfDictArms self rest
 
 mentionsSelfDictGuards : String -> List CGuard -> Bool
 mentionsSelfDictGuards _ [] = False
@@ -846,6 +856,8 @@ clauseBodyOf (CClause _ body) = body
 export
 armBody : CArm -> CExpr
 armBody (CArm _ _ body) = body
+-- an or-pattern candidate has no body of its own: its owner arm carries it
+armBody (CArmAlt _ _ _) = CLit LUnit
 
 -- only ordinary bool guards (a refutable guard binder would complicate the leaf
 -- rewrite — reject the group).
@@ -1301,6 +1313,7 @@ allCallHeads _ _ = []
 allArmHeads : (String -> String) -> CArm -> List String
 allArmHeads cf (CArm _ guards body) =
   flatMap (dispGuardHeads cf) guards ++ allCallHeads cf body
+allArmHeads cf (CArmAlt _ guards _) = flatMap (dispGuardHeads cf) guards
 
 dispGuardHeads : (String -> String) -> CGuard -> List String
 dispGuardHeads cf (CGBool c) = allCallHeads cf c
@@ -1554,6 +1567,11 @@ dispArmsOk cf isFn fa fnSet root ((CArm _ guards body) :: rest) found =
   else match dispLeavesOk cf isFn fa fnSet root body found
     None => None
     Some f2 => dispArmsOk cf isFn fa fnSet root rest f2
+dispArmsOk cf isFn fa fnSet root ((CArmAlt _ guards _) :: rest) found =
+  if allBoolGuards guards then
+    dispArmsOk cf isFn fa fnSet root rest found
+  else
+    None
 
 -- classify a single LEAF.  peeled spine cons bottoming in a saturated user-fn call
 -- ⇒ ok + the bottom fn joins the group.  bare saturated tail-call to a user fn ⇒ ok
@@ -1681,6 +1699,8 @@ dispArmNonTailHeads : (String -> String) ->
 dispArmNonTailHeads cf isFn fa memberSet (CArm _ guards body) =
   flatMap (dispGuardHeads cf) guards
     ++ dispNonTailHeads cf isFn fa memberSet body
+dispArmNonTailHeads cf _ _ _ (CArmAlt _ guards _) =
+  flatMap (dispGuardHeads cf) guards
 
 dispStmtNonTailHeads : (String -> String) ->
   (String -> Bool) ->
@@ -1737,7 +1757,7 @@ export
 isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
@@ -1791,6 +1811,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -1837,6 +1858,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "trmcArmsOk" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))))
 (DFunDef false "trmcArmsOk" (PWild PWild PWild PWild (PList)) (EVar "True"))
 (DFunDef false "trmcArmsOk" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcBodyOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "body"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "trmcArmsOk" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
 (DTypeSig true "trmcGuardsSelfFree" (TyFun (TyCon "SelfRef") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool"))))
 (DFunDef false "trmcGuardsSelfFree" (PWild (PList)) (EVar "True"))
 (DFunDef false "trmcGuardsSelfFree" ((PVar "self") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFree") (EVar "self")) (EVar "c")) (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "rest"))))
@@ -1850,6 +1872,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "trmcArmsHaveCons" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))))
 (DFunDef false "trmcArmsHaveCons" (PWild PWild PWild PWild (PList)) (EVar "False"))
 (DFunDef false "trmcArmsHaveCons" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "trmcBodyHasCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsHaveCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "trmcArmsHaveCons" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsHaveCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest")))
 (DTypeSig true "isCtorTail" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
 (DFunDef false "isCtorTail" (PWild PWild (PVar "self") (PVar "arity") (PCon "CBinPrim" (PLit (LString "::")) (PVar "head") (PVar "tail") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "selfFree") (EVar "self")) (EVar "head")) (EApp (EApp (EApp (EVar "isSelfSatApp") (EVar "self")) (EVar "arity")) (EVar "tail"))))
 (DFunDef false "isCtorTail" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "ctor") PWild) (PVar "fields")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "ic") (EVar "ctor")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "fields")) (EApp (EVar "ar") (EVar "ctor")))) (EBinOp ">=" (EApp (EVar "ar") (EVar "ctor")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "ctorTailFieldsOk") (EVar "self")) (EVar "arity")) (EVar "fields")) (EVar "False"))) (arm PWild () (EVar "False"))))
@@ -1921,6 +1944,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "mentionsSelfMethodArms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodArms" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodArms" ((PVar "method") (PVar "tag") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "guards")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "body"))) (EApp (EApp (EApp (EVar "mentionsSelfMethodArms") (EVar "method")) (EVar "tag")) (EVar "rest"))))
+(DFunDef false "mentionsSelfMethodArms" ((PVar "method") (PVar "tag") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "guards")) (EApp (EApp (EApp (EVar "mentionsSelfMethodArms") (EVar "method")) (EVar "tag")) (EVar "rest"))))
 (DTypeSig true "mentionsSelfMethodGuards" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodGuards" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodGuards" ((PVar "method") (PVar "tag") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "c")) (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "rest"))))
@@ -1975,6 +1999,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig false "mentionsSelfDictArms" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictArms" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictArms" ((PVar "self") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "guards")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "body"))) (EApp (EApp (EVar "mentionsSelfDictArms") (EVar "self")) (EVar "rest"))))
+(DFunDef false "mentionsSelfDictArms" ((PVar "self") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "guards")) (EApp (EApp (EVar "mentionsSelfDictArms") (EVar "self")) (EVar "rest"))))
 (DTypeSig false "mentionsSelfDictGuards" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictGuards" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictGuards" ((PVar "self") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "c")) (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "rest"))))
@@ -2037,6 +2062,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "clauseBodyOf" ((PCon "CClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig true "armBody" (TyFun (TyCon "CArm") (TyCon "CExpr")))
 (DFunDef false "armBody" ((PCon "CArm" PWild PWild (PVar "body"))) (EVar "body"))
+(DFunDef false "armBody" ((PCon "CArmAlt" PWild PWild PWild)) (EApp (EVar "CLit") (EVar "LUnit")))
 (DTypeSig true "allBoolGuards" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "allBoolGuards" ((PList)) (EVar "True"))
 (DFunDef false "allBoolGuards" ((PCons (PCon "CGBool" PWild) (PVar "rest"))) (EApp (EVar "allBoolGuards") (EVar "rest")))
@@ -2126,6 +2152,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "allCallHeads" (PWild PWild) (EListLit))
 (DTypeSig false "allArmHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body"))))
+(DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))
 (DTypeSig false "dispGuardHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispGuardHeads" ((PVar "cf") (PCon "CGBool" (PVar "c"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "c")))
 (DFunDef false "dispGuardHeads" ((PVar "cf") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))
@@ -2168,6 +2195,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig false "dispArmsOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "dispArmsOk" (PWild PWild PWild PWild PWild (PList) (PVar "found")) (EApp (EVar "Some") (EVar "found")))
 (DFunDef false "dispArmsOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "found")) (EIf (EApp (EVar "not") (EApp (EVar "allBoolGuards") (EVar "guards"))) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "body")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "f2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "rest")) (EVar "f2"))))))
+(DFunDef false "dispArmsOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "found")) (EIf (EApp (EVar "allBoolGuards") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "rest")) (EVar "found")) (EVar "None")))
 (DTypeSig false "dispLeafOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "dispLeafOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PVar "e") (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (ELam ((PVar "f")) (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "fnSet")))) (EVar "e")) (arm (PCon "Some" (PTuple (PVar "heads") (PVar "f") PWild)) () (EIf (EApp (EApp (EVar "anyListM") (ELam ((PVar "h")) (EApp (EApp (EApp (EVar "dispCallsRoot") (EVar "cf")) (EVar "root")) (EVar "h")))) (EVar "heads")) (EVar "None") (EApp (EVar "Some") (EBinOp "::" (EVar "f") (EVar "found"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "e")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "f") (EApp (EVar "cf") (EVar "f0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "fnSet")) (EApp (EVar "isFn") (EVar "f"))) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "fa") (EVar "f")))) (EApp (EVar "Some") (EBinOp "::" (EVar "f") (EVar "found"))) (EIf (EApp (EApp (EApp (EVar "dispLeafIsBase") (EVar "cf")) (EVar "root")) (EVar "e")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))) (arm PWild () (EIf (EApp (EApp (EApp (EVar "dispLeafIsBase") (EVar "cf")) (EVar "root")) (EVar "e")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))))
 (DTypeSig false "dispLeafIsBase" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
@@ -2187,6 +2215,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PVar "leaf")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (ELam ((PVar "f")) (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "memberSet")))) (EVar "leaf")) (arm (PCon "Some" (PTuple (PVar "heads") PWild (PVar "args"))) () (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "heads")) (EApp (EApp (EVar "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "args")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "leaf")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "f") (EApp (EVar "cf") (EVar "f0"))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "memberSet")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "fa") (EVar "f")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "args")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "leaf")))))) (arm PWild () (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "leaf")))))))
 (DTypeSig false "dispArmNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispArmNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "body"))))
+(DFunDef false "dispArmNonTailHeads" ((PVar "cf") PWild PWild PWild (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))
 (DTypeSig false "dispStmtNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispStmtNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "ex")))
 (DFunDef false "dispStmtNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PCons (PVar "s") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeadsStmt") (EVar "cf")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "dispStmtNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "rest"))))
@@ -2200,7 +2229,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
@@ -2254,6 +2283,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -2300,6 +2330,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "trmcArmsOk" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))))
 (DFunDef false "trmcArmsOk" (PWild PWild PWild PWild (PList)) (EVar "True"))
 (DFunDef false "trmcArmsOk" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcBodyOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "body"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "trmcArmsOk" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
 (DTypeSig true "trmcGuardsSelfFree" (TyFun (TyCon "SelfRef") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool"))))
 (DFunDef false "trmcGuardsSelfFree" (PWild (PList)) (EVar "True"))
 (DFunDef false "trmcGuardsSelfFree" ((PVar "self") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFree") (EVar "self")) (EVar "c")) (EApp (EApp (EVar "trmcGuardsSelfFree") (EVar "self")) (EVar "rest"))))
@@ -2313,6 +2344,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "trmcArmsHaveCons" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))))
 (DFunDef false "trmcArmsHaveCons" (PWild PWild PWild PWild (PList)) (EVar "False"))
 (DFunDef false "trmcArmsHaveCons" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "trmcBodyHasCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsHaveCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "trmcArmsHaveCons" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcArmsHaveCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "rest")))
 (DTypeSig true "isCtorTail" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
 (DFunDef false "isCtorTail" (PWild PWild (PVar "self") (PVar "arity") (PCon "CBinPrim" (PLit (LString "::")) (PVar "head") (PVar "tail") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "selfFree") (EVar "self")) (EVar "head")) (EApp (EApp (EApp (EVar "isSelfSatApp") (EVar "self")) (EVar "arity")) (EVar "tail"))))
 (DFunDef false "isCtorTail" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "ctor") PWild) (PVar "fields")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "ic") (EVar "ctor")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "fields")) (EApp (EVar "ar") (EVar "ctor")))) (EBinOp ">=" (EApp (EVar "ar") (EVar "ctor")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "ctorTailFieldsOk") (EVar "self")) (EVar "arity")) (EVar "fields")) (EVar "False"))) (arm PWild () (EVar "False"))))
@@ -2384,6 +2416,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig true "mentionsSelfMethodArms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodArms" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodArms" ((PVar "method") (PVar "tag") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "guards")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "body"))) (EApp (EApp (EApp (EVar "mentionsSelfMethodArms") (EVar "method")) (EVar "tag")) (EVar "rest"))))
+(DFunDef false "mentionsSelfMethodArms" ((PVar "method") (PVar "tag") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "guards")) (EApp (EApp (EApp (EVar "mentionsSelfMethodArms") (EVar "method")) (EVar "tag")) (EVar "rest"))))
 (DTypeSig true "mentionsSelfMethodGuards" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodGuards" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodGuards" ((PVar "method") (PVar "tag") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "c")) (EApp (EApp (EApp (EVar "mentionsSelfMethodGuards") (EVar "method")) (EVar "tag")) (EVar "rest"))))
@@ -2438,6 +2471,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig false "mentionsSelfDictArms" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictArms" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictArms" ((PVar "self") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest"))) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "guards")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "body"))) (EApp (EApp (EVar "mentionsSelfDictArms") (EVar "self")) (EVar "rest"))))
+(DFunDef false "mentionsSelfDictArms" ((PVar "self") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "guards")) (EApp (EApp (EVar "mentionsSelfDictArms") (EVar "self")) (EVar "rest"))))
 (DTypeSig false "mentionsSelfDictGuards" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictGuards" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictGuards" ((PVar "self") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "c")) (EApp (EApp (EVar "mentionsSelfDictGuards") (EVar "self")) (EVar "rest"))))
@@ -2500,6 +2534,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "clauseBodyOf" ((PCon "CClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig true "armBody" (TyFun (TyCon "CArm") (TyCon "CExpr")))
 (DFunDef false "armBody" ((PCon "CArm" PWild PWild (PVar "body"))) (EVar "body"))
+(DFunDef false "armBody" ((PCon "CArmAlt" PWild PWild PWild)) (EApp (EVar "CLit") (EVar "LUnit")))
 (DTypeSig true "allBoolGuards" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "allBoolGuards" ((PList)) (EVar "True"))
 (DFunDef false "allBoolGuards" ((PCons (PCon "CGBool" PWild) (PVar "rest"))) (EApp (EVar "allBoolGuards") (EVar "rest")))
@@ -2589,6 +2624,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "allCallHeads" (PWild PWild) (EListLit))
 (DTypeSig false "allArmHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body"))))
+(DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))
 (DTypeSig false "dispGuardHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispGuardHeads" ((PVar "cf") (PCon "CGBool" (PVar "c"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "c")))
 (DFunDef false "dispGuardHeads" ((PVar "cf") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))
@@ -2631,6 +2667,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DTypeSig false "dispArmsOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "dispArmsOk" (PWild PWild PWild PWild PWild (PList) (PVar "found")) (EApp (EVar "Some") (EVar "found")))
 (DFunDef false "dispArmsOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "found")) (EIf (EApp (EVar "not") (EApp (EVar "allBoolGuards") (EVar "guards"))) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "body")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "f2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "rest")) (EVar "f2"))))))
+(DFunDef false "dispArmsOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "found")) (EIf (EApp (EVar "allBoolGuards") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnSet")) (EVar "root")) (EVar "rest")) (EVar "found")) (EVar "None")))
 (DTypeSig false "dispLeafOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "dispLeafOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnSet") (PVar "root") (PVar "e") (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (ELam ((PVar "f")) (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "fnSet")))) (EVar "e")) (arm (PCon "Some" (PTuple (PVar "heads") (PVar "f") PWild)) () (EIf (EApp (EApp (EVar "anyListM") (ELam ((PVar "h")) (EApp (EApp (EApp (EVar "dispCallsRoot") (EVar "cf")) (EVar "root")) (EVar "h")))) (EVar "heads")) (EVar "None") (EApp (EVar "Some") (EBinOp "::" (EVar "f") (EVar "found"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "e")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "f") (EApp (EVar "cf") (EVar "f0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "fnSet")) (EApp (EVar "isFn") (EVar "f"))) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "fa") (EVar "f")))) (EApp (EVar "Some") (EBinOp "::" (EVar "f") (EVar "found"))) (EIf (EApp (EApp (EApp (EVar "dispLeafIsBase") (EVar "cf")) (EVar "root")) (EVar "e")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))) (arm PWild () (EIf (EApp (EApp (EApp (EVar "dispLeafIsBase") (EVar "cf")) (EVar "root")) (EVar "e")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))))
 (DTypeSig false "dispLeafIsBase" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
@@ -2650,6 +2687,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PVar "leaf")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (ELam ((PVar "f")) (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "memberSet")))) (EVar "leaf")) (arm (PCon "Some" (PTuple (PVar "heads") PWild (PVar "args"))) () (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "heads")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "args")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "leaf")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "f") (EApp (EVar "cf") (EVar "f0"))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "f")) (EVar "memberSet")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "fa") (EVar "f")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "allCallHeads") (EVar "cf"))) (EVar "args")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "leaf")))))) (arm PWild () (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "leaf")))))))
 (DTypeSig false "dispArmNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispArmNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "body"))))
+(DFunDef false "dispArmNonTailHeads" ((PVar "cf") PWild PWild PWild (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))
 (DTypeSig false "dispStmtNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispStmtNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "ex")))
 (DFunDef false "dispStmtNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "memberSet") (PCons (PVar "s") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeadsStmt") (EVar "cf")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "dispStmtNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "memberSet")) (EVar "rest"))))

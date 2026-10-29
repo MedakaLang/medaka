@@ -210,6 +210,7 @@ internalExterns : List String
 internalGuardFor : Bool -> List String
 isAliasPath : UsePath -> Bool
 isAmbiguous : Env -> String -> Bool
+isBareVarPat : Pat -> Bool
 isCtorAmbiguous : Env -> String -> Bool
 isCtorOwnerKey : String -> Bool
 isEffectKey : String -> Bool
@@ -252,6 +253,7 @@ oneImportEffects : Map String ModuleExports -> UsePath -> List String
 oneImportIfaceMethods : Map String ModuleExports -> UsePath -> List (String, List String)
 oneImportedModuleValues : Map String ModuleExports -> UsePath -> List (String, List String)
 optStrEq : Option String -> String -> Bool
+orBinderErrors : Option Loc -> List Pat -> List ResError
 originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
 originTraceEnabled : Ref Bool
 originTraceLog : Ref (List (String, List Decl))
@@ -291,6 +293,7 @@ recPatHead : Option Loc -> Env -> String -> List ResError
 recUpdateField : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
 recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 reexportedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
+renderBinderSet : List String -> String
 resErrorCode : ResError -> DiagCode
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
@@ -310,6 +313,7 @@ resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List Re
 resolveToLines : List Decl -> List Decl -> List Decl -> String
 rewriteNonRec : List String -> ResError -> ResError
 runtimeExternTyOriginScope : List Decl -> Map String TyConOrigin
+sameBinders : List String -> List String -> Bool
 sameCase : Bool -> Bool -> Bool
 scopeAdd : String -> Scope -> Scope
 scopeExtend : List String -> Scope -> Scope

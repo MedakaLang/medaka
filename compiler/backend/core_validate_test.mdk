@@ -61,9 +61,11 @@ import ir.core_ir.{
   MethodResultFact(..),
   noDeclFacts,
   noImplSym,
+  synthBind,
   BinderSite(..),
   mapProgramBinders,
   CStmt(..),
+  CArm(..),
   CallMode(..),
   CallSite(..),
 }
@@ -865,6 +867,52 @@ test "(o) a tail flag against the position is refused, naming head and binding" 
           "tail: g is in tail position, stamped CallExact, but not flagged [in f]",
         ]
         (validateTails (reflag "g" False (lowered tailSrc))),
+    ),
+  ]
+
+-- `main` matching on a literal, whose arms are [arms], in a program otherwise
+-- lowered from `main = 0`.
+matchProgram : List CArm -> CProgram
+matchProgram arms = match lowered "main = 0"
+  CProgram _ ctors ctorTypes impls mctx facts =>
+    CProgram
+      [synthBind "main" [CClause [] (CMatch (CLit (LInt 1)) arms)]]
+      ctors
+      ctorTypes
+      impls
+      mctx
+      facts
+
+test "(o2) an or-pattern candidate shares the body of an earlier arm that has one" = expectEach
+  [
+    (
+      "owner is the arm before it",
+      expectEqual
+        []
+        (validateTails
+          (matchProgram [CArm PWild [] (CLit (LInt 1)), CArmAlt PWild [] 0])),
+    ),
+    (
+      "owner is a later entry",
+      expectEqual
+        [
+          "arm: or-pattern candidate 0 shares the body of arm 1, which is not an earlier arm with a body [in main]",
+        ]
+        (validateTails
+          (matchProgram [CArmAlt PWild [] 1, CArm PWild [] (CLit (LInt 1))])),
+    ),
+    (
+      "owner is itself a candidate",
+      expectEqual
+        [
+          "arm: or-pattern candidate 2 shares the body of arm 1, which is not an earlier arm with a body [in main]",
+        ]
+        (validateTails
+          (matchProgram [
+            CArm PWild [] (CLit (LInt 1)),
+            CArmAlt PWild [] 0,
+            CArmAlt PWild [] 1,
+          ])),
     ),
   ]
 

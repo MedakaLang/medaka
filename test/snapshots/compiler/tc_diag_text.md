@@ -1,5 +1,5 @@
 # META
-source_lines=1503
+source_lines=1515
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -600,6 +600,11 @@ existentialScopeMsg name =
   "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
 
 export
+orTooManyMsg : Int -> Int -> String
+orTooManyMsg n cap =
+  "the or-patterns here expand to \{intToString n} alternatives, over the limit of \{intToString cap}; split the pattern into nested matches"
+
+export
 discardedValueMsg : String -> String
 discardedValueMsg desc =
   "this statement's value (\{desc}) is discarded; only a `Unit` expression may stand alone as a statement"
@@ -902,6 +907,13 @@ export
 unreachableArmWarning : String
 unreachableArmWarning =
   "Warning: unreachable match arm; an earlier arm already covers this pattern"
+
+-- An alternative of an or-pattern that earlier arms, or the alternatives before it,
+-- already cover (W-UNREACHABLE-ALT); [k] counts from 1.
+export
+unreachableAltWarning : Int -> String
+unreachableAltWarning k =
+  "Warning: unreachable or-pattern alternative \{intToString k}; earlier arms or alternatives already cover it"
 
 -- Name the scrutinee type (skip the synthetic tuple type names, which aren't
 -- user-facing — the witness pattern already reads as a tuple).
@@ -1669,6 +1681,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "the type `")) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"))))
 (DTypeSig true "existentialScopeMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "existentialScopeMsg" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "this pattern opens the existential authority `")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EVar "name")))) (ELit (LString "`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"))))
+(DTypeSig true "orTooManyMsg" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "orTooManyMsg" ((PVar "n") (PVar "cap")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the or-patterns here expand to ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " alternatives, over the limit of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "cap")))) (ELit (LString "; split the pattern into nested matches"))))
 (DTypeSig true "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EVar "display") (EVar "desc"))) (ELit (LString ") is discarded; only a `Unit` expression may stand alone as a statement"))))
 (DTypeSig true "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
@@ -1764,6 +1778,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "binderNonExhaustiveMsg" ((PVar "ty") (PVar "witness")) (EBlock (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "handle `")) (EApp (EVar "display") (EVar "witness"))) (ELit (LString "` with a `match` or an `if let` instead of binding the pattern directly")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: refutable binding pattern")) (EApp (EVar "display") (EApp (EVar "tyOfMsg") (EVar "ty")))) (ELit (LString ": missing `"))) (EApp (EVar "display") (EVar "witness"))) (ELit (LString "`; "))) (EApp (EVar "display") (EVar "hint"))) (ELit (LString ""))) (EVar "hint")))))
 (DTypeSig true "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm; an earlier arm already covers this pattern")))
+(DTypeSig true "unreachableAltWarning" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "unreachableAltWarning" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: unreachable or-pattern alternative ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "; earlier arms or alternatives already cover it"))))
 (DTypeSig true "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tyOfMsg" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "tyOfMsg" ((PCon "Some" (PVar "k"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "tabKeyName") (EVar "k"))) (DoExpr (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " on `")) (EApp (EVar "display") (EVar "t"))) (ELit (LString "`")))))))
@@ -2124,6 +2140,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "the type `")) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"))))
 (DTypeSig true "existentialScopeMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "existentialScopeMsg" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "this pattern opens the existential authority `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EVar "name")))) (ELit (LString "`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"))))
+(DTypeSig true "orTooManyMsg" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "orTooManyMsg" ((PVar "n") (PVar "cap")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the or-patterns here expand to ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " alternatives, over the limit of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "cap")))) (ELit (LString "; split the pattern into nested matches"))))
 (DTypeSig true "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EMethodRef "display") (EVar "desc"))) (ELit (LString ") is discarded; only a `Unit` expression may stand alone as a statement"))))
 (DTypeSig true "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
@@ -2219,6 +2237,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "binderNonExhaustiveMsg" ((PVar "ty") (PVar "witness")) (EBlock (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "handle `")) (EApp (EMethodRef "display") (EVar "witness"))) (ELit (LString "` with a `match` or an `if let` instead of binding the pattern directly")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: refutable binding pattern")) (EApp (EMethodRef "display") (EApp (EVar "tyOfMsg") (EVar "ty")))) (ELit (LString ": missing `"))) (EApp (EMethodRef "display") (EVar "witness"))) (ELit (LString "`; "))) (EApp (EMethodRef "display") (EVar "hint"))) (ELit (LString ""))) (EVar "hint")))))
 (DTypeSig true "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm; an earlier arm already covers this pattern")))
+(DTypeSig true "unreachableAltWarning" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "unreachableAltWarning" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: unreachable or-pattern alternative ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "; earlier arms or alternatives already cover it"))))
 (DTypeSig true "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tyOfMsg" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "tyOfMsg" ((PCon "Some" (PVar "k"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "tabKeyName") (EVar "k"))) (DoExpr (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " on `")) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "`")))))))

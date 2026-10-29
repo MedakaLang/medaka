@@ -14,6 +14,7 @@
 import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   variantName,
   fieldName,
   Lit(..),
@@ -168,6 +169,10 @@ public export data Oracle = Oracle {
   -- `Bin`, and the first declaration answers for both.  A prelude constructor
   -- cannot be reused (#3471), so a program's own never loses to the prelude's.
   ctorSiblings : OrdMap (List String),
+  -- Whether the matrices queried under this oracle may hold an or-pattern.  An
+  -- oracle from `buildOracle` says so; `oracleForPats` clears it for a match
+  -- whose patterns hold none, so the head scan in `expandOrHeads` is skipped.
+  scanOr : Bool,
 }
 
 export
@@ -202,7 +207,14 @@ buildOracle prog =
       oracleMap
         (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
           ++ flatMap rowSiblings builtinTypeCtors),
+    scanOr = True,
   }
+
+-- [oracle] for a match whose patterns are [pats]: when none holds an or-pattern,
+-- no matrix built from them can, and `expandOrHeads` is skipped.
+export
+oracleForPats : Oracle -> List Pat -> Oracle
+oracleForPats oracle pats = { oracle | scanOr = anyList patHasOr pats }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
 -- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
@@ -377,7 +389,8 @@ desugarPat oracle (PList (h :: rest)) =
 desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
-desugarPat _ (PRng _ _ _) = PWild
+desugarPat _ (PRng lo hi incl) = PRng lo hi incl
+desugarPat oracle (POr alts) = POr (map (desugarPat oracle) alts)
 
 desugarRecPat : Oracle -> String -> List RecPatField -> Pat
 desugarRecPat oracle name fields = match oGetCtorFields oracle name
@@ -529,7 +542,27 @@ export
 useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_ :: _) [] = False
-useful oracle col0 pmat (h :: restQ) = usefulHead oracle col0 pmat h restQ
+useful oracle col0 pmat (h :: restQ) =
+  usefulHead oracle col0 (expandOrHeads oracle pmat) h restQ
+
+-- A row whose head is an or-pattern stands for one row per alternative.  Expanding
+-- at the head, where the column is being decided, keeps the matrix at its source
+-- size until a recursion step reaches the or-pattern.  An alternative may itself
+-- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
+expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
+expandOrHeads oracle pmat
+  | oracle.scanOr && anyList isOrHead pmat = expandOrRows pmat
+  | otherwise = pmat
+
+isOrHead : List Pat -> Bool
+isOrHead ((POr _) :: _) = True
+isOrHead _ = False
+
+expandOrRows : List (List Pat) -> List (List Pat)
+expandOrRows [] = []
+expandOrRows (((POr alts) :: tl) :: rows) =
+  expandOrRows (map (:: tl) alts ++ rows)
+expandOrRows (row :: rows) = row :: expandOrRows rows
 
 usefulHead : Oracle ->
   Option TabKey ->
@@ -542,6 +575,8 @@ usefulHead oracle _ pmat (PCon c args) restQ =
 usefulHead oracle _ pmat (PLit l) restQ =
   useful oracle None (specializeLit l pmat) restQ
     || useful oracle None (defaultMatrix pmat) restQ
+usefulHead oracle col0 pmat (POr alts) restQ =
+  anyList (a => useful oracle col0 pmat (a :: restQ)) alts
 usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
 usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
@@ -653,15 +688,12 @@ patUnreachable oracle col0 precMatrix qpat =
   not (useful oracle col0 precMatrix [qpat])
 
 -- Does the (RAW, pre-desugar) pattern contain a range anywhere?  `desugarPat`
--- collapses a `PRng` to `PWild` (the matrix machinery can't reason about the
--- values a range covers), which OVER-approximates its coverage.  That's harmless
--- for the exhaustiveness direction (it only ever makes the check miss a
--- non-exhaustive match — never a false warning), but for redundancy it would let
--- a preceding range arm masquerade as a catch-all and falsely flag every later
--- arm.  So `checkMatchRedundant` uses this to keep range-bearing arms OUT of the
--- accumulated covered-matrix: we never claim a range covers anything, staying
--- conservative (we may miss a genuinely-dead arm covered only by a range, but we
--- never flag a reachable one).
+-- keeps a `PRng` as a head that matches no constructor and no literal, so for
+-- exhaustiveness a range covers nothing (it UNDER-approximates: a set of ranges
+-- that together cover a finite type still warns).  Redundancy must not do the
+-- same in reverse: a range arm that is never accumulated into the covered matrix
+-- can only miss a dead arm, never flag a reachable one.  `checkMatchRedundant`
+-- uses this to keep range-bearing arms OUT of the covered matrix.
 export
 patHasRange : Pat -> Bool
 patHasRange (PRng _ _ _) = True
@@ -670,6 +702,7 @@ patHasRange (PCons h t) = patHasRange h || patHasRange t
 patHasRange (PTuple ps) = anyList patHasRange ps
 patHasRange (PList ps) = anyList patHasRange ps
 patHasRange (PAs _ _ _ p) = patHasRange p
+patHasRange (POr ps) = anyList patHasRange ps
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
 patHasRange _ = False
 
@@ -695,7 +728,8 @@ usefulWitness : Oracle ->
   Option (List Pat)
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_ :: _) 0 = None
-usefulWitness oracle col0 pmat ncols =
+usefulWitness oracle col0 pmat0 ncols =
+  let pmat = expandOrHeads oracle pmat0
   witnessWild oracle (columnCtors oracle col0 pmat) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by
@@ -804,6 +838,7 @@ isIrrefutablePat (PVar _ _ _) = True
 isIrrefutablePat PWild = True
 isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
 isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
+isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat _ = False
 
