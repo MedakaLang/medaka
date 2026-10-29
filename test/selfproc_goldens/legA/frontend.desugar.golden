@@ -67,7 +67,6 @@ joinLocs : List Loc -> Option Loc
 kvToTuple : (Expr, Expr) -> Expr
 lexCompareExprs : List (Expr, Expr) -> Expr
 locatedAt : Option Loc -> Expr -> Expr
-lookupAssoc : String -> List (String, BinderId) -> Option BinderId
 lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lowerContainerLiterals : List Decl -> List Decl
 lowerDo : Bool -> List DoStmt -> Expr

@@ -1,5 +1,5 @@
 # META
-source_lines=708
+source_lines=713
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -360,6 +360,11 @@ export
 bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
+
+export
+guardVars : CGuard -> List String
+guardVars (CGBind p _) = patVars p
+guardVars (CGBool _) = []
 
 -- Effectful left-to-right fold over a list, for its side effects only.
 export
@@ -819,6 +824,9 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
+(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -1061,6 +1069,9 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
+(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))

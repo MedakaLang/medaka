@@ -1,5 +1,5 @@
 # META
-source_lines=5627
+source_lines=5621
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -101,7 +101,7 @@ import support.util.{
 import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup
 }
-import list.{drop}
+import list.{drop, findMap}
 import eval.u64_halves as H
 import u64 as U64
 import support.opcount.{opBump}
@@ -1065,14 +1065,8 @@ matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
-  map (orderBinds (patBindings (POr alts))) (matchFirstAlt alts v)
+  map (orderBinds (patBindings (POr alts))) (findMap (a => matchPat a v) alts)
 matchPat _ _ = None
-
-matchFirstAlt : List Pat -> Value e -> Option (List (String, Value e))
-matchFirstAlt [] _ = None
-matchFirstAlt (p :: rest) v = match matchPat p v
-  Some binds => Some binds
-  None => matchFirstAlt rest v
 
 orderBinds : List String -> List (String, Value e) -> List (String, Value e)
 orderBinds names binds =
@@ -5637,7 +5631,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -6006,11 +6000,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EVar "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "matchFirstAlt") (EVar "alts")) (EVar "v"))))
+(DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EVar "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
-(DTypeSig false "matchFirstAlt" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "matchFirstAlt" ((PList) PWild) (EVar "None"))
-(DFunDef false "matchFirstAlt" ((PCons (PVar "p") (PVar "rest")) (PVar "v")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "v")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "Some") (EVar "binds"))) (arm (PCon "None") () (EApp (EApp (EVar "matchFirstAlt") (EVar "rest")) (EVar "v")))))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "orderBinds" ((PVar "names") (PVar "binds")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EListLit (ETuple (EVar "x") (EVar "v")))) (arm (PCon "None") () (EListLit))))) (EVar "names")))
 (DTypeSig false "inIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
@@ -7482,7 +7473,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -7851,11 +7842,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "matchFirstAlt") (EVar "alts")) (EVar "v"))))
+(DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
-(DTypeSig false "matchFirstAlt" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "matchFirstAlt" ((PList) PWild) (EVar "None"))
-(DFunDef false "matchFirstAlt" ((PCons (PVar "p") (PVar "rest")) (PVar "v")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "v")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "Some") (EVar "binds"))) (arm (PCon "None") () (EApp (EApp (EVar "matchFirstAlt") (EVar "rest")) (EVar "v")))))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "orderBinds" ((PVar "names") (PVar "binds")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EListLit (ETuple (EVar "x") (EVar "v")))) (arm (PCon "None") () (EListLit))))) (EVar "names")))
 (DTypeSig false "inIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))

@@ -65,7 +65,10 @@ test "exhaust: guard warnings match each fixture's .expected" = check
 colourOracle : Oracle
 colourOracle =
   buildOracle
-    (parse "data C = Red | Green | Blue\ndata Box a = Empty | Full a\n")
+    (parse """
+data C = Red | Green | Blue
+data Box a = Empty | Full a
+""")
 
 con : String -> Pat
 con c = PCon c []

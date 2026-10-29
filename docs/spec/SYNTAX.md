@@ -644,7 +644,7 @@ patterns starts an equation guard instead, as in `f x | x > 0 = x`.
 - An or-pattern wraps across lines only inside parentheses. A `|` ending a line, or a
   line beginning with `|`, is not a continuation:
 
-  ```medaka
+  ```medaka-nocheck: a layout illustration of a parenthesized or-pattern wrapped over three lines, which medaka fmt joins and which names constructors no data declaration here defines
   w k = match k
     (K1
       | K2
@@ -688,7 +688,8 @@ firstWins p = match p
 
 main =
   println "\{kind Red} \{kind Blue} \{kind (Gray 4)} \{kind (Mix Red Red)}"
-  println "\{firstWins (3, 4)} \{firstWins (5, 0)} \{firstWins (0, 7)} \{firstWins (1, 2)}"
+  println
+    "\{firstWins (3, 4)} \{firstWins (5, 0)} \{firstWins (0, 7)} \{firstWins (1, 2)}"
 ```
 
 Its output is:

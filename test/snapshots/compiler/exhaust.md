@@ -1,5 +1,5 @@
 # META
-source_lines=1242
+source_lines=1241
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -555,13 +555,12 @@ useful oracle col0 pmat (h :: restQ) =
 -- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
 expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
 expandOrHeads oracle pmat
-  | oracle.scanOr && anyOrHead pmat = expandOrRows pmat
+  | oracle.scanOr && anyList isOrHead pmat = expandOrRows pmat
   | otherwise = pmat
 
-anyOrHead : List (List Pat) -> Bool
-anyOrHead [] = False
-anyOrHead (((POr _) :: _) :: _) = True
-anyOrHead (_ :: rest) = anyOrHead rest
+isOrHead : List Pat -> Bool
+isOrHead ((POr _) :: _) = True
+isOrHead _ = False
 
 expandOrRows : List (List Pat) -> List (List Pat)
 expandOrRows [] = []
@@ -1409,11 +1408,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "useful" (PWild PWild (PCons PWild PWild) (PList)) (EVar "False"))
 (DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
 (DTypeSig false "expandOrHeads" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))))))
-(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EVar "anyOrHead") (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "anyOrHead" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
-(DFunDef false "anyOrHead" ((PList)) (EVar "False"))
-(DFunDef false "anyOrHead" ((PCons (PCons (PCon "POr" PWild) PWild) PWild)) (EVar "True"))
-(DFunDef false "anyOrHead" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyOrHead") (EVar "rest")))
+(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EApp (EVar "anyList") (EVar "isOrHead")) (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "isOrHead" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
+(DFunDef false "isOrHead" ((PCons (PCon "POr" PWild) PWild)) (EVar "True"))
+(DFunDef false "isOrHead" (PWild) (EVar "False"))
 (DTypeSig false "expandOrRows" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "expandOrRows" ((PList)) (EListLit))
 (DFunDef false "expandOrRows" ((PCons (PCons (PCon "POr" (PVar "alts")) (PVar "tl")) (PVar "rows"))) (EApp (EVar "expandOrRows") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "_s") (EVar "tl")))) (EVar "alts")) (EVar "rows"))))
@@ -1840,11 +1838,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "useful" (PWild PWild (PCons PWild PWild) (PList)) (EVar "False"))
 (DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
 (DTypeSig false "expandOrHeads" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))))))
-(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EVar "anyOrHead") (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "anyOrHead" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
-(DFunDef false "anyOrHead" ((PList)) (EVar "False"))
-(DFunDef false "anyOrHead" ((PCons (PCons (PCon "POr" PWild) PWild) PWild)) (EVar "True"))
-(DFunDef false "anyOrHead" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyOrHead") (EVar "rest")))
+(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EApp (EVar "anyList") (EVar "isOrHead")) (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "isOrHead" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
+(DFunDef false "isOrHead" ((PCons (PCon "POr" PWild) PWild)) (EVar "True"))
+(DFunDef false "isOrHead" (PWild) (EVar "False"))
 (DTypeSig false "expandOrRows" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "expandOrRows" ((PList)) (EListLit))
 (DFunDef false "expandOrRows" ((PCons (PCons (PCon "POr" (PVar "alts")) (PVar "tl")) (PVar "rows"))) (EApp (EVar "expandOrRows") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "_s") (EVar "tl")))) (EVar "alts")) (EVar "rows"))))

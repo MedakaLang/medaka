@@ -551,13 +551,12 @@ useful oracle col0 pmat (h :: restQ) =
 -- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
 expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
 expandOrHeads oracle pmat
-  | oracle.scanOr && anyOrHead pmat = expandOrRows pmat
+  | oracle.scanOr && anyList isOrHead pmat = expandOrRows pmat
   | otherwise = pmat
 
-anyOrHead : List (List Pat) -> Bool
-anyOrHead [] = False
-anyOrHead (((POr _) :: _) :: _) = True
-anyOrHead (_ :: rest) = anyOrHead rest
+isOrHead : List Pat -> Bool
+isOrHead ((POr _) :: _) = True
+isOrHead _ = False
 
 expandOrRows : List (List Pat) -> List (List Pat)
 expandOrRows [] = []

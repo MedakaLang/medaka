@@ -14,10 +14,11 @@
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import backend.emit_plan.{buildEmitPlan}
+import backend.wasm_emit_test_support_test.{linesWith}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import test.{expectAll, labelFail, expectEqual}
 import string.{contains, lines, startsWith}
-import list.{reverse, filter}
+import list.{reverse}
 import types.capability_manifest.{ManifestRequirement(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -62,10 +63,6 @@ takeBlock : List String -> List String -> List String
 takeBlock [] acc = reverse acc
 takeBlock (l :: rest) acc =
   if l == "}" then reverse (l :: acc) else takeBlock rest (l :: acc)
-
--- how many lines of `block` contain `needle`
-linesWith : String -> List String -> Int
-linesWith needle block = length (filter (l => contains needle l) block)
 
 -- the shared body's distinctive constant 7777777, as the tagged word the
 -- emitter writes

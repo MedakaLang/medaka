@@ -1596,7 +1596,7 @@ armGuardFor _ = deferPure []
 -- A match-arm pattern: alternatives `p | q | ...` joined by a bare `|`.  A `|`
 -- followed by something that is not a pattern ending the alternative (`=>`,
 -- `if`, another `|`) is the Haskell guard habit (`pat | cond => ...`) and
--- keeps the targeted `if` message; it is committed (`fatalP`) so the steer
+-- keeps the targeted `if` message; it is committed (`barSteer`) so the steer
 -- survives `armsLoop`'s backtracking (#591).
 parseArmPat : Parser Pat
 parseArmPat = defer

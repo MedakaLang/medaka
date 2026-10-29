@@ -357,6 +357,11 @@ bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
+export
+guardVars : CGuard -> List String
+guardVars (CGBind p _) = patVars p
+guardVars (CGBool _) = []
+
 -- Effectful left-to-right fold over a list, for its side effects only.
 export
 forEachU : (a -> Unit) -> List a -> Unit

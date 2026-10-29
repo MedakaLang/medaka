@@ -64,6 +64,7 @@ import support.util.{
   filterList,
   anyList,
   reverseL,
+  lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
@@ -1370,10 +1371,6 @@ sharedBinderId : (String -> BinderId) ->
 sharedBinderId mint shared x = match lookupAssoc x shared
   Some b => b
   None => mint x
-
-lookupAssoc : String -> List (String, BinderId) -> Option BinderId
-lookupAssoc _ [] = None
-lookupAssoc x ((y, b) :: rest) = if x == y then Some b else lookupAssoc x rest
 
 -- The (name, id) pairs a stamped pattern binds; an or-pattern reads its first
 -- alternative.
