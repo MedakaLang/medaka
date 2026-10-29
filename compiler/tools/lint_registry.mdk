@@ -1,0 +1,542 @@
+-- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
+-- registry, and rule-name selection.  Adding a rule = write one
+-- `List Decl -> List Finding` function and append one `Rule { … }` entry here.
+
+import frontend.ast.{Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
+import support.util.{contains, anyList, filterList, isEmptyL, isSome}
+import hash_map.{has}
+import regex.{RegexError(..), compile, mustCompile}
+import tools.lint_core.{CrossFileRule(..), Rule(..)}
+import tools.lint_shared.{
+  ruleNameAndThenPureMap,
+  ruleNameBindChainToDo,
+  ruleNameBindThenDestructure,
+  ruleNameBoolSimplify,
+  ruleNameClauseMap,
+  ruleNameCloneType,
+  ruleNameComplementPredicate,
+  ruleNameConcatToInterp,
+  ruleNameDeadCode,
+  ruleNameDerivable,
+  ruleNameDestructureInParam,
+  ruleNameDirectiveReason,
+  ruleNameDoubleReverse,
+  ruleNameDuplicateBody,
+  ruleNameIfMaxMin,
+  ruleNameLambdaSection,
+  ruleNameMatchParam,
+  ruleNameMatchToMap,
+  ruleNameMissingSignature,
+  ruleNameNotEq,
+  ruleNameOrElseStaircase,
+  ruleNamePreferAssignOp,
+  ruleNamePromissoryReader,
+  ruleNameRegexLiteral,
+  ruleNameRemParity,
+  ruleNameSelfShadowExtern,
+  ruleNameStdlibReimpl,
+  ruleNameTestBoolLiteralEqual,
+  ruleNameTestEqualInTrue,
+  ruleNameTestPreludeShadow,
+  ruleNameWhenUnless,
+}
+import tools.lint_rules_staging.{
+  andThenPureMapFix,
+  bindThenDestructureFix,
+  boolSimplifyFix,
+  complementPredicateFix,
+  concatToInterpFix,
+  destructureInParamFix,
+  doubleReverseFix,
+  duplicateBodySameFileRule,
+  ifMaxMinFix,
+  lambdaSectionFix,
+  matchParamFix,
+  matchToMapFix,
+  notEqFix,
+  preferAssignFix,
+  remParityFix,
+  ruleAndThenPureMap,
+  ruleBindChainToDo,
+  ruleBindThenDestructure,
+  ruleBoolSimplify,
+  ruleClauseMap,
+  ruleCloneType,
+  ruleComplementPredicate,
+  ruleConcatToInterp,
+  ruleDeadCode,
+  ruleDerivable,
+  ruleDestructureInParam,
+  ruleDirectiveReason,
+  ruleDoubleReverse,
+  ruleDuplicateBody,
+  ruleForPreferAssign,
+  ruleIfMaxMin,
+  ruleLambdaSection,
+  ruleMatchOnParam,
+  ruleMatchToMap,
+  ruleMissingSignature,
+  ruleNotEq,
+  ruleOrElseStaircase,
+  rulePromissoryReader,
+  ruleRegexLiteral,
+  ruleRemParity,
+  ruleSelfShadowExtern,
+  ruleStdlibReimpl,
+  ruleTestBoolLiteralEqual,
+  ruleTestEqualInTrue,
+  ruleTestPreludeShadow,
+  ruleWhenUnless,
+  testBoolLiteralEqualFix,
+  testEqualInTrueFix,
+  whenUnlessFix,
+}
+
+-- ── the registry ─────────────────────────────────────────────────────────────
+-- Each Rule is its own top-level binding (rather than an inline element of the
+-- `allRules` list literal) so the LLVM emitter's record-field scanner — which
+-- traverses binding bodies but not into list-literal elements — registers the
+-- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
+-- + append it to `allRules`.
+matchParamRule : Rule
+matchParamRule = Rule {
+  name = ruleNameMatchParam,
+  descr =
+    "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleMatchOnParam,
+  fix = Some matchParamFix,
+}
+
+derivableRule : Rule
+derivableRule = Rule {
+  name = ruleNameDerivable,
+  descr = "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDerivable,
+  fix = None,
+}
+
+stdlibReimplRule : Rule
+stdlibReimplRule = Rule {
+  name = ruleNameStdlibReimpl,
+  descr =
+    "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleStdlibReimpl,
+  fix = None,
+}
+
+bindThenDestructureRule : Rule
+bindThenDestructureRule = Rule {
+  name = ruleNameBindThenDestructure,
+  descr =
+    "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleBindThenDestructure,
+  fix = Some bindThenDestructureFix,
+}
+
+lambdaSectionRule : Rule
+lambdaSectionRule = Rule {
+  name = ruleNameLambdaSection,
+  descr =
+    "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleLambdaSection,
+  fix = Some lambdaSectionFix,
+}
+
+ifMaxMinRule : Rule
+ifMaxMinRule = Rule {
+  name = ruleNameIfMaxMin,
+  descr =
+    "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleIfMaxMin,
+  fix = Some ifMaxMinFix,
+}
+
+andThenPureMapRule : Rule
+andThenPureMapRule = Rule {
+  name = ruleNameAndThenPureMap,
+  descr =
+    "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleAndThenPureMap,
+  fix = Some andThenPureMapFix,
+}
+
+destructureInParamRule : Rule
+destructureInParamRule = Rule {
+  name = ruleNameDestructureInParam,
+  descr =
+    "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDestructureInParam,
+  fix = Some destructureInParamFix,
+}
+
+missingSignatureRule : Rule
+missingSignatureRule = Rule {
+  name = ruleNameMissingSignature,
+  descr =
+    "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleMissingSignature,
+  fix = None,
+}
+
+notEqRule : Rule
+notEqRule = Rule {
+  name = ruleNameNotEq,
+  descr =
+    "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleNotEq,
+  fix = Some notEqFix,
+}
+
+boolSimplifyRule : Rule
+boolSimplifyRule = Rule {
+  name = ruleNameBoolSimplify,
+  descr =
+    "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleBoolSimplify,
+  fix = Some boolSimplifyFix,
+}
+
+remParityRule : Rule
+remParityRule = Rule {
+  name = ruleNameRemParity,
+  descr =
+    "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleRemParity,
+  fix = Some remParityFix,
+}
+
+doubleReverseRule : Rule
+doubleReverseRule = Rule {
+  name = ruleNameDoubleReverse,
+  descr = "`reverse (reverse x)` is `x`. Drop the double reversal",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDoubleReverse,
+  fix = Some doubleReverseFix,
+}
+
+whenUnlessRule : Rule
+whenUnlessRule = Rule {
+  name = ruleNameWhenUnless,
+  descr =
+    "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleWhenUnless,
+  fix = Some whenUnlessFix,
+}
+
+complementPredicateRule : Rule
+complementPredicateRule = Rule {
+  name = ruleNameComplementPredicate,
+  descr =
+    "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleComplementPredicate,
+  fix = Some complementPredicateFix,
+}
+
+matchToMapRule : Rule
+matchToMapRule = Rule {
+  name = ruleNameMatchToMap,
+  descr =
+    "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleMatchToMap,
+  fix = Some matchToMapFix,
+}
+
+bindChainToDoRule : Rule
+bindChainToDoRule = Rule {
+  name = ruleNameBindChainToDo,
+  descr =
+    "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleBindChainToDo,
+  fix = None,
+}
+
+deadCodeRule : Rule
+deadCodeRule = Rule {
+  name = ruleNameDeadCode,
+  descr =
+    "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDeadCode,
+  fix = None,
+}
+
+concatToInterpRule : Rule
+concatToInterpRule = Rule {
+  name = ruleNameConcatToInterp,
+  descr =
+    "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleConcatToInterp,
+  fix = Some concatToInterpFix,
+}
+
+selfShadowExternRule : Rule
+selfShadowExternRule = Rule {
+  name = ruleNameSelfShadowExtern,
+  descr =
+    "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleSelfShadowExtern,
+  fix = None,
+}
+
+preferAssignOpRule : Rule
+preferAssignOpRule = Rule {
+  name = ruleNamePreferAssignOp,
+  descr =
+    "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleForPreferAssign,
+  fix = Some preferAssignFix,
+}
+
+promissoryReaderRule : Rule
+promissoryReaderRule = Rule {
+  name = ruleNamePromissoryReader,
+  descr =
+    "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)",
+  severity = SevWarning,
+  enabled = True,
+  check = rulePromissoryReader,
+  fix = None,
+}
+
+orElseStaircaseRule : Rule
+orElseStaircaseRule = Rule {
+  name = ruleNameOrElseStaircase,
+  descr =
+    "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleOrElseStaircase,
+  fix = None,
+}
+
+cloneTypeRule : Rule
+cloneTypeRule = Rule {
+  name = ruleNameCloneType,
+  descr =
+    "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleCloneType,
+  fix = None,
+}
+
+clauseMapRule : Rule
+clauseMapRule = Rule {
+  name = ruleNameClauseMap,
+  descr =
+    "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleClauseMap,
+  fix = None,
+}
+
+directiveReasonRule : Rule
+directiveReasonRule = Rule {
+  name = ruleNameDirectiveReason,
+  descr =
+    "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDirectiveReason,
+  fix = None,
+}
+
+regexLiteralRule : Rule
+regexLiteralRule = Rule {
+  name = ruleNameRegexLiteral,
+  descr =
+    "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleRegexLiteral,
+  fix = None,
+}
+
+testBoolLiteralEqualRule : Rule
+testBoolLiteralEqualRule = Rule {
+  name = ruleNameTestBoolLiteralEqual,
+  descr =
+    "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestBoolLiteralEqual,
+  fix = Some testBoolLiteralEqualFix,
+}
+
+testEqualInTrueRule : Rule
+testEqualInTrueRule = Rule {
+  name = ruleNameTestEqualInTrue,
+  descr =
+    "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestEqualInTrue,
+  fix = Some testEqualInTrueFix,
+}
+
+testPreludeShadowRule : Rule
+testPreludeShadowRule = Rule {
+  name = ruleNameTestPreludeShadow,
+  descr =
+    "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestPreludeShadow,
+  fix = None,
+}
+
+export
+allRules : List Rule
+allRules = [
+  matchParamRule,
+  derivableRule,
+  stdlibReimplRule,
+  bindThenDestructureRule,
+  lambdaSectionRule,
+  ifMaxMinRule,
+  andThenPureMapRule,
+  destructureInParamRule,
+  missingSignatureRule,
+  notEqRule,
+  boolSimplifyRule,
+  remParityRule,
+  doubleReverseRule,
+  whenUnlessRule,
+  complementPredicateRule,
+  matchToMapRule,
+  bindChainToDoRule,
+  deadCodeRule,
+  concatToInterpRule,
+  selfShadowExternRule,
+  preferAssignOpRule,
+  promissoryReaderRule,
+  orElseStaircaseRule,
+  cloneTypeRule,
+  clauseMapRule,
+  duplicateBodySameFileRule,
+  directiveReasonRule,
+  regexLiteralRule,
+  testBoolLiteralEqualRule,
+  testEqualInTrueRule,
+  testPreludeShadowRule,
+]
+
+-- ── the cross-file registry ───────────────────────────────────────────────────
+-- Each CrossFileRule is its own top-level binding.  Adding a cross-file rule =
+-- write its `check` fn + one binding here + append it to `allCrossFileRules`.
+duplicateBodyRule : CrossFileRule
+duplicateBodyRule = CrossFileRule {
+  name = ruleNameDuplicateBody,
+  descr =
+    "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDuplicateBody,
+}
+
+export
+allCrossFileRules : List CrossFileRule
+allCrossFileRules = [duplicateBodyRule]
+
+-- Every registered rule name, per-file and cross-file, as plain Strings.
+-- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be
+-- accepted silently — a typo'd rule name filters EVERY finding away and the run
+-- exits 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
+-- this list, so the CLI receives only these Strings.
+-- Deduped, and in registry order: `rule-duplicate-body` is registered TWICE
+-- (a same-file `Rule` and the cross-file `CrossFileRule` under one name), and
+-- printing it twice in the known set reads as a bug in the list.
+export
+allRuleNames : List String
+allRuleNames =
+  let perFile = map ruleNameOf allRules
+  perFile
+    ++ filterList
+      (n => not (contains n perFile))
+      (map crossRuleNameOf allCrossFileRules)
+
+ruleNameOf : Rule -> String
+ruleNameOf r = r.name
+
+crossRuleNameOf : CrossFileRule -> String
+crossRuleNameOf r = r.name
+
+-- ── runner ───────────────────────────────────────────────────────────────────
+
+-- The registry narrowed to the rules `--only`/`--disable` leave active, for runs
+-- whose findings are filtered in this same process.  Findings are still filtered
+-- by name afterwards; this only stops the excluded rules from computing.
+export
+selectRules : List String -> List String -> List Rule
+selectRules only disable = filterList (ruleSelected only disable) allRules
+
+ruleSelected : List String -> List String -> Rule -> Bool
+ruleSelected only disable r =
+  (isEmptyL only || contains r.name only) && not (contains r.name disable)
+
+-- Does `--only`/`--disable` leave the cross-file duplicate-body rule active?
+export
+crossFileSelected : List String -> List String -> Bool
+crossFileSelected only disable =
+  anyList (crossRuleActive only disable) allCrossFileRules
+
+export
+crossRuleActive : List String -> List String -> CrossFileRule -> Bool
+crossRuleActive only disable r =
+  r.enabled
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- ── cross-file rule: duplicate-body (copy-paste detector) ──────────────────────
+-- Flags a top-level `DFunDef` whose ELoc-stripped body (+ param-pattern shape) is
+-- structurally identical to a top-level function in a DIFFERENT file.  The
+-- structural key reuses `ir.sexp.exprSexp` — the location-stripped AST serializer
+-- the parse/sexp gates already rely on — so two copy-pasted bodies render to the
+-- same string.  HIGH-SIGNAL: only bodies at/above `dupComplexityThreshold` AST
+-- nodes are eligible, so trivial bodies (`main = …`, `f x = x`, one-field
+-- accessors) never fire.  Same-file duplicates are out of scope (≥2 distinct
+-- files required).  Deterministic: keys processed in sorted order, occurrences
+-- sorted by (file, line).
