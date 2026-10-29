@@ -4,7 +4,20 @@ model = "gpt-6.1-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-While only waiting for agents or running commands, with no independent work, prefer interruptible waits up to 180 seconds within the tool's limits. This replaces the generic one-minute wait and commentary cadence during idle waiting: announce the wait, then report meaningful changes. Keep the normal active-work cadence and all user-interruption, permission, sandbox, and safety requirements. Await the actual process exit, not a tool timeout. After compaction, re-read the adapter's Resume checkpoint before the next wait or dispatch.
+When waiting only for agents, with no independent work remaining,
+use collaboration.wait_agent with timeout_ms=1800000, within tool limits.
+Announce the wait once. Messages, completion, and user steering can interrupt
+it. On an ordinary timeout, wait again without status polling, unchanged-report
+reads, or heartbeat commentary. This replaces the generic commentary cadence
+while idle; keep the normal progress cadence during active work.
+
+For running commands, retain interruptible waits up to 180 seconds within
+their separate tool limits and await actual process completion. A tool timeout
+is not process completion. Preserve all user-interruption, permission, sandbox,
+and safety requirements.
+
+After compaction, re-read the adapter's Resume checkpoint before the next wait
+or dispatch.
 
 Read .codex/SPRINT.md and the body of .claude/agents/sprint-retro.md, then execute that role at sprint wrap-up. The shared role owns the half-page report and deletion bias. Write only the assigned sprint directory's RETRO.md; do not edit code, workflow instructions, or GitHub.
 

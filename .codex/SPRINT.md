@@ -97,10 +97,12 @@ After compaction or session resume, read this section before the next wait or
 dispatch. Preserve it by reference in the compaction handoff, alongside any
 active agent IDs, process sessions, and outer cell handles; do not create a ledger.
 
-- Re-establish both wait durations from the effective host instructions, not
-  just the inner poll: 180,000 outer / 170,000 inner when three-minute idle
-  waits are allowed, or 60,000 / 55,000 under a one-minute cap. Put the pragma
-  on every long execution call, including the initial command.
+- Re-establish agent and command waits separately from the effective host
+  instructions. For agents, use one direct `collaboration.wait_agent` call
+  with `timeout_ms: 1800000` when permitted. For commands, preserve both wait
+  durations: 180,000 outer / 170,000 inner when three-minute command waits
+  are allowed, or 60,000 / 55,000 under a one-minute cap. Put the pragma on
+  every long execution call, including the initial command.
 - Resume an outstanding outer cell before polling its process; do not restart
   a command because its handle was omitted from a summary. Require process exit.
 - New dispatches still use `fork_turns: none`; a fix still needs its own model
@@ -152,26 +154,25 @@ self-check answers inside Notes.
 
 ### Waiting for agents
 
-The one-minute cadence is a host instruction, not the wait tool's ceiling.
-For a local installation that should allow longer idle waits, Codex's
-user/profile `developer_instructions` can explicitly permit interruptible
-waits up to three minutes and meaningful-change updates while idle, retaining
-the active-work cadence and all interruption/permission rules. Verify the
-effective instructions in a fresh session; this adapter cannot override a
-higher-priority host rule.
+The local user/profile `developer_instructions` request interruptible agent
+waits of 30 minutes (`timeout_ms: 1800000`) when no independent work remains.
+Announce the wait once; messages, completion and user steering can return early.
+Keep normal updates during active work and all interruption/permission rules.
+Verify the effective instructions in a fresh session after configuration changes;
+this adapter cannot override a higher-priority host rule or a tool limit.
+Command waits retain their separate, shorter limits in the next section.
 
 Custom roles replace the inherited `developer_instructions` field. The three
 sprint role TOMLs therefore carry the idle-wait policy themselves; keep their
 policy paragraphs identical. Validate a fresh `sprint_implementer` and
 `sprint_reviewer`, not just a generic child, after changing this configuration.
 
-Prepare the next packet during useful overlap, then hold one
-`collaboration.wait_agent` call while there is no independent work. Use the
-longest timeout permitted by the host instructions: for example, 180,000 ms
-when allowed, or 60,000 ms when the host caps waits at one minute. A long wait
-can return early for a message or completion; its timeout is not a mandatory
-delay. Do not shorten it to audit status, read unchanged reports, or send
-"still running?" messages.
+Prepare the next packet during useful overlap, then hold one direct
+`collaboration.wait_agent({"timeout_ms":1800000})` call while there is no
+independent work. Reduce that duration only when effective host instructions
+or the tool impose a shorter limit. Do not wrap an agent wait in the command
+polling loop, shorten it to audit status, read unchanged reports, or send
+"still running?" messages. The timeout is a maximum, not a mandatory delay.
 
 A wakeup is not necessarily completion. Handle progress, questions, and user
 intervention, then wait again for the outstanding workers' final reports.
