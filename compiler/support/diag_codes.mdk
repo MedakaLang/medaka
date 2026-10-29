@@ -189,6 +189,7 @@ public export data DiagCode =
   | TNonrecValueLet
   | TNotAFunction
   | TOrPatternBinderTypes
+  | TOrPatternTooMany
   | TPhantomMethod
   | TRecursiveAlias
   | TRequiresCycle
@@ -384,6 +385,7 @@ codeText TNoImpl = "T-NO-IMPL"
 codeText TNonrecValueLet = "T-NONREC-VALUE-LET"
 codeText TNotAFunction = "T-NOT-A-FUNCTION"
 codeText TOrPatternBinderTypes = "T-OR-PATTERN-BINDER-TYPES"
+codeText TOrPatternTooMany = "T-OR-PATTERN-TOO-MANY"
 codeText TPhantomMethod = "T-PHANTOM-METHOD"
 codeText TRecursiveAlias = "T-RECURSIVE-ALIAS"
 codeText TRequiresCycle = "T-REQUIRES-CYCLE"
@@ -480,13 +482,14 @@ allDiagCodes = [
   TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
   TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
   TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
-  TOrPatternBinderTypes, TPhantomMethod, TRecursiveAlias, TRequiresCycle,
-  TRequiresDepth, TRequiresUnrouted, TResidual, TSigOverExpansive,
-  TTargetCapability, TTargetNoBinding, TTargetNotProvided, TTypeMismatch,
-  TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord,
-  TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow,
-  WIncomparableImpls, WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
-  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableAlt, WUnreachableArm
+  TOrPatternBinderTypes, TOrPatternTooMany, TPhantomMethod, TRecursiveAlias,
+  TRequiresCycle, TRequiresDepth, TRequiresUnrouted, TResidual,
+  TSigOverExpansive, TTargetCapability, TTargetNoBinding, TTargetNotProvided,
+  TTypeMismatch, TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField,
+  TUnknownRecord, TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive,
+  WImportMethodShadow, WIncomparableImpls, WKeepIrFailed, WMainMissing,
+  WMainShape, WNonexhaustive, WNonexhaustiveClauses, WPreludeMethodShadow,
+  WUnreachableAlt, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.

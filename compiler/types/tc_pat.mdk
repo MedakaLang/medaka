@@ -36,6 +36,7 @@ import types.tc_diag_text.{
   boxedLitPatMsg,
   existentialEscapeMsg,
   existentialScopeMsg,
+  orTooManyMsg,
   unknownCtorMsg,
   unknownFieldMsg,
   unknownRecordMsg,
@@ -72,6 +73,7 @@ import frontend.ast.{
   RecPatField(..),
   isBoxed64Head,
   isTaggedFixedHead,
+  orCountProduct,
   orElseLoc,
 }
 import types.effect_bindings.{BindingSummary(..)}
@@ -133,32 +135,59 @@ openExistentials mctx cells =
     cells ++ mctx.mcCells.openedExistentialsRef.value
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
+-- The entry points for a pattern context: a clause's parameters, an arm's
+-- pattern, a let or guard pattern.  Lowering expands the whole context's
+-- or-patterns into their product of candidates, so the cap is checked here, once
+-- per context, and recursion goes through `inferPatNode`.
 export
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
-inferPat env (PVar x xloc bid) =
+inferPat env p =
+  checkOrCandidateCap env [p]
+  inferPatNode env p
+
+export
+inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
+inferPats env ps =
+  checkOrCandidateCap env ps
+  inferPatsNode env ps
+
+checkOrCandidateCap : TcEnv -> List Pat -> Unit
+checkOrCandidateCap env ps =
+  let n = orCountProduct ps
+  if n > orCandidateCap then
+    pushTypeError
+      env.teDyn.dcModule
+      TOrPatternTooMany
+      (orTooManyMsg n orCandidateCap)
+
+orCandidateCap : Int
+orCandidateCap = 256
+
+inferPatNode : TcEnv -> Pat -> (Mono, List (String, Scheme))
+inferPatNode env (PVar x xloc bid) =
   let v = freshVar env.teDyn.dcModule ()
   recordLocalBind env.teDyn.dcModule x (Some xloc) bid v
   (v, [(x, monoScheme v)])
-inferPat env PWild = (freshVar env.teDyn.dcModule (), [])
-inferPat env (PLit (LInt n)) = inferIntLitPat env.teDyn.dcModule n
-inferPat env (PLit (LU64 hi lo)) = inferU64LitPat env.teDyn.dcModule hi lo
-inferPat env (PLit (LI64 hi lo)) =
+inferPatNode env PWild = (freshVar env.teDyn.dcModule (), [])
+inferPatNode env (PLit (LInt n)) = inferIntLitPat env.teDyn.dcModule n
+inferPatNode env (PLit (LU64 hi lo)) = inferU64LitPat env.teDyn.dcModule hi lo
+inferPatNode env (PLit (LI64 hi lo)) =
   refuseBoxedLitPat
     env.teDyn.dcModule
     "I64"
     (i64HalvesLiteral hi lo)
     env.teDyn.dcModule.mcLoc
   (tconBuiltin "I64", [])
-inferPat env (PLit l) = (litType l, [])
-inferPat env (PCon name pats) = inferPatCon env name pats
-inferPat env (PTuple pats) = inferPatTuple env pats
-inferPat env (PCons h t) = inferPatCons env h t
-inferPat env (PList pats) = inferPatList env pats
-inferPat env (PAs x xloc bid p) = inferPatAs env x xloc bid p
-inferPat env (PRec name fields _) = inferPatRec env name fields
-inferPat env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
-inferPat env (POr alts) = inferOrPat env alts
-inferPat env _ = panic "typecheck: unsupported pattern"
+inferPatNode env (PLit l) = (litType l, [])
+inferPatNode env (PCon name pats) = inferPatCon env name pats
+inferPatNode env (PTuple pats) = inferPatTuple env pats
+inferPatNode env (PCons h t) = inferPatCons env h t
+inferPatNode env (PList pats) = inferPatList env pats
+inferPatNode env (PAs x xloc bid p) = inferPatAs env x xloc bid p
+inferPatNode env (PRec name fields _) = inferPatRec env name fields
+inferPatNode env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
+inferPatNode env (POr alts) = inferOrPat env alts
+inferPatNode env _ = panic "typecheck: unsupported pattern"
 
 -- An or-pattern matches the scrutinee through any alternative, so every alternative has
 -- the scrutinee's type and binds each name at one type.  The first alternative's binders
@@ -168,14 +197,14 @@ inferPat env _ = panic "typecheck: unsupported pattern"
 inferOrPat : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferOrPat env [] = (freshVar env.teDyn.dcModule (), [])
 inferOrPat env (first :: rest) =
-  let fr = inferPat env first
+  let fr = inferPatNode env first
   inferOrAlts env fr 2 rest
   fr
 
 inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
 inferOrAlts _ _ _ [] = ()
 inferOrAlts env fr k (alt :: rest) =
-  let ar = inferPat env alt
+  let ar = inferPatNode env alt
   unifyIn env.teDyn (fst fr) (fst ar)
   each (unifyOrBinder env k (snd ar)) (snd fr)
   inferOrAlts env fr (k + 1) rest
@@ -278,7 +307,7 @@ inferRecPatFieldWith env ft fname bid None =
   recordBinderType env.teDyn.dcModule.mcGraph bid fname ft None False
   [(fname, monoScheme ft)]
 inferRecPatFieldWith env ft _ _ (Some p) =
-  let pr = inferPat env p
+  let pr = inferPatNode env p
   bindFrom env.teDyn (fst pr) ft
   snd pr
 
@@ -412,35 +441,35 @@ inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatCon env name pats = match lookupCtor env name
   None =>
     pushTypeError env.teDyn.dcModule TUnknownCtor (unknownCtorMsg name)
-    let pr = inferPats env pats
+    let pr = inferPatsNode env pats
     (freshVar env.teDyn.dcModule (), snd pr)
   Some scheme => inferPatConWith env scheme pats
 
 inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
 inferPatConWith env scheme pats =
   let ctorType = instantiateCtorPattern env.teDyn.dcModule scheme
-  let pr = inferPats env pats
+  let pr = inferPatsNode env pats
   let resultVar = freshVar env.teDyn.dcModule ()
   unifyIn env.teDyn ctorType (foldrFun (fst pr) resultVar)
   (resultVar, snd pr)
 
 export
-inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
-inferPats env [] = ([], [])
-inferPats env (p :: ps) =
-  let pr = inferPat env p
-  let rest = inferPats env ps
+inferPatsNode : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
+inferPatsNode env [] = ([], [])
+inferPatsNode env (p :: ps) =
+  let pr = inferPatNode env p
+  let rest = inferPatsNode env ps
   (fst pr :: fst rest, snd pr ++ snd rest)
 
 inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPatTuple env pats =
-  let pr = inferPats env pats
+  let pr = inferPatsNode env pats
   (tupleMono (fst pr), snd pr)
 
 inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
 inferPatCons env h t =
-  let hr = inferPat env h
-  let tr = inferPat env t
+  let hr = inferPatNode env h
+  let tr = inferPatNode env t
   let listTy = TApp (tconBuiltin "List") (fst hr)
   unifyIn env.teDyn (fst tr) listTy
   (listTy, snd hr ++ snd tr)
@@ -448,7 +477,7 @@ inferPatCons env h t =
 inferPatList : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPatList env pats =
   let elem = freshVar env.teDyn.dcModule ()
-  let pr = inferPats env pats
+  let pr = inferPatsNode env pats
   unifyAll env.teDyn elem (fst pr)
   (TApp (tconBuiltin "List") elem, snd pr)
 
@@ -459,7 +488,7 @@ inferPatAs : TcEnv ->
   Pat ->
   (Mono, List (String, Scheme))
 inferPatAs env x xloc bid p =
-  let pr = inferPat env p
+  let pr = inferPatNode env p
   recordLocalBind env.teDyn.dcModule x (Some xloc) bid (fst pr)
   (fst pr, (x, monoScheme (fst pr)) :: snd pr)
 

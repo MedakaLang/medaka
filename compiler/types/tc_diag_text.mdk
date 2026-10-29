@@ -596,6 +596,11 @@ existentialScopeMsg name =
   "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
 
 export
+orTooManyMsg : Int -> Int -> String
+orTooManyMsg n cap =
+  "the or-patterns here expand to \{intToString n} alternatives, over the limit of \{intToString cap}; split the pattern into nested matches"
+
+export
 discardedValueMsg : String -> String
 discardedValueMsg desc =
   "this statement's value (\{desc}) is discarded; only a `Unit` expression may stand alone as a statement"

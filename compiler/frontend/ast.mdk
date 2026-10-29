@@ -848,6 +848,37 @@ export
 orCandidates : Pat -> List Pat
 orCandidates p = if patHasOr p then orExpand p else [p]
 
+-- How many candidates `orCandidates` would build for [p], counted without
+-- building them; saturates at `orCountCeiling` so the count itself never overflows.
+export
+orCount : Pat -> Int
+orCount (POr ps) = fold (n p => satAdd n (orCount p)) 0 ps
+orCount (PCon _ ps) = orCountProduct ps
+orCount (PCons h t) = satMul (orCount h) (orCount t)
+orCount (PTuple ps) = orCountProduct ps
+orCount (PList ps) = orCountProduct ps
+orCount (PAs _ _ _ p) = orCount p
+orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
+orCount _ = 1
+
+-- The candidate count of a parameter list, as `paramCandidates` would build it.
+export
+orCountProduct : List Pat -> Int
+orCountProduct ps = fold (n p => satMul n (orCount p)) 1 ps
+
+recFieldCount : RecPatField -> Int
+recFieldCount (RecPatField _ _ _ (Some p)) = orCount p
+recFieldCount _ = 1
+
+orCountCeiling : Int
+orCountCeiling = 1000000
+
+satAdd : Int -> Int -> Int
+satAdd a b = min orCountCeiling (a + b)
+
+satMul : Int -> Int -> Int
+satMul a b = min orCountCeiling (a * b)
+
 orExpand : Pat -> List Pat
 orExpand (POr ps) = flatMap orExpand ps
 orExpand (PCon c ps) = map (PCon c) (orProduct ps)

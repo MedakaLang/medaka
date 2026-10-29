@@ -14,6 +14,7 @@
 import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   variantName,
   fieldName,
   Lit(..),
@@ -168,6 +169,10 @@ public export data Oracle = Oracle {
   -- `Bin`, and the first declaration answers for both.  A prelude constructor
   -- cannot be reused (#3471), so a program's own never loses to the prelude's.
   ctorSiblings : OrdMap (List String),
+  -- Whether the matrices queried under this oracle may hold an or-pattern.  An
+  -- oracle from `buildOracle` says so; `oracleForPats` clears it for a match
+  -- whose patterns hold none, so the head scan in `expandOrHeads` is skipped.
+  scanOr : Bool,
 }
 
 export
@@ -202,7 +207,14 @@ buildOracle prog =
       oracleMap
         (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
           ++ flatMap rowSiblings builtinTypeCtors),
+    scanOr = True,
   }
+
+-- [oracle] for a match whose patterns are [pats]: when none holds an or-pattern,
+-- no matrix built from them can, and `expandOrHeads` is skipped.
+export
+oracleForPats : Oracle -> List Pat -> Oracle
+oracleForPats oracle pats = { oracle | scanOr = anyList patHasOr pats }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
 -- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
@@ -531,15 +543,15 @@ useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_ :: _) [] = False
 useful oracle col0 pmat (h :: restQ) =
-  usefulHead oracle col0 (expandOrHeads pmat) h restQ
+  usefulHead oracle col0 (expandOrHeads oracle pmat) h restQ
 
 -- A row whose head is an or-pattern stands for one row per alternative.  Expanding
 -- at the head, where the column is being decided, keeps the matrix at its source
 -- size until a recursion step reaches the or-pattern.  An alternative may itself
 -- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
-expandOrHeads : List (List Pat) -> List (List Pat)
-expandOrHeads pmat
-  | anyOrHead pmat = expandOrRows pmat
+expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
+expandOrHeads oracle pmat
+  | oracle.scanOr && anyOrHead pmat = expandOrRows pmat
   | otherwise = pmat
 
 anyOrHead : List (List Pat) -> Bool
@@ -718,7 +730,7 @@ usefulWitness : Oracle ->
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_ :: _) 0 = None
 usefulWitness oracle col0 pmat0 ncols =
-  let pmat = expandOrHeads pmat0
+  let pmat = expandOrHeads oracle pmat0
   witnessWild oracle (columnCtors oracle col0 pmat) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by

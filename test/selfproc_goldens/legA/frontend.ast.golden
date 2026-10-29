@@ -92,6 +92,9 @@ negateLiteral : Int -> Int
 noBinderId : BinderId
 noDeclLoc : Loc
 orCandidates : Pat -> List Pat
+orCount : Pat -> Int
+orCountCeiling : Int
+orCountProduct : List Pat -> Int
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 orExpand : Pat -> List Pat
 orProduct : List Pat -> List (List Pat)
@@ -105,11 +108,14 @@ qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String
 recFieldBindings : RecPatField -> List String
 recFieldCandidates : RecPatField -> List RecPatField
+recFieldCount : RecPatField -> Int
 recFieldHasOr : RecPatField -> Bool
 recFieldProduct : List RecPatField -> List (List RecPatField)
 recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
+satAdd : Int -> Int -> Int
+satMul : Int -> Int -> Int
 setDeclNameLoc : Loc -> Decl -> Decl
 startsWithAt : Array Char -> Bool
 stripLocE : Expr -> Expr

@@ -638,6 +638,20 @@ bind (`pat <- e`), and as a function-clause parameter. A function-clause paramet
 must be parenthesized, as in `side (L n | R n) = n`. A bare `|` after the clause
 patterns starts an equation guard instead, as in `f x | x > 0 = x`.
 
+- A pattern's or-patterns expand to the product of their alternatives, and a pattern
+  context (one arm, clause or binding) may expand to at most 256 of them. Beyond that,
+  `check` reports `T-OR-PATTERN-TOO-MANY`; split the pattern into nested matches.
+- An or-pattern wraps across lines only inside parentheses. A `|` ending a line, or a
+  line beginning with `|`, is not a continuation:
+
+  ```medaka
+  w k = match k
+    (K1
+      | K2
+      | K3) => 1
+    K4 => 0
+  ```
+
 - Every alternative binds the same names, and each name has one type in every
   alternative. A name mismatch is the resolve error `R-OR-PATTERN-BINDERS`; a type
   mismatch is the type error `T-OR-PATTERN-BINDER-TYPES`.

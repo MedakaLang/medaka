@@ -251,6 +251,7 @@ The tables below stay as narrative.
 | `T-NONREC-VALUE-LET` | live | non-recursive value let |
 | `T-NOT-A-FUNCTION` | live | not a function |
 | `T-OR-PATTERN-BINDER-TYPES` | live | the alternatives of an or-pattern bind a name at different types |
+| `T-OR-PATTERN-TOO-MANY` | live | the or-patterns of one pattern context expand to more than 256 alternatives |
 | `T-PHANTOM-METHOD` | live | an interface method whose type never mentions the interface variable |
 | `T-RECURSIVE-ALIAS` | live | recursive alias |
 | `T-REQUIRES-CYCLE` | live | `requires` chain repeats a goal |
@@ -549,6 +550,7 @@ kebab-case; never renumber (append only).
 | `R-OR-PATTERN-BINDERS` | `OrPatternBinders` — every alternative of an or-pattern must bind the same names. When an alternative is a bare lowercase identifier (`n \| otherwise => ...`), the message adds the steer that a match-arm guard uses `if`, not `\|` |
 | `R-OR-PATTERN-MISPLACED` | `OrPatternMisplaced` |
 | `T-OR-PATTERN-BINDER-TYPES` | every alternative of an or-pattern must bind each name at one type; the message names both alternatives and their types |
+| `T-OR-PATTERN-TOO-MANY` | the product of the or-pattern alternatives in one arm, clause or binding pattern may not exceed 256; the message names the count and the limit and suggests nested matches |
 | `R-NONREC-VALUE-LET` | `NonRecursiveValueLet` |
 | `R-DUPLICATE-BINDING` | `DuplicateBinding` |
 | `R-DUP-BINDING` | `DuplicateValueBinding` |

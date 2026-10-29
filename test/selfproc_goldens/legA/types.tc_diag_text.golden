@@ -124,6 +124,7 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 notAFunctionMsgFor : Option String -> String -> String
 openRowHint : List Atom -> String
+orTooManyMsg : Int -> Int -> String
 ordinalSentinelMsg : String
 ordinalWord : Int -> String
 ordinaryInPatternSlotMsg : String -> String -> String

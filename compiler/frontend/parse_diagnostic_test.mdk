@@ -218,6 +218,22 @@ f x
         (2, 2, 2, 6)
         [("type", "type_")],
     ),
+    (
+      "bar guard carries the if fix",
+      expectSource
+        "f n = match n\n  m | m > 0 => 1"
+        "P-GUARD-BAR-IN-MATCH"
+        (2, 4, 2, 5)
+        [("|", "if")],
+    ),
+    (
+      "wrapped or-pattern carries no fix",
+      expectSource
+        "data K = K1 | K2 | K3\nf k = match k\n  K1 | K2 |\n    K3 => 1\n  _ => 0"
+        "P-GUARD-BAR-IN-MATCH"
+        (3, 10, 3, 11)
+        [],
+    ),
     ("recoverable", expectSource "f x = = 1" "P-PARSE" (1, 6, 1, 7) []),
   ]
 

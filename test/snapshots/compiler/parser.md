@@ -1,5 +1,5 @@
 # META
-source_lines=5056
+source_lines=5059
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -1623,14 +1623,17 @@ armAltEnd acc TIf = armPatAlts acc TIf
 armAltEnd _ _ = failP "expected `=>` after the alternative"
 
 -- A recoverable failure after a `|` becomes the committed steer, positioned at
--- the `|` so the diagnostic and its `if` fix land on it.
+-- the `|` so the diagnostic and its `if` fix land on it.  A `|` that ends its
+-- line is an or-pattern wrapped onto the next line (the layout opens a block
+-- there), not a guard, so that steer carries no `if` fix.
 barSteer : Parser a -> Parser a
 barSteer p = ParserE (ctx pos => match runPWith ctx p pos
-  PErr _ _ => PFatal (FailProblem matchArmBarGuardMsg) pos
+  PErr _ _ => PFatal (FailProblem (barSteerKind (runPWith ctx peek2P pos))) pos
   r => r)
 
-matchArmBarGuardMsg : ParseDiagnosticKind
-matchArmBarGuardMsg = MatchGuardBar
+barSteerKind : PR Token -> ParseDiagnosticKind
+barSteerKind (POk TIndent _) = MatchGuardBarWrapped
+barSteerKind _ = MatchGuardBar
 
 -- ── Patterns ────────────────────────────────────────────────────────────
 -- A full pattern is a cons-pattern; the as-pattern `x@p` is a cons HEAD, so `@`
@@ -5618,9 +5621,10 @@ parseResultWith mode src tokList offList =
 (DFunDef false "armAltEnd" ((PVar "acc") (PCon "TIf")) (EApp (EApp (EVar "armPatAlts") (EVar "acc")) (EVar "TIf")))
 (DFunDef false "armAltEnd" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `=>` after the alternative"))))
 (DTypeSig false "barSteer" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "barSteer" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" PWild PWild) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "matchArmBarGuardMsg"))) (EVar "pos"))) (arm (PVar "r") () (EVar "r"))))))
-(DTypeSig false "matchArmBarGuardMsg" (TyCon "ParseDiagnosticKind"))
-(DFunDef false "matchArmBarGuardMsg" () (EVar "MatchGuardBar"))
+(DFunDef false "barSteer" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" PWild PWild) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EApp (EVar "barSteerKind") (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "peek2P")) (EVar "pos"))))) (EVar "pos"))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "barSteerKind" (TyFun (TyApp (TyCon "PR") (TyCon "Token")) (TyCon "ParseDiagnosticKind")))
+(DFunDef false "barSteerKind" ((PCon "POk" (PCon "TIndent") PWild)) (EVar "MatchGuardBarWrapped"))
+(DFunDef false "barSteerKind" (PWild) (EVar "MatchGuardBar"))
 (DTypeSig false "parsePat" (TyApp (TyCon "Parser") (TyCon "Pat")))
 (DFunDef false "parsePat" () (EVar "parsePatCons"))
 (DTypeSig false "parseAsPat" (TyApp (TyCon "Parser") (TyCon "Pat")))
@@ -7103,9 +7107,10 @@ parseResultWith mode src tokList offList =
 (DFunDef false "armAltEnd" ((PVar "acc") (PCon "TIf")) (EApp (EApp (EVar "armPatAlts") (EVar "acc")) (EVar "TIf")))
 (DFunDef false "armAltEnd" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `=>` after the alternative"))))
 (DTypeSig false "barSteer" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "barSteer" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" PWild PWild) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EVar "matchArmBarGuardMsg"))) (EVar "pos"))) (arm (PVar "r") () (EVar "r"))))))
-(DTypeSig false "matchArmBarGuardMsg" (TyCon "ParseDiagnosticKind"))
-(DFunDef false "matchArmBarGuardMsg" () (EVar "MatchGuardBar"))
+(DFunDef false "barSteer" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "PErr" PWild PWild) () (EApp (EApp (EVar "PFatal") (EApp (EVar "FailProblem") (EApp (EVar "barSteerKind") (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "peek2P")) (EVar "pos"))))) (EVar "pos"))) (arm (PVar "r") () (EVar "r"))))))
+(DTypeSig false "barSteerKind" (TyFun (TyApp (TyCon "PR") (TyCon "Token")) (TyCon "ParseDiagnosticKind")))
+(DFunDef false "barSteerKind" ((PCon "POk" (PCon "TIndent") PWild)) (EVar "MatchGuardBarWrapped"))
+(DFunDef false "barSteerKind" (PWild) (EVar "MatchGuardBar"))
 (DTypeSig false "parsePat" (TyApp (TyCon "Parser") (TyCon "Pat")))
 (DFunDef false "parsePat" () (EVar "parsePatCons"))
 (DTypeSig false "parseAsPat" (TyApp (TyCon "Parser") (TyCon "Pat")))

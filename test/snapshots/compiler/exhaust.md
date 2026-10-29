@@ -1,5 +1,5 @@
 # META
-source_lines=1230
+source_lines=1242
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -18,6 +18,7 @@ stages=DESUGAR,MARK
 import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   variantName,
   fieldName,
   Lit(..),
@@ -172,6 +173,10 @@ public export data Oracle = Oracle {
   -- `Bin`, and the first declaration answers for both.  A prelude constructor
   -- cannot be reused (#3471), so a program's own never loses to the prelude's.
   ctorSiblings : OrdMap (List String),
+  -- Whether the matrices queried under this oracle may hold an or-pattern.  An
+  -- oracle from `buildOracle` says so; `oracleForPats` clears it for a match
+  -- whose patterns hold none, so the head scan in `expandOrHeads` is skipped.
+  scanOr : Bool,
 }
 
 export
@@ -206,7 +211,14 @@ buildOracle prog =
       oracleMap
         (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
           ++ flatMap rowSiblings builtinTypeCtors),
+    scanOr = True,
   }
+
+-- [oracle] for a match whose patterns are [pats]: when none holds an or-pattern,
+-- no matrix built from them can, and `expandOrHeads` is skipped.
+export
+oracleForPats : Oracle -> List Pat -> Oracle
+oracleForPats oracle pats = { oracle | scanOr = anyList patHasOr pats }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
 -- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
@@ -535,15 +547,15 @@ useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_ :: _) [] = False
 useful oracle col0 pmat (h :: restQ) =
-  usefulHead oracle col0 (expandOrHeads pmat) h restQ
+  usefulHead oracle col0 (expandOrHeads oracle pmat) h restQ
 
 -- A row whose head is an or-pattern stands for one row per alternative.  Expanding
 -- at the head, where the column is being decided, keeps the matrix at its source
 -- size until a recursion step reaches the or-pattern.  An alternative may itself
 -- desugar to an or-pattern (`x@(A | B)`), so the expansion repeats.
-expandOrHeads : List (List Pat) -> List (List Pat)
-expandOrHeads pmat
-  | anyOrHead pmat = expandOrRows pmat
+expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
+expandOrHeads oracle pmat
+  | oracle.scanOr && anyOrHead pmat = expandOrRows pmat
   | otherwise = pmat
 
 anyOrHead : List (List Pat) -> Bool
@@ -722,7 +734,7 @@ usefulWitness : Oracle ->
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_ :: _) 0 = None
 usefulWitness oracle col0 pmat0 ncols =
-  let pmat = expandOrHeads pmat0
+  let pmat = expandOrHeads oracle pmat0
   witnessWild oracle (columnCtors oracle col0 pmat) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by
@@ -1235,7 +1247,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "splitOnChar" false))))
@@ -1257,9 +1269,11 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
-(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
+(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "scanOr" (TyCon "Bool"))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
-(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EVar "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))))
+(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EVar "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))) (fa "scanOr" (EVar "True")))))))
+(DTypeSig true "oracleForPats" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Oracle"))))
+(DFunDef false "oracleForPats" ((PVar "oracle") (PVar "pats")) (ERecordUpdate (EVar "oracle") ((fa "scanOr" (EApp (EApp (EVar "anyList") (EVar "patHasOr")) (EVar "pats"))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
@@ -1393,9 +1407,9 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig true "useful" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool"))))))
 (DFunDef false "useful" (PWild PWild (PList) PWild) (EVar "True"))
 (DFunDef false "useful" (PWild PWild (PCons PWild PWild) (PList)) (EVar "False"))
-(DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EVar "expandOrHeads") (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
-(DTypeSig false "expandOrHeads" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
-(DFunDef false "expandOrHeads" ((PVar "pmat")) (EIf (EApp (EVar "anyOrHead") (EVar "pmat")) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
+(DTypeSig false "expandOrHeads" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))))))
+(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EVar "anyOrHead") (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "anyOrHead" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
 (DFunDef false "anyOrHead" ((PList)) (EVar "False"))
 (DFunDef false "anyOrHead" ((PCons (PCons (PCon "POr" PWild) PWild) PWild)) (EVar "True"))
@@ -1452,7 +1466,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig true "usefulWitness" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "usefulWitness" (PWild PWild (PList) (PVar "ncols")) (EApp (EVar "Some") (EApp (EApp (EVar "replicate") (EVar "ncols")) (EVar "PWild"))))
 (DFunDef false "usefulWitness" (PWild PWild (PCons PWild PWild) (PLit (LInt 0))) (EVar "None"))
-(DFunDef false "usefulWitness" ((PVar "oracle") (PVar "col0") (PVar "pmat0") (PVar "ncols")) (EBlock (DoLet false false (PVar "pmat") (EApp (EVar "expandOrHeads") (EVar "pmat0"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "witnessWild") (EVar "oracle")) (EApp (EApp (EApp (EVar "columnCtors") (EVar "oracle")) (EVar "col0")) (EVar "pmat"))) (EVar "pmat")) (EVar "ncols")))))
+(DFunDef false "usefulWitness" ((PVar "oracle") (PVar "col0") (PVar "pmat0") (PVar "ncols")) (EBlock (DoLet false false (PVar "pmat") (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat0"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "witnessWild") (EVar "oracle")) (EApp (EApp (EApp (EVar "columnCtors") (EVar "oracle")) (EVar "col0")) (EVar "pmat"))) (EVar "pmat")) (EVar "ncols")))))
 (DTypeSig false "witnessWild" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessWild" ((PVar "oracle") (PCon "None") (PVar "pmat") (PVar "ncols")) (EApp (EApp (EVar "witnessPrepend") (EVar "PWild")) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EVar "defaultMatrix") (EVar "pmat"))) (EBinOp "-" (EVar "ncols") (ELit (LInt 1))))))
 (DFunDef false "witnessWild" ((PVar "oracle") (PCon "Some" (PVar "ctors")) (PVar "pmat") (PVar "ncols")) (EApp (EApp (EApp (EApp (EVar "witnessSig") (EVar "oracle")) (EVar "ctors")) (EVar "pmat")) (EVar "ncols")))
@@ -1664,7 +1678,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "splitOnChar" false))))
@@ -1686,9 +1700,11 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
-(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
+(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "scanOr" (TyCon "Bool"))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
-(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))))
+(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))) (fa "scanOr" (EVar "True")))))))
+(DTypeSig true "oracleForPats" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Oracle"))))
+(DFunDef false "oracleForPats" ((PVar "oracle") (PVar "pats")) (ERecordUpdate (EVar "oracle") ((fa "scanOr" (EApp (EApp (EVar "anyList") (EVar "patHasOr")) (EVar "pats"))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
@@ -1822,9 +1838,9 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig true "useful" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool"))))))
 (DFunDef false "useful" (PWild PWild (PList) PWild) (EVar "True"))
 (DFunDef false "useful" (PWild PWild (PCons PWild PWild) (PList)) (EVar "False"))
-(DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EVar "expandOrHeads") (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
-(DTypeSig false "expandOrHeads" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
-(DFunDef false "expandOrHeads" ((PVar "pmat")) (EIf (EApp (EVar "anyOrHead") (EVar "pmat")) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "useful" ((PVar "oracle") (PVar "col0") (PVar "pmat") (PCons (PVar "h") (PVar "restQ"))) (EApp (EApp (EApp (EApp (EApp (EVar "usefulHead") (EVar "oracle")) (EVar "col0")) (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat"))) (EVar "h")) (EVar "restQ")))
+(DTypeSig false "expandOrHeads" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))))))
+(DFunDef false "expandOrHeads" ((PVar "oracle") (PVar "pmat")) (EIf (EBinOp "&&" (EFieldAccess (EVar "oracle") "scanOr") (EApp (EVar "anyOrHead") (EVar "pmat"))) (EApp (EVar "expandOrRows") (EVar "pmat")) (EIf (EVar "otherwise") (EVar "pmat") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "anyOrHead" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyCon "Bool")))
 (DFunDef false "anyOrHead" ((PList)) (EVar "False"))
 (DFunDef false "anyOrHead" ((PCons (PCons (PCon "POr" PWild) PWild) PWild)) (EVar "True"))
@@ -1881,7 +1897,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig true "usefulWitness" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "usefulWitness" (PWild PWild (PList) (PVar "ncols")) (EApp (EVar "Some") (EApp (EApp (EVar "replicate") (EVar "ncols")) (EVar "PWild"))))
 (DFunDef false "usefulWitness" (PWild PWild (PCons PWild PWild) (PLit (LInt 0))) (EVar "None"))
-(DFunDef false "usefulWitness" ((PVar "oracle") (PVar "col0") (PVar "pmat0") (PVar "ncols")) (EBlock (DoLet false false (PVar "pmat") (EApp (EVar "expandOrHeads") (EVar "pmat0"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "witnessWild") (EVar "oracle")) (EApp (EApp (EApp (EVar "columnCtors") (EVar "oracle")) (EVar "col0")) (EVar "pmat"))) (EVar "pmat")) (EVar "ncols")))))
+(DFunDef false "usefulWitness" ((PVar "oracle") (PVar "col0") (PVar "pmat0") (PVar "ncols")) (EBlock (DoLet false false (PVar "pmat") (EApp (EApp (EVar "expandOrHeads") (EVar "oracle")) (EVar "pmat0"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "witnessWild") (EVar "oracle")) (EApp (EApp (EApp (EVar "columnCtors") (EVar "oracle")) (EVar "col0")) (EVar "pmat"))) (EVar "pmat")) (EVar "ncols")))))
 (DTypeSig false "witnessWild" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessWild" ((PVar "oracle") (PCon "None") (PVar "pmat") (PVar "ncols")) (EApp (EApp (EVar "witnessPrepend") (EVar "PWild")) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EVar "defaultMatrix") (EVar "pmat"))) (EBinOp "-" (EVar "ncols") (ELit (LInt 1))))))
 (DFunDef false "witnessWild" ((PVar "oracle") (PCon "Some" (PVar "ctors")) (PVar "pmat") (PVar "ncols")) (EApp (EApp (EApp (EApp (EVar "witnessSig") (EVar "oracle")) (EVar "ctors")) (EVar "pmat")) (EVar "ncols")))

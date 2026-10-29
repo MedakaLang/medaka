@@ -1,5 +1,5 @@
 # META
-source_lines=1510
+source_lines=1515
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -598,6 +598,11 @@ export
 existentialScopeMsg : Option String -> String
 existentialScopeMsg name =
   "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
+
+export
+orTooManyMsg : Int -> Int -> String
+orTooManyMsg n cap =
+  "the or-patterns here expand to \{intToString n} alternatives, over the limit of \{intToString cap}; split the pattern into nested matches"
 
 export
 discardedValueMsg : String -> String
@@ -1676,6 +1681,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "the type `")) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"))))
 (DTypeSig true "existentialScopeMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "existentialScopeMsg" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "this pattern opens the existential authority `")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EVar "name")))) (ELit (LString "`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"))))
+(DTypeSig true "orTooManyMsg" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "orTooManyMsg" ((PVar "n") (PVar "cap")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the or-patterns here expand to ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " alternatives, over the limit of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "cap")))) (ELit (LString "; split the pattern into nested matches"))))
 (DTypeSig true "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EVar "display") (EVar "desc"))) (ELit (LString ") is discarded; only a `Unit` expression may stand alone as a statement"))))
 (DTypeSig true "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
@@ -2133,6 +2140,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "the type `")) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"))))
 (DTypeSig true "existentialScopeMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "existentialScopeMsg" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "this pattern opens the existential authority `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EVar "name")))) (ELit (LString "`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"))))
+(DTypeSig true "orTooManyMsg" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "orTooManyMsg" ((PVar "n") (PVar "cap")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the or-patterns here expand to ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " alternatives, over the limit of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "cap")))) (ELit (LString "; split the pattern into nested matches"))))
 (DTypeSig true "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EMethodRef "display") (EVar "desc"))) (ELit (LString ") is discarded; only a `Unit` expression may stand alone as a statement"))))
 (DTypeSig true "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
