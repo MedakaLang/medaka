@@ -513,6 +513,7 @@ litRuntimeType (LInt _) = RTInt
 litRuntimeType (LFloat _) = RTFloat
 litRuntimeType (LString _) = RTString
 litRuntimeType (LChar _) = RTChar
+litRuntimeType (LByte _) = RTU8
 litRuntimeType (LBool _) = RTBool
 litRuntimeType LUnit = RTUnit
 litRuntimeType (LU64 _ _) = RTU64

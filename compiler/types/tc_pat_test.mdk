@@ -422,3 +422,23 @@ test "an or-pattern opens existentials when any alternative's constructor does" 
       patOpensExistentials env (POr [PWild, PCon "Packed" []]),
       patOpensExistentials env (POr [PWild, PCon "Pair" [PWild, PWild]]),
     )
+
+test "a byte literal pattern has type U8 and binds nothing" =
+  let (m, env) = setup ()
+  let b = shown (inferPat env (PLit (LByte 97)))
+  expectEqual (("U8", []), []) (b, codesOf m)
+
+test "a byte literal pattern against an Int or a Char scrutinee is a type mismatch" =
+  let (m, env) = setup ()
+  let (t, _) = inferPat env (PLit (LByte 97))
+  unifyIn env.teDyn intM t
+  let (m2, env2) = setup ()
+  let (t2, _) = inferPat env2 (PLit (LByte 255))
+  unifyIn env2.teDyn (tconBuiltin "Char") t2
+  expectEqual (["T-TYPE-MISMATCH"], ["T-TYPE-MISMATCH"]) (codesOf m, codesOf m2)
+
+test "a byte literal pattern against a U8 scrutinee is accepted" =
+  let (m, env) = setup ()
+  let (t, _) = inferPat env (PLit (LByte 0))
+  unifyIn env.teDyn (tconBuiltin "U8") t
+  expectEqual [] (codesOf m)

@@ -271,6 +271,8 @@ tagLBool : Unit -> Int
 tagLBool () = 6
 tagLUnit : Unit -> Int
 tagLUnit () = 7
+tagLByte : Unit -> Int
+tagLByte () = 8
 
 -- TyConOrigin
 tagOriginUnresolved : Unit -> Int
@@ -577,6 +579,7 @@ sexpLit (LU64 a0 a1) = SList [tagAtom (tagLU64 ()), sexpInt a0, sexpInt a1]
 sexpLit (LI64 a0 a1) = SList [tagAtom (tagLI64 ()), sexpInt a0, sexpInt a1]
 sexpLit (LString a0) = SList [tagAtom (tagLString ()), sexpString a0]
 sexpLit (LChar a0) = SList [tagAtom (tagLChar ()), sexpString a0]
+sexpLit (LByte a0) = SList [tagAtom (tagLByte ()), sexpInt a0]
 sexpLit (LBool a0) = SList [tagAtom (tagLBool ()), sexpBool a0]
 sexpLit LUnit = tagAtom (tagLUnit ())
 
@@ -1187,6 +1190,9 @@ readLitTagged t cur
   | t == tagLBool () =
     let a0 = readBool cur
     LBool a0
+  | t == tagLByte () =
+    let a0 = readInt cur
+    LByte a0
   | otherwise = cursorFail cur dfltLit
 
 readTyConOrigin : SexpCursor -> TyConOrigin

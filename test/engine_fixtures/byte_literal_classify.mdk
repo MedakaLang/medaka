@@ -1,0 +1,32 @@
+-- Byte literals `b'x'` are `U8` constants in expressions and in literal patterns.
+-- A classifier over packed input matches them with literal patterns and compares
+-- them with `==`; the three engines agree on every value, the escapes
+-- (`\n`, `\t`, `\'`, `\\`, `\0`, `\xFF`) included.
+
+import bytes as B
+import bytes.{Bytes}
+import u8 as U8
+
+subject : Bytes
+subject =
+  B.fromArrayAssumeByteDomain [|97, 10, 255, 0, 39, 92, 9, 32, 48, 122, 13|]
+
+classify : U8 -> Int
+classify b'a' = 1
+classify b'\n' = 2
+classify b'\xFF' = 3
+classify b'\0' = 4
+classify b'\'' = 5
+classify b'\\' = 6
+classify b'\t' = 7
+classify b' ' = 8
+classify b'0' = 9
+classify _ = 0
+
+main = (
+  map classify (B.toU8Array subject),
+  U8.toInt b'A',
+  U8.toInt b'\xFF',
+  U8.toInt b'\x7F',
+  (B.any (== b'z') subject, B.any (== b'q') subject),
+)

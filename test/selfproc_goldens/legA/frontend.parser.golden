@@ -64,6 +64,9 @@ braceItemsFor : String -> Token -> ParserE <> Expr
 bracketIndexRest : Expr -> Expr -> Token -> ParserE <> Expr
 bracketIndexTail : Expr -> ParserE <> Expr
 branchBlock : ParserE <> Expr
+byteBound : ParserE <> Lit
+byteBoundFor : Token -> ParserE <> Lit
+bytePatRest : Lit -> ParserE <> Pat
 charBound : ParserE <> Lit
 charBoundFor : Token -> ParserE <> Lit
 charPatRest : Lit -> ParserE <> Pat

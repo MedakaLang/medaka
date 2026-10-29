@@ -1,0 +1,114 @@
+-- Sibling test for byte literals in `compiler/backend/llvm_emit.mdk` ([P-TEST-SIBLING]).
+--
+-- A byte literal `b'a'` is erased to its `U8` word before Core IR, so the emitter
+-- sees the same constant as for the integer literal `(97 : U8)`.  Each program is
+-- emitted through `emitProgram` as `compiler/entries/llvm_emit_main.mdk` does for
+-- its lowered program; the control writes the same functions with integer
+-- literals.  Runtime behaviour is pinned by `test/engine_fixtures/byte_literal_*.mdk`
+-- on all three engines.
+
+-- lint-disable-file rule-duplicate-body
+-- `funcBlock` is kept local so each sibling test file reads alone.
+
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import backend.emit_plan.{buildEmitPlan}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
+import test.{expectAll, labelFail, expectEqual, expectTrue}
+import string.{contains, lines, startsWith}
+import list.{reverse}
+import types.capability_manifest.{ManifestRequirement(..)}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{ctorFieldTypeNames, lowerProgramEmitWith}
+
+-- the emitted LLVM IR of `src`, as the prelude-free entry would print it
+llOf : String -> String
+llOf src =
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  let input =
+    makeEmitInput
+      RawUnchecked
+      PreludeFreeRuntime
+      []
+      (ctorFieldTypeNames decls)
+      0
+      []
+      []
+      ""
+  match emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+    Ok text => text
+    Err defects => panic "emit refused: \{length defects} symbol defects"
+
+-- the lines of the `define` of top-level `<name>` (`@mdk_<name>(`), through its
+-- closing `}`
+funcBlock : String -> String -> List String
+funcBlock name ll = blockFrom ("@mdk_" ++ name ++ "(") (lines ll)
+
+blockFrom : String -> List String -> List String
+blockFrom _ [] = []
+blockFrom name (l :: rest) =
+  if startsWith "define " l && contains name l then
+    takeBlock rest [l]
+  else
+    blockFrom name rest
+
+takeBlock : List String -> List String -> List String
+takeBlock [] acc = reverse acc
+takeBlock (l :: rest) acc =
+  if l == "}" then reverse (l :: acc) else takeBlock rest (l :: acc)
+
+-- `val` is a byte literal in expression position; `cls` matches byte literals,
+-- escapes and the NUL and 0xFF edges included
+byteSrc : String
+byteSrc =
+  """
+val u = b'a'
+
+cls x = match x
+  b'a' => 1
+  b'\\n' => 2
+  b'\\xFF' => 3
+  b'\\x00' => 4
+  _ => 0
+
+main = cls (val ())
+"""
+
+-- the same functions written with the integer words
+wordSrc : String
+wordSrc =
+  """
+val u = (97 : U8)
+
+cls x = match x
+  97 => 1
+  10 => 2
+  255 => 3
+  0 => 4
+  _ => 0
+
+main = cls (val ())
+"""
+
+test "a byte literal in expression position emits as the U8 integer word" =
+  let byteBlock = funcBlock "val" (llOf byteSrc)
+  expectAll [
+    labelFail "block found" (expectTrue (length byteBlock > 2)),
+    labelFail
+      "same IR as (97 : U8)"
+      (expectEqual (funcBlock "val" (llOf wordSrc)) byteBlock),
+  ]
+
+test "byte literal patterns emit as the U8 integer words" =
+  let byteBlock = funcBlock "cls" (llOf byteSrc)
+  expectAll [
+    labelFail "block found" (expectTrue (length byteBlock > 2)),
+    labelFail
+      "same IR as integer patterns"
+      (expectEqual (funcBlock "cls" (llOf wordSrc)) byteBlock),
+  ]

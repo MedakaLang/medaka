@@ -1,5 +1,5 @@
 # META
-source_lines=723
+source_lines=724
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{CapabilityManifest}
@@ -517,6 +517,7 @@ litRuntimeType (LInt _) = RTInt
 litRuntimeType (LFloat _) = RTFloat
 litRuntimeType (LString _) = RTString
 litRuntimeType (LChar _) = RTChar
+litRuntimeType (LByte _) = RTU8
 litRuntimeType (LBool _) = RTBool
 litRuntimeType LUnit = RTUnit
 litRuntimeType (LU64 _ _) = RTU64
@@ -805,6 +806,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "litRuntimeType" ((PCon "LFloat" PWild)) (EVar "RTFloat"))
 (DFunDef false "litRuntimeType" ((PCon "LString" PWild)) (EVar "RTString"))
 (DFunDef false "litRuntimeType" ((PCon "LChar" PWild)) (EVar "RTChar"))
+(DFunDef false "litRuntimeType" ((PCon "LByte" PWild)) (EVar "RTU8"))
 (DFunDef false "litRuntimeType" ((PCon "LBool" PWild)) (EVar "RTBool"))
 (DFunDef false "litRuntimeType" ((PCon "LUnit")) (EVar "RTUnit"))
 (DFunDef false "litRuntimeType" ((PCon "LU64" PWild PWild)) (EVar "RTU64"))
@@ -963,6 +965,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "litRuntimeType" ((PCon "LFloat" PWild)) (EVar "RTFloat"))
 (DFunDef false "litRuntimeType" ((PCon "LString" PWild)) (EVar "RTString"))
 (DFunDef false "litRuntimeType" ((PCon "LChar" PWild)) (EVar "RTChar"))
+(DFunDef false "litRuntimeType" ((PCon "LByte" PWild)) (EVar "RTU8"))
 (DFunDef false "litRuntimeType" ((PCon "LBool" PWild)) (EVar "RTBool"))
 (DFunDef false "litRuntimeType" ((PCon "LUnit")) (EVar "RTUnit"))
 (DFunDef false "litRuntimeType" ((PCon "LU64" PWild PWild)) (EVar "RTU64"))

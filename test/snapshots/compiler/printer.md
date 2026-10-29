@@ -1,5 +1,5 @@
 # META
-source_lines=2836
+source_lines=2853
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -928,6 +928,22 @@ escapeCharLit c
   | c == "\0" = "\\0"
   | otherwise = c
 
+-- A byte literal body: the char-literal escapes, then printable ASCII as itself,
+-- everything else as `\xNN` in uppercase hex.
+escapeByteLit : Int -> String
+escapeByteLit n
+  | n == 39 = "\\'"
+  | n == 92 = "\\\\"
+  | n == 10 = "\\n"
+  | n == 9 = "\\t"
+  | n == 13 = "\\r"
+  | n == 0 = "\\0"
+  | n >= 32 && n < 127 = optionOr "?" (map charToStr (charFromCode n))
+  | otherwise = "\\x\{upperHexDigit (n / 16)}\{upperHexDigit (n % 16)}"
+
+upperHexDigit : Int -> String
+upperHexDigit d = stringSlice d (d + 1) "0123456789ABCDEF"
+
 -- String-literal escaping: quote, backslash, \n \t \r, NUL, and any other C0
 -- control char as `\u{XX}` — never a raw control byte (a raw NUL once landed in
 -- this file's own source and made it invisible to grep).
@@ -967,6 +983,7 @@ printLit (LFloat f) =
   text (if n > 0 && stringSlice (n - 1) n s == "." then s ++ "0" else s)
 printLit (LString s) = text (escStringLit s)
 printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
+printLit (LByte n) = text ("b'" ++ escapeByteLit n ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
 printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)
@@ -3189,6 +3206,10 @@ effAxesDoc axes =
 (DFunDef false "kvForced" ((PVar "loc") (PVar "kvs")) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (EApp (EVar "snd") (EVar "kv")))) (EVar "kvs"))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DTypeSig false "escapeByteLit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escapeByteLit" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 39))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 92))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 10))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 9))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 13))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LString "\\0")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127)))) (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EApp (EApp (EVar "map") (EVar "charToStr")) (EApp (EVar "charFromCode") (EVar "n")))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\\x")) (EApp (EVar "display") (EApp (EVar "upperHexDigit") (EBinOp "/" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "upperHexDigit") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig false "upperHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "upperHexDigit" ((PVar "d")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789ABCDEF"))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
@@ -3200,6 +3221,7 @@ effAxesDoc axes =
 (DFunDef false "printLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EVar "text") (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString ".")))) (EBinOp "++" (EVar "s") (ELit (LString "0"))) (EVar "s"))))))
 (DFunDef false "printLit" ((PCon "LString" (PVar "s"))) (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "s"))))
 (DFunDef false "printLit" ((PCon "LChar" (PVar "c"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "escapeCharLit") (EVar "c"))) (ELit (LString "'")))))
+(DFunDef false "printLit" ((PCon "LByte" (PVar "n"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "b'")) (EApp (EVar "escapeByteLit") (EVar "n"))) (ELit (LString "'")))))
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
 (DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))
@@ -4178,6 +4200,10 @@ effAxesDoc axes =
 (DFunDef false "kvForced" ((PVar "loc") (PVar "kvs")) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (EApp (EVar "snd") (EVar "kv")))) (EVar "kvs"))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DTypeSig false "escapeByteLit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escapeByteLit" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 39))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 92))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 10))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 9))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 13))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LString "\\0")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127)))) (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EApp (EApp (EMethodRef "map") (EVar "charToStr")) (EApp (EVar "charFromCode") (EVar "n")))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\\x")) (EApp (EMethodRef "display") (EApp (EVar "upperHexDigit") (EBinOp "/" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "upperHexDigit") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig false "upperHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "upperHexDigit" ((PVar "d")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789ABCDEF"))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
@@ -4189,6 +4215,7 @@ effAxesDoc axes =
 (DFunDef false "printLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EVar "text") (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString ".")))) (EBinOp "++" (EVar "s") (ELit (LString "0"))) (EVar "s"))))))
 (DFunDef false "printLit" ((PCon "LString" (PVar "s"))) (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "s"))))
 (DFunDef false "printLit" ((PCon "LChar" (PVar "c"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "escapeCharLit") (EVar "c"))) (ELit (LString "'")))))
+(DFunDef false "printLit" ((PCon "LByte" (PVar "n"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "b'")) (EApp (EVar "escapeByteLit") (EVar "n"))) (ELit (LString "'")))))
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
 (DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))

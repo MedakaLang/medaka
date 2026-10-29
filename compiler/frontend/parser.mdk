@@ -878,6 +878,7 @@ parseAtomRaw = defer
     TFloat f => emit (ELit (LFloat f))
     TString s => emit (ELit (LString s))
     TChar s => emit (ELit (LChar s))
+    TByte n => emit (ELit (LByte n))
     TIdent x => emit (EVar x)
     TUpper x => parseUpperAtom x
     TUnderscore => emit (EVar "_")
@@ -1835,6 +1836,7 @@ parsePatAtomRaw = defer
     TFloat f => emit (PLit (LFloat f))
     TString s => emit (PLit (LString s))
     TChar s => charPatRest (LChar s)
+    TByte n => bytePatRest (LByte n)
     TUpper c => defer
       advance
       n <- upperQualTail c
@@ -1908,6 +1910,12 @@ charPatRest lo = defer
   t <- peekP
   rngPatRest lo charBound t
 
+bytePatRest : Lit -> Parser Pat
+bytePatRest lo = defer
+  advance
+  t <- peekP
+  rngPatRest lo byteBound t
+
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
 rngPatRest lo bound TDotDot = defer
   advance
@@ -1947,6 +1955,15 @@ charBound : Parser Lit
 charBound = defer
   t <- peekP
   charBoundFor t
+
+byteBound : Parser Lit
+byteBound = defer
+  t <- peekP
+  byteBoundFor t
+
+byteBoundFor : Token -> Parser Lit
+byteBoundFor (TByte n) = emit (LByte n)
+byteBoundFor _ = failP "expected a byte range bound"
 
 charBoundFor : Token -> Parser Lit
 charBoundFor (TChar s) = emit (LChar s)
