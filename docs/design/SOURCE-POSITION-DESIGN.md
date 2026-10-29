@@ -105,6 +105,14 @@ require one additional located-syntax attempt over the same tokens. A cached
 structural failure is a result, not a request to reparse. Structural success
 does not authorize compilation, diagnostics or formatting.
 
+LSP publishes this value on the first structural request for a revision, not on
+every document notification. When the existing analysis memo has a successful
+checked parse for the exact source, publication keeps those declarations and
+obtains positions and formatting metadata from one located-syntax pass. A
+failed completion falls back to the checked parse over the prepared tokens;
+cached declarations alone cannot manufacture success. Project requests
+prepare visited open sources on demand under the session cache's capacity.
+
 This is not a lossless grammar tree. Expression locations do not generally
 cover a whole expression, and an interpolated literal's location need not start
 at its opening quote. Source edits require an independently authoritative span
