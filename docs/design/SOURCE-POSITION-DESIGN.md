@@ -84,7 +84,7 @@ independent errors after a 1 MiB comment allocated about 772 MB because each
 error built another full-source index; sharing eliminates that repeated work.
 This is a component measurement, not a claim about total end-to-end cost.
 
-The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
+The immutable `frontend/syntax_source.mdk` publishes original text, token spans, scanner-proven comments and opaque gaps alongside the checked `ParsedSource` and bounded recovery. It does not provide general expression extents or cross-edit node identity. `parse_engine` owns invocation-scoped parse state. The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
 
 ## Source-fidelity decision
 

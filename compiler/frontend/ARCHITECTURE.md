@@ -25,6 +25,9 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
 | `parse_result.mdk` | Immutable parsed declarations, positions, metadata and parse errors | `ParsedSource`, `ParseMetadata`, `ParseError`, `parsedDecls` |
 | `parser.mdk` | Grammar over parse-engine contexts and tokens; stratified operator ladder | `parse`, `parseLocated`, `parseResult`, `parseSource` |
+| `parse_recovery.mdk` | Bounded recovery over prepared tokens and strict parse results | `parseRecovering`, `recoverSourcePairsWithIndex` |
+| `recovery_result.mdk` | Immutable partial results, diagnostics and recovery budgets | `RecoveredSource`, `RecoveryStats` |
+| `syntax_source.mdk` | Immutable original text, scanner comments, token coverage, strict parse and bounded recovery | `SyntaxSource`, `publishSyntax`, `renderOriginal` |
 | `desugar.mdk` | Lowers sugar (guards, sections, interpolation, comprehensions, do, `?`, deriving) to the core AST; runs after parse, before resolve; owns the shared `mapExpr`/`mapDecl` traversal | `desugar` |
 | `resolve.mdk` | Name environment and scope checks: unbound names, duplicates, privacy; single-file and multi-module paths | `resolveProgram`, `resolveModulesToLines` |
 | `visibility.mdk` | A module's export surface, built from its declarations and the surfaces of the modules it re-exports; imports no resolver state | `ModuleExports`, `buildExportsWith`, `coreExports` |
@@ -136,7 +139,7 @@ UTF-16 projection stays with SourceIndex.
   support modules, never grammar or tools. Its index provider is invocation-owned
   and does not escape. Prescan bodies migrate out of `parser`; existing parser
   prescan APIs remain compatibility adapters.
-- Planned recovery owns current-source partial syntax in `parse_recovery` and
+- Recovery owns current-source partial syntax in `parse_recovery` and
   immutable `recovery_result` values. It drives the strict declaration grammar
   at trustworthy root fences, stops at ambiguous delimiters or terminal lexical
   errors, and never sends partial results to semantic or execution pipelines.

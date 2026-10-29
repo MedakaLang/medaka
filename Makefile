@@ -502,6 +502,7 @@ inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parse_engine_test.mdk
 	./medaka test compiler/frontend/parse_diagnostic_test.mdk
 	./medaka test compiler/frontend/parse_recovery_test.mdk
+	./medaka test compiler/frontend/syntax_source_test.mdk
 
 ## compiler/frontend/ast_codec.mdk is imported only by types.prelude_elab; this
 ## step runs its own sibling test by name.

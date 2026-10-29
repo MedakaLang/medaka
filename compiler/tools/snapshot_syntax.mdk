@@ -1,46 +1,67 @@
 import frontend.parse_recovery.{
-  parseRecoveringWithIndex, defaultRecoveryAdmission
+  RecoveryLimits, defaultRecoveryLimits, budgetResult
+}
+import frontend.syntax_source.{
+  SyntaxSource, SyntaxAdmission(..), publishSyntax, syntaxIndex, syntaxRecovered
 }
 import frontend.recovery_result.{RecoveredSource}
 import tools.source_snapshot.{
-  SourceRevision(..), SourceSnapshot(..), SnapshotId(..), revisionId,
-  snapshotFromRevision
+  SourceRevision(..),
+  SourceSnapshot(..),
+  SnapshotId(..),
+  revisionId,
 }
 
 public export data SnapshotMismatch = SnapshotMismatch SnapshotId SnapshotId
 export data SnapshotSyntax =
   SnapshotSyntax SnapshotId (Option Int) RecoveredSource
 export data PreparedSyntax =
-  PreparedSyntax (Option SourceSnapshot) SnapshotSyntax
+  PreparedSyntax (Option SourceSnapshot) SnapshotSyntax (Option SyntaxSource)
+
+public export data ParseOptions = ParseOptions RecoveryLimits
+
+export
+defaultParseOptions : ParseOptions
+defaultParseOptions = ParseOptions defaultRecoveryLimits
 
 export
 parseSnapshotSyntax : SourceRevision -> PreparedSyntax
-parseSnapshotSyntax (revision@(SourceRevision _ version _ text)) =
-  match defaultRecoveryAdmission text
-    Some result =>
-      PreparedSyntax None (SnapshotSyntax (revisionId revision) version result)
-    None =>
-      let snapshot = snapshotFromRevision revision
-      match snapshot
-        SourceSnapshot _ _ _ _ index =>
-          PreparedSyntax
-            (Some snapshot)
-            (SnapshotSyntax
-              (revisionId revision)
-              version
-              (parseRecoveringWithIndex index text))
+parseSnapshotSyntax = prepareSnapshotSyntax defaultParseOptions
+
+export
+prepareSnapshotSyntax : ParseOptions -> SourceRevision -> PreparedSyntax
+prepareSnapshotSyntax (ParseOptions limits) (revision@(SourceRevision uri version generation text)) =
+  match publishSyntax limits text
+    Err admission =>
+      let count = match admission
+        SourceLimit _ => 0
+        TokenLimit n => n
+      PreparedSyntax
+        None
+        (SnapshotSyntax (revisionId revision) version (budgetResult text count))
+        None
+    Ok syntax =>
+      PreparedSyntax
+        (Some (SourceSnapshot uri version generation text (syntaxIndex syntax)))
+        (SnapshotSyntax (revisionId revision) version (syntaxRecovered syntax))
+        (Some syntax)
+
+export
+snapshotSyntaxSource : PreparedSyntax -> Option SyntaxSource
+snapshotSyntaxSource (PreparedSyntax _ _ syntax) = syntax
 
 export
 snapshotSyntaxId : PreparedSyntax -> SnapshotId
-snapshotSyntaxId (PreparedSyntax _ (SnapshotSyntax id _ _)) = id
+snapshotSyntaxId (PreparedSyntax _ (SnapshotSyntax id _ _) _) = id
 
 export
 snapshotSyntaxVersion : PreparedSyntax -> Option Int
-snapshotSyntaxVersion (PreparedSyntax _ (SnapshotSyntax _ version _)) = version
+snapshotSyntaxVersion (PreparedSyntax _ (SnapshotSyntax _ version _) _) =
+  version
 
 export
 snapshotSyntaxResult : PreparedSyntax -> RecoveredSource
-snapshotSyntaxResult (PreparedSyntax _ (SnapshotSyntax _ _ result)) = result
+snapshotSyntaxResult (PreparedSyntax _ (SnapshotSyntax _ _ result) _) = result
 
 export
 snapshotSyntaxMatches : SourceRevision -> PreparedSyntax -> Bool
@@ -55,4 +76,4 @@ snapshotSyntaxMatches (revision@(SourceRevision _ version _ _)) syntax = match (
 
 export
 snapshotSyntaxSnapshot : PreparedSyntax -> Option SourceSnapshot
-snapshotSyntaxSnapshot (PreparedSyntax snapshot _) = snapshot
+snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
