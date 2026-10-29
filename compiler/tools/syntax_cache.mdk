@@ -1,0 +1,107 @@
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omDelete, omSize}
+import frontend.parse_recovery.{RecoveryLimits(..)}
+import frontend.syntax_source.{syntaxSourceText, syntaxTokens}
+import tools.source_snapshot.{SnapshotId(..)}
+import tools.snapshot_syntax.{
+  ParseOptions(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxVersion,
+  snapshotSyntaxSource
+}
+
+public export data SyntaxCacheLimits = SyntaxCacheLimits Int Int Int Int
+data CacheEntry = CacheEntry ParseOptions PreparedSyntax Int Int
+export data SyntaxCache =
+  SyntaxCache SyntaxCacheLimits (OrdMap CacheEntry) (List String) Int Int
+
+export
+defaultSyntaxCacheLimits : SyntaxCacheLimits
+defaultSyntaxCacheLimits = SyntaxCacheLimits 4 65536 131072 65536
+
+export
+emptySyntaxCache : SyntaxCacheLimits -> SyntaxCache
+emptySyntaxCache limits = SyntaxCache limits omEmpty [] 0 0
+
+sameOptions : ParseOptions -> ParseOptions -> Bool
+sameOptions (ParseOptions (RecoveryLimits a b c d)) (ParseOptions (RecoveryLimits w x y z)) =
+  a == w && b == x && c == y && d == z
+
+export
+lookupSyntax : SnapshotId ->
+  Option Int ->
+  ParseOptions ->
+  SyntaxCache ->
+  Option PreparedSyntax
+lookupSyntax (SnapshotId uri generation) version options (SyntaxCache _ entries _ _ _) =
+  match omLookup uri entries
+    None => None
+    Some (CacheEntry stored prepared _ _) =>
+      let (SnapshotId _ current) = snapshotSyntaxId prepared
+      if generation == current
+        && version == snapshotSyntaxVersion prepared
+        && sameOptions options stored then
+        Some prepared
+      else
+        None
+
+export
+invalidateSyntax : String -> SyntaxCache -> SyntaxCache
+invalidateSyntax uri (cache@(SyntaxCache limits entries order source tokens)) =
+  match omLookup uri entries
+    None => cache
+    Some (CacheEntry _ _ s t) =>
+      SyntaxCache
+        limits
+        (omDelete uri entries)
+        (filter (/= uri) order)
+        (source - s)
+        (tokens - t)
+
+export
+clearSyntax : SyntaxCache -> SyntaxCache
+clearSyntax (SyntaxCache limits _ _ _ _) = emptySyntaxCache limits
+
+export
+syntaxCacheSize : SyntaxCache -> Int
+syntaxCacheSize (SyntaxCache _ entries _ _ _) = omSize entries
+
+export
+syntaxCacheWeight : SyntaxCache -> (Int, Int)
+syntaxCacheWeight (SyntaxCache _ _ _ source tokens) = (source, tokens)
+
+trimCache : SyntaxCache -> SyntaxCache
+trimCache (cache@(SyntaxCache (SyntaxCacheLimits count _ sourceLimit tokenLimit) _ order source tokens)) =
+  if syntaxCacheSize cache <= count
+    && source <= sourceLimit
+    && tokens <= tokenLimit then
+    cache
+  else match order
+    [] => cache
+    uri :: _ => trimCache (invalidateSyntax uri cache)
+
+export
+insertSyntax : ParseOptions -> PreparedSyntax -> SyntaxCache -> SyntaxCache
+insertSyntax options prepared cache =
+  let (SnapshotId uri _) = snapshotSyntaxId prepared
+  let without = invalidateSyntax uri cache
+  match snapshotSyntaxSource prepared
+    None => without
+    Some syntax =>
+      let (SyntaxCache (limits@(SyntaxCacheLimits count perEntry sourceLimit tokenLimit)) entries order source tokens) =
+        without
+      let s = stringLength (syntaxSourceText syntax)
+      let t = arrayLength (syntaxTokens syntax)
+      if count <= 0
+        || perEntry < 0
+        || sourceLimit < 0
+        || tokenLimit < 0
+        || s > perEntry
+        || s > sourceLimit
+        || t > tokenLimit then
+        without
+      else
+        trimCache
+          (SyntaxCache
+            limits
+            (omInsert uri (CacheEntry options prepared s t) entries)
+            (order ++ [uri])
+            (source + s)
+            (tokens + t))
