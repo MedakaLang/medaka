@@ -745,9 +745,25 @@ walkTys w curLoc (t :: rest) =
 -- ── local binder frames (each name → a fresh, shadow-distinct key) ───────────
 -- Each binder records its DEF at its OWN name-token `Loc` (from `patBinders`), so
 -- a fn-name / decl-name click no longer `locContains`-matches a param/local (§9.4).
+-- The alternatives of an or-pattern each bind the same name, so a name met again
+-- in one frame is another site of the binder already minted, not a new binder.
 mkNamedFrame : W -> List (String, Loc) -> List (String, String)
-mkNamedFrame _ [] = []
-mkNamedFrame w ((n, l) :: rest) = mkOneLocal w n l :: mkNamedFrame w rest
+mkNamedFrame w binds = mkNamedFrameGo w [] binds
+
+mkNamedFrameGo : W ->
+  List (String, String) ->
+  List (String, Loc) ->
+  List (String, String)
+mkNamedFrameGo _ acc [] = reverseList acc
+mkNamedFrameGo w acc ((n, l) :: rest) = match assocFind (ctxOf w) n acc
+  Some key =>
+    let _ = recordAltSite w key l
+    mkNamedFrameGo w acc rest
+  None => mkNamedFrameGo w (mkOneLocal w n l :: acc) rest
+
+recordAltSite : W -> String -> Loc -> Unit
+recordAltSite (W ctx _ uri _ _) key loc =
+  recordDef ctx key uri (withUri uri loc)
 
 mkOneLocal : W -> String -> Loc -> (String, String)
 mkOneLocal (W ctx mid uri _ _) name loc =

@@ -41,6 +41,7 @@ authJoinTailFor : Token -> ParserE <> (List EffParamTy)
 authTermFor : Token -> Token -> ParserE <> EffParamTy
 authTermP : ParserE <> EffParamTy
 barSteer : ParserE <> a -> ParserE <> a
+barSteerKind : PR Token -> ParseDiagnosticKind
 bareAttr : String -> Option Attr
 bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
@@ -255,7 +256,6 @@ located : ParserE <> Expr -> ParserE <> Expr
 locatedUpperNameP : ParserE <> (String, Loc)
 lowerNameFor : Token -> ParserE <> String
 lowerNameP : ParserE <> String
-matchArmBarGuardMsg : ParseDiagnosticKind
 matchArrow : ParserE <> Unit
 matchBody : ParserE <> Expr
 maxNestDepth : Int

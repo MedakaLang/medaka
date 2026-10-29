@@ -891,6 +891,14 @@ test "a bar followed by a non-pattern keeps the if steer" = expectEach [
   ),
 ]
 
+test "a bar ending a line steers to parentheses and carries no if" =
+  expectTextContainsAll
+    ["ending a line", "(A | B | C)"]
+    (parseStatus """x = match n
+  K1 | K2 |
+    K3 => 1
+""")
+
 test "formatting an or-pattern is stable and keeps parentheses where needed" =
   let src =
     """x = match n

@@ -1619,14 +1619,17 @@ armAltEnd acc TIf = armPatAlts acc TIf
 armAltEnd _ _ = failP "expected `=>` after the alternative"
 
 -- A recoverable failure after a `|` becomes the committed steer, positioned at
--- the `|` so the diagnostic and its `if` fix land on it.
+-- the `|` so the diagnostic and its `if` fix land on it.  A `|` that ends its
+-- line is an or-pattern wrapped onto the next line (the layout opens a block
+-- there), not a guard, so that steer carries no `if` fix.
 barSteer : Parser a -> Parser a
 barSteer p = ParserE (ctx pos => match runPWith ctx p pos
-  PErr _ _ => PFatal (FailProblem matchArmBarGuardMsg) pos
+  PErr _ _ => PFatal (FailProblem (barSteerKind (runPWith ctx peek2P pos))) pos
   r => r)
 
-matchArmBarGuardMsg : ParseDiagnosticKind
-matchArmBarGuardMsg = MatchGuardBar
+barSteerKind : PR Token -> ParseDiagnosticKind
+barSteerKind (POk TIndent _) = MatchGuardBarWrapped
+barSteerKind _ = MatchGuardBar
 
 -- ── Patterns ────────────────────────────────────────────────────────────
 -- A full pattern is a cons-pattern; the as-pattern `x@p` is a cons HEAD, so `@`

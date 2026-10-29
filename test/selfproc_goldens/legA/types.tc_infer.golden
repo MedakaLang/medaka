@@ -10,7 +10,8 @@ applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
 argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
 argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
 armIsUnguarded : List Guard -> Bool
-armUnreachable : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+armUnreachable : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+armsOracle : ModuleCtx -> List Arm -> Oracle
 beginsWithSpan : Option Loc -> Loc -> Bool
 binderMarker : String
 binopSpanLoc : Expr -> Expr -> Option Loc
@@ -25,7 +26,7 @@ checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
 checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit
-checkRedundantGo : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
 checkStmtNotDiscarded : DynCtx -> List UObligation -> Mono -> Expr -> Unit
 checkWideLiterals : ModuleCtx -> List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
@@ -33,7 +34,7 @@ clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
 composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
 consOp : DynCtx -> Mono -> Mono -> Mono
-deadAltIndexes : ModuleCtx -> Option TabKey -> List (List Pat) -> Bool -> List (List Pat) -> Int -> List Pat -> List Int
+deadAltIndexes : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> List (List Pat) -> Int -> List Pat -> List Int
 declareQuantified : ModuleCtx -> Scheme -> Unit
 declareRigidVars : ModuleCtx -> List String -> Unit
 derefOp : DynCtx -> Mono -> Mono
@@ -125,7 +126,7 @@ localRole : Bool -> BindingRole
 matchWarningLoc : Option Loc -> List Arm -> Option Loc
 matchWarningsNow : ModuleCtx -> Bool
 negateOp : ModuleCtx -> Mono -> Mono
-nonExhaustiveMsg : ModuleCtx -> Mono -> List (List Pat) -> Bool -> (String, Option String)
+nonExhaustiveMsg : ModuleCtx -> Oracle -> Mono -> List (List Pat) -> Bool -> (String, Option String)
 nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 numArithOp : DynCtx -> Mono -> Mono -> Mono
@@ -155,8 +156,8 @@ unboundVarFresh : ModuleCtx -> String -> Mono
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
-unreachableAltIndexes : ModuleCtx -> Option TabKey -> List (List Pat) -> Bool -> Int -> List Pat -> List Int
+unreachableAltIndexes : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> Int -> List Pat -> List Int
 valueSpanLoc : Expr -> Option Loc
-warnUnreachableAlts : ModuleCtx -> Option TabKey -> List (List Pat) -> Bool -> Pat -> Pat -> Expr -> Unit
+warnUnreachableAlts : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> Pat -> Pat -> Expr -> Unit
 warnedAt : Option Loc -> TcDiag -> Bool
 wideFitsI64 : Int -> Int -> Bool -> Bool

@@ -39,7 +39,7 @@ digitVal : Char -> Int
 doStmtBinds : DoStmt -> List LetBind
 exhaustToLines : List Decl -> String
 exhaustToLinesWith : List Decl -> List Decl -> String
-expandOrHeads : List (List Pat) -> List (List Pat)
+expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
 expandOrRows : List (List Pat) -> List (List Pat)
 fieldAssignBinds : FieldAssign -> List LetBind
 findRecField : String -> List RecPatField -> Option (Option Pat)
@@ -88,6 +88,7 @@ oGetCtorSiblings : Oracle -> String -> Option (List String)
 oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtors : Oracle -> TabKey -> Option (List String)
 oracleCtorName : Oracle -> String -> String
+oracleForPats : Oracle -> List Pat -> Oracle
 oracleKnownName : Oracle -> String -> String -> String
 oracleMap : List (String, a) -> Map String a
 parenWrapWit : Bool -> String -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=2875
+source_lines=2906
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -851,6 +851,37 @@ recFieldHasOr _ = False
 export
 orCandidates : Pat -> List Pat
 orCandidates p = if patHasOr p then orExpand p else [p]
+
+-- How many candidates `orCandidates` would build for [p], counted without
+-- building them; saturates at `orCountCeiling` so the count itself never overflows.
+export
+orCount : Pat -> Int
+orCount (POr ps) = fold (n p => satAdd n (orCount p)) 0 ps
+orCount (PCon _ ps) = orCountProduct ps
+orCount (PCons h t) = satMul (orCount h) (orCount t)
+orCount (PTuple ps) = orCountProduct ps
+orCount (PList ps) = orCountProduct ps
+orCount (PAs _ _ _ p) = orCount p
+orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
+orCount _ = 1
+
+-- The candidate count of a parameter list, as `paramCandidates` would build it.
+export
+orCountProduct : List Pat -> Int
+orCountProduct ps = fold (n p => satMul n (orCount p)) 1 ps
+
+recFieldCount : RecPatField -> Int
+recFieldCount (RecPatField _ _ _ (Some p)) = orCount p
+recFieldCount _ = 1
+
+orCountCeiling : Int
+orCountCeiling = 1000000
+
+satAdd : Int -> Int -> Int
+satAdd a b = min orCountCeiling (a + b)
+
+satMul : Int -> Int -> Int
+satMul a b = min orCountCeiling (a * b)
 
 orExpand : Pat -> List Pat
 orExpand (POr ps) = flatMap orExpand ps
@@ -2984,6 +3015,26 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
 (DTypeSig true "orCandidates" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "orCandidates" ((PVar "p")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EVar "orExpand") (EVar "p")) (EListLit (EVar "p"))))
+(DTypeSig true "orCount" (TyFun (TyCon "Pat") (TyCon "Int")))
+(DFunDef false "orCount" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satAdd") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 0))) (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "satMul") (EApp (EVar "orCount") (EVar "h"))) (EApp (EVar "orCount") (EVar "t"))))
+(DFunDef false "orCount" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PList" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
+(DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
+(DFunDef false "orCount" (PWild) (ELit (LInt 1)))
+(DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
+(DTypeSig false "recFieldCount" (TyFun (TyCon "RecPatField") (TyCon "Int")))
+(DFunDef false "recFieldCount" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "orCount") (EVar "p")))
+(DFunDef false "recFieldCount" (PWild) (ELit (LInt 1)))
+(DTypeSig false "orCountCeiling" (TyCon "Int"))
+(DFunDef false "orCountCeiling" () (ELit (LInt 1000000)))
+(DTypeSig false "satAdd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "satAdd" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "min") (EVar "orCountCeiling")) (EBinOp "+" (EVar "a") (EVar "b"))))
+(DTypeSig false "satMul" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "satMul" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "min") (EVar "orCountCeiling")) (EBinOp "*" (EVar "a") (EVar "b"))))
 (DTypeSig false "orExpand" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "orExpand" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "orExpand")) (EVar "ps")))
 (DFunDef false "orExpand" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "map") (EApp (EVar "PCon") (EVar "c"))) (EApp (EVar "orProduct") (EVar "ps"))))
@@ -3513,6 +3564,26 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
 (DTypeSig true "orCandidates" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "orCandidates" ((PVar "p")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EVar "orExpand") (EVar "p")) (EListLit (EVar "p"))))
+(DTypeSig true "orCount" (TyFun (TyCon "Pat") (TyCon "Int")))
+(DFunDef false "orCount" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satAdd") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 0))) (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "satMul") (EApp (EVar "orCount") (EVar "h"))) (EApp (EVar "orCount") (EVar "t"))))
+(DFunDef false "orCount" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PList" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
+(DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
+(DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
+(DFunDef false "orCount" (PWild) (ELit (LInt 1)))
+(DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
+(DTypeSig false "recFieldCount" (TyFun (TyCon "RecPatField") (TyCon "Int")))
+(DFunDef false "recFieldCount" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "orCount") (EVar "p")))
+(DFunDef false "recFieldCount" (PWild) (ELit (LInt 1)))
+(DTypeSig false "orCountCeiling" (TyCon "Int"))
+(DFunDef false "orCountCeiling" () (ELit (LInt 1000000)))
+(DTypeSig false "satAdd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "satAdd" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "min") (EVar "orCountCeiling")) (EBinOp "+" (EVar "a") (EVar "b"))))
+(DTypeSig false "satMul" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "satMul" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "min") (EVar "orCountCeiling")) (EBinOp "*" (EVar "a") (EVar "b"))))
 (DTypeSig false "orExpand" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "orExpand" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "orExpand")) (EVar "ps")))
 (DFunDef false "orExpand" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "PCon") (EVar "c"))) (EApp (EVar "orProduct") (EVar "ps"))))
