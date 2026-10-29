@@ -21,7 +21,7 @@ export import tools.lint_core.{
   ruleMetaName,
 }
 export import tools.lint_shared.{collectDirectives}
-export import tools.lint_rules_staging.{fileDupOccs}
+export import tools.lint_dup.{fileDupOccs}
 export import tools.lint_registry.{
   allCrossFileRules,
   allRuleNames,
