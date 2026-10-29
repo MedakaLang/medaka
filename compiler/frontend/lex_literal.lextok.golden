@@ -66,6 +66,8 @@ IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "concat"
+COMMA
+IDENT "toUtf8"
 RBRACE
 NEWLINE
 PUBLIC
@@ -3820,6 +3822,406 @@ LPAREN
 IDENT "p"
 PLUS
 INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "readByteLiteral"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "readByteLiteral"
+IDENT "src"
+IDENT "pos"
+EQUAL
+INDENT
+LET
+IDENT "len"
+EQUAL
+IDENT "arrayLength"
+IDENT "src"
+NEWLINE
+LET
+IDENT "p"
+EQUAL
+IDENT "pos"
+PLUS
+INT 2
+NEWLINE
+IF
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+AND
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+CHAR "x"
+THEN
+INDENT
+IDENT "hexByteEscape"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+LPAREN
+IDENT "p"
+PLUS
+INT 2
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "charRead"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+UNDERSCORE
+IDENT "e"
+RPAREN
+FAT_ARROW
+IDENT "lexFailure"
+IDENT "pos"
+IDENT "e"
+LPAREN
+IDENT "byteKind"
+IDENT "kind"
+RPAREN
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "s"
+COMMA
+IDENT "next"
+RPAREN
+FAT_ARROW
+IDENT "asciiByte"
+IDENT "pos"
+IDENT "next"
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteKind"
+COLON
+UPPER "ParseDiagnosticKind"
+ARROW
+UPPER "ParseDiagnosticKind"
+NEWLINE
+IDENT "byteKind"
+UPPER "EmptyChar"
+EQUAL
+INDENT
+UPPER "BadByteLiteral"
+STRING "byte literal is empty; a byte literal is exactly one ASCII character, such as `b'a'`"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteKind"
+LPAREN
+UPPER "LongChar"
+IDENT "text"
+RPAREN
+EQUAL
+INDENT
+UPPER "BadByteLiteral"
+INTERP_OPEN "byte literal `b'"
+IDENT "text"
+INTERP_END "'` has more than one character; a byte literal is exactly one ASCII character"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteKind"
+IDENT "kind"
+EQUAL
+IDENT "kind"
+NEWLINE
+IDENT "hexByteEscape"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "hexByteEscape"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "h"
+EQUAL
+INDENT
+LET
+IDENT "he"
+EQUAL
+IDENT "uHexEnd"
+IDENT "src"
+IDENT "len"
+IDENT "h"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "he"
+MINUS
+IDENT "h"
+NEWLINE
+IF
+IDENT "n"
+EQ_EQ
+INT 2
+AND
+IDENT "he"
+LT
+IDENT "len"
+AND
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "he"
+RPAREN
+THEN
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "parseHex"
+IDENT "src"
+IDENT "h"
+IDENT "he"
+INT 0
+COMMA
+IDENT "he"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "n"
+EQ_EQ
+INT 2
+THEN
+INDENT
+IDENT "lexFailure"
+IDENT "pos"
+IDENT "len"
+UPPER "UnterminatedChar"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "lexFailure"
+IDENT "pos"
+IDENT "he"
+LPAREN
+UPPER "BadByteLiteral"
+STRING "invalid byte escape `\\x`; it takes exactly two hex digits, `\\x00` to `\\xFF`"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiByte"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "LexError"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "asciiByte"
+IDENT "pos"
+IDENT "next"
+IDENT "s"
+EQUAL
+MATCH
+IDENT "stringToChars"
+IDENT "s"
+INDENT
+IDENT "cs"
+IF
+IDENT "arrayLength"
+IDENT "cs"
+GT
+INT 0
+AND
+IDENT "charCode"
+LPAREN
+IDENT "at"
+IDENT "cs"
+INT 0
+RPAREN
+LT
+INT 128
+FAT_ARROW
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "charCode"
+LPAREN
+IDENT "at"
+IDENT "cs"
+INT 0
+RPAREN
+COMMA
+IDENT "next"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+IDENT "lexFailure"
+IDENT "pos"
+IDENT "next"
+LPAREN
+UPPER "NonAsciiByte"
+IDENT "s"
+LPAREN
+IDENT "utf8FixIt"
+IDENT "s"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "utf8FixIt"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "utf8FixIt"
+IDENT "s"
+EQUAL
+IDENT "joinWith"
+STRING ", "
+LPAREN
+IDENT "map"
+IDENT "byteLiteralText"
+LPAREN
+IDENT "toList"
+LPAREN
+IDENT "toUtf8"
+IDENT "s"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+IDENT "byteLiteralText"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "byteLiteralText"
+IDENT "n"
+EQUAL
+INTERP_OPEN "`b'\\x"
+IDENT "hexDigit"
+LPAREN
+IDENT "n"
+SLASH
+INT 16
+RPAREN
+INTERP_MID ""
+IDENT "hexDigit"
+LPAREN
+IDENT "n"
+MOD
+INT 16
+RPAREN
+INTERP_END "'`"
+NEWLINE
+IDENT "hexDigit"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "hexDigit"
+IDENT "d"
+EQUAL
+INDENT
+IDENT "charToStr"
+LPAREN
+IDENT "optionOr"
+CHAR "0"
+LPAREN
+IDENT "charFromCode"
+LPAREN
+IDENT "d"
+PLUS
+LPAREN
+IF
+IDENT "d"
+LT
+INT 10
+THEN
+INT 48
+ELSE
+INT 55
+RPAREN
+RPAREN
+RPAREN
 RPAREN
 NEWLINE
 DEDENT

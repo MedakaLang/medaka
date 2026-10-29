@@ -1,8 +1,12 @@
+afterBinderKeyword : Array Char -> Int -> Bool
 afterNl : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Int -> Int -> RawTok
 at : Array Char -> Int -> Char
+atLineStart : Array Char -> Int -> Bool
 atToken : Array Char -> Int -> Token
 bracketTok : Array Char -> Int -> Token
 btClose : Array Char -> Int -> Int -> Int
+byteLiteralIsName : Array Char -> Int -> Int -> Int -> Bool
+byteRename : Array Char -> Int -> String
 closeBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 collectNoUs : Array Char -> Int -> Int -> List Char
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
@@ -66,6 +70,7 @@ scan : Array Char -> Int -> ScanCursor -> List RawTok
 scanAt : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
 scanBacktick : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanBarOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+scanByte : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanChar : ScanCursor -> Array Char -> Int -> Int -> LexFrame -> RawTok
 scanColonOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanDotOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
@@ -86,11 +91,14 @@ scanUpper : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 sigRadixDigits : Array Char -> Int -> Int -> List Char
 singleDedent : String -> String
 singleOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
+skipBlanksBack : Array Char -> Int -> Int
 skipBlockComment : Array Char -> Int -> Int -> Int -> Int
 skipLineComment : Array Char -> Int -> Int -> Int
+spansWhitespace : Array Char -> Int -> Int -> Bool
 stripLeadingUs : Array Char -> Int -> Int -> String
 substrNoUs : Array Char -> Int -> Int -> String
 wideBase : Array Char -> Int -> Int
 wideHalves : Int -> List Char -> Option (Int, Int)
 wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
 wideIntTok : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> List Char -> RawTok
+wordEndsAt : Array Char -> Int -> String -> Bool

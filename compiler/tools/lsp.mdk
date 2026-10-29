@@ -1361,6 +1361,7 @@ roleOf (TIdent _) depth lineStart _ =
 roleOf (TBacktickIdent _) _ _ _ = Some 3
 roleOf (TString _) _ _ _ = Some 5
 roleOf (TChar _) _ _ _ = Some 5
+roleOf (TByte _) _ _ _ = Some 5
 roleOf (TInterpOpen _) _ _ _ = Some 5
 roleOf (TInterpMid _) _ _ _ = Some 5
 roleOf (TInterpEnd _) _ _ _ = Some 5

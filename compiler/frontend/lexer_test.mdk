@@ -3,7 +3,7 @@ import frontend.lexer.{
   tokenizeWithOffsetPairs
 }
 import test.{Expectation, expectEqual, expectAll, expectEach}
-import list.{zip, filterMap}
+import list.{zip, filterMap, take, drop}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
 
 literalText : Token -> String
@@ -305,3 +305,38 @@ test "scanner invocations and EOF tails remain independent" =
           _ => None)
         (zip (fst bad) (snd bad))),
   ]
+
+tokensOf : String -> List String
+tokensOf src = map tokenToString (tokenize src)
+
+test "byte literal is one token; neighbours are unchanged" = expectAll [
+  expectEqual
+    ["IDENT \"x\"", "EQUAL", "BYTE 97"]
+    (take 3 (tokensOf "x = b'a'")),
+  expectEqual ["BYTE 255"] (take 1 (drop 2 (tokensOf "x = b'\\xFF'"))),
+  expectEqual ["IDENT \"b\"", "CHAR \"a\""] (take 2 (tokensOf "b 'a'")),
+  expectEqual ["IDENT \"b'\""] (take 1 (tokensOf "b'")),
+  expectEqual ["IDENT \"b'x\""] (take 1 (tokensOf "b'x")),
+  expectEqual ["IDENT \"fib'\""] (take 1 (tokensOf "fib'")),
+]
+
+errOf : Token -> Option String
+errOf (TLexError (ByteLikeIdent old new)) = Some "ident:\{old}:\{new}"
+errOf (TLexError (NonAsciiByte _ _)) = Some "non-ascii"
+errOf (TLexError (BadByteLiteral _)) = Some "bad"
+errOf _ = None
+
+lexErrorKind : String -> String
+lexErrorKind src = match filterMap errOf (tokenize src)
+  k :: _ => k
+  [] => "none"
+
+test "identifier spelled as a byte literal is an error" = expectAll [
+  expectEqual "ident:b'a':b_a" (lexErrorKind "main = let b'a' = 3 in 1"),
+  expectEqual "ident:b'a':b_a" (lexErrorKind "b'a' = 3"),
+  expectEqual "ident:b'a':b_a" (lexErrorKind "x = b'a'z"),
+  expectEqual "non-ascii" (lexErrorKind "x = b'é'"),
+  expectEqual "bad" (lexErrorKind "x = b''"),
+  expectEqual "bad" (lexErrorKind "x = b'\\x100'"),
+  expectEqual "none" (lexErrorKind "x = b'a'"),
+]

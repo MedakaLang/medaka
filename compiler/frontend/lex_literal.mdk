@@ -3,7 +3,7 @@ import frontend.lex_token.{Token(..), RawTok(..)}
 import support.char.{isQuote, isApos, isBackslash, isNL, isCR, isHexDigit}
 import support.util.{joinWith}
 import list.{reverse}
-import string.{concat}
+import string.{concat, toUtf8}
 
 public export data LiteralFlavor = PlainLiteral | TripleLiteral
 public export data LiteralPart = InitialLiteral | ContinuedLiteral
@@ -486,6 +486,62 @@ charClose src len p
   | p >= len = p
   | isApos (at src p) = p
   | otherwise = charClose src len (p + 1)
+
+-- `pos` is the offset of the `b` of `b'x'`; returns the byte and the offset
+-- just past the closing apostrophe.  The escape set is the char literal's
+-- (`charRead`) plus `\xNN`.
+export
+readByteLiteral : Array Char -> Int -> Result LexError (Int, Int)
+readByteLiteral src pos =
+  let len = arrayLength src
+  let p = pos + 2
+  if p + 1 < len && isBackslash (at src p) && at src (p + 1) == 'x' then
+    hexByteEscape src len pos (p + 2)
+  else match charRead src len p
+    Err (LexError kind _ e) => lexFailure pos e (byteKind kind)
+    Ok (s, next) => asciiByte pos next s
+
+byteKind : ParseDiagnosticKind -> ParseDiagnosticKind
+byteKind EmptyChar =
+  BadByteLiteral
+    "byte literal is empty; a byte literal is exactly one ASCII character, such as `b'a'`"
+byteKind (LongChar text) =
+  BadByteLiteral
+    "byte literal `b'\{text}'` has more than one character; a byte literal is exactly one ASCII character"
+byteKind kind = kind
+
+hexByteEscape : Array Char -> Int -> Int -> Int -> Result LexError (Int, Int)
+hexByteEscape src len pos h =
+  let he = uHexEnd src len h
+  let n = he - h
+  if n == 2 && he < len && isApos (at src he) then
+    Ok (parseHex src h he 0, he + 1)
+  else if n == 2 then
+    lexFailure pos len UnterminatedChar
+  else
+    lexFailure
+      pos
+      he
+      (BadByteLiteral
+        "invalid byte escape `\\x`; it takes exactly two hex digits, `\\x00` to `\\xFF`")
+
+asciiByte : Int -> Int -> String -> Result LexError (Int, Int)
+asciiByte pos next s = match stringToChars s
+  cs if arrayLength cs > 0 && charCode (at cs 0) < 128 =>
+    Ok (charCode (at cs 0), next)
+  _ => lexFailure pos next (NonAsciiByte s (utf8FixIt s))
+
+-- `b'\xC3'`, `b'\xA9'` for the UTF-8 bytes of `s`.
+export
+utf8FixIt : String -> String
+utf8FixIt s = joinWith ", " (map byteLiteralText (toList (toUtf8 s)))
+
+byteLiteralText : Int -> String
+byteLiteralText n = "`b'\\x\{hexDigit (n / 16)}\{hexDigit (n % 16)}'`"
+
+hexDigit : Int -> String
+hexDigit d =
+  charToStr (optionOr '0' (charFromCode (d + (if d < 10 then 48 else 55))))
 
 export
 dedentSegments : List String -> List String
