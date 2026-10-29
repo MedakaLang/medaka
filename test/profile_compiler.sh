@@ -10,7 +10,7 @@
 # Results go to stdout; progress/debug goes to stderr.
 #
 # Single-file targets:
-#   compiler/frontend/lexer.mdk     — self-contained (no imports); all stages accurate
+#   compiler/frontend/lexer.mdk     — facade with imports; parse+desugar accurate
 #   compiler/frontend/parser.mdk    — large file with imports; parse+desugar accurate
 #
 # Multi-module target:
@@ -116,5 +116,8 @@ profile_modules() {
 }
 
 profile_single "$ROOT/compiler/frontend/lexer.mdk"
+profile_single "$ROOT/compiler/frontend/lex_scan.mdk"
+profile_single "$ROOT/compiler/frontend/lex_literal.mdk"
+profile_single "$ROOT/compiler/frontend/lex_layout.mdk"
 profile_single "$ROOT/compiler/frontend/parser.mdk"
 profile_modules "$ROOT/compiler/entries/all_modules_entry.mdk" "$ROOT/compiler"

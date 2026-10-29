@@ -1727,7 +1727,7 @@ matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match peelQual m
   -- rigid arm.  A real head is uppercase-initial OR one of the four reserved
   -- `__tupleN__` tags (`tupleCtorTyName`, `compiler/frontend/parser.mdk:2137-2141`,
   -- minted via `tyConBuiltin` at `:2131`), and `__tupleN__` is ALSO a legal rigid
-  -- spelling: `identStartLower` (`compiler/frontend/lexer.mdk:1638`) admits a
+  -- spelling: `scanAt` (`compiler/frontend/lex_scan.mdk`) admits a
   -- leading `_`, so `data Bad = Bad __tuple2__` binds a type PARAMETER and both
   -- rigid producers can mint `TRigid "__tuple2__"`.  Measured: without this arm
   -- `impl Q (,)` stops matching such a goal and a program that checked clean before

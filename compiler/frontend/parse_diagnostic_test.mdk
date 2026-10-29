@@ -30,6 +30,7 @@ test "the established frontend code roster is assigned by kinds" =
         (codeText code, expectEqual code (diagnosticCode (problem kind))))
       [
         (UnterminatedString, LUnterminatedString),
+        (NestedInterpolation, LNestedInterpolation),
         (UnterminatedComment, LUnterminatedComment),
         (UnterminatedChar, LBadCharLiteral),
         (InvalidEscape "\\v" False, LBadEscape),

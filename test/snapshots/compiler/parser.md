@@ -1691,7 +1691,7 @@ recordPatFieldRest name nameLoc _ =
 -- pattern" (or a downstream layout/`: or =` complaint, once `many`/`parseOrElse` has
 -- swallowed the recoverable failure) hides the real cause: the NAME is reserved.
 -- `reservedIdentKeyword` returns the SOURCE SPELLING of any lowercase-lexeme
--- keyword token (the full `keywordOrIdent` table in lexer.mdk — the identifiers a
+-- keyword token (the full `keywordOrIdent` table in lex_scan.mdk — the identifiers a
 -- user would plausibly try as a name), or None for a structural token (`=`, `(`,
 -- `,`, …) whose presence is the ordinary end-of-pattern signal that MUST stay a
 -- recoverable `failP` so `many parseParamPat` / list-cons parsing terminates.
@@ -1702,7 +1702,7 @@ recordPatFieldRest name nameLoc _ =
 -- `parseLocated` entry (self-typecheck tool) runs no such scan, so the arm can
 -- fire for them — harmless, since none is ever a legal identifier under any
 -- channel. (`record` is NOT in this table any more: it is an ordinary
--- identifier, #62 — see `keywordOrIdent` in lexer.mdk for why it was freed and
+-- identifier, #62 — see `keywordOrIdent` in lex_scan.mdk for why it was freed and
 -- `mut`/`function` were not.)
 -- ⚠️ `let`/`if`/`then`/`else`/`rec` are DELIBERATELY absent (→ None → recoverable
 -- "expected pattern"): `if` legitimately follows a pattern as a match-arm GUARD
@@ -2741,7 +2741,7 @@ parseExternFor pub _ = defer
     })
 
 -- The indented `bind` clause lines under an extern's signature, which the
--- lexer opens as a block of their own (`externClauseBreaks`).
+-- layout opens as a block of their own (`frontend/lex_layout.mdk`).
 externBindsFor : Token -> Token -> Parser (List ExternBind)
 externBindsFor TIndent (TIdent "bind") = defer
   advance

@@ -94,16 +94,16 @@ leaves identifiers unquoted while the rest of the corpus quotes them.
 Only flagged rows carry a suggested rewrite. Rows marked **clean** are listed
 compactly (grouped) to keep this scannable.
 
-### 2.1 Lex — `compiler/frontend/lexer.mdk`
+### 2.1 Lex — `compiler/frontend/lex_scan.mdk` and `lex_literal.mdk`
 
 | Code | Message (verbatim) | file:line | Flag | Rewrite |
 |---|---|---|---|---|
-| L-UNTERMINATED-COMMENT | `unterminated block comment` | lexer.mdk:458 | clean | — |
-| L-UNTERMINATED-STRING | `unterminated string literal` | lexer.mdk:610, 615 | clean | — |
-| L-BAD-ESCAPE | `invalid escape sequence '\{charToStr e}'` | lexer.mdk:629 | clean | — |
-| L-HS-LAMBDA | `unexpected '\' — Medaka lambdas are written 'x => e' (not '\x -> e')` | lexer.mdk:936 | clean | — |
-| L-HS-DOLLAR | `Medaka has no '$' — apply directly 'f x', parenthesize '(f x)', or pipe with '\|>'` | lexer.mdk:943 | clean | — |
-| L-BAD-CHAR | `unexpected character '\{charToStr c}'` | lexer.mdk:945 | clean | — |
+| L-UNTERMINATED-COMMENT | `unterminated block comment` | lex_scan.mdk | clean | — |
+| L-UNTERMINATED-STRING | `unterminated string literal` | lex_literal.mdk | clean | — |
+| L-BAD-ESCAPE | `invalid escape sequence '\{charToStr e}'` | lex_literal.mdk | clean | — |
+| L-HS-LAMBDA | `unexpected '\' — Medaka lambdas are written 'x => e' (not '\x -> e')` | lex_scan.mdk | clean | — |
+| L-HS-DOLLAR | `Medaka has no '$' — apply directly 'f x', parenthesize '(f x)', or pipe with '\|>'` | lex_scan.mdk | clean | — |
+| L-BAD-CHAR | `unexpected character '\{charToStr c}'` | lex_scan.mdk | clean | — |
 
 Lex copy is uniformly terse and factual. No changes.
 

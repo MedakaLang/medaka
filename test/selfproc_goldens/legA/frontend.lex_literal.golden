@@ -1,0 +1,63 @@
+at : Array Char -> Int -> Char
+bareUnicodeEscMsgStr : Array Char -> Int -> Int -> ParseDiagnosticKind
+bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
+bareUnicodeEscWritten : Array Char -> Int -> Int -> String
+charClose : Array Char -> Int -> Int -> Int
+charEscape : Array Char -> Int -> Int -> Char -> Result LexError (String, Int)
+charFinished : Array Char -> Int -> Int -> Int -> String -> Result LexError (String, Int)
+charRead : Array Char -> Int -> Int -> Result LexError (String, Int)
+commonEscDecode : Char -> Option String
+computeMinIndent : String -> Int
+copyCharRange : Array Char -> Int -> Int -> String
+dedentGroupSegs : Int -> List String -> List String
+dedentRestSegs : Int -> Bool -> List String -> List String
+dedentSegments : List String -> List String
+dedentTripleGo : List RawTok -> List RawTok
+dedentTripleGroup : String -> Int -> Int -> List String -> List RawTok -> List RawTok -> List RawTok
+dedentTripleInterp : List RawTok -> List RawTok
+dropCharsToStr : Array Char -> Int -> Int -> String
+endsWithNl : String -> Bool
+finish : List String -> String
+firstFragNl : Bool -> List String -> Bool
+hasTripleInterpOpen : List RawTok -> Bool
+indentOf : String -> Int
+indentOfGo : Array Char -> Int -> Int -> Int
+indentSentinel : Int
+isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
+isInitial : LiteralPart -> Bool
+isPlain : LiteralFlavor -> Bool
+isTripleAt : Array Char -> Int -> Int -> Bool
+isUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
+joinNlStr : List String -> String
+lexFailure : Int -> Int -> ParseDiagnosticKind -> Result LexError a
+literalEscape : Array Char -> Int -> Int -> LiteralFlavor -> LiteralPart -> Bool -> Bool -> List String -> Char -> Result LexError LiteralRead
+literalGo : Array Char -> Int -> Int -> LiteralFlavor -> LiteralPart -> Bool -> Bool -> List String -> Result LexError LiteralRead
+minIndentGo : List String -> Int -> Int
+normalizeMin : Int -> Int
+parseHex : Array Char -> Int -> Int -> Int -> Int
+plainRunEnd : Array Char -> Int -> Int -> Int
+readCharacter : Array Char -> Int -> Result LexError (String, Int)
+readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
+splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
+splitLines : Array Char -> Int -> Int -> List String
+splitRange : Array Char -> Int -> Int -> Int -> List String
+startsWithNl : String -> Bool
+stripFirstAware : Int -> Bool -> List String -> List String
+stripIndent : String -> String
+stripIndentCs : String -> Array Char -> Int -> String
+stripLine : Int -> String -> String
+stripLines : Int -> List String -> List String
+substituteOwn : List String -> List RawTok -> List RawTok
+tripleRunEnd : Array Char -> Int -> Int -> Int
+uHexEnd : Array Char -> Int -> Int -> Int
+uniEscChar : Array Char -> Int -> Int -> Option Char
+uniEscCode : Array Char -> Int -> Int -> Option Int
+uniEscEnd : Array Char -> Int -> Int -> Int
+uniEscErr : Array Char -> Int -> Int -> Result LexError a
+uniEscTermErr : Array Char -> Int -> Int -> Int -> Int -> Int -> Result LexError a
+uniEscText : Array Char -> Int -> Int -> String
+uniEscWellFormed : Array Char -> Int -> Int -> Bool
+uniHexSigLen : Array Char -> Int -> Int -> Int
+uniIsSurrogate : Int -> Bool
+unicodeErrorEnd : Array Char -> Int -> Int -> Int
+unicodeErrorEndGo : Array Char -> Int -> Int -> Int

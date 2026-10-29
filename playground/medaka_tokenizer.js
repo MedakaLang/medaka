@@ -1,5 +1,5 @@
 // medaka_tokenizer.js — a hand-written stream tokenizer for Medaka, matching the
-// compiler lexer's token classes (compiler/frontend/lexer.mdk; census in
+// compiler lexer's token classes (compiler/frontend/lex_scan.mdk; census in
 // PLAYGROUND-EDITOR-DESIGN.md §5).  It is a CodeMirror-6 StreamParser body, but
 // it has NO CodeMirror imports so it can be unit-tested in isolation over any
 // object implementing the CM6 StringStream surface (peek/next/eat/eatSpace/
@@ -49,10 +49,10 @@
 //                  `)` that closes below it, a keyword like `in`/`then`/`else`, or an
 //                  arithmetic operator / `,` at that depth ends the type position.
 
-// The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
+// The keyword set, mirroring lex_scan.mdk's `keywordOrIdent` table.  True/False are
 // NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
 // authority, don't trust a count (this comment claimed "28" for a 32-element set):
-//   grep -n '^keywordOrIdent "' compiler/frontend/lexer.mdk
+//   grep -n '^keywordOrIdent "' compiler/frontend/lex_scan.mdk
 // `record` was removed from this set by #62 — it is an ordinary identifier now.
 // (`internal` is here but not in `keywordOrIdent`; it is a modifier the
 // playground colours, not a lexer keyword.)
@@ -64,7 +64,7 @@ export const KEYWORDS = new Set([
 ]);
 
 // Multi-char operators, longest-first so a plain string match never truncates a
-// longer operator (lexer.mdk scanOp, 725-775).
+// longer operator (lex_scan.mdk scanOp).
 const OP3 = ['...'];
 const OP2 = ['==', '/=', '<=', '>=', '&&', '||', '::', '++', '|>', '>>', '<<',
   '=>', '->', '<-', '[|', '|]', '{.', '.*', '..', '.=', '@|'];

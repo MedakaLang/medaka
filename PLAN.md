@@ -1451,7 +1451,7 @@ same-indent NEWLINE — so `putStr header` / `putStr body` on consecutive lines 
 `let _ =`.
 
 **Feasibility (already scoped):** *not* a lexer-ambiguity problem. The layout pass
-(`frontend/lexer.mdk` `applyNlTop`/`resolveCont`) already makes same-column lines **separate logical
+(`frontend/lex_layout.mdk` `applyNlTopPairs`/`resolveContPairs`) already makes same-column lines **separate logical
 lines** (`col == top` → bare `NEWLINE`, no INDENT), and the only application-across-lines case is a
 **deeper-indented** continuation (Phase 137 `resolveCont`), already disambiguated. So `foo\nbar` at the
 same column can never be `foo bar` today. Work is:

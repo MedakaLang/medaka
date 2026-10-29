@@ -139,7 +139,7 @@ public export data Mono =
   -- consumer that does NOT carry a `TRigid` arm, so getting it wrong silently
   -- changes answers:
   --   * a RIGID name never starts with an UPPERCASE letter.  It is not
-  --     necessarily lowercase: `identStartLower` (`frontend/lexer.mdk:1638`) is
+  --     necessarily lowercase: `scanAt` (`frontend/lex_scan.mdk`) is
   --     `isLower … || … == '_'`, so `_k`/`_v`/`_a` (synthesized by
   --     `frontend/desugar.mdk:964,967`), `_` (`frontend/parser.mdk:2720`) and
   --     `__tuple2__` are all legal rigid spellings.
