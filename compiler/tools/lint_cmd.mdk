@@ -7,18 +7,19 @@
 -- assertions because they call `requireArgs`/`optDefault`/`dieMsg`, which are
 -- defined there and shared with the other verbs; importing them here would
 -- make `driver` -> `tools` -> `driver` a cycle the loader rejects.
--- `lintHelpText`/`lintArgSpec` are spec VALUES, not callers, so the cycle does
--- not pin them: they stay only because the two gates that police argv surfaces
--- name `medaka_cli.mdk` in their `sources`.  `test` resolved this the other
--- way (`tools/test_cmd.mdk` holds `testHelpText`/`testArgSpec`, and both gates'
--- `sources` name it); the two verbs are deliberately not symmetric yet.
+-- `lintArgSpec` is a spec VALUE, not a caller, so the cycle does not pin it: it
+-- stays only because the two gates that police argv surfaces name
+-- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
+-- `--list-rules`/`--explain` views of the registry.
 --
 -- Rule implementations are not here either: they live in `tools/lint.mdk`
 -- (`Rule`/`CrossFileRule`), the cache format in `tools/lint_cache.mdk`, and
 -- the count baseline in `tools/lint_baseline.mdk`.  This module only sequences
 -- them.
 
-import support.util.{anyList, joinNl}
+import support.util.{anyList, contains, joinNl, joinWith}
+import string as Str
+import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
   Positions,
@@ -27,6 +28,7 @@ import driver.loader.{findProjectRoot, findProjectRootOrSelf, readSource}
 import driver.diagnostics.{
   Diag,
   cjAllToJson,
+  ppSeverity,
   diagIsError,
   ppDiagCliLines,
   ppDiagCliSrc,
@@ -36,9 +38,18 @@ import driver.diagnostics.{
 import support.cli_targets.{collectMdkFiles, expandLintTarget}
 import support.stage_count.{stageExit}
 import tools.lint.{
+  Category(..),
+  CrossFileRule(..),
   Directive,
   Finding,
-  Rule,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule(..),
+  RuleMeta(..),
+  Scope(..),
+  ruleMetaName,
+  allCrossFileRules,
   StdlibIndex,
   allRules,
   applyFindingDeny,
@@ -82,6 +93,234 @@ import tools.lint_baseline.{
   diagCodeOf,
   findingRuleOf,
 }
+
+-- ── `medaka lint --help`, `--list-rules`, `--explain` ──────────────────────────
+-- The flag surface is declared by `lintArgSpec` in `medaka_cli.mdk`; the text
+-- and the registry views the flags print live here, next to the verb's engine.
+
+export
+lintHelpText : String
+lintHelpText = stringConcat [
+  "medaka lint — Lint files/dirs against style rules\n", "\n", "Usage:\n",
+  "  medaka lint [paths...] [flags]\n",
+  "  medaka lint --list-rules [filters] [--json|--markdown]\n",
+  "  medaka lint --explain <rule>\n", "\n",
+  "  --fix                 rewrite fixable findings in-place\n",
+  "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
+  "                       envelope instead of human text (--fix is ignored)\n",
+  "  --cache                reuse per-file results for files whose content is\n",
+  "                       unchanged (opt-in, like ESLint's --cache)\n",
+  "  --disable=r1,r2,...    suppress findings from the named rules\n",
+  "  --only=r1,...          keep only findings from the named rules\n",
+  "  --deny=r1,...          promote findings from the named rules to error\n",
+  "  --baseline=<file>      error only where a file's per-rule finding count\n",
+  "                       exceeds its row in <file> (counts may fall freely)\n",
+  "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n",
+  "  --list-rules           list every rule with its metadata (--json for the\n",
+  "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n",
+  "  --scope=universal|internal     with --list-rules: keep one scope\n",
+  "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n",
+  "  --tier=file|cross              with --list-rules: keep one rule tier\n",
+  "  --explain <rule>       print a rule's summary and documentation\n", "\n",
+  "Target resolution: explicit file args are linted in order; a single\n",
+  "directory arg lints its top-level .mdk files (not recursive); no args\n",
+  "finds the medaka.toml project root and lints its top-level .mdk files.\n",
+  "Exit 0 unless a SevError finding exists.\n"
+]
+
+-- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
+-- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
+-- and appears once here, with both tiers; its per-file metadata is the row's.
+export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List String }
+
+export
+allRuleRows : List RuleRow
+allRuleRows =
+  let fileMetas = map ruleMetaOf allRules
+  let crossMetas = map crossMetaOf allCrossFileRules
+  let fileNames = map ruleMetaName fileMetas
+  let crossNames = map ruleMetaName crossMetas
+  let crossOnly =
+    filter (m => not (contains (ruleMetaName m) fileNames)) crossMetas
+  map (m => mkRow m (tiersOf (ruleMetaName m) crossNames)) fileMetas
+    ++ map (m => mkRow m ["cross"]) crossOnly
+
+ruleMetaOf : Rule -> RuleMeta
+ruleMetaOf r = r.meta
+
+crossMetaOf : CrossFileRule -> RuleMeta
+crossMetaOf r = r.meta
+
+mkRow : RuleMeta -> List String -> RuleRow
+mkRow m tiers = RuleRow { rrMeta = m, rrTiers = tiers }
+
+rowName : RuleRow -> String
+rowName row = ruleMetaName row.rrMeta
+
+tiersOf : String -> List String -> List String
+tiersOf n crossNames
+  | contains n crossNames = ["file", "cross"]
+  | otherwise = ["file"]
+
+scopeText : Scope -> String
+scopeText Universal = "universal"
+scopeText Internal = "internal"
+
+ratchetText : Ratchet -> String
+ratchetText Gated = "gated"
+ratchetText Baselined = "baselined"
+
+categoryText : Category -> String
+categoryText Correctness = "correctness"
+categoryText Suspicious = "suspicious"
+categoryText Perf = "perf"
+categoryText Complexity = "complexity"
+categoryText Style = "style"
+
+fixabilityText : Fixability -> String
+fixabilityText Fixable = "fixable"
+fixabilityText NotFixable = "not-fixable"
+
+needText : Need -> String
+needText NeedsStdlibIndex = "stdlib-index"
+
+-- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
+-- error naming the accepted ones, never an empty listing that reads as "none".
+export
+selectRuleRows : Option String ->
+  Option String ->
+  Option String ->
+  Result String (List RuleRow)
+selectRuleRows scope ratchet tier = do
+  s <- checkChoice "--scope" ["universal", "internal"] scope
+  r <- checkChoice "--ratchet" ["gated", "baselined"] ratchet
+  t <- checkChoice "--tier" ["file", "cross"] tier
+  Ok (filter (rowMatches s r t) allRuleRows)
+
+checkChoice : String ->
+  List String ->
+  Option String ->
+  Result String (Option String)
+checkChoice _ _ None = Ok None
+checkChoice flagName choices (Some v)
+  | anyList (== v) choices = Ok (Some v)
+  | otherwise =
+    Err "\{flagName} must be one of \{joinWith ", " choices}, got `\{v}`"
+
+rowMatches : Option String -> Option String -> Option String -> RuleRow -> Bool
+rowMatches s r t row =
+  optMatches s (scopeText row.rrMeta.scope)
+    && optMatches r (ratchetText row.rrMeta.ratchet)
+    && (match t
+      None => True
+      Some v => anyList (== v) row.rrTiers)
+
+optMatches : Option String -> String -> Bool
+optMatches None _ = True
+optMatches (Some v) actual = v == actual
+
+-- One tab-separated line per rule: name, scope, category, ratchet, fixability,
+-- tiers, summary.
+export
+renderRuleRowsText : List RuleRow -> String
+renderRuleRowsText rows = joinNl (map ruleRowLine rows) ++ "\n"
+
+ruleRowLine : RuleRow -> String
+ruleRowLine row =
+  let m = row.rrMeta
+  joinWith "\t" [
+    m.name,
+    scopeText m.scope,
+    categoryText m.category,
+    ratchetText m.ratchet,
+    fixabilityText m.fixability,
+    joinWith "," row.rrTiers,
+    m.summary,
+  ]
+
+export
+renderRuleRowsJson : List RuleRow -> String
+renderRuleRowsJson rows =
+  stringify (jObject [("rules", jArray (map ruleRowJson rows))]) ++ "\n"
+
+ruleRowJson : RuleRow -> Json
+ruleRowJson row =
+  let m = row.rrMeta
+  jObject [
+    ("name", JString m.name),
+    ("summary", JString m.summary),
+    ("doc", JString m.doc),
+    ("category", JString (categoryText m.category)),
+    ("scope", JString (scopeText m.scope)),
+    ("ratchet", JString (ratchetText m.ratchet)),
+    ("severity", JString (ppSeverity m.defaultSeverity)),
+    ("fixability", JString (fixabilityText m.fixability)),
+    ("needs", jArray (map (n => JString (needText n)) m.needs)),
+    ("tiers", jArray (map JString row.rrTiers)),
+  ]
+
+-- `--explain <rule>`: the summary, the documentation, then the classification.
+-- An unknown name is an `Err` that offers the first registered rule whose name
+-- contains the argument, when there is one.
+export
+explainRule : String -> Result String String
+explainRule q = match filter (row => rowName row == q) allRuleRows
+  row :: _ => Ok (explainText row)
+  [] =>
+    let near = filter (row => Str.contains q (rowName row)) allRuleRows
+    match near
+      row :: _ => Err "unknown rule `\{q}` (did you mean `\{rowName row}`?)"
+      [] => Err "unknown rule `\{q}` (see `medaka lint --list-rules`)"
+
+explainText : RuleRow -> String
+explainText row =
+  let m = row.rrMeta
+  joinNl [
+    m.name,
+    "",
+    m.summary,
+    "",
+    m.doc,
+    "",
+    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{joinWith "," row.rrTiers}",
+  ]
+
+-- The generated page `docs/ops/LINT-RULES.md`.  `test/lint_rules_page_test` style
+-- drift check: `lint_test.mdk` compares the checked-in page with this text.
+export
+rulesPageMarkdown : String
+rulesPageMarkdown =
+  joinNl
+      ([
+          "# Lint rules",
+          "",
+          "<!-- Generated by `medaka lint --list-rules --markdown`. Do not edit by hand. -->",
+          "",
+          "Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka program; `internal` rules enforce this repository's own conventions. `gated` rules must have zero findings across the enforced tree; `baselined` rules may only fall (`docs/ops/CLI-CONFORMANCE.md`, `.githooks/pre-commit`). Per-rule detail: `medaka lint --explain <rule>`.",
+          "",
+          "| Rule | Scope | Category | Ratchet | Fix | Tiers |",
+          "|---|---|---|---|---|---|",
+        ]
+        ++ map rulesPageTableRow allRuleRows
+        ++ flatMap rulesPageSection allRuleRows)
+    ++ "\n"
+
+rulesPageTableRow : RuleRow -> String
+rulesPageTableRow row =
+  let m = row.rrMeta
+  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " row.rrTiers} |"
+
+rulesPageSection : RuleRow -> List String
+rulesPageSection row =
+  let m = row.rrMeta
+  ["", "## \{m.name}", "", m.summary, ""] ++ docBody m.doc
+
+-- Prose before the first `Before:` stays prose; the example goes in a fence.
+docBody : String -> List String
+docBody doc = match Str.indexOf "\n\nBefore:" doc
+  None => [doc]
+  Some i =>
+    [Str.take i doc, "", "```"] ++ Str.lines (Str.drop (i + 2) doc) ++ ["```"]
 
 -- Resolve `--cache` to `Some (cacheDir, ruleSetStamp)`, or `None` to run
 -- uncached.  TWO reasons this declines, both deliberate (#395):

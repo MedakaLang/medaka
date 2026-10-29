@@ -1,5 +1,5 @@
 # META
-source_lines=5500
+source_lines=5514
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_rules_staging.mdk — every lint rule body (`rule*`, `fix*`
@@ -91,13 +91,19 @@ import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{Comment, commentLine, commentCol, commentText}
 import tools.lint_core.{
+  Category(..),
   DirScope(..),
   Directive(..),
   DupClause(..),
   FileFacts(..),
   Finding(..),
-  Rule(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
   StdlibIndex(..),
+  mkRule,
   factComments,
   factDupClauses,
   factOracle,
@@ -5011,15 +5017,23 @@ sameFileInsert x (y :: ys)
 
 export
 duplicateBodySameFileRule : Rule
-duplicateBodySameFileRule = Rule {
-  name = ruleNameDuplicateBody,
-  descr =
-    "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDuplicateBodySameFile,
-  fix = None,
-}
+duplicateBodySameFileRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDuplicateBody,
+      summary =
+        "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
+      doc =
+        "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDuplicateBodySameFile
+    None
 
 -- ── rule: directive-reason (#2862) ────────────────────────────────────────────
 -- A `-- lint-disable-*` directive with no comment stating the constraint that
@@ -5517,7 +5531,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DirScope" true) (mem "Directive" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Rule" true) (mem "StdlibIndex" true) (mem "factComments" false) (mem "factDupClauses" false) (mem "factOracle" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factComments" false) (mem "factDupClauses" false) (mem "factOracle" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isStdlibPath" false) (mem "parseDirective" false) (mem "ruleNameAndThenPureMap" false) (mem "ruleNameBindChainToDo" false) (mem "ruleNameBindThenDestructure" false) (mem "ruleNameBoolSimplify" false) (mem "ruleNameClauseMap" false) (mem "ruleNameCloneType" false) (mem "ruleNameComplementPredicate" false) (mem "ruleNameConcatToInterp" false) (mem "ruleNameDeadCode" false) (mem "ruleNameDerivable" false) (mem "ruleNameDestructureInParam" false) (mem "ruleNameDirectiveReason" false) (mem "ruleNameDoubleReverse" false) (mem "ruleNameDuplicateBody" false) (mem "ruleNameIfMaxMin" false) (mem "ruleNameLambdaSection" false) (mem "ruleNameMatchParam" false) (mem "ruleNameMatchToMap" false) (mem "ruleNameMissingSignature" false) (mem "ruleNameNotEq" false) (mem "ruleNameOrElseStaircase" false) (mem "ruleNamePreferAssignOp" false) (mem "ruleNamePromissoryReader" false) (mem "ruleNameRegexLiteral" false) (mem "ruleNameRemParity" false) (mem "ruleNameSelfShadowExtern" false) (mem "ruleNameStdlibReimpl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "ruleNameTestEqualInTrue" false) (mem "ruleNameTestPreludeShadow" false) (mem "ruleNameWhenUnless" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "trimWs" false) (mem "unwrapLoc" false) (mem "zipDeclPos" false))))
 (DTypeSig true "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
@@ -7042,7 +7056,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sameFileInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "duplicateBodySameFileRule" (TyCon "Rule"))
-(DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
+(DFunDef false "duplicateBodySameFileRule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "summary" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "doc" (ELit (LString "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDuplicateBodySameFile")) (EVar "None")))
 (DTypeSig true "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
@@ -7180,7 +7194,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DirScope" true) (mem "Directive" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Rule" true) (mem "StdlibIndex" true) (mem "factComments" false) (mem "factDupClauses" false) (mem "factOracle" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factComments" false) (mem "factDupClauses" false) (mem "factOracle" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isStdlibPath" false) (mem "parseDirective" false) (mem "ruleNameAndThenPureMap" false) (mem "ruleNameBindChainToDo" false) (mem "ruleNameBindThenDestructure" false) (mem "ruleNameBoolSimplify" false) (mem "ruleNameClauseMap" false) (mem "ruleNameCloneType" false) (mem "ruleNameComplementPredicate" false) (mem "ruleNameConcatToInterp" false) (mem "ruleNameDeadCode" false) (mem "ruleNameDerivable" false) (mem "ruleNameDestructureInParam" false) (mem "ruleNameDirectiveReason" false) (mem "ruleNameDoubleReverse" false) (mem "ruleNameDuplicateBody" false) (mem "ruleNameIfMaxMin" false) (mem "ruleNameLambdaSection" false) (mem "ruleNameMatchParam" false) (mem "ruleNameMatchToMap" false) (mem "ruleNameMissingSignature" false) (mem "ruleNameNotEq" false) (mem "ruleNameOrElseStaircase" false) (mem "ruleNamePreferAssignOp" false) (mem "ruleNamePromissoryReader" false) (mem "ruleNameRegexLiteral" false) (mem "ruleNameRemParity" false) (mem "ruleNameSelfShadowExtern" false) (mem "ruleNameStdlibReimpl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "ruleNameTestEqualInTrue" false) (mem "ruleNameTestPreludeShadow" false) (mem "ruleNameWhenUnless" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "trimWs" false) (mem "unwrapLoc" false) (mem "zipDeclPos" false))))
 (DTypeSig true "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
@@ -8705,7 +8719,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sameFileInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "duplicateBodySameFileRule" (TyCon "Rule"))
-(DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
+(DFunDef false "duplicateBodySameFileRule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "summary" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "doc" (ELit (LString "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDuplicateBodySameFile")) (EVar "None")))
 (DTypeSig true "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))

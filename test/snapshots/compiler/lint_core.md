@@ -1,5 +1,5 @@
 # META
-source_lines=251
+source_lines=335
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -67,6 +67,54 @@ export
 factDupClauses : FileFacts -> List DupClause
 factDupClauses ff = memoGet ff.ffDupClauses
 
+-- What kind of defect a rule reports, for the rules page and `--list-rules`.
+public export data Category =
+  | Correctness
+  | Suspicious
+  | Perf
+  | Complexity
+  | Style
+
+-- Whether a rule is meaningful in any Medaka program (`Universal`) or enforces
+-- this repository's own conventions or compiler-private code (`Internal`).
+public export data Scope = Universal | Internal
+
+-- How the repository enforces a rule: zero findings (`Gated`) or a per-file
+-- count that may only fall (`Baselined`).
+public export data Ratchet = Gated | Baselined
+
+-- Whether `--fix` may rewrite the findings of a rule.
+public export data Fixability = Fixable | NotFixable
+
+-- An input a rule's `check` reads beyond the file itself; the runner builds
+-- only what some active rule needs.
+public export data Need = NeedsStdlibIndex
+
+-- Everything the CLI, the rules page and the runner know about a rule besides
+-- its `check`.  `doc` states what the rule flags, why, and a before -> after
+-- example; `summary` is its first line.
+public export data RuleMeta = RuleMeta {
+  name : String,
+  summary : String,
+  doc : String,
+  category : Category,
+  scope : Scope,
+  ratchet : Ratchet,
+  defaultSeverity : Severity,
+  fixability : Fixability,
+  needs : List Need,
+}
+
+export
+ruleMetaName : RuleMeta -> String
+ruleMetaName m = m.name
+
+export
+needsStdlibIndex : RuleMeta -> Bool
+needsStdlibIndex m = match m.needs
+  NeedsStdlibIndex :: _ => True
+  [] => False
+
 -- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
 -- (`StdlibIndex`, below — every exported stdlib name with its declared
 -- signature, so a rule can ask what the stdlib actually provides instead of
@@ -79,8 +127,10 @@ factDupClauses ff = memoGet ff.ffDupClauses
 -- irrefutability logic to recognise single-constructor patterns) and a single
 -- decl, it returns `Some replacementDecls` if the rule can safely rewrite that
 -- decl, else `None`.  `None` = the rule is not auto-fixable.
+-- `name`/`descr`/`severity`/`enabled`/`fix` are derived from `meta` by `mkRule`;
 -- `enabled`/`severity` are the defaults the CLI may override before running.
 public export data Rule = Rule {
+  meta : RuleMeta,
   name : String,
   descr : String,
   severity : Severity,
@@ -95,11 +145,45 @@ public export data Rule = Rule {
 -- file path into their `loc`.  Adding a cross-file rule = one `check` fn + one
 -- binding + one `allCrossFileRules` entry.
 public export data CrossFileRule = CrossFileRule {
+  meta : RuleMeta,
   name : String,
   descr : String,
   severity : Severity,
   enabled : Bool,
   check : List (String, Positions, List Decl) -> List Finding,
+}
+
+-- The one constructor of a `Rule`: the record's plain fields are read off the
+-- metadata so the two cannot disagree.  A rule whose `fixability` is
+-- `NotFixable` carries no fixer whatever `fix` says.
+export
+mkRule : RuleMeta ->
+  (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding) ->
+  Option (Oracle -> Decl -> Option (List Decl)) ->
+  Rule
+mkRule m check fix = Rule {
+  meta = m,
+  name = m.name,
+  descr = m.summary,
+  severity = m.defaultSeverity,
+  enabled = True,
+  check = check,
+  fix = match m.fixability
+    Fixable => fix
+    NotFixable => None,
+}
+
+export
+mkCrossFileRule : RuleMeta ->
+  (List (String, Positions, List Decl) -> List Finding) ->
+  CrossFileRule
+mkCrossFileRule m check = CrossFileRule {
+  meta = m,
+  name = m.name,
+  descr = m.summary,
+  severity = m.defaultSeverity,
+  enabled = True,
+  check = check,
 }
 
 -- ── the stdlib reference index ────────────────────────────────────────────────
@@ -276,8 +360,22 @@ public export data DupClause = DupClause {
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
-(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
+(DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
+(DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
+(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
+(DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
+(DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
+(DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
+(DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
+(DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
 (DFunDef false "emptyStdlibIndex" () (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)))
@@ -320,8 +418,22 @@ public export data DupClause = DupClause {
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
-(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
+(DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
+(DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
+(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
+(DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
+(DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
+(DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
+(DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
+(DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
 (DFunDef false "emptyStdlibIndex" () (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)))

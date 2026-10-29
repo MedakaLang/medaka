@@ -1,0 +1,8 @@
+-- #3837 (c): a local function parameter named like the introduced verb.  The
+-- finding is reported; `--fix` leaves the file unchanged.
+
+import test.{expectEqual}
+
+f a = (expectEqual True (a == 1), g 0)
+  where
+    g expectTrue = expectTrue

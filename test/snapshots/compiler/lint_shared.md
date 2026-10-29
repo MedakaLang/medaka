@@ -1,5 +1,5 @@
 # META
-source_lines=322
+source_lines=316
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -140,12 +140,6 @@ ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 export
 ruleNameTestPreludeShadow : String
 ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
-
--- The rule whose `check` reads the `StdlibIndex`; the runner builds the index
--- only when this rule is active.
-export
-stdlibIndexRule : String
-stdlibIndexRule = ruleNameStdlibReimpl
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
@@ -396,8 +390,6 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
 (DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
 (DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
-(DTypeSig true "stdlibIndexRule" (TyCon "String"))
-(DFunDef false "stdlibIndexRule" () (EVar "ruleNameStdlibReimpl"))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -530,8 +522,6 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
 (DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
 (DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
-(DTypeSig true "stdlibIndexRule" (TyCon "String"))
-(DFunDef false "stdlibIndexRule" () (EVar "ruleNameStdlibReimpl"))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

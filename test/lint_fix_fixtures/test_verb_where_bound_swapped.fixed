@@ -1,0 +1,9 @@
+-- #3837 (b): a `where`-bound `expectEqual` is not `test`'s verb, so swapping
+-- it for the imported `expectTrue` changes the result type.  The finding is
+-- reported; `--fix` leaves the file unchanged.
+
+import test.{expectEqual, expectTrue}
+
+f a = expectEqual True (a == 1)
+  where
+    expectEqual x y = x
