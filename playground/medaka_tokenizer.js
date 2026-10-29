@@ -257,6 +257,13 @@ function tokenCode(stream, state) {
     return 'constructor';
   }
 
+  // byte literal `b'x'` (U8 character notation): a `b` at a token start glued to a
+  // complete char body. A `b'` that does not close (`b'x y'`, `b'`) stays an identifier.
+  if (c === 'b' && stream.match(/^b'(\\.[^']*|[^'\\])'/, false)) {
+    stream.next();
+    return tokenChar(stream);
+  }
+
   // lowercase / underscore identifier or keyword
   if ((c >= 'a' && c <= 'z') || c === '_') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
