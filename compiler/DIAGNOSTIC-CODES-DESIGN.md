@@ -76,11 +76,16 @@ decisions" §1 (code scheme) and §5 (warning-range regression).
 
 ## 0b. The registry
 
-The canonical list of every code, one row per code. `live` codes are exactly the
-`allDiagCodes` of `compiler/support/diag_codes.mdk`; `retired` and `reserved` texts are never
-reused and have no constructor; `runtime` codes are minted only by the C runtime
+The canonical list of every code the compiler and the C runtime mint, one row per code. `live`
+codes are exactly the `allDiagCodes` of `compiler/support/diag_codes.mdk`; `retired` and `reserved`
+texts are never reused and have no constructor; `runtime` codes are minted only by the C runtime
 (`runtime/medaka_rt.c`). `compiler/support/diag_codes_doc_test.mdk` pins this table against the
-module both ways. The tables below stay as narrative.
+module both ways, and every `runtime error [E-...]` banner in the C runtime against the table.
+The pin does not read compiler string literals: a code named in a message or comment is not
+checked against the table. Two codes are minted by the playground host, outside the pin and
+without a row: `E-GRAPHICS-PROTOCOL` and `E-GRAPHICS-INITIALIZATION`
+(`playground/animation_host.mjs`, `playground/animation_controller.mjs`, `playground/worker.js`).
+The tables below stay as narrative.
 
 <!-- registry:begin -->
 | Code | Status | Meaning |
@@ -89,13 +94,13 @@ module both ways. The tables below stay as narrative.
 | `E-CYCLIC-VALUE` | live | a value refers to itself during its own initialization |
 | `E-DIV-ZERO` | live | integer division by zero |
 | `E-INDEX-OOB` | live | list/array/string index out of bounds |
-| `E-INT-OVERFLOW` | live | `Int` `+`, `-`, `*`, negation or `/` whose result is outside |
+| `E-INT-OVERFLOW` | live | `Int` `+`, `-`, `*`, negation or `/` whose result is outside `intMinBound .. intMaxBound` |
 | `E-LET-REFUTE` | live | refutable `let` pattern failed |
 | `E-MAIN-ASYNC-PAYLOAD` | live | the entry main has an unsupported async payload (playground) |
 | `E-MOD-ZERO` | live | integer modulo by zero |
 | `E-NO-MAIN` | live | no main in the file |
 | `E-NONEXHAUSTIVE-MATCH` | live | `match` had no arm for the runtime value |
-| `E-NOT-A-FUNCTION` | live | applied a non-function value (borderline) |
+| `E-NOT-A-FUNCTION` | live | a call whose head evaluates to a value that is not a function |
 | `E-PANIC` | live | explicit user `panic` |
 | `E-PHYS-DUPLICATE` | live | one function, type or global is declared or defined twice |
 | `E-PHYS-SHAPE` | live | a direct call supplies a different operand count from the definition's parameter count |
@@ -145,7 +150,7 @@ module both ways. The tables below stay as narrative.
 | `R-AMBIGUOUS-TYPE` | live | resolve error `AmbiguousType` |
 | `R-AS-PATTERN-MISPLACED` | live | resolve error `AsPatternMisplaced` |
 | `R-BARE-CTOR-IMPORT` | live | resolve error `BareCtorImport` |
-| `R-BUILD-FAILED` | live | Not a `ResError` constructor |
+| `R-BUILD-FAILED` | live | `medaka build --json` failed at the emit or link stage, after the front-end check came back clean |
 | `R-CANNOT-DERIVE` | live | a `deriving (…)` name no deriver claims (#421) |
 | `R-DUP-BINDER` | live | resolve error `DuplicateBinder` |
 | `R-DUP-BINDING` | live | resolve error `DuplicateValueBinding` |
@@ -156,13 +161,13 @@ module both ways. The tables below stay as narrative.
 | `R-EFFECT-LABEL-NO-MEMBERS` | live | an effect label imported with (..) has no constructors to bring |
 | `R-EXTERN-WITH-BODY` | live | resolve error `ExternWithBody` |
 | `R-FIELD-NOT-IN-RECORD` | live | resolve error `FieldNotInRecord` |
-| `R-FILE-NOT-FOUND` | live | Not a `ResError` constructor |
-| `R-FILE-NOT-UTF8` | live | Not a `ResError` constructor |
+| `R-FILE-NOT-FOUND` | live | the CLI target path could not be read |
+| `R-FILE-NOT-UTF8` | live | the CLI target file is readable but its bytes are not valid UTF-8 |
 | `R-IMMUTABLE-ASSIGN` | live | resolve error `ReassignImmutable` |
 | `R-INTERNAL-EXTERN` | live | resolve error `InternalExternAccess` |
 | `R-METHOD-NOT-IN-INTERFACE` | live | resolve error `MethodNotInInterface` |
 | `R-MISPLACED-AUTHORITY-BINDER` | live | resolve error `MisplacedAuthorityBinder` |
-| `R-MODULE-LOAD` | live | Not a `ResError` constructor |
+| `R-MODULE-LOAD` | live | the multi-module load step failed (missing or cyclic import, unreadable module) |
 | `R-NEWTYPE-CTOR-PRIVATE` | live | resolve error `NewtypeCtorNotExported` |
 | `R-NO-EXPORTED-CTORS` | live | resolve error `NoExportedConstructors` |
 | `R-NONREC-VALUE-LET` | live | resolve error `NonRecursiveValueLet` |
@@ -267,12 +272,12 @@ module both ways. The tables below stay as narrative.
 | `W-GUARD-INEXHAUSTIVE` | live | guards may not be exhaustive (exhaust) |
 | `W-IMPORT-METHOD-SHADOW` | live | A name module `M` **selectively imports** (`import m.{f}`) is also an interface method |
 | `W-INCOMPARABLE-IMPLS` | live | **`⊑`-incomparable impls** (warning) |
-| `W-KEEP-IR-FAILED` | live | Not a typecheck warning |
+| `W-KEEP-IR-FAILED` | live | `medaka build`'s best-effort `--keep-ir` copy could not be written; the build itself succeeded |
 | `W-MAIN-MISSING` | live | the entry module has no `main` |
-| `W-MAIN-SHAPE` | live | `main` is a FUNCTION |
+| `W-MAIN-SHAPE` | live | `main` is declared as a function (`main () = ...`, `main x = ...`) instead of a zero-argument value |
 | `W-NONEXHAUSTIVE` | live | **non-exhaustive match** (warning) |
 | `W-NONEXHAUSTIVE-CLAUSES` | live | non-exhaustive clauses of a multi-clause function |
-| `W-PRELUDE-METHOD-SHADOW` | live | An interface method declared in module `M` whose name collides with an **implicit-prelude |
+| `W-PRELUDE-METHOD-SHADOW` | live | an interface method declared in module `M` shares its name with an implicit-prelude standalone, which becomes unreachable by its bare name in `M` |
 | `W-UNREACHABLE-ALT` | live | an alternative of an or-pattern that earlier arms (or earlier alternatives of an unguarded arm) already cover (warning) |
 | `W-UNREACHABLE-ARM` | live | **unreachable match arm** (warning) |
 | `T-NO-IMPL-NAMED` | retired | never minted; the doc listed it as live |

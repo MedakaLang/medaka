@@ -338,6 +338,7 @@ jobs:
               # Syntax references, guide chapters and advanced-topic chapters are
               # executable docs, not prose.
               docs/spec/SYNTAX.md) nondoc "$f" ;;
+              compiler/DIAGNOSTIC-CODES-DESIGN.md) nondoc "$f" ;;
               docs/guide/*.md) nondoc "$f" ;;
               docs/advanced/*.md) nondoc "$f" ;;
 
