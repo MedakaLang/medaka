@@ -23,6 +23,7 @@ public export data UnicodeProblem =
   deriving (Eq)
 
 public export data ParseDiagnosticKind =
+  | NestedInterpolation
   | UnterminatedString
   | UnterminatedComment
   | UnterminatedChar
@@ -70,6 +71,7 @@ diagnosticCode : ParseDiagnostic -> DiagCode
 diagnosticCode (ParseDiagnostic kind _ _) = problemCode kind
 
 problemCode : ParseDiagnosticKind -> DiagCode
+problemCode NestedInterpolation = LNestedInterpolation
 problemCode UnterminatedString = LUnterminatedString
 problemCode UnterminatedComment = LUnterminatedComment
 problemCode UnterminatedChar = LBadCharLiteral
@@ -128,6 +130,8 @@ renderParseDiagnostic (ParseDiagnostic kind _ _) = renderParseProblem kind
 
 export
 renderParseProblem : ParseDiagnosticKind -> String
+renderParseProblem NestedInterpolation =
+  "nested string interpolation is not supported"
 renderParseProblem UnterminatedString = "unterminated string literal"
 renderParseProblem UnterminatedComment = "unterminated block comment"
 renderParseProblem UnterminatedChar = "unterminated character literal"

@@ -249,7 +249,7 @@ isLineEndTok _ = False
 
 -- `record` has been removed as a declaration keyword (records are now the
 -- `data X = { … }` short form), but — unlike `mut`/`function` above — the WORD
--- is an ordinary identifier again (#62; `keywordOrIdent`, lexer.mdk, carries the
+-- is an ordinary identifier again (#62; `keywordOrIdent`, lex_scan.mdk, carries the
 -- reasoning for the split).  So the rule cannot key on the token: `recordHeadIdx`
 -- (run at line starts by `prescanLineStart`) keys on the removed CONSTRUCT'S
 -- SHAPE, the same way the `for`/`while`/`def` rule keys (also plain `TIdent`s).

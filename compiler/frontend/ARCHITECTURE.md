@@ -1,6 +1,6 @@
 # frontend/ — source text to resolved, marked AST
 
-**Status:** CURRENT — re-derived from source at f804ff533441d3691c10e8dcee311e78e02ddaec on 2026-10-27. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — the lexer boundary below describes the extracted owners.
 
 ## What this directory is
 The first four stages of the pipeline (`ARCHITECTURE.md` section 1): lexer, parser, desugar,
@@ -17,7 +17,10 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `lex_token.mdk` | Token and raw-token types, token descriptions, predicates and EOF-clamped token access | `Token`, `RawTok`, `describeToken`, `peekTok` |
 | `parse_locate.mdk` | Token offsets and typed diagnostic locations; imports only `lex_token`, `parse_diagnostic` and `support/source_index` | `locateOffset`, `locateTokenDiagnostic` |
 | `parse_hints.mdk` | Syntax-only removed-form and contextual recognition, using a lazy invocation-scoped source index | `prescanDiagnostic`, token-shape helpers |
-| `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize`, `tokenizeWithOffsetPairs` |
+| `lex_literal.mdk` | Literal and character decoding, escapes, and triple dedent | `readLiteral`, `readCharacter`, `dedentSegments`, `dedentTripleInterp` |
+| `lex_scan.mdk` | Raw scanning and invocation-owned cursor | `scanRaw`, `scanRawChars`, `scanRawUndedentedChars` |
+| `lex_layout.mdk` | Indentation decisions and token/start/range projections | `applyLayoutTokens`, `applyLayoutStarts`, `applyLayoutRanges` |
+| `lexer.mdk` | Tokenization facade and position adapters | `tokenize`, `tokenizeWithOffsetPairs` |
 | `parse_positions.mdk` | Derives immutable declaration positions from tokens and spans | `Positions`, `DeclPos`, `positionsFromSpans` |
 | `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
 | `parse_result.mdk` | Immutable parsed declarations, positions, metadata and parse errors | `ParsedSource`, `ParseMetadata`, `ParseError`, `parsedDecls` |
@@ -40,6 +43,85 @@ tokens and bounds delimiter depth; it retains no parse context or source index.
 The advice is conditional and cannot decide acceptance.
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |
 | `desugar_cache.mdk` | Source-keyed memo of the desugared prelude, a sibling tier above `parse_cache`, bounded at four entries. An entry is either a tree minted under a fresh generation, or a pending decoder for the text's shipped tree (`registerPreludeDecls`) that runs on the text's first demand and falls back to parse and desugar when it yields nothing. `preludeGeneration` returns the generation pair of the two prelude texts, the key the prelude caches are keyed by | `desugaredPrelude`, `desugaredPreludeKey`, `preludeGeneration`, `registerPreludeDecls` |
+
+## Lexer boundary
+
+The lexer facade delegates raw scanning and literals to `lex_scan` and
+`lex_literal`, and layout to `lex_layout`. Their dependency graph is acyclic: lexer calls lex_scan and
+lex_layout; lex_scan calls lex_literal; both lex_literal and lex_layout use
+lex_token, which depends on parse_diagnostic and ast. The owners may use
+support char, util and stage_count and selected stdlib functions; they must not
+import parser, driver, tools, types, IR or backend. The facade alone retains its
+existing source-index position adapters. SourceIndex holds coordinates, not source
+text: scanning takes a String or Array Char, never constructs or forces an index,
+and diagnostic/recovery callers retain their lazy index provider.
+
+- **lex_literal** owns plain and triple literal segments, character and escape
+  decoding, range copying and triple dedent. Its public data are
+  LiteralFlavor (PlainLiteral, TripleLiteral), LiteralPart (InitialLiteral,
+  ContinuedLiteral), LexError (diagnostic kind and start/end offsets),
+  LiteralCursor (position, opening quote, flavor, part, leading raw LF and
+  inside-hole flag), LiteralStop (LiteralClose or LiteralHole), and LiteralRead
+  (decoded segment, next offset, stop and leading raw LF). Its functions are
+  `readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead`,
+  `readCharacter : Array Char -> Int -> Result LexError (String, Int)`,
+  `copyCharRange : Array Char -> Int -> Int -> String`,
+  `dedentSegments : List String -> List String`, and
+  `dedentTripleInterp : List RawTok -> List RawTok`. Segment builders batch
+  owned fragments and join once; they do not append per character or retain the source.
+- **lex_scan** owns raw scanning, numbers, identifiers, operators, comments and
+  newlines. Its exports are `scanRaw : String -> List RawTok`,
+  `scanRawChars : Array Char -> List RawTok`, and
+  `scanRawUndedentedChars : Array Char -> List RawTok`; the last serves comment
+  collection without dedent or layout. There is no separate recovering scanner.
+  A finite CodeFrame or HoleFrame (literal flavor, opener offset and positive
+  brace depth) replaces signed-depth flavor encoding. An inner plain or triple
+  string is read synchronously in a hole; an actual nested interpolation opener
+  is a terminal local error at its two-character span. Sequential outer holes
+  remain supported. Triple interpolation opener metadata survives dedent.
+  One invocation-owned ScanCursor holds four refs for position, delimiter depth,
+  frame and readiness, plus immutable source length. A single-match `scan` loop
+  owns the output spine and receives one token from `scanOne`; helpers update the
+  cursor and never call `scan`. Stage-1 tail-modulo-cons makes this loop bounded
+  in native and Wasm. The ready flag controls EOF; an ignored placeholder is not
+  a token sentinel. The cursor never escapes into tokens or retained context.
+- **lex_layout** owns extern-clause breaks, layout and the final filter. Its
+  exports are `applyLayoutTokens : List RawTok -> List Token`,
+  `applyLayoutStarts : List RawTok -> List (Token, Int)`, and
+  `applyLayoutRanges : List RawTok -> List (Token, Int, Int)`. One private
+  engine emits only the requested projection, without allocating unused
+  coordinates. It preserves existing synthetic offsets and layout decisions.
+
+The facade retains these current public functions:
+
+```text
+tokenize : String -> List Token
+tokenizeWithLines : String -> (List Token, List Int)
+tokenizeWithOffsets : String -> (List Token, List Int)
+tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))
+collectComments : String -> List Comment
+commentLine : Comment -> Int
+commentCol : Comment -> Int
+commentText : Comment -> String
+offsetToLineCol : String -> Int -> (Int, Int)
+offsetsToLines : Array Char -> List Int -> List Int
+isThenTok : Token -> Bool
+isElseTok : Token -> Bool
+```
+
+It also retains Comment, Token and BracketFrame re-exports, token renderers,
+lineStartsOf and offsetToLineColFast. BracketFrame belongs to layout; isThenTok and isElseTok belong to lex_token and
+are re-exported by the facade. The former scanner and literal bodies and the
+parallel layout and filter twins were deleted from the facade. It retains
+delegation and comment/position adapters. The dedicated nested-interpolation
+diagnostic is implemented.
+
+The prototype's matched batches measured complete ordinary-source tokenization
+at 1.191x, 1.094x and 1.216x baseline: the accepted tradeoff permits up to
+1.35x time and 1.05x allocation for matched batches while removing literal
+quadratics. Allocation doubling is bounded at 2.30 and output-only retained
+heap at 1.10x baseline plus 64 KiB. Coordinates remain decoded-character offsets;
+UTF-16 projection stays with SourceIndex.
 
 ## Laws that bind it
 - **A1** — frontend imports only `support/` (and stdlib); it must not know Core IR, LLVM or any CLI verb.

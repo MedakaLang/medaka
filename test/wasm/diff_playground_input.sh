@@ -36,9 +36,18 @@ main = length (tokenize "main = 42")
 EOF
 checks=$((checks + 1))
 if "$MODULES" "$RUNTIME" "$CORE" "$WORK/scanner.mdk" "$WORK" "$ROOT/compiler" "$ROOT/stdlib" >"$WORK/scanner.wat" 2>"$WORK/scanner.err"; then
-  for property in 'group:frontend_lexer__scan' '(func $frontend_lexer__scan__disploop' 'return_call $frontend_lexer__scan__disploop'; do
-    grep -qF "$property" "$WORK/scanner.wat" || bad "scanner lost bounded-stack property: $property"
+  grep -qF ';; tmc: frontend_lex_scan__scan trmc' "$WORK/scanner.wat" || bad "scanner lost Stage-1 TMC marker"
+  awk 'index($0, "  (func $frontend_lex_scan__scan ") == 1 { in_scan = 1 }
+       in_scan { print }
+       in_scan && /^  \)$/ { exit }' "$WORK/scanner.wat" > "$WORK/scanner-function.wat"
+  for property in 'loop $tmcloop' 'br $tmcloop'; do
+    grep -qF "$property" "$WORK/scanner-function.wat" || bad "scanner lost bounded-stack property: $property"
   done
+  if grep -Eq '(return_)?call \$frontend_lex_scan__scan([[:space:]]|$)' "$WORK/scanner-function.wat"; then
+    bad "scanner Stage-1 loop calls itself"
+  fi
+  wasm-tools parse "$WORK/scanner.wat" -o "$WORK/scanner.wasm" >"$WORK/scanner.parse.out" 2>"$WORK/scanner.parse.err" || bad "scanner WAT did not parse"
+  wasm-tools validate --features=all "$WORK/scanner.wasm" >"$WORK/scanner.validate.out" 2>"$WORK/scanner.validate.err" || bad "scanner Wasm did not validate"
 else
   bad "scanner emission failed"
   cat "$WORK/scanner.err"

@@ -1,0 +1,506 @@
+import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
+import frontend.lex_token.{Token(..), RawTok(..)}
+import support.char.{isQuote, isApos, isBackslash, isNL, isCR, isHexDigit}
+import support.util.{joinWith}
+import list.{reverse}
+import string.{concat}
+
+public export data LiteralFlavor = PlainLiteral | TripleLiteral
+public export data LiteralPart = InitialLiteral | ContinuedLiteral
+public export data LexError = LexError ParseDiagnosticKind Int Int
+public export data LiteralCursor = LiteralCursor {
+  literalPosition : Int,
+  literalQuoteOpen : Int,
+  literalFlavor : LiteralFlavor,
+  literalPart : LiteralPart,
+  literalLeadingRawLf : Bool,
+  literalInsideHole : Bool,
+}
+public export data LiteralStop = LiteralClose | LiteralHole
+public export data LiteralRead = LiteralRead String Int LiteralStop Bool
+
+at : Array Char -> Int -> Char
+at src i = arrayGetUnsafe i src
+
+export
+copyCharRange : Array Char -> Int -> Int -> String
+copyCharRange src start endp
+  | endp <= start = ""
+  | otherwise =
+    let out = arrayMake (endp - start) (at src start)
+    let _ = arrayBlit src start out 0 (endp - start)
+    stringFromChars out
+
+commonEscDecode : Char -> Option String
+commonEscDecode e
+  | e == 'n' = Some "\n"
+  | e == 't' = Some "\t"
+  | e == 'r' = Some "\r"
+  | e == '0' = Some (charToStr (optionOr ' ' (charFromCode 0)))
+  | isBackslash e = Some "\\"
+  | isQuote e = Some "\""
+  | otherwise = None
+
+stripIndent : String -> String
+stripIndent s =
+  let cs = stringToChars s
+  stripIndentCs s cs (arrayLength cs)
+
+stripIndentCs : String -> Array Char -> Int -> String
+stripIndentCs s cs n
+  | n == 0 = s
+  | at cs 0 /= '\n' = s
+  | otherwise =
+    let lines = splitLines cs 1 n
+    let minInd = normalizeMin (minIndentGo lines indentSentinel)
+    joinNlStr (stripLines minInd lines)
+
+splitLines : Array Char -> Int -> Int -> List String
+splitLines cs p n = splitRange cs p p n
+
+indentSentinel : Int
+indentSentinel = 1000000000
+
+indentOf : String -> Int
+indentOf line =
+  let cs = stringToChars line
+  indentOfGo cs (arrayLength cs) 0
+
+indentOfGo : Array Char -> Int -> Int -> Int
+indentOfGo cs n i
+  | i >= n = indentSentinel
+  | at cs i == ' ' = indentOfGo cs n (i + 1)
+  | otherwise = i
+
+minIndentGo : List String -> Int -> Int
+minIndentGo [] acc = acc
+minIndentGo (l :: rest) acc = minIndentGo rest (min acc (indentOf l))
+
+normalizeMin : Int -> Int
+normalizeMin m = if m == indentSentinel then 0 else m
+
+stripLines : Int -> List String -> List String
+stripLines k ls = map (stripLine k) ls
+
+stripLine : Int -> String -> String
+stripLine k line =
+  let cs = stringToChars line
+  let n = arrayLength cs
+  dropCharsToStr cs (min k n) n
+
+dropCharsToStr : Array Char -> Int -> Int -> String
+dropCharsToStr cs k n = copyCharRange cs k n
+
+joinNlStr : List String -> String
+joinNlStr xs = joinWith "\n" xs
+
+startsWithNl : String -> Bool
+startsWithNl s =
+  let cs = stringToChars s
+  arrayLength cs > 0 && at cs 0 == '\n'
+
+endsWithNl : String -> Bool
+endsWithNl s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  n > 0 && at cs (n - 1) == '\n'
+
+computeMinIndent : String -> Int
+computeMinIndent joined =
+  let cs = stringToChars joined
+  let n = arrayLength cs
+  -- position 1: the leading '\n' (guaranteed present) is dropped, same as
+  -- `stripIndentCs` does for the single-segment case.
+  normalizeMin (minIndentGo (splitLines cs 1 n) indentSentinel)
+
+dedentGroupSegs : Int -> List String -> List String
+dedentGroupSegs minInd (openStr :: rest) =
+  let cs = stringToChars openStr
+  let openLines = splitLines cs 1 (arrayLength cs)
+  let openOut = joinNlStr (stripLines minInd openLines)
+  openOut :: dedentRestSegs minInd (endsWithNl openStr) rest
+dedentGroupSegs _ [] = []
+
+dedentRestSegs : Int -> Bool -> List String -> List String
+dedentRestSegs _ _ [] = []
+dedentRestSegs minInd atLineStart (seg :: rest) =
+  let cs = stringToChars seg
+  let lines = splitLines cs 0 (arrayLength cs)
+  let out = joinNlStr (stripFirstAware minInd atLineStart lines)
+  out :: dedentRestSegs minInd (endsWithNl seg) rest
+
+stripFirstAware : Int -> Bool -> List String -> List String
+stripFirstAware _ _ [] = []
+stripFirstAware minInd True (l :: rest) =
+  stripLine minInd l :: stripLines minInd rest
+stripFirstAware minInd False (l :: rest) = l :: stripLines minInd rest
+
+splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
+splitInterpGroup [] = ([], [], [])
+splitInterpGroup ((RTok (TInterpMid s) mo me) :: rest) =
+  let (segs, mid, after) = splitInterpGroup rest
+  (s :: segs, RTok (TInterpMid s) mo me :: mid, after)
+splitInterpGroup ((RTok (TInterpEnd s) eo ee) :: rest) =
+  ([s], [RTok (TInterpEnd s) eo ee], rest)
+splitInterpGroup (t :: rest) =
+  let (segs, mid, after) = splitInterpGroup rest
+  (segs, t :: mid, after)
+
+substituteOwn : List String -> List RawTok -> List RawTok
+substituteOwn _ [] = []
+substituteOwn (v :: vs) ((RTok (TInterpMid _) mo me) :: rest) =
+  RTok (TInterpMid v) mo me :: substituteOwn vs rest
+substituteOwn (v :: vs) ((RTok (TInterpEnd _) eo ee) :: rest) =
+  RTok (TInterpEnd v) eo ee :: substituteOwn vs rest
+substituteOwn vals (t :: rest) = t :: substituteOwn vals rest
+substituteOwn [] (t :: rest) = t :: substituteOwn [] rest
+
+export
+dedentTripleInterp : List RawTok -> List RawTok
+dedentTripleInterp toks
+  | hasTripleInterpOpen toks = dedentTripleGo toks
+  | otherwise = toks
+
+hasTripleInterpOpen : List RawTok -> Bool
+hasTripleInterpOpen [] = False
+hasTripleInterpOpen ((RTripleInterpOpen _ _ _) :: _) = True
+hasTripleInterpOpen (_ :: rest) = hasTripleInterpOpen rest
+
+dedentTripleGo : List RawTok -> List RawTok
+dedentTripleGo [] = []
+dedentTripleGo ((RTripleInterpOpen s so eo) :: rest) =
+  let (rawSegs, midToks, afterEnd) = splitInterpGroup rest
+  dedentTripleGroup s so eo rawSegs midToks afterEnd
+dedentTripleGo (t :: rest) = t :: dedentTripleGo rest
+
+dedentTripleGroup : String ->
+  Int ->
+  Int ->
+  List String ->
+  List RawTok ->
+  List RawTok ->
+  List RawTok
+dedentTripleGroup sReal so eo rawSegs midToks afterEnd
+  | startsWithNl sReal =
+    let allRaw = sReal :: rawSegs
+    let minInd = computeMinIndent (concat allRaw)
+    match dedentGroupSegs minInd allRaw
+      openStr' :: restVals =>
+        RTok (TInterpOpen openStr') so eo
+          :: substituteOwn restVals midToks ++ dedentTripleGo afterEnd
+      [] => RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
+  | otherwise =
+    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
+
+finish : List String -> String
+finish [] = ""
+finish [s] = s
+finish xs = concat (reverse xs)
+firstFragNl : Bool -> List String -> Bool
+firstFragNl leading [] = True
+firstFragNl leading _ = leading
+splitRange : Array Char -> Int -> Int -> Int -> List String
+splitRange cs start p n
+  | p >= n = [copyCharRange cs start n]
+  | at cs p == '\n' =
+    copyCharRange cs start p :: splitRange cs (p + 1) (p + 1) n
+  | otherwise = splitRange cs start (p + 1) n
+
+tripleRunEnd : Array Char -> Int -> Int -> Int
+tripleRunEnd src len p
+  | p >= len = len
+  | isQuote (at src p) || isBackslash (at src p) || isNL (at src p) = p
+  | otherwise = tripleRunEnd src len (p + 1)
+
+uniEscWellFormed : Array Char -> Int -> Int -> Bool
+uniEscWellFormed src len p =
+  let s = p + 3
+  let he = uHexEnd src len s
+  he > s && he < len && at src he == '}'
+
+uniHexSigLen : Array Char -> Int -> Int -> Int
+uniHexSigLen src p endp
+  | p >= endp = 0
+  | at src p == '0' = uniHexSigLen src (p + 1) endp
+  | otherwise = endp - p
+
+uniEscCode : Array Char -> Int -> Int -> Option Int
+uniEscCode src len p =
+  let s = p + 3
+  let he = uHexEnd src len s
+  if uniHexSigLen src s he > 6 then None else Some (parseHex src s he 0)
+
+uniEscText : Array Char -> Int -> Int -> String
+uniEscText src len p = copyCharRange src p (uHexEnd src len (p + 3) + 1)
+
+uniEscChar : Array Char -> Int -> Int -> Option Char
+uniEscChar src len p
+  | not (uniEscWellFormed src len p) = None
+  | otherwise = match uniEscCode src len p
+    None => None
+    Some cp => charFromCode cp
+
+uniIsSurrogate : Int -> Bool
+uniIsSurrogate cp = cp >= 55296 && cp <= 57343
+
+uniEscTermErr : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result LexError a
+uniEscTermErr src len s he p endp
+  | he >= len = lexFailure p endp (BadUnicodeEscape UnicodeUnterminated)
+  | at src he == '_' = lexFailure p endp (BadUnicodeEscape UnicodeSeparator)
+  | he == s && at src he == '}' =
+    lexFailure p endp (BadUnicodeEscape UnicodeEmpty)
+  | he == s =
+    lexFailure
+      p
+      endp
+      (BadUnicodeEscape (UnicodeExpectedDigit (charToStr (at src he))))
+  | otherwise =
+    lexFailure
+      p
+      endp
+      (BadUnicodeEscape (UnicodeExpectedClose (charToStr (at src he))))
+
+uniEscErr : Array Char -> Int -> Int -> Result LexError a
+uniEscErr src len p =
+  let endp = unicodeErrorEnd src len p
+  if not (uniEscWellFormed src len p) then
+    uniEscTermErr src len (p + 3) (uHexEnd src len (p + 3)) p endp
+  else match uniEscCode src len p
+    Some cp if uniIsSurrogate cp =>
+      lexFailure
+        p
+        endp
+        (BadUnicodeEscape (UnicodeSurrogate (uniEscText src len p)))
+    _ =>
+      lexFailure
+        p
+        endp
+        (BadUnicodeEscape (UnicodeOutOfRange (uniEscText src len p)))
+
+unicodeErrorEnd : Array Char -> Int -> Int -> Int
+unicodeErrorEnd src len p = unicodeErrorEndGo src len (p + 3)
+
+unicodeErrorEndGo : Array Char -> Int -> Int -> Int
+unicodeErrorEndGo src len p
+  | p >= len = len
+  | at src p == '}' = p + 1
+  | isQuote (at src p)
+    || isApos (at src p)
+    || isNL (at src p)
+    || isCR (at src p) = p
+  | otherwise = unicodeErrorEndGo src len (p + 1)
+
+uHexEnd : Array Char -> Int -> Int -> Int
+uHexEnd src len p
+  | p < len && isHexDigit (at src p) = uHexEnd src len (p + 1)
+  | otherwise = p
+
+isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
+isBareUnicodeEsc src len p e =
+  e == 'u'
+    && p + 2 < len
+    && isHexDigit (at src (p + 2))
+    && uHexEnd src len (p + 2) - (p + 2) == 4
+
+bareUnicodeEscWritten : Array Char -> Int -> Int -> String
+bareUnicodeEscWritten src len p = copyCharRange src p (uHexEnd src len (p + 2))
+
+bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
+bareUnicodeEscSuggested src len p =
+  "\\u{\{copyCharRange src (p + 2) (uHexEnd src len (p + 2))}}"
+bareUnicodeEscMsgStr : Array Char -> Int -> Int -> ParseDiagnosticKind
+bareUnicodeEscMsgStr src len p =
+  BareUnicodeEscape
+    (bareUnicodeEscWritten src len p)
+    (bareUnicodeEscSuggested src len p)
+
+isUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
+isUnicodeEsc src len p e = e == 'u' && p + 2 < len && at src (p + 2) == '{'
+
+uniEscEnd : Array Char -> Int -> Int -> Int
+uniEscEnd src len p = uHexEnd src len (p + 3) + 1
+
+lexFailure : Int -> Int -> ParseDiagnosticKind -> Result LexError a
+lexFailure start end kind = Err (LexError kind start end)
+
+parseHex : Array Char -> Int -> Int -> Int -> Int
+parseHex src p end acc
+  | p >= end = acc
+  | otherwise =
+    let c = at src p
+    let d =
+      if c >= '0' && c <= '9' then
+        charCode c - charCode '0'
+      else if c >= 'a' && c <= 'f' then
+        charCode c - charCode 'a' + 10
+      else
+        charCode c - charCode 'A' + 10
+    parseHex src (p + 1) end (acc * 16 + d)
+
+export
+readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
+readLiteral src (LiteralCursor p quote flavor part leading inside) =
+  literalGo src (arrayLength src) p flavor part leading inside []
+
+literalGo : Array Char ->
+  Int ->
+  Int ->
+  LiteralFlavor ->
+  LiteralPart ->
+  Bool ->
+  Bool ->
+  List String ->
+  Result LexError LiteralRead
+literalGo src len p flavor part leading inside acc
+  | p >= len = lexFailure p p UnterminatedString
+  | isPlain flavor && isQuote (at src p) =
+    Ok (LiteralRead (finish acc) (p + 1) LiteralClose leading)
+  | not (isPlain flavor) && isTripleAt src len p =
+    Ok (LiteralRead (finish acc) (p + 3) LiteralClose leading)
+  | isBackslash (at src p) && p + 1 < len =
+    literalEscape src len p flavor part leading inside acc (at src (p + 1))
+  | isPlain flavor && isBackslash (at src p) && isInitial part =
+    lexFailure p len UnterminatedString
+  | not (isPlain flavor) && isNL (at src p) =
+    literalGo
+      src
+      len
+      (p + 1)
+      flavor
+      part
+      (firstFragNl leading acc)
+      inside
+      ("\n" :: acc)
+  | not (isPlain flavor) && isQuote (at src p) =
+    literalGo src len (p + 1) flavor part leading inside ("\"" :: acc)
+  | otherwise =
+    let q =
+      if isPlain flavor then
+        plainRunEnd src len (p + 1)
+      else
+        tripleRunEnd src len (p + 1)
+    literalGo
+      src
+      len
+      q
+      flavor
+      part
+      leading
+      inside
+      (copyCharRange src p q :: acc)
+
+literalEscape : Array Char ->
+  Int ->
+  Int ->
+  LiteralFlavor ->
+  LiteralPart ->
+  Bool ->
+  Bool ->
+  List String ->
+  Char ->
+  Result LexError LiteralRead
+literalEscape src len p flavor part leading inside acc e
+  | e == '{' && inside = lexFailure p (p + 2) NestedInterpolation
+  | e == '{' = Ok (LiteralRead (finish acc) (p + 2) LiteralHole leading)
+  | isUnicodeEsc src len p e = match uniEscChar src len p
+    None => uniEscErr src len p
+    Some c =>
+      literalGo
+        src
+        len
+        (uniEscEnd src len p)
+        flavor
+        part
+        leading
+        inside
+        (charToStr c :: acc)
+  | isBareUnicodeEsc src len p e =
+    lexFailure p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
+  | otherwise = match commonEscDecode e
+    Some s => literalGo src len (p + 2) flavor part leading inside (s :: acc)
+    None => lexFailure p (p + 2) (InvalidEscape ("\\" ++ charToStr e) False)
+
+isTripleAt : Array Char -> Int -> Int -> Bool
+isTripleAt src len p =
+  p + 2 < len
+    && isQuote (at src p)
+    && isQuote (at src (p + 1))
+    && isQuote (at src (p + 2))
+
+plainRunEnd : Array Char -> Int -> Int -> Int
+plainRunEnd src len p
+  | p >= len = len
+  | isQuote (at src p) || isBackslash (at src p) = p
+  | otherwise = plainRunEnd src len (p + 1)
+
+export
+readCharacter : Array Char -> Int -> Result LexError (String, Int)
+readCharacter src pos = charRead src (arrayLength src) (pos + 1)
+
+charRead : Array Char -> Int -> Int -> Result LexError (String, Int)
+charRead src len p
+  | p >= len = lexFailure (p - 1) len UnterminatedChar
+  | isBackslash (at src p) && p + 1 >= len =
+    lexFailure (p - 1) len UnterminatedChar
+  | isBackslash (at src p) = charEscape src len p (at src (p + 1))
+  | isApos (at src p) = lexFailure (p - 1) (p + 1) EmptyChar
+  | p + 1 < len && isApos (at src (p + 1)) = Ok (charToStr (at src p), p + 2)
+  | otherwise =
+    let e = charClose src len p
+    if e >= len then
+      lexFailure (p - 1) len UnterminatedChar
+    else
+      lexFailure (p - 1) (e + 1) (LongChar (copyCharRange src p e))
+
+charEscape : Array Char -> Int -> Int -> Char -> Result LexError (String, Int)
+charEscape src len p e
+  | isUnicodeEsc src len p e = match uniEscChar src len p
+    None => uniEscErr src len p
+    Some c => charFinished src len p (uniEscEnd src len p) (charToStr c)
+  | isBareUnicodeEsc src len p e =
+    lexFailure p (uHexEnd src len (p + 2)) (bareUnicodeEscMsgStr src len p)
+  | otherwise = match if isApos e then Some "'" else commonEscDecode e
+    None => lexFailure p (p + 2) (InvalidEscape ("\\" ++ charToStr e) True)
+    Some s => charFinished src len p (p + 2) s
+
+charFinished : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  String ->
+  Result LexError (String, Int)
+charFinished src len p end s =
+  if end < len && isApos (at src end) then
+    Ok (s, end + 1)
+  else
+    lexFailure (p - 1) len UnterminatedChar
+
+charClose : Array Char -> Int -> Int -> Int
+charClose src len p
+  | p >= len = p
+  | isApos (at src p) = p
+  | otherwise = charClose src len (p + 1)
+
+export
+dedentSegments : List String -> List String
+dedentSegments [] = []
+dedentSegments [s] = [stripIndent s]
+dedentSegments (segs@(first :: _)) =
+  if startsWithNl first then
+    dedentGroupSegs (computeMinIndent (concat segs)) segs
+  else
+    segs
+
+isPlain : LiteralFlavor -> Bool
+isPlain PlainLiteral = True
+isPlain _ = False
+
+isInitial : LiteralPart -> Bool
+isInitial InitialLiteral = True
+isInitial _ = False

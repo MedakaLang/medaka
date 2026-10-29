@@ -1,0 +1,81 @@
+import frontend.lexer.{tokenize}
+import test.{
+  Expectation, expectEach, expectAll, expectGreaterThan, expectLessThan, fail
+}
+
+data SourceCase = SourceCase {
+  label : String,
+  opening : String,
+  piece : String,
+  closing : String,
+}
+
+source : SourceCase -> Int -> String
+source c n = c.opening ++ stringConcat (map (_ => c.piece) [1..=n]) ++ c.closing
+
+allocation : String -> <IO> Option Float
+allocation src =
+  let before = allocBytes ()
+  let count = length (tokenize src)
+  let after = allocBytes ()
+  if count > 0 then Some (after - before) else None
+
+minimumAllocation : String -> <IO> Option Float
+minimumAllocation src = match (allocation src, allocation src, allocation src)
+  (Some a, Some b, Some c) => Some (min a (min b c))
+  _ => None
+
+scaling : SourceCase -> <IO> (String, Expectation)
+scaling c =
+  let small = minimumAllocation (source c 2000)
+  let middle = minimumAllocation (source c 4000)
+  let large = minimumAllocation (source c 8000)
+  let result = match (small, middle, large)
+    (Some a, Some b, Some d) => expectAll [
+      expectGreaterThan 0.0 a,
+      expectLessThan (a * 2.3) b,
+      expectLessThan (b * 2.3) d,
+    ]
+    _ => fail "tokenization returned no tokens"
+  (c.label, result)
+
+test "literal scanner allocation scales" =
+  expectEach
+    (map scaling [
+      SourceCase {
+        label = "plain",
+        opening = "main = \"",
+        piece = "a",
+        closing = "\"",
+      },
+      SourceCase {
+        label = "escaped",
+        opening = "main = \"",
+        piece = "\\n",
+        closing = "\"",
+      },
+      SourceCase {
+        label = "triple long",
+        opening = "main = \"\"\"",
+        piece = "a",
+        closing = "\"\"\"",
+      },
+      SourceCase {
+        label = "triple lines",
+        opening = "main = \"\"\"\n",
+        piece = "  abcdefgh\n",
+        closing = "  \"\"\"",
+      },
+      SourceCase {
+        label = "segments",
+        opening = "main = \"\"\"\n",
+        piece = "  a\\{1}\n",
+        closing = "  \"\"\"",
+      },
+      SourceCase {
+        label = "mixed utf8",
+        opening = "main = \"",
+        piece = "😀é\\n",
+        closing = "\"",
+      },
+    ])

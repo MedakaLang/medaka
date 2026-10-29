@@ -181,6 +181,14 @@ p3 = "result: \{1 + 2}"  -- arbitrary expression
 p4 = "multi \{name}"  -- works in triple-quoted too
 ```
 
+Nested interpolation is unsupported: a quoted string inside an interpolation
+hole cannot itself open a `\{` hole. The lexer rejects the
+actual inner opener with `L-NESTED-INTERPOLATION`, located at the backslash and
+opening brace. Ordinary plain and
+triple-quoted strings inside holes remain supported, including braces, Unicode
+escapes and escaped backslashes such as `\\{`, which are not openers.
+Multiple sequential holes in the outer string remain supported.
+
 ## Type annotations & signatures
 
 ```medaka
@@ -1512,7 +1520,7 @@ lexes as a plain `TIdent` and is fair game as a name.
 said "31" while `record` was still reserved and would have gone on saying it:
 
 ```sh
-grep -n '^keywordOrIdent "' compiler/frontend/lexer.mdk | sed 's/.*"\(.*\)".*/\1/' | sort
+grep -n '^keywordOrIdent "' compiler/frontend/lex_scan.mdk | sed 's/.*"\(.*\)".*/\1/' | sort
 ```
 
 ⚠️ **If `medaka check` reports `expected a dedent` (or another confusing,
@@ -1533,7 +1541,7 @@ type      where     with
 
 ⚠️ **`record` is NOT on this list.** It was, until #62; it is now an ordinary
 identifier — see "Removed — do not use" above, and `keywordOrIdent`'s own
-comment in `compiler/frontend/lexer.mdk` for why it was freed while `mut` and
+comment in `compiler/frontend/lex_scan.mdk` for why it was freed while `mut` and
 `function` were deliberately kept.
 
 They fall into three groups, by how misusing one as an identifier actually

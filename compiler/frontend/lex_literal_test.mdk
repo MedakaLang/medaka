@@ -1,0 +1,34 @@
+import frontend.lex_literal.{
+  LiteralCursor(..), LiteralFlavor(..), LiteralPart(..), LiteralRead(..),
+  LiteralStop(..), LexError(..), readLiteral, readCharacter
+}
+import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
+import test.{expectEqual, expectAll}
+
+literalResult : String -> Bool -> String
+literalResult source inside =
+  let cursor = LiteralCursor 0 0 PlainLiteral InitialLiteral False inside
+  match readLiteral (stringToChars source) cursor
+    Ok (LiteralRead s n LiteralHole _) => "hole:\{s}:\{intToString n}"
+    Ok (LiteralRead s n LiteralClose _) => "close:\{s}:\{intToString n}"
+    Err (LexError NestedInterpolation s e) =>
+      "nested:\{intToString s}:\{intToString e}"
+    Err _ => "other error"
+
+characterResult : String -> String
+characterResult source = match readCharacter (stringToChars source) 0
+  Ok (s, n) => "\{s}:\{intToString n}"
+  Err (LexError (BadUnicodeEscape (UnicodeOutOfRange text)) start end) =>
+    "out-of-range:\{text}:\{intToString start}:\{intToString end}"
+  Err _ => "other error"
+
+test "literal reader preserves escapes and reports the nested opener" = expectAll
+  [
+    expectEqual "hole:a:3" (literalResult "a\\{1}" False),
+    expectEqual "nested:1:3" (literalResult "a\\{1}" True),
+    expectEqual "close:a\\{b}:7" (literalResult "a\\\\{b}\"" True),
+    expectEqual "A:8" (characterResult "'\\u{41}'"),
+    expectEqual
+      "out-of-range:\\u{110000}:1:11"
+      (characterResult "'\\u{110000}'"),
+  ]
