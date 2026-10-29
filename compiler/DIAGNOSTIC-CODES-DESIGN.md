@@ -273,7 +273,7 @@ module both ways. The tables below stay as narrative.
 | `W-NONEXHAUSTIVE` | live | **non-exhaustive match** (warning) |
 | `W-NONEXHAUSTIVE-CLAUSES` | live | non-exhaustive clauses of a multi-clause function |
 | `W-PRELUDE-METHOD-SHADOW` | live | An interface method declared in module `M` whose name collides with an **implicit-prelude |
-| `W-UNREACHABLE-ALT` | live | an alternative of an or-pattern that earlier arms or alternatives already cover (warning) |
+| `W-UNREACHABLE-ALT` | live | an alternative of an or-pattern that earlier arms (or earlier alternatives of an unguarded arm) already cover (warning) |
 | `W-UNREACHABLE-ARM` | live | **unreachable match arm** (warning) |
 | `T-NO-IMPL-NAMED` | retired | never minted; the doc listed it as live |
 | `T-ROW-KIND-MISMATCH` | retired | never minted; the doc listed it as live |
@@ -573,7 +573,7 @@ kebab-case; never renumber (append only).
 | Code | Source |
 |---|---|
 | `W-NONEXHAUSTIVE` | non-exhaustive `match` (typecheck `matchWarnings`) |
-| `W-UNREACHABLE-ALT` | an alternative of an or-pattern arm already covered by an earlier unguarded arm or an earlier alternative of the same arm (typecheck `matchWarnings`; `checkMatchRedundant`). Reported only when the arm as a whole is reachable; top-level alternatives only |
+| `W-UNREACHABLE-ALT` | an alternative of an or-pattern arm already covered by an earlier unguarded arm or, in an unguarded arm, an earlier alternative of the same arm (typecheck `matchWarnings`; `checkMatchRedundant`). Reported only when the arm as a whole is reachable; top-level alternatives only |
 | `W-UNREACHABLE-ARM` | unreachable/redundant `match` arm — pattern already covered by an earlier unguarded arm (typecheck `matchWarnings`; `checkMatchRedundant`) |
 | `W-GUARD-INEXHAUSTIVE` | guards may not be exhaustive (exhaust) |
 | `W-NONEXHAUSTIVE-CLAUSES` | non-exhaustive clauses of a multi-clause function — a constructor is not covered by any clause (exhaust; the function-clause analog of `W-NONEXHAUSTIVE`) |

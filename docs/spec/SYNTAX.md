@@ -648,11 +648,12 @@ patterns starts an equation guard instead, as in `f x | x > 0 = x`.
   own bindings before control moves to the next arm (Rust RFC 2535). A single value
   can therefore run a guard more than once. Guard binds and equation guards follow
   the same rule.
-- An alternative that an earlier arm, or an earlier alternative of the same arm,
-  already covers warns `W-UNREACHABLE-ALT`. An arm whose alternatives are all covered
+- An alternative that an earlier arm, or an earlier alternative of the same unguarded
+  arm, already covers warns `W-UNREACHABLE-ALT`. An arm whose alternatives are all covered
   warns `W-UNREACHABLE-ARM` instead. Only the alternatives at the top of an arm's
   pattern are checked, and only constructor patterns: a literal is not checked for
-  redundancy, so a repeated literal arm or alternative does not warn.
+  redundancy, so a repeated literal arm or alternative does not warn. In a guarded arm
+  an earlier alternative never covers a later one, since the guard may fail and retry it.
 - Exhaustiveness counts the constructors the alternatives name. On a type with a
   third constructor `Tc`, the arm `Ta | Tb => 1` alone warns `W-NONEXHAUSTIVE`, naming
   `Tc`.

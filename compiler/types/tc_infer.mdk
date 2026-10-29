@@ -3064,7 +3064,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
           None
           None
         :: mctx.mcCells.matchWarnings.value
-  warnUnreachableAlts mctx col0 prec pat dp body
+  warnUnreachableAlts mctx col0 prec (armIsUnguarded gs) pat dp body
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range covers part of its type that the matrix cannot name
   -- (patHasRange) — either would produce a false "redundant" on a later arm.
@@ -3074,18 +3074,21 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
   let offCol2 = offCol || contributes && not (isConPat dp)
   checkRedundantGo mctx col0 prec2 heads2 offCol2 rest
 
--- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or the
--- alternatives before it in the same arm, already cover.  The arm as a whole being
+-- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or (in
+-- an unguarded arm only) the alternatives before it in the same arm, already cover.
+-- A guarded arm re-tries later alternatives when the guard fails (D1), so an earlier
+-- alternative of the same arm never covers a later one.  The arm as a whole being
 -- unreachable is reported once, as the arm.  An arm with a range stays out: a range
 -- is not in the covered matrix, so its alternatives cannot be judged against it.
 warnUnreachableAlts : ModuleCtx ->
   Option TabKey ->
   List (List Pat) ->
+  Bool ->
   Pat ->
   Pat ->
   Expr ->
   Unit
-warnUnreachableAlts mctx col0 prec pat (POr alts) body
+warnUnreachableAlts mctx col0 prec unguarded pat (POr alts) body
   | patHasRange pat = ()
   | otherwise =
     each
@@ -3099,8 +3102,8 @@ warnUnreachableAlts mctx col0 prec pat (POr alts) body
               None
               None
             :: mctx.mcCells.matchWarnings.value)
-      (unreachableAltIndexes mctx col0 prec [] 1 alts)
-warnUnreachableAlts _ _ _ _ _ _ = ()
+      (unreachableAltIndexes mctx col0 prec unguarded 1 alts)
+warnUnreachableAlts _ _ _ _ _ _ _ = ()
 
 -- 1-based positions of the alternatives covered by [prec] and the alternatives
 -- before them ([seen], newest first).  Empty when every alternative is covered:
@@ -3108,25 +3111,27 @@ warnUnreachableAlts _ _ _ _ _ _ = ()
 unreachableAltIndexes : ModuleCtx ->
   Option TabKey ->
   List (List Pat) ->
-  List (List Pat) ->
+  Bool ->
   Int ->
   List Pat ->
   List Int
-unreachableAltIndexes mctx col0 prec seen k alts =
-  let ks = deadAltIndexes mctx col0 prec seen k alts
+unreachableAltIndexes mctx col0 prec unguarded k alts =
+  let ks = deadAltIndexes mctx col0 prec unguarded [] k alts
   if listLen ks == listLen alts then [] else ks
 
 deadAltIndexes : ModuleCtx ->
   Option TabKey ->
   List (List Pat) ->
+  Bool ->
   List (List Pat) ->
   Int ->
   List Pat ->
   List Int
-deadAltIndexes _ _ _ _ _ [] = []
-deadAltIndexes mctx col0 prec seen k (a :: rest) =
+deadAltIndexes _ _ _ _ _ _ [] = []
+deadAltIndexes mctx col0 prec unguarded seen k (a :: rest) =
   let dead = patUnreachable mctx.mcCells.matchOracle.value col0 (seen ++ prec) a
-  let more = deadAltIndexes mctx col0 prec ([a] :: seen) (k + 1) rest
+  let seen2 = if unguarded then [a] :: seen else seen
+  let more = deadAltIndexes mctx col0 prec unguarded seen2 (k + 1) rest
   if dead then k :: more else more
 
 -- PERF fast path.  `patUnreachable` runs the full Maranget `useful` recursion, which
