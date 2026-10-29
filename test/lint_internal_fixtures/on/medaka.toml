@@ -1,0 +1,5 @@
+[package]
+name = "on"
+
+[lint]
+internal = true # on purpose

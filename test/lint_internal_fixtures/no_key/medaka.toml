@@ -1,0 +1,4 @@
+[package]
+name = "no_key"
+
+[lint]

@@ -335,6 +335,7 @@ import tools.lint_cmd.{
   lintCacheCtx,
   lintHelpText,
   renderRuleRowsJson,
+  renderRuleRowsNames,
   renderRuleRowsText,
   rulesPageMarkdown,
   selectRuleRows,
@@ -3889,7 +3890,11 @@ lintArgSpec =
         "gated|baselined"
         "with --list-rules: keep one ratchet",
       value ["--tier"] "file|cross" "with --list-rules: keep one rule tier",
+      switch ["--names"] "with --list-rules: print only the rule names",
       value ["--explain"] "<rule>" "print a rule's summary and documentation",
+      switch
+        ["--internal"]
+        "run the internal-scope rules on every target, manifest or not",
     ])
 
 runLintCmd : List String -> <IO> Unit
@@ -3909,11 +3914,12 @@ runLintCmd argv0 =
 assertNoListOnlyFlags : Args -> <IO> Unit
 assertNoListOnlyFlags a =
   if flag "--markdown" a
+    || flag "--names" a
     || isSome (flagValue "--scope" a)
     || isSome (flagValue "--ratchet" a)
     || isSome (flagValue "--tier" a) then
     dieMsg
-      "medaka lint: --markdown/--scope/--ratchet/--tier require --list-rules"
+      "medaka lint: --markdown/--names/--scope/--ratchet/--tier require --list-rules"
 
 runLintListRules : Args -> <IO> Unit
 runLintListRules a =
@@ -3930,6 +3936,8 @@ runLintListRules a =
       Ok rows =>
         if flag "--json" a then
           putStr (renderRuleRowsJson rows)
+        else if flag "--names" a then
+          putStr (renderRuleRowsNames rows)
         else
           putStr (renderRuleRowsText rows)
 
@@ -4034,9 +4042,11 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
   -- handed down alongside the parsed rows.
   let cwd = canonicalizePath "."
   let baseCtx = loadLintBaselineCtx cwd baselineArg
+  let internalFlag = flag "--internal" a
   if isSome writeBaselineArg then
     runLintWriteBaselineCmd
       stdlibIdx
+      internalFlag
       disableNames
       onlyNames
       denyNames
@@ -4044,7 +4054,14 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
       (optDefault writeBaselineArg "")
       files
   else if jsonMode then
-    runLintJsonCmd stdlibIdx disableNames onlyNames denyNames baseCtx files
+    runLintJsonCmd
+      stdlibIdx
+      internalFlag
+      disableNames
+      onlyNames
+      denyNames
+      baseCtx
+      files
   else
     let multiFile = match files
       _ :: _ :: _ => True
@@ -4058,6 +4075,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     let (perFileErr, entries, parsed) =
       lintFilesGo
         stdlibIdx
+        internalFlag
         fixMode
         multiFile
         disableNames
@@ -4134,6 +4152,7 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
 -- have found — a baseline can never be written from a different derivation than
 -- the one that checks it.
 runLintWriteBaselineCmd : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
@@ -4141,9 +4160,16 @@ runLintWriteBaselineCmd : StdlibIndex ->
   String ->
   List String ->
   <IO> Unit
-runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
+runLintWriteBaselineCmd idx internalFlag disableNames onlyNames denyNames cwd out files =
   let triples =
-    lintFilesToDiagTriples idx disableNames onlyNames denyNames None files
+    lintFilesToDiagTriples
+      idx
+      internalFlag
+      disableNames
+      onlyNames
+      denyNames
+      None
+      files
   let parseFailures = flatMap lintBaselineParseFailures triples
   if listLen parseFailures > 0 then
     emitWarningLines parseFailures

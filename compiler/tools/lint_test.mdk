@@ -43,6 +43,8 @@ import tools.lint.{
 import tools.lint_cmd.{
   allRuleRows,
   explainRule,
+  internalDisabledFor,
+  internalRuleNames,
   lintFilesToDiagTriples,
   rulesPageMarkdown,
   selectRuleRows,
@@ -94,7 +96,7 @@ test "the old per-file-only triple builder never carries a duplicate-body findin
   match buildStdlibIndexResult
     Err _ => fail "could not build stdlib index"
     Ok idx =>
-      let triples = lintFilesToDiagTriples idx [] [] [] None fixtureFiles
+      let triples = lintFilesToDiagTriples idx True [] [] [] None fixtureFiles
       expectTrue (not (anyDupRuleDiag triples))
 
 -- ── 2. the JSON path's own internals surface it ─────────────────────────────
@@ -102,7 +104,7 @@ test "the JSON path's own internals surface the duplicate-body finding" =
   match buildStdlibIndexResult
     Err _ => fail "could not build stdlib index"
     Ok idx =>
-      let quads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+      let quads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let triples = map dropQuadParse quads
       let cross = crossFileJsonFindings [] [] [] quads
       let merged = mergeCrossFileIntoTriples cross triples
@@ -113,7 +115,7 @@ test "the MCP path's own internals produce the SAME finding set as JSON" =
   match buildStdlibIndexResult
     Err _ => fail "could not build stdlib index"
     Ok idx =>
-      let jsonQuads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+      let jsonQuads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let jsonTriples = map dropQuadParse jsonQuads
       let jsonCross = crossFileJsonFindings [] [] [] jsonQuads
       let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
@@ -189,7 +191,7 @@ isOkText (Err _) = False
 test "the test-verb rules report but do not fix" = match buildStdlibIndexResult
   Err _ => fail "could not build stdlib index"
   Ok idx =>
-    let triples = lintFilesToDiagTriples idx [] [] [] None verbFixtures
+    let triples = lintFilesToDiagTriples idx True [] [] [] None verbFixtures
     expectEach (map (reportsTestVerbRule triples) verbFixtures)
 
 verbFixtures : List String
@@ -218,3 +220,67 @@ isTestVerbDiag : Diag -> Bool
 isTestVerbDiag d =
   diagCode d == "rule-test-bool-literal-equal"
     || diagCode d == "rule-test-equal-in-true"
+
+-- ── 6. internal-scope activation ────────────────────────────────────────────
+-- Internal rules run only under `--internal` or a manifest whose `[lint]`
+-- section says `internal = true`; every other manifest, and no manifest at all,
+-- leaves them off.
+test "internal rules are off unless a manifest or --internal turns them on" = expectEach
+  [
+    (
+      "the flag wins without a manifest",
+      expectEqual [] (internalDisabledFor True "stdlib/list.mdk"),
+    ),
+    (
+      "no manifest",
+      expectEqual
+        internalRuleNames
+        (internalDisabledFor False "stdlib/list.mdk"),
+    ),
+    (
+      "[lint] internal = true",
+      expectEqual
+        []
+        (internalDisabledFor False "test/lint_internal_fixtures/on/a.mdk"),
+    ),
+    (
+      "a manifest without the key",
+      expectEqual
+        internalRuleNames
+        (internalDisabledFor False "test/lint_internal_fixtures/no_key/a.mdk"),
+    ),
+    (
+      "the key outside [lint]",
+      expectEqual
+        internalRuleNames
+        (internalDisabledFor
+          False
+          "test/lint_internal_fixtures/wrong_section/a.mdk"),
+    ),
+    (
+      "a quoted value",
+      expectEqual
+        internalRuleNames
+        (internalDisabledFor False "test/lint_internal_fixtures/quoted/a.mdk"),
+    ),
+    (
+      "the compiler's own manifest",
+      expectEqual [] (internalDisabledFor False "compiler/tools/lint.mdk"),
+    ),
+  ]
+
+test "the internal-rule list is exactly the internal-scope registry rows" =
+  let rows = match selectRuleRows (Some "internal") None None
+    Ok rs => rs
+    Err _ => []
+  expectEqual (listLen rows) (listLen internalRuleNames)
+
+-- With activation off the test-verb rules (scope Internal) are silent on
+-- fixtures that trip them; the `--internal` run above reports them.
+test "an internal rule is silent on a manifest-less project" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let triples = lintFilesToDiagTriples idx False [] [] [] None verbFixtures
+      expectFalse
+        (anyList (t => anyList isTestVerbDiag (tripleDiags t)) triples)
