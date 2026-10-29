@@ -66,6 +66,7 @@ litSexp (LInt n) = node "LInt" [intToString n]
 litSexp (LFloat f) = node "LFloat" [floatToString f]
 litSexp (LString s) = node "LString" [escStr s]
 litSexp (LChar s) = node "LChar" [escStr s]
+litSexp (LByte n) = node "LByte" [intToString n]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]

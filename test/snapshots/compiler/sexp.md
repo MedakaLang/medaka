@@ -1,5 +1,5 @@
 # META
-source_lines=422
+source_lines=423
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -70,6 +70,7 @@ litSexp (LInt n) = node "LInt" [intToString n]
 litSexp (LFloat f) = node "LFloat" [floatToString f]
 litSexp (LString s) = node "LString" [escStr s]
 litSexp (LChar s) = node "LChar" [escStr s]
+litSexp (LByte n) = node "LByte" [intToString n]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]
@@ -441,6 +442,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LFloat" (PVar "f"))) (EApp (EApp (EVar "node") (ELit (LString "LFloat"))) (EListLit (EApp (EVar "floatToString") (EVar "f")))))
 (DFunDef false "litSexp" ((PCon "LString" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LString"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "litSexp" ((PCon "LChar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LChar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "litSexp" ((PCon "LByte" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "LByte"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
 (DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
@@ -646,6 +648,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LFloat" (PVar "f"))) (EApp (EApp (EVar "node") (ELit (LString "LFloat"))) (EListLit (EApp (EVar "floatToString") (EVar "f")))))
 (DFunDef false "litSexp" ((PCon "LString" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LString"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "litSexp" ((PCon "LChar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LChar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "litSexp" ((PCon "LByte" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "LByte"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
 (DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))

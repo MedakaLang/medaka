@@ -1,5 +1,5 @@
 # META
-source_lines=5621
+source_lines=5623
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1029,6 +1029,7 @@ matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
 matchPat (PLit (LString s)) (VString t) = if s == t then Some [] else None
 matchPat (PLit (LChar c)) (VChar d) = if c == d then Some [] else None
+matchPat (PLit (LByte n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LBool b)) (VBool c) = if boolEq b c then Some [] else None
 matchPat (PLit LUnit) VUnit = Some []
 matchPat (PCon "True" []) (VBool True) = Some []
@@ -1670,6 +1671,7 @@ eval _ (ELit (LI64 hi lo)) = VI64 hi lo
 eval _ (EWideLit hi lo _ _) = VU64 hi lo
 eval _ (ELit (LString s)) = VString s
 eval _ (ELit (LChar c)) = VChar c
+eval _ (ELit (LByte n)) = VInt n
 eval _ (ELit (LBool b)) = VBool b
 eval _ (ELit LUnit) = VUnit
 eval env (EVar x) = if startsWithAt x then VUnit else lookupEnv env x
@@ -5986,6 +5988,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LString" (PVar "s"))) (PCon "VString" (PVar "t"))) (EIf (EBinOp "==" (EVar "s") (EVar "t")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PCon "VChar" (PVar "d"))) (EIf (EBinOp "==" (EVar "c") (EVar "d")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
+(DFunDef false "matchPat" ((PCon "PLit" (PCon "LByte" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PCon "VBool" (PVar "c"))) (EIf (EApp (EApp (EVar "boolEq") (EVar "b")) (EVar "c")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LUnit")) (PCon "VUnit")) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PCon" (PLit (LString "True")) (PList)) (PCon "VBool" (PCon "True"))) (EApp (EVar "Some") (EListLit)))
@@ -6202,6 +6205,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
+(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LUnit"))) (EVar "VUnit"))
 (DFunDef false "eval" ((PVar "env") (PCon "EVar" (PVar "x"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
@@ -7828,6 +7832,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LString" (PVar "s"))) (PCon "VString" (PVar "t"))) (EIf (EBinOp "==" (EVar "s") (EVar "t")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PCon "VChar" (PVar "d"))) (EIf (EBinOp "==" (EVar "c") (EVar "d")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
+(DFunDef false "matchPat" ((PCon "PLit" (PCon "LByte" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PCon "VBool" (PVar "c"))) (EIf (EApp (EApp (EVar "boolEq") (EVar "b")) (EVar "c")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LUnit")) (PCon "VUnit")) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PCon" (PLit (LString "True")) (PList)) (PCon "VBool" (PCon "True"))) (EApp (EVar "Some") (EListLit)))
@@ -8044,6 +8049,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
+(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LUnit"))) (EVar "VUnit"))
 (DFunDef false "eval" ((PVar "env") (PCon "EVar" (PVar "x"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))

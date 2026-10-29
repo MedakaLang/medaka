@@ -1,5 +1,5 @@
 # META
-source_lines=1241
+source_lines=1242
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -497,6 +497,7 @@ litEq (LInt a) (LInt b) = a == b
 litEq (LFloat a) (LFloat b) = a == b
 litEq (LString a) (LString b) = a == b
 litEq (LChar a) (LChar b) = a == b
+litEq (LByte a) (LByte b) = a == b
 litEq (LBool a) (LBool b) = a == b
 litEq LUnit LUnit = True
 litEq (LU64 ah al) (LU64 bh bl) = ah == bh && al == bl
@@ -1380,6 +1381,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LByte" (PVar "a")) (PCon "LByte" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
 (DFunDef false "litEq" ((PCon "LU64" (PVar "ah") (PVar "al")) (PCon "LU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
@@ -1810,6 +1812,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LByte" (PVar "a")) (PCon "LByte" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
 (DFunDef false "litEq" ((PCon "LU64" (PVar "ah") (PVar "al")) (PCon "LU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))

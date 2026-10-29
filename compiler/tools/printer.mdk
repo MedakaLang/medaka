@@ -924,6 +924,22 @@ escapeCharLit c
   | c == "\0" = "\\0"
   | otherwise = c
 
+-- A byte literal body: the char-literal escapes, then printable ASCII as itself,
+-- everything else as `\xNN` in uppercase hex.
+escapeByteLit : Int -> String
+escapeByteLit n
+  | n == 39 = "\\'"
+  | n == 92 = "\\\\"
+  | n == 10 = "\\n"
+  | n == 9 = "\\t"
+  | n == 13 = "\\r"
+  | n == 0 = "\\0"
+  | n >= 32 && n < 127 = optionOr "?" (map charToStr (charFromCode n))
+  | otherwise = "\\x\{upperHexDigit (n / 16)}\{upperHexDigit (n % 16)}"
+
+upperHexDigit : Int -> String
+upperHexDigit d = stringSlice d (d + 1) "0123456789ABCDEF"
+
 -- String-literal escaping: quote, backslash, \n \t \r, NUL, and any other C0
 -- control char as `\u{XX}` — never a raw control byte (a raw NUL once landed in
 -- this file's own source and made it invisible to grep).
@@ -963,6 +979,7 @@ printLit (LFloat f) =
   text (if n > 0 && stringSlice (n - 1) n s == "." then s ++ "0" else s)
 printLit (LString s) = text (escStringLit s)
 printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
+printLit (LByte n) = text ("b'" ++ escapeByteLit n ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
 printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)

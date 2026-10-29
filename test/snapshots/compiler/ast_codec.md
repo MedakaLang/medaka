@@ -1,5 +1,5 @@
 # META
-source_lines=2126
+source_lines=2132
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -275,6 +275,8 @@ tagLBool : Unit -> Int
 tagLBool () = 6
 tagLUnit : Unit -> Int
 tagLUnit () = 7
+tagLByte : Unit -> Int
+tagLByte () = 8
 
 -- TyConOrigin
 tagOriginUnresolved : Unit -> Int
@@ -581,6 +583,7 @@ sexpLit (LU64 a0 a1) = SList [tagAtom (tagLU64 ()), sexpInt a0, sexpInt a1]
 sexpLit (LI64 a0 a1) = SList [tagAtom (tagLI64 ()), sexpInt a0, sexpInt a1]
 sexpLit (LString a0) = SList [tagAtom (tagLString ()), sexpString a0]
 sexpLit (LChar a0) = SList [tagAtom (tagLChar ()), sexpString a0]
+sexpLit (LByte a0) = SList [tagAtom (tagLByte ()), sexpInt a0]
 sexpLit (LBool a0) = SList [tagAtom (tagLBool ()), sexpBool a0]
 sexpLit LUnit = tagAtom (tagLUnit ())
 
@@ -1191,6 +1194,9 @@ readLitTagged t cur
   | t == tagLBool () =
     let a0 = readBool cur
     LBool a0
+  | t == tagLByte () =
+    let a0 = readInt cur
+    LByte a0
   | otherwise = cursorFail cur dfltLit
 
 readTyConOrigin : SexpCursor -> TyConOrigin
@@ -2223,6 +2229,8 @@ readDeclTagged t cur
 (DFunDef false "tagLBool" ((PLit LUnit)) (ELit (LInt 6)))
 (DTypeSig false "tagLUnit" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "tagLUnit" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagLByte" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLByte" ((PLit LUnit)) (ELit (LInt 8)))
 (DTypeSig false "tagOriginUnresolved" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "tagOriginUnresolved" ((PLit LUnit)) (ELit (LInt 0)))
 (DTypeSig false "tagOriginBuiltin" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -2490,6 +2498,7 @@ readDeclTagged t cur
 (DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLI64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
 (DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLString") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLChar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LByte" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLByte") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLBool") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "tagAtom") (EApp (EVar "tagLUnit") (ELit LUnit))))
 (DTypeSig false "sexpTyConOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
@@ -2727,7 +2736,7 @@ readDeclTagged t cur
 (DTypeSig false "readLitBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
 (DFunDef false "readLitBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLUnit") (ELit LUnit))) (EVar "LUnit") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readLitTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLByte") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LByte") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 (DTypeSig false "readTyConOrigin" (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin")))
 (DFunDef false "readTyConOrigin" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyConOriginTagged")) (EVar "readTyConOriginBare")) (EVar "cur")))
 (DTypeSig false "readTyConOriginBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
@@ -2951,6 +2960,8 @@ readDeclTagged t cur
 (DFunDef false "tagLBool" ((PLit LUnit)) (ELit (LInt 6)))
 (DTypeSig false "tagLUnit" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "tagLUnit" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagLByte" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLByte" ((PLit LUnit)) (ELit (LInt 8)))
 (DTypeSig false "tagOriginUnresolved" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "tagOriginUnresolved" ((PLit LUnit)) (ELit (LInt 0)))
 (DTypeSig false "tagOriginBuiltin" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -3218,6 +3229,7 @@ readDeclTagged t cur
 (DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLI64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
 (DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLString") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLChar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LByte" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLByte") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLBool") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")))))
 (DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "tagAtom") (EApp (EVar "tagLUnit") (ELit LUnit))))
 (DTypeSig false "sexpTyConOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
@@ -3455,7 +3467,7 @@ readDeclTagged t cur
 (DTypeSig false "readLitBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
 (DFunDef false "readLitBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLUnit") (ELit LUnit))) (EVar "LUnit") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readLitTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLByte") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LByte") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 (DTypeSig false "readTyConOrigin" (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin")))
 (DFunDef false "readTyConOrigin" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyConOriginTagged")) (EVar "readTyConOriginBare")) (EVar "cur")))
 (DTypeSig false "readTyConOriginBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
