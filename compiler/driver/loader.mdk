@@ -1269,6 +1269,42 @@ scanSiteRoot inDeps (line :: rest) =
   else
     scanSiteRoot inDeps rest
 
+-- Does the project rooted at `root` switch on the linter's internal-scope rules
+-- (`[lint]` section, `internal = true`)?  Read like `allow-internal`: False when
+-- the manifest is missing, unreadable or states anything but the bare token
+-- `true`.  The key is only honoured inside `[lint]`, since `internal` is too
+-- common a word to claim in every section.
+export
+manifestLintInternal : String -> <IO> Bool
+manifestLintInternal root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => False
+    Ok src => scanLintInternal False (splitNl src)
+  else
+    False
+
+scanLintInternal : Bool -> List String -> Bool
+scanLintInternal _ [] = False
+scanLintInternal inLint (line :: rest) =
+  let t = stringTrim line
+  let header = match splitOnChar "#" t
+    h :: _ => stringTrim h
+    [] => t
+  if startsWith "[" header then
+    scanLintInternal (header == "[lint]") rest
+  else if inLint && keyBeforeEq t == "internal" then
+    lineValueIsTrue t
+  else
+    scanLintInternal inLint rest
+
+-- True when the text after the `=` is the bare token `true`; a trailing `#`
+-- comment is inert.
+lineValueIsTrue : String -> Bool
+lineValueIsTrue t = match splitOnChar "#" (rawValAfterEq t)
+  value :: _ => stringTrim value == "true"
+  [] => False
+
 -- A module is trusted when the root it resolved under is a trusted root, or
 -- when its file lies anywhere under `stdlibRoot`. The second arm is what
 -- trusts a nested stdlib module (`stdlib/crypto/hmac.mdk`) checked as the

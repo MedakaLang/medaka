@@ -112,6 +112,31 @@ rule = "rule-clone-type"
 count = 2
 
 [[entry]]
+file = "pds/lib/base58.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+rule = "rule-orelse-staircase"
+count = 1
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
 file = "stdlib/http.mdk"
 rule = "rule-clone-type"
 count = 2
