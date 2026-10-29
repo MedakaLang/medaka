@@ -276,4 +276,9 @@ main = f ()
         """{- comment -}
 main = [1, 2,]
 """,
+        """data E = L Int | R Int
+f e = match e
+  L x | R x => x
+main = f (L 1)
+""",
       ])

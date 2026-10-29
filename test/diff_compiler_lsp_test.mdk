@@ -1658,17 +1658,22 @@ test "references on an or-pattern binder reach every alternative's site" = withS
     ("medaka.toml", """[project]
 name = "orrefs"
 """),
-    ("main.mdk", """data E = L Int Int | R Int Int
+    (
+      "main.mdk",
+      """data E = L Int Int | R Int Int
 f e = match e
   L x y | R y x => x * 10 + y
 main = f (L 1 2)
-"""),
+""",
+    ),
   ]
     Err e => fail e
     Ok _ =>
       let main = stringConcat ["file://", dir, "/main.mdk"]
       let (errors, out) = drive [
-        didOpenMsg main """data E = L Int Int | R Int Int
+        didOpenMsg
+          main
+          """data E = L Int Int | R Int Int
 f e = match e
   L x y | R y x => x * 10 + y
 main = f (L 1 2)
@@ -2500,3 +2505,76 @@ test "closing another project keeps an open broken dependency last good source" 
               ("after", expectEqual expected (hoverContents 102 objs)),
             ]
       _ => fail "could not create project fixtures")
+
+test "cached open sibling preserves or-pattern references across edits" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"orcache\"\n"),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", "import lib.{value}\nmain = value\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let src =
+        """data E = L Int | R Int
+export value = match L 1
+  L x | R x => x
+"""
+      let changed =
+        """data E = L Int | R Int
+export value = match R 2
+  L x | R x => x + 1
+"""
+      let (errors, out) = drive [
+        didOpenMsg main "import lib.{value}\nmain = value\n",
+        didOpenMsg lib src,
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        rpc
+          12
+          "textDocument/references"
+          (jObject [
+            ("textDocument", jObject [("uri", JString lib)]),
+            ("position", coordPos 2 15),
+            ("context", jObject [("includeDeclaration", JBool True)]),
+          ]),
+        didChangeMsg lib changed,
+        rpc 13 "textDocument/definition" (posParams main 1 8),
+        rpc
+          14
+          "textDocument/references"
+          (jObject [
+            ("textDocument", jObject [("uri", JString lib)]),
+            ("position", coordPos 2 15),
+            ("context", jObject [("includeDeclaration", JBool True)]),
+          ]),
+        notify "textDocument/didClose" (docParams lib),
+        rpc 15 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let definition = Some (jArray [coordLocation lib 1 7 12])
+          let refs =
+            Some
+              (jArray [
+                coordLocation lib 2 4 5,
+                coordLocation lib 2 10 11,
+                coordLocation lib 2 15 16,
+              ])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("cold definition", expectEqual definition (resultTo 10 objs)),
+            ("warm definition", expectEqual definition (resultTo 11 objs)),
+            ("cold references", expectEqual refs (resultTo 12 objs)),
+            ("edited definition", expectEqual definition (resultTo 13 objs)),
+            ("edited references", expectEqual refs (resultTo 14 objs)),
+            (
+              "closed sibling reads disk",
+              expectEqual
+                (Some (jArray [coordLocation lib 0 7 12]))
+                (resultTo 15 objs),
+            ),
+          ])
