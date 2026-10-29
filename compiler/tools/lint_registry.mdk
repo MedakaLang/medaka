@@ -21,11 +21,9 @@ import tools.lint_core.{
   mkRule,
 }
 import tools.lint_shared.{
-  ruleNameAndThenPureMap,
   ruleNameBindChainToDo,
   ruleNameBindThenDestructure,
   ruleNameBoolSimplify,
-  ruleNameClauseMap,
   ruleNameCloneType,
   ruleNameComplementPredicate,
   ruleNameConcatToInterp,
@@ -36,14 +34,10 @@ import tools.lint_shared.{
   ruleNameDuplicateBody,
   ruleNameIfMaxMin,
   ruleNameLambdaSection,
-  ruleNameMatchToMap,
-  ruleNameMissingSignature,
-  ruleNameOrElseStaircase,
   ruleNamePreferAssignOp,
   ruleNamePromissoryReader,
   ruleNameRegexLiteral,
   ruleNameRemParity,
-  ruleNameTestBoolLiteralEqual,
   ruleNameTestEqualInTrue,
   ruleNameWhenUnless,
 }
@@ -53,8 +47,13 @@ import tools.lint_rule_not_eq as NotEq
 import tools.lint_rule_double_reverse as DoubleReverse
 import tools.lint_rule_self_shadow_extern as SelfShadowExtern
 import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
+import tools.lint_rule_andthen_pure_map as AndThenPureMap
+import tools.lint_rule_missing_signature as MissingSignature
+import tools.lint_rule_match_to_map as MatchToMap
+import tools.lint_rule_orelse_staircase as OrElseStaircase
+import tools.lint_rule_clause_map as ClauseMap
+import tools.lint_rule_internal_test_bool_literal_equal as TestBoolLiteralEqual
 import tools.lint_rules_staging.{
-  andThenPureMapFix,
   bindThenDestructureFix,
   boolSimplifyFix,
   complementPredicateFix,
@@ -63,14 +62,11 @@ import tools.lint_rules_staging.{
   duplicateBodySameFileRule,
   ifMaxMinFix,
   lambdaSectionFix,
-  matchToMapFix,
   preferAssignFix,
   remParityFix,
-  ruleAndThenPureMap,
   ruleBindChainToDo,
   ruleBindThenDestructure,
   ruleBoolSimplify,
-  ruleClauseMap,
   ruleCloneType,
   ruleComplementPredicate,
   ruleConcatToInterp,
@@ -82,16 +78,11 @@ import tools.lint_rules_staging.{
   ruleForPreferAssign,
   ruleIfMaxMin,
   ruleLambdaSection,
-  ruleMatchToMap,
-  ruleMissingSignature,
-  ruleOrElseStaircase,
   rulePromissoryReader,
   ruleRegexLiteral,
   ruleRemParity,
-  ruleTestBoolLiteralEqual,
   ruleTestEqualInTrue,
   ruleWhenUnless,
-  testBoolLiteralEqualFix,
   testEqualInTrueFix,
   whenUnlessFix,
 }
@@ -178,25 +169,6 @@ ifMaxMinRule =
     ruleIfMaxMin
     (Some ifMaxMinFix)
 
-andThenPureMapRule : Rule
-andThenPureMapRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameAndThenPureMap,
-      summary =
-        "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
-      doc =
-        "A monadic bind whose continuation only wraps a pure transformation in `pure` is `map`, by the functor law `m >>= (pure . f) == fmap f m`.\n\nBefore:\n  andThen m (x => pure (f x))\nAfter:\n  map f m",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleAndThenPureMap
-    (Some andThenPureMapFix)
-
 destructureInParamRule : Rule
 destructureInParamRule =
   mkRule
@@ -215,25 +187,6 @@ destructureInParamRule =
     }
     ruleDestructureInParam
     (Some destructureInParamFix)
-
-missingSignatureRule : Rule
-missingSignatureRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameMissingSignature,
-      summary =
-        "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
-      doc =
-        "A top-level binding without a sibling type signature has an inferred type that changes silently when its body does. Write the signature (Haskell -Wmissing-signatures).\n\nBefore:\n  double x = x * 2\nAfter:\n  double : Int -> Int\n  double x = x * 2",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleMissingSignature
-    None
 
 boolSimplifyRule : Rule
 boolSimplifyRule =
@@ -310,25 +263,6 @@ complementPredicateRule =
     }
     ruleComplementPredicate
     (Some complementPredicateFix)
-
-matchToMapRule : Rule
-matchToMapRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameMatchToMap,
-      summary =
-        "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
-      doc =
-        "A two-arm `match` on an `Option` or `Result` that passes the failure constructor through and re-wraps the success value is `map` (hlint \"use fmap\").\n\nBefore:\n  match r\n    Ok v => Ok (f v)\n    Err e => Err e\nAfter:\n  map f r",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleMatchToMap
-    (Some matchToMapFix)
 
 bindChainToDoRule : Rule
 bindChainToDoRule =
@@ -425,25 +359,6 @@ promissoryReaderRule =
     rulePromissoryReader
     None
 
-orElseStaircaseRule : Rule
-orElseStaircaseRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameOrElseStaircase,
-      summary =
-        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
-      doc =
-        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))",
-      category = Complexity,
-      scope = Universal,
-      ratchet = Baselined,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleOrElseStaircase
-    None
-
 cloneTypeRule : Rule
 cloneTypeRule =
   mkRule
@@ -461,25 +376,6 @@ cloneTypeRule =
       needs = [],
     }
     ruleCloneType
-    None
-
-clauseMapRule : Rule
-clauseMapRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameClauseMap,
-      summary =
-        "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)",
-      doc =
-        "A two-clause `[]` / `(x :: xs)` recursion that conses a per-element transform onto the recursive call is a hand-written `map`. Suggest-only.\n\nBefore:\n  go [] = []\n  go (x :: xs) = f x :: go xs\nAfter:\n  map f",
-      category = Style,
-      scope = Universal,
-      ratchet = Baselined,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleClauseMap
     None
 
 directiveReasonRule : Rule
@@ -520,25 +416,6 @@ regexLiteralRule =
     ruleRegexLiteral
     None
 
-testBoolLiteralEqualRule : Rule
-testBoolLiteralEqualRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameTestBoolLiteralEqual,
-      summary =
-        "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
-      doc =
-        "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)",
-      category = Style,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleTestBoolLiteralEqual
-    (Some testBoolLiteralEqualFix)
-
 testEqualInTrueRule : Rule
 testEqualInTrueRule =
   mkRule
@@ -567,29 +444,29 @@ allRules = [
   bindThenDestructureRule,
   lambdaSectionRule,
   ifMaxMinRule,
-  andThenPureMapRule,
+  AndThenPureMap.rule,
   destructureInParamRule,
-  missingSignatureRule,
+  MissingSignature.rule,
   NotEq.rule,
   boolSimplifyRule,
   remParityRule,
   DoubleReverse.rule,
   whenUnlessRule,
   complementPredicateRule,
-  matchToMapRule,
+  MatchToMap.rule,
   bindChainToDoRule,
   deadCodeRule,
   concatToInterpRule,
   SelfShadowExtern.rule,
   preferAssignOpRule,
   promissoryReaderRule,
-  orElseStaircaseRule,
+  OrElseStaircase.rule,
   cloneTypeRule,
-  clauseMapRule,
+  ClauseMap.rule,
   duplicateBodySameFileRule,
   directiveReasonRule,
   regexLiteralRule,
-  testBoolLiteralEqualRule,
+  TestBoolLiteralEqual.rule,
   testEqualInTrueRule,
   TestPreludeShadow.rule,
 ]
