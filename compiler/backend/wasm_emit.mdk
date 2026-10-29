@@ -6,8 +6,8 @@ import backend.wasm_repr.{
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
   selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, Env,
-  envEmpty, envHas, envBindUnstamped, envRestrict, envExtendUnstamped,
-  paramEnvOver, appHead, isPlainParam, isValBind
+  envEmpty, envHas, envBindUnstamped, envBindPat, envRestrict,
+  envExtendUnstamped, paramEnvOver, appHead, isPlainParam, isValBind
 }
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
@@ -739,6 +739,9 @@ data FnCtx = FnCtx {
   localSlots : Ref (OrdMap LocalSlot),
   localTypes : Ref (List WasmRepr),
   nextLocal : Ref Int,
+  -- the decision tree being emitted: each arm some or-pattern candidate shares
+  -- the body of, keyed by its index
+  orBlocks : OrdMap OrArm,
 }
 
 freshFnCtx : Unit -> FnCtx
@@ -751,6 +754,7 @@ freshFnCtx () = FnCtx {
   localSlots = Ref omEmpty,
   localTypes = Ref [],
   nextLocal = Ref 0,
+  orBlocks = omEmpty,
 }
 
 progValNames : Prog -> List String
@@ -8567,9 +8571,22 @@ emitDecisionTail prog env arity scrut arms tree =
   let st = emitRefExpr prog env 0 scrut
   let scrutL = scratchLocal 0
   let occ0 = ["local.get $" ++ scrutL]
+  let shared = orArms "$ort" arms
+  let progT = progWithOrBlocks shared prog
+  let treeCode = emitTreeTail progT env arity 1 occ0 [occ0] arms tree
   st
     ++ ["local.set $" ++ scrutL]
-    ++ emitTreeTail prog env arity 1 occ0 [occ0] arms tree
+    ++ fold (inner a => orBlockTail prog env arity a inner) treeCode shared
+
+-- A tail tree's code wrapped in the block of the shared arm [a], the arm's body
+-- after the block.  Every path out of the tree but a candidate's branch returns
+-- or branches further out, so nothing falls into the body.
+orBlockTail : Prog -> Env -> Int -> OrArm -> List String -> List String
+orBlockTail prog env arity a inner =
+  orBlockOpen a
+    ++ indent (inner ++ ["unreachable"])
+    ++ orBlockClose a
+    ++ emitRefTail prog (orBodyEnv env a) arity a.oaBody
 
 -- the decision tree, with arm LEAVES emitted in tail position.  Structurally mirrors
 -- emitTreeRef but: leaves → emitRefTail (return_call / value+return), and switches do
@@ -8603,13 +8620,16 @@ emitLeafTail : Prog ->
   List CArm ->
   Int ->
   List String
-emitLeafTail prog env arity root arms i = match nthArm arms i
-  Some (CArm pat _ body) =>
+emitLeafTail prog env arity root arms i = match leafArm prog arms i
+  Some (pat, _, body, share) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let bodyCode = emitRefTail prog env2 arity body
-    binds ++ bodyCode
-  Some (CArmAlt _ _ _) => orArmGap prog
+    binds ++ armExitTail prog env2 arity body share
   None => gapLP prog "ref-mode: tail decision arm index out of range"
+
+-- A matched tail arm's body, or the branch to its shared block.
+armExitTail : Prog -> Env -> Int -> CExpr -> Option OrArm -> List String
+armExitTail _ _ _ _ (Some a) = orBlockExit a
+armExitTail prog env arity body None = emitRefTail prog env arity body
 
 -- Like emitGuardArmRef, for guarded arms in tail position.
 -- G6 (#379): same `patTestBind` re-match as emitGuardArmRef — see its note.  A `PRng`
@@ -8625,20 +8645,21 @@ emitGuardArmTail : Prog ->
   Int ->
   CTree ->
   List String
-emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
-  Some (CArm pat guards body) =>
-    let gLabel = "$gt" ++ intToString d
-    let (tests, binds, env2) = patTestBind prog pat root gLabel env
-    -- #379: guards now thread the env (a CGBind binds names the body can see), so the
-    -- body is emitted under env3, not env2.
-    let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
-    let armCode =
-      ["block " ++ gLabel]
-        ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body)
-        ++ ["end"]
-    armCode ++ emitTreeTail prog env arity d root occs arms fail
-  Some (CArmAlt _ _ _) => orArmGap prog
-  None => gapLP prog "ref-mode: tail guarded arm index out of range"
+emitGuardArmTail prog env arity d root occs arms i fail =
+  match leafArm prog arms i
+    Some (pat, guards, body, share) =>
+      let gLabel = "$gt" ++ intToString d
+      let (tests, binds, env2) = patTestBind prog pat root gLabel env
+      -- #379: guards now thread the env (a CGBind binds names the body can see), so the
+      -- body is emitted under env3, not env2.
+      let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
+      let armCode =
+        ["block " ++ gLabel]
+          ++ indent
+            (tests ++ binds ++ gcode ++ armExitTail prog env3 arity body share)
+          ++ ["end"]
+      armCode ++ emitTreeTail prog env arity d root occs arms fail
+    None => gapLP prog "ref-mode: tail guarded arm index out of range"
 
 emitSwitchTail : Prog ->
   Env ->
@@ -9844,8 +9865,135 @@ emitDecisionRef prog env d scrut arms tree =
   st
     ++ ["local.set $" ++ scrutL]
     ++ ["block " ++ decLabel ++ " (result (ref eq))"]
-    ++ indent (emitTreeRef prog env (d + 1) decLabel occ0 [occ0] arms tree)
+    ++ indent (emitTreeShared prog env (d + 1) decLabel occ0 arms tree)
     ++ ["end"]
+
+-- The tree, wrapped in one block per arm an or-pattern candidate shares the body
+-- of.  A candidate's leaf binds the arm's variables and branches out of the
+-- arm's block, and the body follows the block's `end`, emitted once.  A tree
+-- with no candidate arm is emitted unwrapped.
+emitTreeShared : Prog ->
+  Env ->
+  Int ->
+  String ->
+  List String ->
+  List CArm ->
+  CTree ->
+  List String
+emitTreeShared prog env d decLabel occ0 arms tree =
+  let shared = orArms ("$or" ++ intToString d) arms
+  let progT = progWithOrBlocks shared prog
+  let treeCode = emitTreeRef progT env d decLabel occ0 [occ0] arms tree
+  if isEmptyL shared then
+    treeCode
+  else
+    fold
+      (inner a => orBlockRef prog env d decLabel a inner)
+      (treeCode ++ ["br " ++ decLabel])
+      shared
+
+-- [inner] wrapped in the block of the shared arm [a], the arm's body after the
+-- block.
+orBlockRef : Prog -> Env -> Int -> String -> OrArm -> List String -> List String
+orBlockRef prog env d decLabel a inner =
+  orBlockOpen a
+    ++ indent inner
+    ++ orBlockClose a
+    ++ emitRefExpr prog (orBodyEnv env a) d a.oaBody
+    ++ ["br " ++ decLabel]
+
+-- An arm some or-pattern candidate shares the body of: its index, its block's
+-- label, the variables a candidate's leaf carries out of the block, in order,
+-- and the arm's pattern, guards and body.  The variables leave the block as its
+-- results rather than as locals set inside it, because a non-nullable local
+-- set inside a block is unset again after the block's `end`.
+data OrArm = OrArm {
+  oaIndex : Int,
+  oaLabel : String,
+  oaVars : List String,
+  oaPat : Pat,
+  oaGuards : List CGuard,
+  oaBody : CExpr,
+}
+
+-- The arms of [arms] some `CArmAlt` candidate shares the body of, in arm order,
+-- their blocks named under [prefix].
+orArms : String -> List CArm -> List OrArm
+orArms prefix arms =
+  let owners = fold orOwnerStep omEmpty arms
+  if omSize owners == 0 then [] else orArmsFrom prefix owners 0 arms
+
+orOwnerStep : OrdMap Unit -> CArm -> OrdMap Unit
+orOwnerStep seen (CArmAlt _ _ owner) = omInsert (intToString owner) () seen
+orOwnerStep seen _ = seen
+
+orArmsFrom : String -> OrdMap Unit -> Int -> List CArm -> List OrArm
+orArmsFrom _ _ _ [] = []
+orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
+  | omHasKey (intToString i) owners =
+    let a = OrArm {
+      oaIndex = i,
+      oaLabel = "\{prefix}_\{intToString i}",
+      oaVars = patVars pat ++ flatMap guardVars guards,
+      oaPat = pat,
+      oaGuards = guards,
+      oaBody = body,
+    }
+    a :: orArmsFrom prefix owners (i + 1) rest
+orArmsFrom prefix owners i (_ :: rest) = orArmsFrom prefix owners (i + 1) rest
+
+guardVars : CGuard -> List String
+guardVars (CGBind p _) = patVars p
+guardVars (CGBool _) = []
+
+orBlockOpen : OrArm -> List String
+orBlockOpen a = match a.oaVars
+  [] => ["block " ++ a.oaLabel]
+  vars =>
+    let results = joinWith " " (map (_ => "(ref eq)") vars)
+    ["block \{a.oaLabel} (result \{results})"]
+
+-- The block's `end`, then its results back into the arm's variables.
+orBlockClose : OrArm -> List String
+orBlockClose a =
+  "end" :: map (x => "local.set $" ++ gname x) (reverseL a.oaVars)
+
+-- [prog] for emitting a tree whose shared arms are [shared].
+progWithOrBlocks : List OrArm -> Prog -> Prog
+progWithOrBlocks shared prog =
+  let blocks =
+    omFromPairs (map (a => (intToString a.oaIndex, a)) shared) omEmpty
+  progWithFnCtx prog { progFnCtx prog | orBlocks = blocks }
+
+-- Arm [i]'s pattern, guards and body, and the shared arm its leaves branch to
+-- when the body is shared.  A `CArmAlt`'s body is its owner's.
+leafArm : Prog ->
+  List CArm ->
+  Int ->
+  Option (Pat, List CGuard, CExpr, Option OrArm)
+leafArm prog arms i = match nthArm arms i
+  Some (CArm pat guards body) => Some (pat, guards, body, orBlockOf prog i)
+  Some (CArmAlt pat guards owner) => match nthArm arms owner
+    Some (CArm _ _ body) => Some (pat, guards, body, orBlockOf prog owner)
+    _ => None
+  None => None
+
+orBlockOf : Prog -> Int -> Option OrArm
+orBlockOf prog i = omLookup (intToString i) (progFnCtx prog).orBlocks
+
+-- A candidate's leaf, its variables bound: carry them out of the shared block.
+orBlockExit : OrArm -> List String
+orBlockExit a =
+  map (x => "local.get $" ++ gname x) a.oaVars ++ ["br " ++ a.oaLabel]
+
+-- The scope a shared body sees: [env] with the variables the arm's pattern and
+-- guards bind.
+orBodyEnv : Env -> OrArm -> Env
+orBodyEnv env a = fold guardBindEnv (envBindPat a.oaPat env) a.oaGuards
+
+guardBindEnv : Env -> CGuard -> Env
+guardBindEnv env (CGBind p _) = envBindPat p env
+guardBindEnv env (CGBool _) = env
 
 -- emit a CTree.  `d` = nesting depth (fresh locals/labels); `decLabel` = the
 -- enclosing `$dec<n>` an arm body branches to; `root` = the scrutinee occurrence
@@ -9882,21 +10030,24 @@ emitLeafRef : Prog ->
   List CArm ->
   Int ->
   List String
-emitLeafRef prog env d decLabel root arms i = match nthArm arms i
-  Some (CArm pat _ body) =>
+emitLeafRef prog env d decLabel root arms i = match leafArm prog arms i
+  Some (pat, _, body, share) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let bodyCode = emitRefExpr prog env2 d body
-    binds ++ bodyCode ++ ["br " ++ decLabel]
-  Some (CArmAlt _ _ _) => orArmGap prog
+    binds ++ armExitRef prog env2 d decLabel body share
   None => gapLP prog "ref-mode: decision arm index out of range"
 
--- An or-pattern candidate arm shares another arm's body, which this emitter does
--- not lower yet; it is refused, never emitted as something else.
-orArmGap : Prog -> List String
-orArmGap prog =
-  gapLP
-    prog
-    "ref-mode: or-pattern arm (CArmAlt, a candidate sharing another arm's body) is not lowered on wasm yet [in \{progBinding prog}]"
+-- A matched arm's body and the branch out with its value, or the branch to its
+-- shared block.
+armExitRef : Prog ->
+  Env ->
+  Int ->
+  String ->
+  CExpr ->
+  Option OrArm ->
+  List String
+armExitRef _ _ _ _ _ (Some a) = orBlockExit a
+armExitRef prog env d decLabel body None =
+  emitRefExpr prog env d body ++ ["br " ++ decLabel]
 
 -- a guarded arm: RE-MATCH the pattern, evaluate the guards; all-pass → body + br
 -- decLabel; any fail → the `fail` subtree (resumes at the same column context).
@@ -9918,25 +10069,24 @@ emitGuardArmRef : Prog ->
   Int ->
   CTree ->
   List String
-emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
-  Some (CArm pat guards body) =>
-    let gLabel = "$g" ++ intToString d
-    let (tests, binds, env2) = patTestBind prog pat root gLabel env
-    -- #379: guards now thread the env (a CGBind binds names the body can see), so the
-    -- body is emitted under env3, not env2.
-    let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
-    let armCode =
-      ["block " ++ gLabel]
-        ++ indent
-          (tests
-            ++ binds
-            ++ gcode
-            ++ emitRefExpr prog env3 d body
-            ++ ["br " ++ decLabel])
-        ++ ["end"]
-    armCode ++ emitTreeRef prog env d decLabel root occs arms fail
-  Some (CArmAlt _ _ _) => orArmGap prog
-  None => gapLP prog "ref-mode: guarded arm index out of range"
+emitGuardArmRef prog env d decLabel root occs arms i fail =
+  match leafArm prog arms i
+    Some (pat, guards, body, share) =>
+      let gLabel = "$g" ++ intToString d
+      let (tests, binds, env2) = patTestBind prog pat root gLabel env
+      -- #379: guards now thread the env (a CGBind binds names the body can see), so the
+      -- body is emitted under env3, not env2.
+      let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
+      let armCode =
+        ["block " ++ gLabel]
+          ++ indent
+            (tests
+              ++ binds
+              ++ gcode
+              ++ armExitRef prog env3 d decLabel body share)
+          ++ ["end"]
+      armCode ++ emitTreeRef prog env d decLabel root occs arms fail
+    None => gapLP prog "ref-mode: guarded arm index out of range"
 
 -- #379: the stash slot for a refutable pattern guard's right-hand side.  `patTestBind`
 -- embeds its `occ` snippet once per test AND once per bind, so `occ` must be a cheap,
