@@ -1,0 +1,55 @@
+-- Shared helpers for the `llvm_emit_*_test.mdk` siblings that read emitted LLVM IR
+-- ([P-TEST-SIBLING]); it holds no tests of its own.
+
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import backend.emit_plan.{buildEmitPlan}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
+import string.{contains, lines, startsWith}
+import list.{reverse}
+import types.capability_manifest.{ManifestRequirement(..)}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{ctorFieldTypeNames, lowerProgramEmitWith}
+
+-- the emitted LLVM IR of `src`, as the prelude-free entry would print it
+export
+llOf : String -> String
+llOf src =
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  let input =
+    makeEmitInput
+      RawUnchecked
+      PreludeFreeRuntime
+      []
+      (ctorFieldTypeNames decls)
+      0
+      []
+      []
+      ""
+  match emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+    Ok text => text
+    Err defects => panic "emit refused: \{length defects} symbol defects"
+
+-- the lines of the `define` of top-level `<name>` (`@mdk_<name>(`), through its
+-- closing `}`
+export
+funcBlock : String -> String -> List String
+funcBlock name ll = blockFrom ("@mdk_" ++ name ++ "(") (lines ll)
+
+blockFrom : String -> List String -> List String
+blockFrom _ [] = []
+blockFrom name (l :: rest) =
+  if startsWith "define " l && contains name l then
+    takeBlock rest [l]
+  else
+    blockFrom name rest
+
+takeBlock : List String -> List String -> List String
+takeBlock [] acc = reverse acc
+takeBlock (l :: rest) acc =
+  if l == "}" then reverse (l :: acc) else takeBlock rest (l :: acc)

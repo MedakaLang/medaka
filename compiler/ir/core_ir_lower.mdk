@@ -366,7 +366,10 @@ orDecision site scrut pat body tail =
 -- next before the next clause.  Any other body is lowered once, under a
 -- decision over fresh parameters whose miss falls through to the next clause.
 lowerOrClause : List Pat -> Expr -> List (List Pat, CExpr)
-lowerOrClause pats body
+lowerOrClause rawPats body = lowerErasedClause (map eraseBytePat rawPats) body
+
+lowerErasedClause : List Pat -> Expr -> List (List Pat, CExpr)
+lowerErasedClause pats body
   | any patHasOr pats =
     let lowered = lower body
     if cFallsThrough lowered then
@@ -654,8 +657,10 @@ unitName : String
 unitName = "__unit__"
 
 -- A byte literal pattern is its `U8` word, like the expression `lower` gives the
--- same literal, so no matrix, decision tree or engine sees `LByte`.  Every
--- position `lower` reads a pattern from erases through here.
+-- same literal, so no matrix, decision tree or engine sees `LByte`.  A pattern
+-- enters Core IR through `lowerOrClause` (clauses, impl methods), `orDefaultParams`
+-- (lambdas, interface defaults), `letDecision`/`CLet`, `lowerArm` or `lowerGuard`;
+-- each of those erases through here, and a new entry must too.
 eraseBytePat : Pat -> Pat
 eraseBytePat (PLit (LByte n)) = PLit (LInt n)
 eraseBytePat (PCon c ps) = PCon c (map eraseBytePat ps)
@@ -927,9 +932,7 @@ lowerClause (FunClause pats body) = lowerClauses pats body
 
 lowerClauses : List Pat -> Expr -> List CClause
 lowerClauses pats body =
-  map
-    (c => CClause (fst c) (snd c))
-    (lowerOrClause (map eraseBytePat pats) body)
+  map (c => CClause (fst c) (snd c)) (lowerOrClause pats body)
 
 lowerStmt : DoStmt -> CStmt
 lowerStmt (DoExpr e) = CSExpr (lower e)

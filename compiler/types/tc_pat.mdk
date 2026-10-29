@@ -235,10 +235,8 @@ unifyOrBinder env k binds (name, Forall _ _ _ _ _ t1) =
 inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
 inferPatRng mctx (LInt lo) (LInt hi) =
   let a = freshVar mctx ()
-  mctx.mcCells.patLitPending :=
-    (a, hi, mctx.mcLoc)
-      :: (a, lo, mctx.mcLoc)
-      :: mctx.mcCells.patLitPending.value
+  parkIntLit mctx a lo
+  parkIntLit mctx a hi
   (a, [])
 inferPatRng mctx (LByte _) (LByte _) = (tconBuiltin "U8", [])
 inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
@@ -330,9 +328,13 @@ inferRecPatFieldWith env ft _ _ (Some p) =
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
 inferIntLitPat mctx n =
   let a = freshVar mctx ()
+  parkIntLit mctx a n
+  (a, [])
+
+parkIntLit : ModuleCtx -> Mono -> Int -> Unit
+parkIntLit mctx a n =
   mctx.mcCells.patLitPending :=
     (a, n, mctx.mcLoc) :: mctx.mcCells.patLitPending.value
-  (a, [])
 
 -- Open a pattern site: park the literals of any enclosing site and start
 -- empty.  The existentials a pattern opens are parked the same way; a match

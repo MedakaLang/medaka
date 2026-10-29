@@ -38,7 +38,7 @@ sampleSize : Int
 sampleSize = 40
 
 sampleSeed : Int
-sampleSeed = 4395
+sampleSeed = 4396
 
 -- A linear congruential step; the sample is a function of the seed and the
 -- directory listing, so a failure replays.

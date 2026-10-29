@@ -5,13 +5,13 @@
 import support.diag_codes.{DiagCode(..), codeText}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import types.publish.{TcDiag(..), tcCode, tcMsg}
-import frontend.ast.{Loc(..)}
+import frontend.ast.{Expr(..), Lit(..), Loc(..)}
 import types.tc_diag_text.{
   aliasArityMsg, ambiguousFieldMsg, backticked, derivableIface,
   discardedValueFix, discardedValueMsg, kindName, locGoalKey, locKey,
   missingFieldMsg, noImplFoundMsg, ordinalWord, overAppliedMsg, prependDiagOpt,
-  quotedNames, renderKindArrow, starSpelling, unboundVarMsg, unknownCtorMsg,
-  unknownFieldMsg, wideAnnotateHelp, writtenDiag
+  quotedNames, renderCallArgs, renderKindArrow, starSpelling, unboundVarMsg,
+  unknownCtorMsg, unknownFieldMsg, wideAnnotateHelp, writtenDiag
 }
 import types.tc_mono.{tconBuiltin}
 import types.tc_types.{Kind(..)}
@@ -154,3 +154,8 @@ test "prependDiagOpt adds a written diagnostic only when there is a message" =
     expectEqual [] (map tcMsg none),
     expectEqual ["q is bad"] (map tcMsg some),
   ]
+
+test "a tuple call hint renders a byte literal argument as its U8 value" =
+  expectEqual
+    (Some ["97", "2"])
+    (renderCallArgs [ELit (LByte 97), ELit (LInt 2)])

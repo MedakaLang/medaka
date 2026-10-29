@@ -1,5 +1,5 @@
 # META
-source_lines=2853
+source_lines=2852
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -90,6 +90,8 @@ import support.util.{
   isNonEmptyL, escOneHex2
 }
 import list.{last, sortBy}
+import hex as Hex
+import bytes as B
 import support.char.{isUpper}
 
 -- ── Document algebra ──────────────────────────────
@@ -931,18 +933,15 @@ escapeCharLit c
 -- A byte literal body: the char-literal escapes, then printable ASCII as itself,
 -- everything else as `\xNN` in uppercase hex.
 escapeByteLit : Int -> String
-escapeByteLit n
-  | n == 39 = "\\'"
-  | n == 92 = "\\\\"
-  | n == 10 = "\\n"
-  | n == 9 = "\\t"
-  | n == 13 = "\\r"
-  | n == 0 = "\\0"
-  | n >= 32 && n < 127 = optionOr "?" (map charToStr (charFromCode n))
-  | otherwise = "\\x\{upperHexDigit (n / 16)}\{upperHexDigit (n % 16)}"
+escapeByteLit n = match charFromCode n
+  Some c =>
+    let s = charToStr c
+    let escaped = escapeCharLit s
+    if escaped /= s || n >= 32 && n < 127 then escaped else byteHexEscape n
+  None => byteHexEscape n
 
-upperHexDigit : Int -> String
-upperHexDigit d = stringSlice d (d + 1) "0123456789ABCDEF"
+byteHexEscape : Int -> String
+byteHexEscape n = "\\x" ++ Hex.encodeUpper (B.fromArrayAssumeByteDomain [|n|])
 
 -- String-literal escaping: quote, backslash, \n \t \r, NUL, and any other C0
 -- control char as `\u{XX}` — never a raw control byte (a raw NUL once landed in
@@ -2859,6 +2858,8 @@ effAxesDoc axes =
 (DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
+(DUse false (UseAlias ("hex") "Hex"))
+(DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
@@ -3207,9 +3208,9 @@ effAxesDoc axes =
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escapeByteLit" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "escapeByteLit" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 39))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 92))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 10))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 9))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 13))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LString "\\0")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127)))) (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EApp (EApp (EVar "map") (EVar "charToStr")) (EApp (EVar "charFromCode") (EVar "n")))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\\x")) (EApp (EVar "display") (EApp (EVar "upperHexDigit") (EBinOp "/" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "upperHexDigit") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
-(DTypeSig false "upperHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "upperHexDigit" ((PVar "d")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789ABCDEF"))))
+(DFunDef false "escapeByteLit" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "s") (EApp (EVar "charToStr") (EVar "c"))) (DoLet false false (PVar "escaped") (EApp (EVar "escapeCharLit") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "/=" (EVar "escaped") (EVar "s")) (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127))))) (EVar "escaped") (EApp (EVar "byteHexEscape") (EVar "n")))))) (arm (PCon "None") () (EApp (EVar "byteHexEscape") (EVar "n")))))
+(DTypeSig false "byteHexEscape" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "byteHexEscape" ((PVar "n")) (EBinOp "++" (ELit (LString "\\x")) (EApp (EVar "Hex.encodeUpper") (EApp (EVar "B.fromArrayAssumeByteDomain") (EArrayLit (EVar "n"))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
@@ -3853,6 +3854,8 @@ effAxesDoc axes =
 (DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
+(DUse false (UseAlias ("hex") "Hex"))
+(DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
@@ -4201,9 +4204,9 @@ effAxesDoc axes =
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escapeByteLit" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "escapeByteLit" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 39))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 92))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 10))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 9))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 13))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LString "\\0")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127)))) (EApp (EApp (EVar "optionOr") (ELit (LString "?"))) (EApp (EApp (EMethodRef "map") (EVar "charToStr")) (EApp (EVar "charFromCode") (EVar "n")))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\\x")) (EApp (EMethodRef "display") (EApp (EVar "upperHexDigit") (EBinOp "/" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "upperHexDigit") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
-(DTypeSig false "upperHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "upperHexDigit" ((PVar "d")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789ABCDEF"))))
+(DFunDef false "escapeByteLit" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "s") (EApp (EVar "charToStr") (EVar "c"))) (DoLet false false (PVar "escaped") (EApp (EVar "escapeCharLit") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "/=" (EVar "escaped") (EVar "s")) (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (EBinOp "<" (EVar "n") (ELit (LInt 127))))) (EVar "escaped") (EApp (EVar "byteHexEscape") (EVar "n")))))) (arm (PCon "None") () (EApp (EVar "byteHexEscape") (EVar "n")))))
+(DTypeSig false "byteHexEscape" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "byteHexEscape" ((PVar "n")) (EBinOp "++" (ELit (LString "\\x")) (EApp (EVar "Hex.encodeUpper") (EApp (EVar "B.fromArrayAssumeByteDomain") (EArrayLit (EVar "n"))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
