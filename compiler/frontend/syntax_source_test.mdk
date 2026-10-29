@@ -1,11 +1,12 @@
 import frontend.syntax_source.{
   publishSyntax, syntaxSourceText, renderOriginal, syntaxPieces, syntaxTrivia,
-  syntaxStrict, syntaxRecovered, syntaxSlice, SourceSpan(..), SourcePiece(..),
-  Trivia(..), TriviaKind(..)
+  syntaxStrict, syntaxStructural, syntaxRecovered, syntaxSlice, SourceSpan(..),
+  SourcePiece(..), Trivia(..), TriviaKind(..)
 }
 import frontend.parse_recovery.{defaultRecoveryLimits}
 import frontend.recovery_result.{recoveredStats, RecoveryStats(..)}
-import frontend.parser.{parseSource}
+import frontend.parser.{parseSource, parseSourceSyntaxPairs}
+import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.ast_codec.{declsSExp}
 import support.sexp_value.{renderSExp}
 import frontend.ast.{Loc(..)}
@@ -122,9 +123,20 @@ corpusCase path =
   (
     path,
     match (actual, expected)
-      (Ok syntax, Ok strict) => match syntaxStrict syntax
-        Ok published => expectEqual (parsedView strict) (parsedView published)
-        Err _ => expectTrue False
+      (Ok syntax, Ok strict) => match (
+        syntaxStrict syntax,
+        syntaxStructural syntax,
+      )
+        (Ok published, Some structural) =>
+          let (tokens, offsets) = tokenizeWithOffsetPairs src
+          match parseSourceSyntaxPairs src tokens offsets
+            Some syntaxOnly => expectAll [
+              expectEqual (parsedView strict) (parsedView published),
+              expectEqual (parsedView strict) (parsedView structural),
+              expectEqual (parsedView strict) (parsedView syntaxOnly),
+            ]
+            None => expectTrue False
+        _ => expectTrue False
       _ => expectTrue False,
   )
 
@@ -134,3 +146,58 @@ test "published checked parse retains AST positions and metadata" =
       "stdlib/core.mdk", "compiler/tools/fmt.mdk",
       "compiler/frontend/parser.mdk"
     ])
+
+test "structural syntax keeps checked rejection separate" = expectEach [
+  (
+    "removed record",
+    expectOkThen
+      (syntax => expectAll [
+        expectTrue (isErr (syntaxStrict syntax)),
+        expectTrue (isSome (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits "record P : Int\nmain = 1\n"),
+  ),
+  (
+    "malformed",
+    expectOkThen
+      (syntax => expectAll [
+        expectTrue (isErr (syntaxStrict syntax)),
+        expectTrue (isNone (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits "main = )"),
+  ),
+  (
+    "unterminated",
+    expectOkThen
+      (syntax => expectAll [
+        expectTrue (isErr (syntaxStrict syntax)),
+        expectTrue (isNone (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits "main = \"unfinished"),
+  ),
+]
+
+test "checked and syntax modes agree on complete source details" =
+  expectEach
+    (map
+      (src => (
+        src,
+        match (publishSyntax defaultRecoveryLimits src, parseSource src)
+          (Ok syntax, Ok checked) =>
+            let (tokens, offsets) = tokenizeWithOffsetPairs src
+            match (
+              syntaxStructural syntax,
+              parseSourceSyntaxPairs src tokens offsets,
+            )
+              (Some shared, Some located) => expectAll [
+                expectEqual (parsedView checked) (parsedView shared),
+                expectEqual (parsedView checked) (parsedView located),
+              ]
+              _ => expectTrue False
+          _ => expectTrue False,
+      ))
+      [
+        "-- 😀\r\nmain = (1, 2,)\r\n",
+        "f () = 1\nmain = f ()\n",
+        "{- comment -}\nmain = [1, 2,]\n",
+      ])

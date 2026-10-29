@@ -2,7 +2,7 @@ import list.{reverse}
 import frontend.lex_token.{Token, RawTok(..)}
 import frontend.lex_scan.{scanRawChars}
 import frontend.lex_layout.{applyLayoutRanges}
-import frontend.parser.{parseSourcePairsWithIndex}
+import frontend.parser.{parseSourcePairsWithIndex, parseSourceSyntaxPairs}
 import frontend.parse_result.{ParsedSource}
 import frontend.parse_diagnostic.{ParseDiagnostic}
 import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
@@ -23,7 +23,7 @@ public export data SyntaxAdmission =
   deriving (Debug, Display)
 
 export data SyntaxSource =
-  SyntaxSource String SourceIndex (Array Token) (Array SourceSpan) (Array Trivia) (Array SourcePiece) (Result ParseDiagnostic ParsedSource) RecoveredSource
+  SyntaxSource String SourceIndex (Array Token) (Array SourceSpan) (Array Trivia) (Array SourcePiece) (Result ParseDiagnostic ParsedSource) (Option ParsedSource) RecoveredSource
 
 rawRange : RawTok -> (Int, Int, PieceKind)
 rawRange (RTok _ s e) = (s, e, TokenCoverage)
@@ -72,6 +72,9 @@ publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnos
     else
       let index = indexSource src
       let strict = parseSourcePairsWithIndex src tokens offsets (() => index)
+      let structural = match strict
+        Ok parsed => Some parsed
+        Err _ => parseSourceSyntaxPairs src tokens offsets
       let recovered =
         recoverSourcePairsWithIndex limits index src tokens offsets strict
       Ok
@@ -83,11 +86,12 @@ publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnos
           (arrayFromList (comments src raw))
           (arrayFromList (pieces (stringLength src) 0 raw))
           strict
+          structural
           recovered)
 
 export
 syntaxSourceText : SyntaxSource -> String
-syntaxSourceText (SyntaxSource src _ _ _ _ _ _ _) = src
+syntaxSourceText (SyntaxSource src _ _ _ _ _ _ _ _) = src
 
 export
 renderOriginal : SyntaxSource -> String
@@ -95,32 +99,35 @@ renderOriginal = syntaxSourceText
 
 export
 syntaxIndex : SyntaxSource -> SourceIndex
-syntaxIndex (SyntaxSource _ index _ _ _ _ _ _) = index
+syntaxIndex (SyntaxSource _ index _ _ _ _ _ _ _) = index
 
 export
 syntaxTokens : SyntaxSource -> Array Token
-syntaxTokens (SyntaxSource _ _ tokens _ _ _ _ _) = arrayFromList (toList tokens)
+syntaxTokens (SyntaxSource _ _ tokens _ _ _ _ _ _) =
+  arrayFromList (toList tokens)
 
 export
 syntaxTokenSpans : SyntaxSource -> Array SourceSpan
-syntaxTokenSpans (SyntaxSource _ _ _ spans _ _ _ _) =
+syntaxTokenSpans (SyntaxSource _ _ _ spans _ _ _ _ _) =
   arrayFromList (toList spans)
 
 export
 syntaxTrivia : SyntaxSource -> Array Trivia
-syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _) = arrayFromList (toList trivia)
+syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _ _) =
+  arrayFromList (toList trivia)
 
 export
 syntaxPieces : SyntaxSource -> Array SourcePiece
-syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _) = arrayFromList (toList pieces)
+syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _ _) =
+  arrayFromList (toList pieces)
 
 export
 syntaxStrict : SyntaxSource -> Result ParseDiagnostic ParsedSource
-syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _) = strict
+syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _ _) = strict
 
 export
 syntaxRecovered : SyntaxSource -> RecoveredSource
-syntaxRecovered (SyntaxSource _ _ _ _ _ _ _ recovered) = recovered
+syntaxRecovered (SyntaxSource _ _ _ _ _ _ _ _ recovered) = recovered
 
 export
 syntaxSlice : SyntaxSource -> SourceSpan -> Option String
@@ -138,3 +145,7 @@ spanFromLoc syntax (Loc _ line col endLine endCol) = do
   lo <- sourcePositionToOffset index line col
   hi <- sourcePositionToOffset index endLine endCol
   if lo <= hi then Some (SourceSpan lo hi) else None
+
+export
+syntaxStructural : SyntaxSource -> Option ParsedSource
+syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural

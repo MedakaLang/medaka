@@ -2339,3 +2339,30 @@ f x = x
             (map (get "range") valid),
         ),
       ]
+
+test "definition reuses open strict-rejected sibling syntax" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"syntaxcache\"\n"),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", "import lib.{value}\nmain = value\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let (errors, out) = drive [
+        didOpenMsg main "import lib.{value}\nmain = value\n",
+        didOpenMsg lib "record P : Int\nexport value = 9\n",
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let expected = Some (jArray [coordLocation lib 1 7 12])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("first definition", expectEqual expected (resultTo 10 objs)),
+            ("second definition", expectEqual expected (resultTo 11 objs)),
+          ])

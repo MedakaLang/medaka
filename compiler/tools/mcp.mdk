@@ -1,7 +1,15 @@
-import tools.source_snapshot.{SourceRevision(..), SourceSnapshot(..)}
-import tools.snapshot_syntax.{
-  parseSnapshotSyntax, snapshotSyntaxResult, snapshotSyntaxSnapshot
+import tools.source_snapshot.{
+  SourceRevision(..), SourceSnapshot(..), SnapshotId(..)
 }
+import tools.snapshot_syntax.{
+  PreparedSyntax, parseSnapshotSyntax, snapshotSyntaxResult,
+  snapshotSyntaxSnapshot, snapshotSyntaxSource, defaultParseOptions
+}
+import tools.syntax_cache.{
+  SyntaxCache, emptySyntaxCache, defaultSyntaxCacheLimits, lookupSyntax,
+  insertSyntax
+}
+import frontend.syntax_source.{syntaxSourceText}
 import tools.syntax_queries.{symbolsFromRecovered, jPosition}
 import tools.lsp_diagnostics.{diagnosticJsonOr}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
@@ -64,8 +72,9 @@ import tools.lsp.{
   typeAtPoint,
   typeAtPointsWithIndex,
   documentSymbols,
-  definitionResult,
-  definitionResultsWithIndex,
+  structuralParsed,
+  definitionResultParsed,
+  definitionResultsParsed,
   referencesResult,
   emptyDocs,
   docsPut,
@@ -82,6 +91,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{
   Positions,
   parseResult,
+  parseWithPositionsOpt,
   parseErrorLine,
   parseErrorCol,
   parseErrorMessage,
@@ -141,7 +151,7 @@ import tools.test_pins_report.{
   knownRedCountProps,
 }
 import support.util.{joinWith}
-import list.{zipWith}
+import list.{zipWith, take}
 import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
@@ -415,16 +425,73 @@ toolDescriptor (McpTool name desc schema _) = jObject [
 
 -- Dispatch a tools/call by tool name against `mcpTools`.  `None` ⇒ no such tool
 -- (caller emits JSON-RPC -32601).  `Some result` ⇒ the tool's result Json.
-callTool : String -> String -> String -> String -> Json -> <IO> Option Json
-callTool runtimeSrc coreSrc stdlibDir name args =
+callTool : Ref McpSyntaxState ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  <IO> Option Json
+callTool state runtimeSrc coreSrc stdlibDir name args =
   map
-    ((McpTool _ _ _ handler) => handler runtimeSrc coreSrc stdlibDir args)
+    ((McpTool _ _ _ handler) =>
+      if name == "medaka_symbols" then
+        runSymbolsCached state args
+      else if name == "medaka_definition" then
+        runDefinitionCached state args
+      else
+        handler runtimeSrc coreSrc stdlibDir args)
     (lookupTool name mcpTools)
 
 lookupTool : String -> List McpTool -> Option McpTool
 lookupTool _ [] = None
 lookupTool name (t :: ts) = match t
   McpTool n _ _ _ => if n == name then Some t else lookupTool name ts
+
+data McpSyntaxState = McpSyntaxState SyntaxCache (List (String, Int)) Int
+
+emptyMcpSyntaxState : McpSyntaxState
+emptyMcpSyntaxState =
+  McpSyntaxState (emptySyntaxCache defaultSyntaxCacheLimits) [] 0
+
+mcpGeneration : String -> List (String, Int) -> Option Int
+mcpGeneration _ [] = None
+mcpGeneration uri ((key, generation) :: rest) =
+  if uri == key then Some generation else mcpGeneration uri rest
+
+mcpPrepared : Ref McpSyntaxState ->
+  String ->
+  String ->
+  <IO> (SourceRevision, PreparedSyntax)
+mcpPrepared state path src =
+  let uri = uriOfPath path
+  let (McpSyntaxState cache entries next) = !state
+  let found = do
+    generation <- mcpGeneration uri entries
+    prepared <- lookupSyntax
+      (SnapshotId uri generation)
+      None
+      defaultParseOptions
+      cache
+    syntax <- snapshotSyntaxSource prepared
+    if syntaxSourceText syntax == src then Some (generation, prepared) else None
+  -- The multiline assignment form is not accepted by the seed parser.
+  -- lint-disable-next-line rule-prefer-assign-op
+  match found
+    Some (generation, prepared) =>
+      (SourceRevision uri None generation src, prepared)
+    None =>
+      let revision = SourceRevision uri None next src
+      let prepared = parseSnapshotSyntax revision
+      let entries2 =
+        take 4 ((uri, next) :: filter ((key, _) => key /= uri) entries)
+      let _ =
+        state :=
+          McpSyntaxState
+            (insertSyntax defaultParseOptions prepared cache)
+            entries2
+            (next + 1)
+      (revision, prepared)
 
 -- ── medaka_check tool ─────────────────────────────────────────────────────────
 
@@ -843,10 +910,8 @@ regionPosition index off = match offsetToUtf16Position index off
   Some (line, col) => jPosition line col
   None => JNull
 
-symbolsResult : String -> String -> Json
-symbolsResult path src =
-  let revision = SourceRevision (uriOfPath path) None 0 src
-  let syntax = parseSnapshotSyntax revision
+symbolsResult : String -> String -> SourceRevision -> PreparedSyntax -> Json
+symbolsResult path src revision syntax =
   let result = snapshotSyntaxResult syntax
   let (completeness, stop) = match recoveredCompleteness result
     Complete => ("complete", JNull)
@@ -899,7 +964,11 @@ symbolsResult path src =
           ++ [("structuredContent", metadata)])
 
 runSymbolsTool : String -> String -> String -> Json -> <IO> Json
-runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
+runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args =
+  runSymbolsCached (Ref emptyMcpSyntaxState) args
+
+runSymbolsCached : Ref McpSyntaxState -> Json -> <IO> Json
+runSymbolsCached state args = match fieldStr "file" args
   None =>
     toolArgError
       "medaka_symbols: missing or invalid argument — require 'file' (string)"
@@ -907,7 +976,9 @@ runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
     Err e =>
       toolArgError
         (stringConcat ["medaka_symbols: cannot read file '", path, "': ", e])
-    Ok src => symbolsResult path src
+    Ok src =>
+      let (revision, prepared) = mcpPrepared state path src
+      symbolsResult path src revision prepared
 
 -- ── medaka_definition tool ───────────────────────────────────────────────────
 
@@ -938,9 +1009,14 @@ positionParams line col =
 -- rather than left as a bare `null`, indistinguishable from "there's nothing
 -- here".  Applies to BOTH addressing modes — a col-mode miss is exactly the
 -- ambiguity #849 reports.
-definitionAtCol : String -> String -> Int -> Int -> Json
-definitionAtCol path src line col =
-  match definitionResult path src (positionParams line col)
+definitionAtCol : String ->
+  String ->
+  Int ->
+  Int ->
+  Option (List Decl, Positions) ->
+  Json
+definitionAtCol path src line col parsed =
+  match definitionResultParsed path src (positionParams line col) parsed
     JNull => definitionMissNote line (Some col) src
     hit => hit
 
@@ -979,8 +1055,9 @@ definitionManyCols : SourceIndex ->
   Int ->
   String ->
   List Int ->
+  Option (List Decl, Positions) ->
   Json
-definitionManyCols index path src line symbol cols = jObject [
+definitionManyCols index path src line symbol cols parsed = jObject [
   ("ambiguous", JBool True),
   ("symbol", JString symbol),
   (
@@ -989,7 +1066,7 @@ definitionManyCols index path src line symbol cols = jObject [
       (zipWith
         definitionOneMatch
         cols
-        (definitionResultsWithIndex index path src line cols)),
+        (definitionResultsParsed index path src line cols parsed)),
   ),
 ]
 
@@ -1009,7 +1086,11 @@ definitionOneMatch col result = jObject [
 -- call); every other outcome (hit, miss, ambiguous, out-of-range line) is a
 -- CLEAN, ACTIONABLE result, never a crash.
 runDefinitionTool : String -> String -> String -> Json -> <IO> Json
-runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
+runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args =
+  runDefinitionCached (Ref emptyMcpSyntaxState) args
+
+runDefinitionCached : Ref McpSyntaxState -> Json -> <IO> Json
+runDefinitionCached state args = match (
   fieldStr "file" args,
   fieldInt "line" args,
 )
@@ -1017,38 +1098,26 @@ runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
     Err e =>
       toolArgError
         (stringConcat ["medaka_definition: cannot read file '", path, "': ", e])
-    Ok src => match (fieldInt "col" args, fieldSymbol args)
-      (Some _, Some _) =>
-        toolArgError
-          "medaka_definition: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
-      (None, None) =>
-        toolArgError
-          "medaka_definition: missing argument — provide 'col' (integer) or 'symbol' (string)"
-      (Some col, None) =>
-        toolTextResult (stringify (definitionAtCol path src line col)) False
-      (None, Some symbol) =>
-        let index = indexSource src
-        match lineTextAtIndexed index src line
-          None =>
-            toolTextResult
-              (stringify
-                (jObject [
-                  ("matches", jArray []),
-                  (
-                    "note",
-                    JString
-                      (stringConcat [
-                        "line ",
-                        intToString line,
-                        " does not exist in '",
-                        path,
-                        "'",
-                      ]),
-                  ),
-                ]))
-              False
-          Some lineText => match symbolColsInSource index line lineText symbol
-            [] =>
+    Ok src =>
+      let (_, prepared) = mcpPrepared state path src
+      let parsed = match snapshotSyntaxSource prepared
+        None => parseWithPositionsOpt src
+        Some _ => structuralParsed prepared
+      match (fieldInt "col" args, fieldSymbol args)
+        (Some _, Some _) =>
+          toolArgError
+            "medaka_definition: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
+        (None, None) =>
+          toolArgError
+            "medaka_definition: missing argument — provide 'col' (integer) or 'symbol' (string)"
+        (Some col, None) =>
+          toolTextResult
+            (stringify (definitionAtCol path src line col parsed))
+            False
+        (None, Some symbol) =>
+          let index = indexSource src
+          match lineTextAtIndexed index src line
+            None =>
               toolTextResult
                 (stringify
                   (jObject [
@@ -1057,29 +1126,49 @@ runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
                       "note",
                       JString
                         (stringConcat [
-                          "no identifier named '",
-                          symbol,
-                          "' on line ",
+                          "line ",
                           intToString line,
-                          " of '",
+                          " does not exist in '",
                           path,
                           "'",
                         ]),
                     ),
-                    (
-                      "identifiersOnLine",
-                      jArray (map identPairJson (identifiersInLine lineText)),
-                    ),
                   ]))
                 False
-            [col] =>
-              toolTextResult
-                (stringify (definitionAtCol path src line col))
-                False
-            cols =>
-              toolTextResult
-                (stringify (definitionManyCols index path src line symbol cols))
-                False
+            Some lineText => match symbolColsInSource index line lineText symbol
+              [] =>
+                toolTextResult
+                  (stringify
+                    (jObject [
+                      ("matches", jArray []),
+                      (
+                        "note",
+                        JString
+                          (stringConcat [
+                            "no identifier named '",
+                            symbol,
+                            "' on line ",
+                            intToString line,
+                            " of '",
+                            path,
+                            "'",
+                          ]),
+                      ),
+                      (
+                        "identifiersOnLine",
+                        jArray (map identPairJson (identifiersInLine lineText)),
+                      ),
+                    ]))
+                  False
+              [col] =>
+                toolTextResult
+                  (stringify (definitionAtCol path src line col parsed))
+                  False
+              cols =>
+                toolTextResult
+                  (stringify
+                    (definitionManyCols index path src line symbol cols parsed))
+                  False
   _ =>
     toolArgError
       "medaka_definition: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
@@ -1833,14 +1922,15 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
-handleToolsCall : String ->
+handleToolsCall : Ref McpSyntaxState ->
+  String ->
   String ->
   String ->
   Json ->
   Json ->
   (Unit -> <IO> Option String) ->
   <IO> Unit
-handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
+handleToolsCall state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
   match fieldStr "name" params
     None =>
       writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
@@ -1848,7 +1938,7 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
       let args = fieldOr "arguments" params
       let _ = logMcpCall "tools/call" name (stringify args)
       let _ = selectToolProfile args
-      match callTool runtimeSrc coreSrc stdlibDir name args
+      match callTool state runtimeSrc coreSrc stdlibDir name args
         None =>
           writeMessage
             (errorMsg
@@ -1881,14 +1971,15 @@ selectToolProfile args = match fieldStr "file" args
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : String ->
+dispatchMsg : Ref McpSyntaxState ->
+  String ->
   String ->
   String ->
   Json ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
+dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
   match asArray msg
     Some _ =>
       writeMessage
@@ -1921,6 +2012,7 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
               writeMessage (responseMsg idJson toolsListResult)
             else if meth == "tools/call" then
               handleToolsCall
+                state
                 runtimeSrc
                 coreSrc
                 stdlibDir
@@ -1938,36 +2030,52 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : String ->
+handleLine : Ref McpSyntaxState ->
+  String ->
   String ->
   String ->
   String ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
+handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
   let line = stripCR raw
   if line == "" then
     unit
   else match parse line
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
     Ok msg =>
-      dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion
+      dispatchMsg
+        state
+        runtimeSrc
+        coreSrc
+        stdlibDir
+        msg
+        stalenessCheck
+        serverVersion
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : String ->
+serveLoop : Ref McpSyntaxState ->
+  String ->
   String ->
   String ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
+serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   match readLineOpt ()
     None => unit
     Some raw =>
       let _ =
-        handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion
-      serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
+        handleLine
+          state
+          runtimeSrc
+          coreSrc
+          stdlibDir
+          raw
+          stalenessCheck
+          serverVersion
+      serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
@@ -1985,4 +2093,10 @@ runMcpServer : String ->
   <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
-  serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
+  serveLoop
+    (Ref emptyMcpSyntaxState)
+    runtimeSrc
+    coreSrc
+    stdlibDir
+    stalenessCheck
+    serverVersion
