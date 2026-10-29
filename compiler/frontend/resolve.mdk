@@ -2961,7 +2961,7 @@ ppResError (UnknownModule n _) = "unknown module `\{n}`"
 ppResError (AsPatternMisplaced _) =
   "an `@` as-pattern is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern"
 ppResError (OrPatternMisplaced _) =
-  "an or-pattern `(a | b)` is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern"
+  "an or-pattern `(a | b)` is only allowed in a binding position: a lambda or function-clause parameter, a `let` left-hand side, a do-block bind or a match pattern"
 ppResError (OrPatternBinders xs ys steer _) =
   "the alternatives of an or-pattern must bind the same names, but one binds \{renderBinderSet xs} and another binds \{renderBinderSet ys}"
     ++ (if steer then "; a match-arm guard uses `if`, not `|`" else "")

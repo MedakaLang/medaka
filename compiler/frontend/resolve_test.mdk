@@ -295,6 +295,6 @@ test "a bare identifier alternative adds the if steer to the binder error" =
 test "an or-pattern outside a binding position is misplaced" =
   expectEqual
     [
-      "an or-pattern `(a | b)` is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern",
+      "an or-pattern `(a | b)` is only allowed in a binding position: a lambda or function-clause parameter, a `let` left-hand side, a do-block bind or a match pattern",
     ]
     (orPatternMessages "f t = (t | t)\n")

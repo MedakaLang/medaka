@@ -461,6 +461,30 @@ test "an or-pattern arm covers its alternatives, a guarded one covers none, and 
       ["W-UNREACHABLE-ARM"],
   ]
 
+test "a guarded or-pattern arm re-tries later alternatives, so overlapping alternatives do not warn" = expectAll
+  [
+    checksOf
+      [
+        Arm
+          (POr [PCon "Ta" [], PCon "Ta" []])
+          [GBool (ELit (LBool True))]
+          (ELit LUnit),
+        armOf "Ta",
+        armOf "Tb",
+      ]
+      [],
+    checksOf
+      [
+        armOf "Ta",
+        Arm
+          (POr [PCon "Ta" [], PCon "Tb" []])
+          [GBool (ELit (LBool True))]
+          (ELit LUnit),
+        armOf "Tb",
+      ]
+      ["W-UNREACHABLE-ALT"],
+  ]
+
 test "a refutable binding pattern warns in the words of a binding, not of a match" =
   let m = scopedWith shapes
   let _ = envWithData m shapes
