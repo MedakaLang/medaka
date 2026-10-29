@@ -1,5 +1,20 @@
 -- lint rule bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
 
+-- ── rule: bind-chain-to-do (SUGGEST-ONLY, no autofix) ─────────────────────────
+-- Flag a DEEP (≥3) manual monadic-bind pyramid over Result/Option written as
+-- nested `match`, where every level is a verbatim failure-passthrough bind:
+--   Result:  match <scrut> { Err v => Err v; Ok <pat> => <cont> }
+--   Option:  match <scrut> { None => None;  Some <pat> => <cont> }
+-- and `<cont>` continues the chain (another such match, possibly after one or
+-- more interspersed `let` bindings that parse as an `EBlock` of `DoLet`s), never
+-- a same-ctor re-wrap (`Ok x => Ok (f x)` is a `map` — `rule-match-to-map` owns
+-- it, and it is excluded here via the same `matchToMapTransform` linchpin).  The
+-- innermost continuation may be a functor `map f m` terminal (which IS the final
+-- bind — `do { x <- m; pure (f x) }`) so it counts toward the depth.  The chain
+-- must be monad-consistent (all Result OR all Option — a mixed level breaks it).
+-- This IS an `EMatch`-recursion recognizer, not the `EApp`-shaped rules; `fix =
+-- None` — the conversion to `do` is done by hand.
+
 import frontend.ast.{
   Loc(..),
   Pat(..),

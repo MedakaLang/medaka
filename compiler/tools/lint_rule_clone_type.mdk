@@ -1,5 +1,29 @@
 -- lint rule rule-clone-type: a two-constructor `data` with Option's or Result's arities and no `impl`. Prefer the stdlib type.
 
+-- ── rule: clone-type (#2566) ─────────────────────────────────────────
+-- The TYPE-level analogue of `rule-stdlib-reimpl`: a two-constructor `data`
+-- whose constructor arities are exactly `Option`'s (`None | Some a` -- 0 then 1)
+-- or `Result`'s (`Err e | Ok a` -- 1 and 1), declared in a file that writes no
+-- `impl` for it.  Such a type re-declares a prelude shape while getting none of
+-- the prelude's combinators, so every consumer hand-rolls `map`/`andThen`/
+-- `orElse`/`withDefault` at each use site.
+--
+-- Both conjuncts are SYNTACTIC, because the linter has no type environment: the
+-- arity signature read off `dataCtors`, and the absence of a `DImpl` in the SAME
+-- file whose target type head is this type's name.  A `deriving (Eq, Ord, Debug)`
+-- clause is deliberately not counted as an impl -- a derived structural instance
+-- is not the combinator API this rule is about, so a derived-only type is still
+-- as impl-less as a bare one for this purpose.
+--
+-- Arity cannot separate a clone from a two-variant DOMAIN sum that lands on the
+-- same shape by coincidence (`SExp = SAtom String | SList (List SExp)` is
+-- atom-vs-list, not failure-vs-success), and no syntactic test can: the
+-- difference is what the variants MEAN.  A declaration a human has ruled on for
+-- exactly that reason carries a `-- lint-disable-next-line rule-clone-type`
+-- directly above it, so the exclusion sits at the declaration it exonerates and
+-- binds to THAT declaration alone; a global list of names would exclude every
+-- like-named type anywhere in the tree, including ones nobody has read.
+
 import frontend.ast.{Loc(..), Ty(..), Variant(..), ConPayload(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}

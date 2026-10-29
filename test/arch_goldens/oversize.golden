@@ -3,5 +3,4 @@ backend.wasm_emit
 eval.eval
 frontend.parser
 frontend.resolve
-tools.lint_rules_staging
 tools.test_cmd

@@ -485,6 +485,21 @@ build                --release              NOT-PARSED     error: medaka build t
 | `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — now `medaka fmt: --stdout --write are mutually exclusive; pass one`, rc 1 (`snapshot`'s own mode-conflict rejection was already the right model, now mirrored here). |
 | `gate run --jobs <n>` | accepted, ignored, **documented as such** | ✅ conforming dead surface (E6) |
 
+### 5f-lint. `medaka lint` registry-view and activation flags
+
+Declared by `lintArgSpec` (`medaka_cli.mdk`); text in `lintHelpText` (`compiler/tools/lint_cmd.mdk`).
+The rule lists these print come from the registry (`compiler/tools/lint_registry.mdk`), never a hand copy.
+
+| Flag | Behaviour | Disposition |
+|---|---|---|
+| `--list-rules` | prints every rule with its metadata (scope, ratchet, tier, category); `--json` is the machine form | conforming |
+| `--explain <rule>` | prints one rule's summary and documentation; an unknown name is rejected, rc 1 | conforming |
+| `--scope=universal\|internal` | with `--list-rules`: keeps one scope; any other value is rejected, rc 1 | conforming |
+| `--ratchet=gated\|baselined` | with `--list-rules`: keeps one ratchet; any other value is rejected, rc 1 | conforming |
+| `--tier=file\|cross` | with `--list-rules`: keeps one rule tier; any other value is rejected, rc 1 | conforming |
+| `--markdown` | with `--list-rules`: renders the page committed as `docs/ops/LINT-RULES.md` | conforming |
+| `--internal` | runs the internal-scope rules on every target; without it they run only under a manifest whose `[lint]` section says `internal = true` (CLI and `medaka_lint` over MCP alike) | conforming |
+
 ### 5g. What is now GATED, and what still is not
 
 `test/diff_compiler_cli_help_conformance.sh` (S-help-truthfulness, #2354) is the enforcing

@@ -38,6 +38,7 @@ joinSlash : List String -> String
 keyBeforeEq : String -> String
 keyEqGo : String -> Int -> Int -> String
 lastOr : a -> List a -> a
+lineValueIsTrue : String -> Bool
 loadErrorMessage : LoadError -> String
 loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
 loadProgramE : String -> List String -> <IO> Result LoadError (List (String, List Decl))
@@ -50,6 +51,7 @@ loadedPairs : List (String, String, List Decl) -> List (String, String)
 loadedSourceOf : String -> Option String
 loadedSourcesRef : Ref (Map String String)
 manifestAllowsInternal : String -> <IO> Bool
+manifestLintInternal : String -> <IO> Bool
 manifestSiteRoot : String -> <IO> Option String
 mdkBaseName : String -> Option String
 modIdToPath : (String, String, List Decl) -> (String, String)
@@ -77,6 +79,7 @@ rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List Decl
 rewriteUsePath : String -> UsePath -> UsePath
 scanAllowInternal : Bool -> List String -> Bool
+scanLintInternal : Bool -> List String -> Bool
 scanSiteRoot : Bool -> List String -> Option String
 settleLoad : List (String, String, List Decl) -> List String
 slashToDot : String -> String
