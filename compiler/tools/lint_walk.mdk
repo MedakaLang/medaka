@@ -87,7 +87,7 @@ import tools.lint_shared.{
   sortUniqS,
   zipDeclPos,
 }
-import tools.lint_rules_staging.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
+import tools.lint_dup.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
 import tools.lint_registry.{
   allCrossFileRules, allRules, crossRuleActive, selectRules
 }
