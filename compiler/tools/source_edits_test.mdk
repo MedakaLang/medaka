@@ -1,0 +1,40 @@
+import tools.source_snapshot.{makeSnapshot, snapshotId, SnapshotId(..)}
+import tools.source_edits.{SourceEdit(..), EditError(..), applySourceEdits}
+import frontend.syntax_source.{SourceSpan(..)}
+import test.{expectAll, expectEqual}
+
+errorName : Result EditError String -> String
+errorName (Ok _) = "ok"
+errorName (Err StaleSnapshot) = "stale"
+errorName (Err InvalidRange) = "range"
+errorName (Err OverlappingEdits) = "overlap"
+errorName (Err ExpectedTextMismatch) = "expected"
+
+value : Result EditError String -> String
+value (Ok s) = s
+value (Err _) = "error"
+
+test "edits preserve source and validate the whole batch" =
+  let snapshot = makeSnapshot "a" None 1 "-- é\r\nmain = 12\r\n"
+  let id = snapshotId snapshot
+  let one = SourceEdit id (SourceSpan 13 15) "12" "34"
+  let insert = SourceEdit id (SourceSpan 15 15) "" "!"
+  let stale = SourceEdit (SnapshotId "a" 2) (SourceSpan 13 15) "12" "x"
+  let wrong = SourceEdit id (SourceSpan 13 15) "xx" "x"
+  let invalid = SourceEdit id (SourceSpan 0 100) "" "x"
+  let overlap = SourceEdit id (SourceSpan 14 15) "2" "x"
+  expectAll [
+    expectEqual
+      "-- é\r\nmain = 34!\r\n"
+      (value (applySourceEdits snapshot [insert, one])),
+    expectEqual "-- é\r\nmain = 12\r\n" (value (applySourceEdits snapshot [])),
+    expectEqual "stale" (errorName (applySourceEdits snapshot [one, stale])),
+    expectEqual "expected" (errorName (applySourceEdits snapshot [one, wrong])),
+    expectEqual "range" (errorName (applySourceEdits snapshot [invalid])),
+    expectEqual
+      "overlap"
+      (errorName (applySourceEdits snapshot [one, overlap])),
+    expectEqual
+      "overlap"
+      (errorName (applySourceEdits snapshot [insert, insert])),
+  ]

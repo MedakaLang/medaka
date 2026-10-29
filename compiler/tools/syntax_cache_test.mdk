@@ -1,0 +1,144 @@
+import tools.source_snapshot.{SourceRevision(..), SnapshotId(..)}
+import tools.snapshot_syntax.{
+  ParseOptions(..), PreparedSyntax, defaultParseOptions, prepareSnapshotSyntax,
+  snapshotSyntaxId
+}
+import tools.syntax_cache.{
+  SyntaxCacheLimits(..), emptySyntaxCache, insertSyntax, lookupSyntax,
+  invalidateSyntax, clearSyntax, syntaxCacheSize, syntaxCacheWeight
+}
+import frontend.parse_recovery.{RecoveryLimits(..)}
+import test.{expectAll, expectEqual, expectTrue}
+
+prepared : String -> Option Int -> Int -> PreparedSyntax
+prepared uri version generation =
+  prepareSnapshotSyntax
+    defaultParseOptions
+    (SourceRevision uri version generation "main = 1\n")
+
+test "identity options replacement and FIFO budgets" =
+  let limits = SyntaxCacheLimits 2 100 100 100
+  let a = prepared "a" None 1
+  let b = prepared "b" (Some 1) 2
+  let c = prepared "c" None 3
+  let cache =
+    insertSyntax
+      defaultParseOptions
+      b
+      (insertSyntax defaultParseOptions a (emptySyntaxCache limits))
+  let evicted = insertSyntax defaultParseOptions c cache
+  let replacement = insertSyntax defaultParseOptions (prepared "a" None 4) cache
+  let altered = [
+    ParseOptions (RecoveryLimits 1 500000 4096 32),
+    ParseOptions (RecoveryLimits 8388608 1 4096 32),
+    ParseOptions (RecoveryLimits 8388608 500000 1 32),
+    ParseOptions (RecoveryLimits 8388608 500000 4096 1),
+  ]
+  expectAll [
+    expectTrue
+      (isSome (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions cache)),
+    expectTrue
+      (isNone (lookupSyntax (SnapshotId "a" 2) None defaultParseOptions cache)),
+    expectTrue
+      (isNone
+        (lookupSyntax (SnapshotId "a" 1) (Some 1) defaultParseOptions cache)),
+    expectTrue
+      (isNone (lookupSyntax (SnapshotId "z" 1) None defaultParseOptions cache)),
+    expectTrue
+      (all
+        (o => isNone (lookupSyntax (SnapshotId "a" 1) None o cache))
+        altered),
+    expectTrue
+      (isNone
+        (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions evicted)),
+    expectEqual 2 (syntaxCacheSize evicted),
+    expectTrue
+      (isNone
+        (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions replacement)),
+    expectEqual 2 (syntaxCacheSize replacement),
+    expectEqual 1 (syntaxCacheSize (invalidateSyntax "a" cache)),
+    expectEqual (0, 0) (syntaxCacheWeight (clearSyntax cache)),
+    expectEqual
+      0
+      (syntaxCacheSize
+        (insertSyntax
+          defaultParseOptions
+          a
+          (emptySyntaxCache (SyntaxCacheLimits 0 100 100 100)))),
+    expectEqual
+      0
+      (syntaxCacheSize
+        (insertSyntax
+          defaultParseOptions
+          a
+          (emptySyntaxCache (SyntaxCacheLimits 2 1 100 100)))),
+    expectEqual
+      0
+      (syntaxCacheSize
+        (insertSyntax
+          defaultParseOptions
+          a
+          (emptySyntaxCache (SyntaxCacheLimits 2 100 1 100)))),
+    expectEqual
+      0
+      (syntaxCacheSize
+        (insertSyntax
+          defaultParseOptions
+          a
+          (emptySyntaxCache (SyntaxCacheLimits 2 100 100 0)))),
+    expectEqual
+      0
+      (syntaxCacheSize
+        (insertSyntax
+          defaultParseOptions
+          a
+          (emptySyntaxCache (SyntaxCacheLimits (-1) 100 100 100)))),
+  ]
+
+test "aggregate budgets evict oldest and negative limits retain nothing" =
+  let a = prepared "a" None 1
+  let b = prepared "b" None 2
+  let sourceBound =
+    insertSyntax
+      defaultParseOptions
+      b
+      (insertSyntax
+        defaultParseOptions
+        a
+        (emptySyntaxCache (SyntaxCacheLimits 4 100 12 100)))
+  let tokenBound =
+    insertSyntax
+      defaultParseOptions
+      b
+      (insertSyntax
+        defaultParseOptions
+        a
+        (emptySyntaxCache (SyntaxCacheLimits 4 100 100 6)))
+  let negativeSource =
+    insertSyntax
+      defaultParseOptions
+      a
+      (emptySyntaxCache (SyntaxCacheLimits 4 (-1) 100 100))
+  let negativeTotal =
+    insertSyntax
+      defaultParseOptions
+      a
+      (emptySyntaxCache (SyntaxCacheLimits 4 100 (-1) 100))
+  let negativeTokens =
+    insertSyntax
+      defaultParseOptions
+      a
+      (emptySyntaxCache (SyntaxCacheLimits 4 100 100 (-1)))
+  expectAll [
+    expectEqual 1 (syntaxCacheSize sourceBound),
+    expectTrue
+      (isNone
+        (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions sourceBound)),
+    expectEqual 1 (syntaxCacheSize tokenBound),
+    expectTrue
+      (isNone
+        (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions tokenBound)),
+    expectEqual 0 (syntaxCacheSize negativeSource),
+    expectEqual 0 (syntaxCacheSize negativeTotal),
+    expectEqual 0 (syntaxCacheSize negativeTokens),
+  ]
