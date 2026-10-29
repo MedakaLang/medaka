@@ -4,13 +4,14 @@ import driver.diagnostic_value.{
 import support.source_index.{SourceIndex, sourcePositionToOffset}
 import tools.lsp_positions.{locToLspRange}
 import tools.source_snapshot.{SourceSnapshot(..), SnapshotId(..), snapshotId}
+import tools.source_edits.{SourceEdit(..), validateSourceEdits}
+import frontend.syntax_source.{SourceSpan(..)}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
   diagnosticLoc, diagnosticEdits
 }
 import json.{Json(..), jObject, jArray}
-import string.{sliceClamped}
 
 severityCode : Severity -> Int
 severityCode SevError = 1
@@ -87,7 +88,7 @@ parseDiagnosticJson snapshot fallback d pd = match snapshot
         base
 
 actionForEdit : SourceSnapshot -> ParseEdit -> List Json
-actionForEdit (SourceSnapshot uri version _ text index) (ParseEdit loc expected replacement applicability) =
+actionForEdit (snapshot@(SourceSnapshot uri version _ _ index)) (ParseEdit loc expected replacement applicability) =
   match loc
     Loc _ sl sc el ec => match (
       sourcePositionToOffset index sl sc,
@@ -96,8 +97,15 @@ actionForEdit (SourceSnapshot uri version _ text index) (ParseEdit loc expected 
     )
       (Some start, Some end, Some range) =>
         if applicability == MachineApplicable
-          && end >= start
-          && sliceClamped start end text == expected then
+          && (match (validateSourceEdits snapshot [
+            SourceEdit
+              (snapshotId snapshot)
+              (SourceSpan start end)
+              expected
+              replacement,
+          ])
+            Ok _ => True
+            Err _ => False) then
           [
             jObject [
               ("title", JString ("Replace with " ++ replacement)),

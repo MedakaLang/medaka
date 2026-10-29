@@ -8,6 +8,7 @@ canonicalModId : List (String, String) -> List String -> String -> <IO> String
 canonicalPathId : List (String, String) -> List String -> String -> <IO> String
 childDeps : List (String, String) -> String -> List String -> <IO> List (String, String)
 childRoots : String -> List String -> List String
+clearLoadedSourceRecords : Unit -> Unit
 collectDeps : String -> List String -> List (String, String)
 collectDepsIn : String -> List String -> List (String, String)
 collectLibs : String -> List String -> List (String, String)

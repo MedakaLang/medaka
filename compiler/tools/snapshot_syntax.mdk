@@ -1,8 +1,10 @@
+import frontend.ast.{Decl}
 import frontend.parse_recovery.{
   RecoveryLimits, defaultRecoveryLimits, budgetResult
 }
 import frontend.syntax_source.{
-  SyntaxSource, SyntaxAdmission(..), publishSyntax, syntaxIndex, syntaxRecovered
+  SyntaxSource, SyntaxAdmission(..), publishSyntax,
+  publishSyntaxWithCheckedDecls, syntaxIndex, syntaxRecovered
 }
 import frontend.recovery_result.{RecoveredSource}
 import tools.source_snapshot.{
@@ -18,7 +20,7 @@ export data SnapshotSyntax =
 export data PreparedSyntax =
   PreparedSyntax (Option SourceSnapshot) SnapshotSyntax (Option SyntaxSource)
 
-public export data ParseOptions = ParseOptions RecoveryLimits
+public export data ParseOptions = ParseOptions RecoveryLimits deriving (Eq)
 
 export
 defaultParseOptions : ParseOptions
@@ -30,8 +32,25 @@ parseSnapshotSyntax = prepareSnapshotSyntax defaultParseOptions
 
 export
 prepareSnapshotSyntax : ParseOptions -> SourceRevision -> PreparedSyntax
-prepareSnapshotSyntax (ParseOptions limits) (revision@(SourceRevision uri version generation text)) =
-  match publishSyntax limits text
+prepareSnapshotSyntax = prepareSnapshotSyntaxKnown None
+
+export
+prepareSnapshotSyntaxWithCheckedDecls : ParseOptions ->
+  SourceRevision ->
+  List Decl ->
+  PreparedSyntax
+prepareSnapshotSyntaxWithCheckedDecls options revision decls =
+  prepareSnapshotSyntaxKnown (Some decls) options revision
+
+prepareSnapshotSyntaxKnown : Option (List Decl) ->
+  ParseOptions ->
+  SourceRevision ->
+  PreparedSyntax
+prepareSnapshotSyntaxKnown known (ParseOptions limits) (revision@(SourceRevision uri version generation text)) =
+  let publication = match known
+    None => publishSyntax limits text
+    Some decls => publishSyntaxWithCheckedDecls limits text decls
+  match publication
     Err admission =>
       let count = match admission
         SourceLimit _ => 0

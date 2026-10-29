@@ -1,5 +1,5 @@
 # META
-source_lines=2102
+source_lines=2097
 stages=DESUGAR,MARK
 # SOURCE
 import tools.source_snapshot.{
@@ -155,7 +155,7 @@ import tools.test_pins_report.{
   knownRedCountProps,
 }
 import support.util.{joinWith}
-import list.{zipWith, take}
+import list.{zipWith, take, lookup}
 import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
@@ -458,11 +458,6 @@ emptyMcpSyntaxState : McpSyntaxState
 emptyMcpSyntaxState =
   McpSyntaxState (emptySyntaxCache defaultSyntaxCacheLimits) [] 0
 
-mcpGeneration : String -> List (String, Int) -> Option Int
-mcpGeneration _ [] = None
-mcpGeneration uri ((key, generation) :: rest) =
-  if uri == key then Some generation else mcpGeneration uri rest
-
 mcpPrepared : Ref McpSyntaxState ->
   String ->
   String ->
@@ -471,7 +466,7 @@ mcpPrepared state path src =
   let uri = uriOfPath path
   let (McpSyntaxState cache entries next) = !state
   let found = do
-    generation <- mcpGeneration uri entries
+    generation <- lookup uri entries
     prepared <- lookupSyntax
       (SnapshotId uri generation)
       None
@@ -2134,7 +2129,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
-(DUse false (UseGroup ("list") ((mem "zipWith" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "zipWith" false) (mem "take" false) (mem "lookup" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
@@ -2178,11 +2173,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DData Private "McpSyntaxState" () ((variant "McpSyntaxState" (ConPos (TyCon "SyntaxCache") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int")))) ())
 (DTypeSig false "emptyMcpSyntaxState" (TyCon "McpSyntaxState"))
 (DFunDef false "emptyMcpSyntaxState" () (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EVar "emptySyntaxCache") (EVar "defaultSyntaxCacheLimits"))) (EListLit)) (ELit (LInt 0))))
-(DTypeSig false "mcpGeneration" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "mcpGeneration" (PWild (PList)) (EVar "None"))
-(DFunDef false "mcpGeneration" ((PVar "uri") (PCons (PTuple (PVar "key") (PVar "generation")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "uri") (EVar "key")) (EApp (EVar "Some") (EVar "generation")) (EApp (EApp (EVar "mcpGeneration") (EVar "uri")) (EVar "rest"))))
 (DTypeSig false "mcpPrepared" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "SourceRevision") (TyCon "PreparedSyntax")))))))
-(DFunDef false "mcpPrepared" ((PVar "state") (PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "path"))) (DoLet false false (PCon "McpSyntaxState" (PVar "cache") (PVar "entries") (PVar "next")) (EUnOp "!" (EVar "state"))) (DoLet false false (PVar "found") (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "mcpGeneration") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "generation")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "lookupSyntax") (EApp (EApp (EVar "SnapshotId") (EVar "uri")) (EVar "generation"))) (EVar "None")) (EVar "defaultParseOptions")) (EVar "cache"))) (ELam ((PVar "prepared")) (EApp (EApp (EVar "andThen") (EApp (EVar "snapshotSyntaxSource") (EVar "prepared"))) (ELam ((PVar "syntax")) (EIf (EBinOp "==" (EApp (EVar "syntaxSourceText") (EVar "syntax")) (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "prepared"))) (EVar "None"))))))))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PTuple (PVar "generation") (PVar "prepared"))) () (ETuple (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "generation")) (EVar "src")) (EVar "prepared"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "next")) (EVar "src"))) (DoLet false false (PVar "prepared") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "entries2") (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "uri") (EVar "next")) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EBinOp "/=" (EVar "key") (EVar "uri")))) (EVar "entries"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "state")) (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EApp (EApp (EVar "insertSyntax") (EVar "defaultParseOptions")) (EVar "prepared")) (EVar "cache"))) (EVar "entries2")) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (ETuple (EVar "revision") (EVar "prepared")))))))))
+(DFunDef false "mcpPrepared" ((PVar "state") (PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "path"))) (DoLet false false (PCon "McpSyntaxState" (PVar "cache") (PVar "entries") (PVar "next")) (EUnOp "!" (EVar "state"))) (DoLet false false (PVar "found") (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "generation")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "lookupSyntax") (EApp (EApp (EVar "SnapshotId") (EVar "uri")) (EVar "generation"))) (EVar "None")) (EVar "defaultParseOptions")) (EVar "cache"))) (ELam ((PVar "prepared")) (EApp (EApp (EVar "andThen") (EApp (EVar "snapshotSyntaxSource") (EVar "prepared"))) (ELam ((PVar "syntax")) (EIf (EBinOp "==" (EApp (EVar "syntaxSourceText") (EVar "syntax")) (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "prepared"))) (EVar "None"))))))))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PTuple (PVar "generation") (PVar "prepared"))) () (ETuple (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "generation")) (EVar "src")) (EVar "prepared"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "next")) (EVar "src"))) (DoLet false false (PVar "prepared") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "entries2") (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "uri") (EVar "next")) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EBinOp "/=" (EVar "key") (EVar "uri")))) (EVar "entries"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "state")) (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EApp (EApp (EVar "insertSyntax") (EVar "defaultParseOptions")) (EVar "prepared")) (EVar "cache"))) (EVar "entries2")) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (ETuple (EVar "revision") (EVar "prepared")))))))))
 (DTypeSig false "medakaCheckSchema" (TyCon "Json"))
 (DFunDef false "medakaCheckSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to a .mdk file to check."))))))) (ETuple (ELit (LString "source")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Inline Medaka source to check (no file on disk).")))))))))))))
 (DTypeSig false "syntheticSourceName" (TyCon "String"))
@@ -2424,7 +2416,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
-(DUse false (UseGroup ("list") ((mem "zipWith" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "zipWith" false) (mem "take" false) (mem "lookup" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
@@ -2468,11 +2460,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DData Private "McpSyntaxState" () ((variant "McpSyntaxState" (ConPos (TyCon "SyntaxCache") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int")))) ())
 (DTypeSig false "emptyMcpSyntaxState" (TyCon "McpSyntaxState"))
 (DFunDef false "emptyMcpSyntaxState" () (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EVar "emptySyntaxCache") (EVar "defaultSyntaxCacheLimits"))) (EListLit)) (ELit (LInt 0))))
-(DTypeSig false "mcpGeneration" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "mcpGeneration" (PWild (PList)) (EVar "None"))
-(DFunDef false "mcpGeneration" ((PVar "uri") (PCons (PTuple (PVar "key") (PVar "generation")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "uri") (EVar "key")) (EApp (EVar "Some") (EVar "generation")) (EApp (EApp (EVar "mcpGeneration") (EVar "uri")) (EVar "rest"))))
 (DTypeSig false "mcpPrepared" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "SourceRevision") (TyCon "PreparedSyntax")))))))
-(DFunDef false "mcpPrepared" ((PVar "state") (PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "path"))) (DoLet false false (PCon "McpSyntaxState" (PVar "cache") (PVar "entries") (PVar "next")) (EUnOp "!" (EVar "state"))) (DoLet false false (PVar "found") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "mcpGeneration") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "generation")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "lookupSyntax") (EApp (EApp (EVar "SnapshotId") (EVar "uri")) (EVar "generation"))) (EVar "None")) (EVar "defaultParseOptions")) (EVar "cache"))) (ELam ((PVar "prepared")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "snapshotSyntaxSource") (EVar "prepared"))) (ELam ((PVar "syntax")) (EIf (EBinOp "==" (EApp (EVar "syntaxSourceText") (EVar "syntax")) (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "prepared"))) (EVar "None"))))))))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PTuple (PVar "generation") (PVar "prepared"))) () (ETuple (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "generation")) (EVar "src")) (EVar "prepared"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "next")) (EVar "src"))) (DoLet false false (PVar "prepared") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "entries2") (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "uri") (EVar "next")) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EBinOp "/=" (EVar "key") (EVar "uri")))) (EVar "entries"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "state")) (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EApp (EApp (EVar "insertSyntax") (EVar "defaultParseOptions")) (EVar "prepared")) (EVar "cache"))) (EVar "entries2")) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (ETuple (EVar "revision") (EVar "prepared")))))))))
+(DFunDef false "mcpPrepared" ((PVar "state") (PVar "path") (PVar "src")) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "path"))) (DoLet false false (PCon "McpSyntaxState" (PVar "cache") (PVar "entries") (PVar "next")) (EUnOp "!" (EVar "state"))) (DoLet false false (PVar "found") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "generation")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "lookupSyntax") (EApp (EApp (EVar "SnapshotId") (EVar "uri")) (EVar "generation"))) (EVar "None")) (EVar "defaultParseOptions")) (EVar "cache"))) (ELam ((PVar "prepared")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "snapshotSyntaxSource") (EVar "prepared"))) (ELam ((PVar "syntax")) (EIf (EBinOp "==" (EApp (EVar "syntaxSourceText") (EVar "syntax")) (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "prepared"))) (EVar "None"))))))))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PTuple (PVar "generation") (PVar "prepared"))) () (ETuple (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "generation")) (EVar "src")) (EVar "prepared"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "revision") (EApp (EApp (EApp (EApp (EVar "SourceRevision") (EVar "uri")) (EVar "None")) (EVar "next")) (EVar "src"))) (DoLet false false (PVar "prepared") (EApp (EVar "parseSnapshotSyntax") (EVar "revision"))) (DoLet false false (PVar "entries2") (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "uri") (EVar "next")) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EBinOp "/=" (EVar "key") (EVar "uri")))) (EVar "entries"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "state")) (EApp (EApp (EApp (EVar "McpSyntaxState") (EApp (EApp (EApp (EVar "insertSyntax") (EVar "defaultParseOptions")) (EVar "prepared")) (EVar "cache"))) (EVar "entries2")) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (ETuple (EVar "revision") (EVar "prepared")))))))))
 (DTypeSig false "medakaCheckSchema" (TyCon "Json"))
 (DFunDef false "medakaCheckSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to a .mdk file to check."))))))) (ETuple (ELit (LString "source")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Inline Medaka source to check (no file on disk).")))))))))))))
 (DTypeSig false "syntheticSourceName" (TyCon "String"))

@@ -22,6 +22,7 @@ test "edits preserve source and validate the whole batch" =
   let stale = SourceEdit (SnapshotId "a" 2) (SourceSpan 13 15) "12" "x"
   let wrong = SourceEdit id (SourceSpan 13 15) "xx" "x"
   let invalid = SourceEdit id (SourceSpan 0 100) "" "x"
+  let reversed = SourceEdit id (SourceSpan 15 13) "" "x"
   let overlap = SourceEdit id (SourceSpan 14 15) "2" "x"
   expectAll [
     expectEqual
@@ -37,6 +38,7 @@ test "edits preserve source and validate the whole batch" =
     expectEqual "stale" (errorName (applySourceEdits snapshot [one, stale])),
     expectEqual "expected" (errorName (applySourceEdits snapshot [one, wrong])),
     expectEqual "range" (errorName (applySourceEdits snapshot [invalid])),
+    expectEqual "range" (errorName (applySourceEdits snapshot [reversed])),
     expectEqual
       "overlap"
       (errorName (applySourceEdits snapshot [one, overlap])),

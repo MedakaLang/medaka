@@ -4,11 +4,12 @@ import tools.syntax_queries.{
   jPosition, jRange
 }
 import tools.snapshot_syntax.{
-  PreparedSyntax, parseSnapshotSyntax, defaultParseOptions, snapshotSyntaxSource
+  PreparedSyntax, parseSnapshotSyntax, prepareSnapshotSyntaxWithCheckedDecls,
+  defaultParseOptions, snapshotSyntaxSource
 }
 import tools.syntax_cache.{
   SyntaxCache, emptySyntaxCache, defaultSyntaxCacheLimits, lookupSyntax,
-  insertSyntax, invalidateSyntax
+  insertSyntax, invalidateSyntax, syntaxCacheEntryLimit
 }
 import frontend.syntax_source.{
   syntaxStructural, syntaxIndex, syntaxTokens, syntaxTokenSpans, SourceSpan(..)
@@ -75,9 +76,13 @@ import driver.diagnostics.{
   GraphId,
   graphIdSame,
   stdlibExportsReader,
+  clearProjectPassEntries,
 }
-import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
-import support.ordmap.{OrdMap, omEmpty, omLookup}
+import driver.loader.{
+  findProjectRootOrSelf, parseCachedLocated, retainParsed,
+  clearLoadedSourceRecords
+}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omFromNames, omHasKey}
 import support.stage_count.{stageBump}
 import support.path.{dirOf}
 import support.source_index.{
@@ -234,24 +239,35 @@ docsResident uri (docs@(Docs _ _ _ _ _ _ cache)) = do
   lookupSyntax (SnapshotId uri generation) version defaultParseOptions cache
 
 docsPrepared : String -> Docs -> Option PreparedSyntax
-docsPrepared uri docs = match docsResident uri docs
-  Some prepared => Some prepared
-  None => map parseSnapshotSyntax (docsRevision uri docs)
+docsPrepared uri docs = docsResident uri docs
 
 docsPrepare : String -> Docs -> Docs
-docsPrepare uri (docs@(Docs xs flagged kept versions generations next cache)) =
-  match docsRevision uri docs
-    None => docs
-    Some revision =>
-      let prepared = parseSnapshotSyntax revision
-      Docs
-        xs
-        flagged
-        kept
-        versions
-        generations
-        next
-        (insertSyntax defaultParseOptions prepared cache)
+docsPrepare uri docs = fst (docsPrepareResult uri docs)
+
+docsPrepareResult : String -> Docs -> (Docs, Option PreparedSyntax)
+docsPrepareResult uri (docs@(Docs xs flagged kept versions generations next cache)) =
+  match (docsResident uri docs, docsRevision uri docs)
+    (Some prepared, _) => (docs, Some prepared)
+    (_, None) => (docs, None)
+    (None, Some (revision@(SourceRevision _ _ _ text))) =>
+      let prepared = match omLookup text !projectParseCache
+        Some decls =>
+          prepareSnapshotSyntaxWithCheckedDecls
+            defaultParseOptions
+            revision
+            decls
+        None => parseSnapshotSyntax revision
+      (
+        Docs
+          xs
+          flagged
+          kept
+          versions
+          generations
+          next
+          (insertSyntax defaultParseOptions prepared cache),
+        Some prepared,
+      )
 
 export
 structuralParsed : PreparedSyntax -> Option (List Decl, Positions)
@@ -1628,6 +1644,16 @@ projectCache = Ref []
 projectParseCache : Ref (OrdMap (List Decl))
 projectParseCache = Ref omEmpty
 
+retainOpenProjectSources : Docs -> Unit
+retainOpenProjectSources (Docs xs _ _ _ _ _ _) =
+  let openPaths = omFromNames (map ((uri, _) => pathOfUri uri) xs) omEmpty
+  projectCache := filter ((path, _) => omHasKey path openPaths) !projectCache
+
+clearSessionSourceOwners : Unit -> Unit
+clearSessionSourceOwners () =
+  clearLoadedSourceRecords ()
+  clearProjectPassEntries ()
+
 -- file:// URI ↔ filesystem path.  LSP clients send `file://<abs-path>`; the
 -- loader works in plain paths.  pathOfUri strips the scheme; uriOfPath re-adds
 -- it (so a loader file path maps back to the Docs key for the read override).
@@ -1863,8 +1889,7 @@ handleDidOpen runtimeSrc coreSrc params docs =
       None => docs
       Some text =>
         let version = asInt (fieldOr "version" (fieldOr "textDocument" params))
-        let docs2 =
-          docsPrepare uri (docsSetVersion uri version (docsPut uri text docs))
+        let docs2 = docsSetVersion uri version (docsPut uri text docs)
         publishFor runtimeSrc coreSrc uri text docs2
 
 handleDidChange : String -> String -> Json -> Docs -> <IO> Docs
@@ -1875,8 +1900,7 @@ handleDidChange runtimeSrc coreSrc params docs =
       None => docs
       Some text =>
         let version = asInt (fieldOr "version" (fieldOr "textDocument" params))
-        let docs2 =
-          docsPrepare uri (docsSetVersion uri version (docsPut uri text docs))
+        let docs2 = docsSetVersion uri version (docsPut uri text docs)
         publishFor runtimeSrc coreSrc uri text docs2
 
 samePosition : Json -> Json -> Bool
@@ -1964,55 +1988,88 @@ cursorIdentifier src params = do
   name <- identifierAt src line col
   Some (line, col, name)
 
-projectRefIndex : String -> String -> String -> Docs -> <IO> RefIndex
-projectRefIndex runtimeSrc coreSrc rootFile docs =
+projectRefIndexPrepared : String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> (RefIndex, Docs, Option PreparedSyntax)
+projectRefIndexPrepared runtimeSrc coreSrc rootFile docs =
   let projectDir = findProjectRootOrSelf (dirOf rootFile)
-  let read = path => docsGet (uriOfPath path) docs
+  let rootUri = uriOfPath rootFile
+  let (initial, rootPrepared) = docsPrepareResult rootUri docs
+  let current = Ref initial
+  let (Docs _ _ _ _ _ _ cache) = docs
+  let budget =
+    Ref
+      (max
+        0
+        (max 1 (syntaxCacheEntryLimit cache)
+          - (match docsResident rootUri docs
+            None => 1
+            Some _ => 0)))
+  let root = Ref rootPrepared
+  let read = path => docsGet (uriOfPath path) !current
   let parse =
     path src =>
       let uri = uriOfPath path
-      match (docsGet uri docs, docsResident uri docs)
-        (Some text, Some prepared) if text == src =>
-          let _ = stageBump "lsp.project.parsed_hit"
-          structuralParsed prepared
+      match docsGet uri !current
+        Some text if text == src =>
+          let before =
+            if path == rootFile then !root else docsResident uri !current
+          let prepared = match before
+            None if !budget > 0 =>
+              budget := !budget - 1
+              let (updated, fresh) = docsPrepareResult uri !current
+              current := updated
+              fresh
+            _ => before
+          match prepared
+            Some value => match snapshotSyntaxSource value
+              Some _ =>
+                let _ = stageBump "lsp.project.parsed_hit"
+                structuralParsed value
+              None => parseWithPositionsOpt src
+            None => parseWithPositionsOpt src
         _ => parseWithPositionsOpt src
-  buildRefIndexProjectWithParsed read parse projectDir runtimeSrc coreSrc
+  let idx =
+    buildRefIndexProjectWithParsed read parse projectDir runtimeSrc coreSrc
+  (idx, !current, !root)
 
 -- textDocument/definition → Location[] (singleton) or null.
-handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Docs
 handleDefinition runtimeSrc coreSrc idJson params docs =
-  let result = match requestUri params
-    None => JNull
+  let (result, updated) = match requestUri params
+    None => (JNull, docs)
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => projectDefinition runtimeSrc coreSrc uri src params docs
-  writeMessage (responseMsg idJson result)
+      None => (JNull, docs)
+      Some src =>
+        projectDefinitionPrepared runtimeSrc coreSrc uri src params docs
+  let _ = writeMessage (responseMsg idJson result)
+  updated
 
-projectDefinition : String ->
+projectDefinitionPrepared : String ->
   String ->
   String ->
   String ->
   Json ->
   Docs ->
-  <IO> Json
-projectDefinition runtimeSrc coreSrc uri src params docs =
+  <IO> (Json, Docs)
+projectDefinitionPrepared runtimeSrc coreSrc uri src params docs =
   match cursorIdentifier src params
-    None => JNull
+    None => (JNull, docs)
     Some (line, col, _) =>
       let rootFile = pathOfUri uri
-      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
-      match binderAt idx rootFile (line + 1) col
-        None => definitionResultParsed
-          uri
-          src
-          params
-          (match docsPrepared uri docs
+      let (idx, updated, root) =
+        projectRefIndexPrepared runtimeSrc coreSrc rootFile docs
+      let result = match binderAt idx rootFile (line + 1) col
+        None => definitionResultParsed uri src params (match root
+          None => parseWithPositionsOpt src
+          Some prepared => match snapshotSyntaxSource prepared
             None => parseWithPositionsOpt src
-            Some prepared => match snapshotSyntaxSource prepared
-              None => parseWithPositionsOpt src
-              Some _ => structuralParsed prepared)
+            Some _ => structuralParsed prepared)
         Some key =>
-          jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
+          jArray (locationsJson updated (sortBy compareUseLoc (defsOf idx key)))
+      (result, updated)
 
 -- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
@@ -2097,14 +2154,16 @@ definitionIndexed uri sourceLength index chars parsed line col =
 -- `identifierAt` gates the (potentially whole-project) index build the same
 -- way `hoverFor`/`typeAtPoint` gate their env build: resolve the cheap,
 -- pure check first, only pay for the project load on an actual identifier.
-handleReferences : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleReferences : String -> String -> Json -> Json -> Docs -> <IO> Docs
 handleReferences runtimeSrc coreSrc idJson params docs =
-  let result = match requestUri params
-    None => JNull
+  let (result, updated) = match requestUri params
+    None => (JNull, docs)
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => referencesResult runtimeSrc coreSrc uri src params docs
-  writeMessage (responseMsg idJson result)
+      None => (JNull, docs)
+      Some src =>
+        referencesResultPrepared runtimeSrc coreSrc uri src params docs
+  let _ = writeMessage (responseMsg idJson result)
+  updated
 
 -- Exported for `medaka_references` (#254) — TRUE WHOLE-PROJECT scope, not
 -- one entry's import closure (#254 Stage 1.1: the entry-rooted
@@ -2136,15 +2195,30 @@ referencesResult : String ->
   Docs ->
   <IO> Json
 referencesResult runtimeSrc coreSrc uri src params docs =
+  let (result, _) =
+    referencesResultPrepared runtimeSrc coreSrc uri src params docs
+  result
+
+referencesResultPrepared : String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Docs ->
+  <IO> (Json, Docs)
+referencesResultPrepared runtimeSrc coreSrc uri src params docs =
   match cursorIdentifier src params
-    None => jArray []
+    None => (jArray [], docs)
     Some (line, col, _) =>
       let rootFile = pathOfUri uri
-      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
-      match binderAt idx rootFile (line + 1) col
+      let (idx, updated, _) =
+        projectRefIndexPrepared runtimeSrc coreSrc rootFile docs
+      let result = match binderAt idx rootFile (line + 1) col
         None => jArray []
         Some key =>
-          jArray (referenceLocations docs idx key (includeDeclarationOf params))
+          jArray
+            (referenceLocations updated idx key (includeDeclarationOf params))
+      (result, updated)
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
 -- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
@@ -2343,7 +2417,10 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
             (invalidateSyntax u cache)
         _ => docs
       let _ = match docs2
-        Docs xs _ _ _ _ _ _ => retainParsed projectParseCache (map snd xs)
+        Docs xs _ _ _ _ _ _ =>
+          let _ = retainParsed projectParseCache (map snd xs)
+          let _ = retainOpenProjectSources docs2
+          if isEmpty xs then clearSessionSourceOwners ()
       Step docs2 True
     else if meth == "textDocument/codeAction" then
       let _ = handleCodeAction (requestId msg) (fieldOr "params" msg) docs
@@ -2352,29 +2429,32 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
       let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/documentSymbol" then
-      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs
-      Step docs True
+      let docs2 = match requestUri (fieldOr "params" msg)
+        Some uri => docsPrepare uri docs
+        None => docs
+      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs2
+      Step docs2 True
     else if meth == "textDocument/definition" then
-      let _ =
+      let docs2 =
         handleDefinition
           runtimeSrc
           coreSrc
           (requestId msg)
           (fieldOr "params" msg)
           docs
-      Step docs True
+      Step docs2 True
     else if meth == "textDocument/documentHighlight" then
       let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/references" then
-      let _ =
+      let docs2 =
         handleReferences
           runtimeSrc
           coreSrc
           (requestId msg)
           (fieldOr "params" msg)
           docs
-      Step docs True
+      Step docs2 True
     else if meth == "textDocument/hover" then
       let _ =
         handleHover
@@ -2403,8 +2483,11 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
           docs
       Step docs True
     else if meth == "textDocument/semanticTokens/full" then
-      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs
-      Step docs True
+      let docs2 = match requestUri (fieldOr "params" msg)
+        Some uri => docsPrepare uri docs
+        None => docs
+      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs2
+      Step docs2 True
     else if meth == "shutdown" then
       let _ = writeMessage (responseMsg (requestId msg) JNull)
       Step docs True
@@ -2455,7 +2538,12 @@ export
 runServer : String -> String -> String -> <IO> Unit
 runServer runtimeSrc coreSrc serverVersion =
   let _ = logLine "=== medaka-lsp session start ==="
-  serve runtimeSrc coreSrc serverVersion emptyDocs
+  projectCache := []
+  projectParseCache := omEmpty
+  let _ = serve runtimeSrc coreSrc serverVersion emptyDocs
+  projectCache := []
+  projectParseCache := omEmpty
+  clearSessionSourceOwners ()
 
 export
 unit : Unit

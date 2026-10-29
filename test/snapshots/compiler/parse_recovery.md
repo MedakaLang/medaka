@@ -29,7 +29,7 @@ import frontend.recovery_result.{
   invalidRegions, recoveredCompleteness, recoveredStats
 }
 
-public export data RecoveryLimits = RecoveryLimits Int Int Int Int
+public export data RecoveryLimits = RecoveryLimits Int Int Int Int deriving (Eq)
 
 export
 defaultRecoveryLimits : RecoveryLimits
@@ -463,6 +463,7 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false) (mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "RecoveryStats" true) (mem "makeInvalidRegion" false) (mem "makeRecoveredSource" false) (mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "recoveredDiagnostics" false) (mem "invalidRegions" false) (mem "recoveredCompleteness" false) (mem "recoveredStats" false))))
 (DData Public "RecoveryLimits" () ((variant "RecoveryLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "RecoveryLimits")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RecoveryLimits" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3")) (PCon "RecoveryLimits" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DTypeSig true "defaultRecoveryLimits" (TyCon "RecoveryLimits"))
 (DFunDef false "defaultRecoveryLimits" () (EApp (EApp (EApp (EApp (EVar "RecoveryLimits") (ELit (LInt 8388608))) (ELit (LInt 500000))) (ELit (LInt 4096))) (ELit (LInt 32))))
 (DData Private "DelimiterKind" () ((variant "Paren" (ConPos)) (variant "Bracket" (ConPos)) (variant "ArrayDelimiter" (ConPos)) (variant "Brace" (ConPos)) (variant "Interpolation" (ConPos))) ())
@@ -540,6 +541,7 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false) (mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "RecoveryStats" true) (mem "makeInvalidRegion" false) (mem "makeRecoveredSource" false) (mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "recoveredDiagnostics" false) (mem "invalidRegions" false) (mem "recoveredCompleteness" false) (mem "recoveredStats" false))))
 (DData Public "RecoveryLimits" () ((variant "RecoveryLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "RecoveryLimits")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RecoveryLimits" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3")) (PCon "RecoveryLimits" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DTypeSig true "defaultRecoveryLimits" (TyCon "RecoveryLimits"))
 (DFunDef false "defaultRecoveryLimits" () (EApp (EApp (EApp (EApp (EVar "RecoveryLimits") (ELit (LInt 8388608))) (ELit (LInt 500000))) (ELit (LInt 4096))) (ELit (LInt 32))))
 (DData Private "DelimiterKind" () ((variant "Paren" (ConPos)) (variant "Bracket" (ConPos)) (variant "ArrayDelimiter" (ConPos)) (variant "Brace" (ConPos)) (variant "Interpolation" (ConPos))) ())

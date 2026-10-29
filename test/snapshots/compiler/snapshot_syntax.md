@@ -1,12 +1,14 @@
 # META
-source_lines=79
+source_lines=98
 stages=DESUGAR,MARK
 # SOURCE
+import frontend.ast.{Decl}
 import frontend.parse_recovery.{
   RecoveryLimits, defaultRecoveryLimits, budgetResult
 }
 import frontend.syntax_source.{
-  SyntaxSource, SyntaxAdmission(..), publishSyntax, syntaxIndex, syntaxRecovered
+  SyntaxSource, SyntaxAdmission(..), publishSyntax,
+  publishSyntaxWithCheckedDecls, syntaxIndex, syntaxRecovered
 }
 import frontend.recovery_result.{RecoveredSource}
 import tools.source_snapshot.{
@@ -22,7 +24,7 @@ export data SnapshotSyntax =
 export data PreparedSyntax =
   PreparedSyntax (Option SourceSnapshot) SnapshotSyntax (Option SyntaxSource)
 
-public export data ParseOptions = ParseOptions RecoveryLimits
+public export data ParseOptions = ParseOptions RecoveryLimits deriving (Eq)
 
 export
 defaultParseOptions : ParseOptions
@@ -34,8 +36,25 @@ parseSnapshotSyntax = prepareSnapshotSyntax defaultParseOptions
 
 export
 prepareSnapshotSyntax : ParseOptions -> SourceRevision -> PreparedSyntax
-prepareSnapshotSyntax (ParseOptions limits) (revision@(SourceRevision uri version generation text)) =
-  match publishSyntax limits text
+prepareSnapshotSyntax = prepareSnapshotSyntaxKnown None
+
+export
+prepareSnapshotSyntaxWithCheckedDecls : ParseOptions ->
+  SourceRevision ->
+  List Decl ->
+  PreparedSyntax
+prepareSnapshotSyntaxWithCheckedDecls options revision decls =
+  prepareSnapshotSyntaxKnown (Some decls) options revision
+
+prepareSnapshotSyntaxKnown : Option (List Decl) ->
+  ParseOptions ->
+  SourceRevision ->
+  PreparedSyntax
+prepareSnapshotSyntaxKnown known (ParseOptions limits) (revision@(SourceRevision uri version generation text)) =
+  let publication = match known
+    None => publishSyntax limits text
+    Some decls => publishSyntaxWithCheckedDecls limits text decls
+  match publication
     Err admission =>
       let count = match admission
         SourceLimit _ => 0
@@ -82,20 +101,26 @@ export
 snapshotSyntaxSnapshot : PreparedSyntax -> Option SourceSnapshot
 snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 # DESUGAR
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" false) (mem "defaultRecoveryLimits" false) (mem "budgetResult" false))))
-(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
+(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "publishSyntaxWithCheckedDecls" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true) (mem "SnapshotId" true) (mem "revisionId" false))))
 (DData Public "SnapshotMismatch" () ((variant "SnapshotMismatch" (ConPos (TyCon "SnapshotId") (TyCon "SnapshotId")))) ())
 (DData Abstract "SnapshotSyntax" () ((variant "SnapshotSyntax" (ConPos (TyCon "SnapshotId") (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "RecoveredSource")))) ())
 (DData Abstract "PreparedSyntax" () ((variant "PreparedSyntax" (ConPos (TyApp (TyCon "Option") (TyCon "SourceSnapshot")) (TyCon "SnapshotSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))) ())
 (DData Public "ParseOptions" () ((variant "ParseOptions" (ConPos (TyCon "RecoveryLimits")))) ())
+(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DTypeSig true "defaultParseOptions" (TyCon "ParseOptions"))
 (DFunDef false "defaultParseOptions" () (EApp (EVar "ParseOptions") (EVar "defaultRecoveryLimits")))
 (DTypeSig true "parseSnapshotSyntax" (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))
 (DFunDef false "parseSnapshotSyntax" () (EApp (EVar "prepareSnapshotSyntax") (EVar "defaultParseOptions")))
 (DTypeSig true "prepareSnapshotSyntax" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax"))))
-(DFunDef false "prepareSnapshotSyntax" ((PCon "ParseOptions" (PVar "limits")) (PAs "revision" (PCon "SourceRevision" (PVar "uri") (PVar "version") (PVar "generation") (PVar "text")))) (EMatch (EApp (EApp (EVar "publishSyntax") (EVar "limits")) (EVar "text")) (arm (PCon "Err" (PVar "admission")) () (EBlock (DoLet false false (PVar "count") (EMatch (EVar "admission") (arm (PCon "SourceLimit" PWild) () (ELit (LInt 0))) (arm (PCon "TokenLimit" (PVar "n")) () (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "PreparedSyntax") (EVar "None")) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EApp (EVar "budgetResult") (EVar "text")) (EVar "count")))) (EVar "None"))))) (arm (PCon "Ok" (PVar "syntax")) () (EApp (EApp (EApp (EVar "PreparedSyntax") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "SourceSnapshot") (EVar "uri")) (EVar "version")) (EVar "generation")) (EVar "text")) (EApp (EVar "syntaxIndex") (EVar "syntax"))))) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EVar "syntaxRecovered") (EVar "syntax")))) (EApp (EVar "Some") (EVar "syntax"))))))
+(DFunDef false "prepareSnapshotSyntax" () (EApp (EVar "prepareSnapshotSyntaxKnown") (EVar "None")))
+(DTypeSig true "prepareSnapshotSyntaxWithCheckedDecls" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PreparedSyntax")))))
+(DFunDef false "prepareSnapshotSyntaxWithCheckedDecls" ((PVar "options") (PVar "revision") (PVar "decls")) (EApp (EApp (EApp (EVar "prepareSnapshotSyntaxKnown") (EApp (EVar "Some") (EVar "decls"))) (EVar "options")) (EVar "revision")))
+(DTypeSig false "prepareSnapshotSyntaxKnown" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))))
+(DFunDef false "prepareSnapshotSyntaxKnown" ((PVar "known") (PCon "ParseOptions" (PVar "limits")) (PAs "revision" (PCon "SourceRevision" (PVar "uri") (PVar "version") (PVar "generation") (PVar "text")))) (EBlock (DoLet false false (PVar "publication") (EMatch (EVar "known") (arm (PCon "None") () (EApp (EApp (EVar "publishSyntax") (EVar "limits")) (EVar "text"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EApp (EApp (EVar "publishSyntaxWithCheckedDecls") (EVar "limits")) (EVar "text")) (EVar "decls"))))) (DoExpr (EMatch (EVar "publication") (arm (PCon "Err" (PVar "admission")) () (EBlock (DoLet false false (PVar "count") (EMatch (EVar "admission") (arm (PCon "SourceLimit" PWild) () (ELit (LInt 0))) (arm (PCon "TokenLimit" (PVar "n")) () (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "PreparedSyntax") (EVar "None")) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EApp (EVar "budgetResult") (EVar "text")) (EVar "count")))) (EVar "None"))))) (arm (PCon "Ok" (PVar "syntax")) () (EApp (EApp (EApp (EVar "PreparedSyntax") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "SourceSnapshot") (EVar "uri")) (EVar "version")) (EVar "generation")) (EVar "text")) (EApp (EVar "syntaxIndex") (EVar "syntax"))))) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EVar "syntaxRecovered") (EVar "syntax")))) (EApp (EVar "Some") (EVar "syntax"))))))))
 (DTypeSig true "snapshotSyntaxSource" (TyFun (TyCon "PreparedSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))
 (DFunDef false "snapshotSyntaxSource" ((PCon "PreparedSyntax" PWild PWild (PVar "syntax"))) (EVar "syntax"))
 (DTypeSig true "snapshotSyntaxId" (TyFun (TyCon "PreparedSyntax") (TyCon "SnapshotId")))
@@ -109,20 +134,26 @@ snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 (DTypeSig true "snapshotSyntaxSnapshot" (TyFun (TyCon "PreparedSyntax") (TyApp (TyCon "Option") (TyCon "SourceSnapshot"))))
 (DFunDef false "snapshotSyntaxSnapshot" ((PCon "PreparedSyntax" (PVar "snapshot") PWild PWild)) (EVar "snapshot"))
 # MARK
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" false) (mem "defaultRecoveryLimits" false) (mem "budgetResult" false))))
-(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
+(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "publishSyntaxWithCheckedDecls" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true) (mem "SnapshotId" true) (mem "revisionId" false))))
 (DData Public "SnapshotMismatch" () ((variant "SnapshotMismatch" (ConPos (TyCon "SnapshotId") (TyCon "SnapshotId")))) ())
 (DData Abstract "SnapshotSyntax" () ((variant "SnapshotSyntax" (ConPos (TyCon "SnapshotId") (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "RecoveredSource")))) ())
 (DData Abstract "PreparedSyntax" () ((variant "PreparedSyntax" (ConPos (TyApp (TyCon "Option") (TyCon "SourceSnapshot")) (TyCon "SnapshotSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))) ())
 (DData Public "ParseOptions" () ((variant "ParseOptions" (ConPos (TyCon "RecoveryLimits")))) ())
+(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DTypeSig true "defaultParseOptions" (TyCon "ParseOptions"))
 (DFunDef false "defaultParseOptions" () (EApp (EVar "ParseOptions") (EVar "defaultRecoveryLimits")))
 (DTypeSig true "parseSnapshotSyntax" (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))
 (DFunDef false "parseSnapshotSyntax" () (EApp (EVar "prepareSnapshotSyntax") (EVar "defaultParseOptions")))
 (DTypeSig true "prepareSnapshotSyntax" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax"))))
-(DFunDef false "prepareSnapshotSyntax" ((PCon "ParseOptions" (PVar "limits")) (PAs "revision" (PCon "SourceRevision" (PVar "uri") (PVar "version") (PVar "generation") (PVar "text")))) (EMatch (EApp (EApp (EVar "publishSyntax") (EVar "limits")) (EVar "text")) (arm (PCon "Err" (PVar "admission")) () (EBlock (DoLet false false (PVar "count") (EMatch (EVar "admission") (arm (PCon "SourceLimit" PWild) () (ELit (LInt 0))) (arm (PCon "TokenLimit" (PVar "n")) () (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "PreparedSyntax") (EVar "None")) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EApp (EVar "budgetResult") (EVar "text")) (EDictApp "count")))) (EVar "None"))))) (arm (PCon "Ok" (PVar "syntax")) () (EApp (EApp (EApp (EVar "PreparedSyntax") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "SourceSnapshot") (EVar "uri")) (EVar "version")) (EVar "generation")) (EVar "text")) (EApp (EVar "syntaxIndex") (EVar "syntax"))))) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EVar "syntaxRecovered") (EVar "syntax")))) (EApp (EVar "Some") (EVar "syntax"))))))
+(DFunDef false "prepareSnapshotSyntax" () (EApp (EVar "prepareSnapshotSyntaxKnown") (EVar "None")))
+(DTypeSig true "prepareSnapshotSyntaxWithCheckedDecls" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PreparedSyntax")))))
+(DFunDef false "prepareSnapshotSyntaxWithCheckedDecls" ((PVar "options") (PVar "revision") (PVar "decls")) (EApp (EApp (EApp (EVar "prepareSnapshotSyntaxKnown") (EApp (EVar "Some") (EVar "decls"))) (EVar "options")) (EVar "revision")))
+(DTypeSig false "prepareSnapshotSyntaxKnown" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "ParseOptions") (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))))
+(DFunDef false "prepareSnapshotSyntaxKnown" ((PVar "known") (PCon "ParseOptions" (PVar "limits")) (PAs "revision" (PCon "SourceRevision" (PVar "uri") (PVar "version") (PVar "generation") (PVar "text")))) (EBlock (DoLet false false (PVar "publication") (EMatch (EVar "known") (arm (PCon "None") () (EApp (EApp (EVar "publishSyntax") (EVar "limits")) (EVar "text"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EApp (EApp (EVar "publishSyntaxWithCheckedDecls") (EVar "limits")) (EVar "text")) (EVar "decls"))))) (DoExpr (EMatch (EVar "publication") (arm (PCon "Err" (PVar "admission")) () (EBlock (DoLet false false (PVar "count") (EMatch (EVar "admission") (arm (PCon "SourceLimit" PWild) () (ELit (LInt 0))) (arm (PCon "TokenLimit" (PVar "n")) () (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "PreparedSyntax") (EVar "None")) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EApp (EVar "budgetResult") (EVar "text")) (EDictApp "count")))) (EVar "None"))))) (arm (PCon "Ok" (PVar "syntax")) () (EApp (EApp (EApp (EVar "PreparedSyntax") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "SourceSnapshot") (EVar "uri")) (EVar "version")) (EVar "generation")) (EVar "text")) (EApp (EVar "syntaxIndex") (EVar "syntax"))))) (EApp (EApp (EApp (EVar "SnapshotSyntax") (EApp (EVar "revisionId") (EVar "revision"))) (EVar "version")) (EApp (EVar "syntaxRecovered") (EVar "syntax")))) (EApp (EVar "Some") (EVar "syntax"))))))))
 (DTypeSig true "snapshotSyntaxSource" (TyFun (TyCon "PreparedSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))
 (DFunDef false "snapshotSyntaxSource" ((PCon "PreparedSyntax" PWild PWild (PVar "syntax"))) (EVar "syntax"))
 (DTypeSig true "snapshotSyntaxId" (TyFun (TyCon "PreparedSyntax") (TyCon "SnapshotId")))
