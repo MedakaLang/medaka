@@ -628,6 +628,61 @@ are where refutation is intended, so they never warn for being refutable.
 Irrefutable binders (a tuple of irrefutable patterns, a single-constructor data,
 `_`, a variable, `()`) never warn.
 
+### Or-patterns
+
+Alternatives are joined by `|` inside a pattern, and the pattern matches when any
+one of them matches. An or-pattern is allowed wherever a binding pattern is: a match
+arm, nested inside another pattern (`Some (Red | Green)`), as an as-pattern
+(`whole@(Red | Blue)`), in a `let`, as a lambda parameter, as a `do` bind, as a guard
+bind (`pat <- e`), and as a function-clause parameter. A function-clause parameter
+must be parenthesized, as in `side (L n | R n) = n`. A bare `|` after the clause
+patterns starts an equation guard instead, as in `f x | x > 0 = x`.
+
+- Every alternative binds the same names, and each name has one type in every
+  alternative. A name mismatch is the resolve error `R-OR-PATTERN-BINDERS`; a type
+  mismatch is the type error `T-OR-PATTERN-BINDER-TYPES`.
+- Alternatives are tried left to right, and the first one that matches supplies the
+  bindings. With nested or-patterns, the leftmost one varies slowest.
+- A guard is tried for each matching alternative, in that order, until one passes.
+  If it fails under one alternative, the next matching alternative is tried with its
+  own bindings before control moves to the next arm (Rust RFC 2535). A single value
+  can therefore run a guard more than once. Guard binds and equation guards follow
+  the same rule.
+- An alternative that an earlier arm, or an earlier alternative of the same arm,
+  already covers warns `W-UNREACHABLE-ALT`. An arm whose alternatives are all covered
+  warns `W-UNREACHABLE-ARM` instead. Only the alternatives at the top of an arm's
+  pattern are checked, and only constructor patterns: a literal is not checked for
+  redundancy, so a repeated literal arm or alternative does not warn.
+- Exhaustiveness counts the constructors the alternatives name. On a type with a
+  third constructor `Tc`, the arm `Ta | Tb => 1` alone warns `W-NONEXHAUSTIVE`, naming
+  `Tc`.
+
+```medaka
+data C = Red | Green | Blue | Gray Int | Mix C C
+
+kind : C -> Int
+kind c = match c
+  Red | Green | Blue => 1
+  Gray _ => 2
+  Mix _ _ => 3
+
+firstWins : (Int, Int) -> Int
+firstWins p = match p
+  (x, 4) | (x, 0) | (0, x) => x
+  _ => 0 - 1
+
+main =
+  println "\{kind Red} \{kind Blue} \{kind (Gray 4)} \{kind (Mix Red Red)}"
+  println "\{firstWins (3, 4)} \{firstWins (5, 0)} \{firstWins (0, 7)} \{firstWins (1, 2)}"
+```
+
+Its output is:
+
+```medaka-expect
+1 1 2 3
+3 5 7 -1
+```
+
 ## Control flow
 
 ```medaka

@@ -111,8 +111,7 @@ guard can also sit on the same line as the clause head: `drop n xs | n <= 0 = xs
 > `pattern if condition => body`:
 >
 > ```
-> error: guards.mdk:2:4: a match-arm guard uses `if`, not `|` — write `pat if cond
-> => body` (Medaka has no or-patterns)
+> error: guards.mdk:2:4: a match-arm guard uses `if`, not `|`; write `pat if cond => body`
 > ```
 
 ## `where`
