@@ -1,0 +1,322 @@
+-- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
+-- the rule-name constants, location and trimming helpers, the suppression
+-- directive parser, and the stdlib path predicates.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..), DeclPos, positionsDecls, declPosLine}
+import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
+import support.util.{contains, filterList, splitOnChar, joinWith, startsWith}
+import list.{sortBy}
+import support.path.{stripMdk}
+import regex.{Regex, mustCompile, find as reFind, escape}
+import frontend.lexer.{Comment, commentLine, commentText}
+import tools.lint_core.{DirScope(..), Directive(..)}
+
+-- ── rule names (kept in sync between the Rule entry and its Findings) ─────────
+export
+ruleNameMatchParam : String
+ruleNameMatchParam = "rule-match-on-param"
+
+export
+ruleNameDerivable : String
+ruleNameDerivable = "rule-hand-rolled-derivable"
+
+export
+ruleNameStdlibReimpl : String
+ruleNameStdlibReimpl = "rule-stdlib-reimpl"
+
+export
+ruleNameDuplicateBody : String
+ruleNameDuplicateBody = "rule-duplicate-body"
+
+export
+ruleNameBindThenDestructure : String
+ruleNameBindThenDestructure = "rule-bind-then-destructure"
+
+export
+ruleNameLambdaSection : String
+ruleNameLambdaSection = "rule-lambda-section"
+
+export
+ruleNameIfMaxMin : String
+ruleNameIfMaxMin = "rule-if-max-min"
+
+export
+ruleNameAndThenPureMap : String
+ruleNameAndThenPureMap = "rule-andthen-pure-map"
+
+export
+ruleNameDestructureInParam : String
+ruleNameDestructureInParam = "rule-destructure-in-param"
+
+export
+ruleNameMissingSignature : String
+ruleNameMissingSignature = "rule-missing-signature"
+
+export
+ruleNameNotEq : String
+ruleNameNotEq = "rule-not-eq"
+
+export
+ruleNameBoolSimplify : String
+ruleNameBoolSimplify = "rule-bool-simplify"
+
+export
+ruleNameRemParity : String
+ruleNameRemParity = "rule-rem-parity"
+
+export
+ruleNameDoubleReverse : String
+ruleNameDoubleReverse = "rule-double-reverse"
+
+export
+ruleNameWhenUnless : String
+ruleNameWhenUnless = "rule-when-unless"
+
+export
+ruleNameComplementPredicate : String
+ruleNameComplementPredicate = "rule-complement-predicate"
+
+export
+ruleNameMatchToMap : String
+ruleNameMatchToMap = "rule-match-to-map"
+
+export
+ruleNameBindChainToDo : String
+ruleNameBindChainToDo = "rule-bind-chain-to-do"
+
+export
+ruleNameDeadCode : String
+ruleNameDeadCode = "rule-dead-code"
+
+export
+ruleNameConcatToInterp : String
+ruleNameConcatToInterp = "rule-concat-to-interp"
+
+export
+ruleNameSelfShadowExtern : String
+ruleNameSelfShadowExtern = "rule-self-shadow-extern"
+
+export
+ruleNamePreferAssignOp : String
+ruleNamePreferAssignOp = "rule-prefer-assign-op"
+
+export
+ruleNamePromissoryReader : String
+ruleNamePromissoryReader = "rule-promissory-reader"
+
+export
+ruleNameOrElseStaircase : String
+ruleNameOrElseStaircase = "rule-orelse-staircase"
+
+export
+ruleNameCloneType : String
+ruleNameCloneType = "rule-clone-type"
+
+export
+ruleNameClauseMap : String
+ruleNameClauseMap = "rule-clause-map"
+
+export
+ruleNameDirectiveReason : String
+ruleNameDirectiveReason = "rule-directive-reason"
+
+export
+ruleNameRegexLiteral : String
+ruleNameRegexLiteral = "rule-regex-literal"
+
+export
+ruleNameTestBoolLiteralEqual : String
+ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
+
+export
+ruleNameTestEqualInTrue : String
+ruleNameTestEqualInTrue = "rule-test-equal-in-true"
+
+export
+ruleNameTestPreludeShadow : String
+ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+
+-- The rule whose `check` reads the `StdlibIndex`; the runner builds the index
+-- only when this rule is active.
+export
+stdlibIndexRule : String
+stdlibIndexRule = ruleNameStdlibReimpl
+
+-- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
+-- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
+-- but `test/lint_fixtures/foo.mdk` does not).
+--
+-- `rule-hand-rolled-derivable` uses this blanket path test as-is: a hand-
+-- written `impl Eq/Ord/Debug` anywhere inside the stdlib is legitimate
+-- regardless of which stdlib file it lives in or which type it's for
+-- (bootstrap ordering, a ctor/class name clash, or a non-structural instance
+-- whose `deriving` would be semantically WRONG) — the exemption there is
+-- "this is stdlib code," not "this file owns this particular name."
+--
+-- `rule-stdlib-reimpl` does NOT use this: its exemption is per (path, name)
+-- OWNERSHIP, not per path — see `firstMatchingModule` below.  A blanket path skip
+-- would wrongly exempt a stdlib file that only CONSUMES a name it doesn't own
+-- (`stdlib/toml.mdk` reimplementing `list.reverse` as `listReverse`) right
+-- alongside the file that legitimately defines it.
+export
+isStdlibPath : String -> Bool
+isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
+
+-- The import id a path under `stdlib/` names: the segments after the last
+-- `stdlib` segment, dot-joined, so `stdlib/crypto/hmac.mdk` is `crypto.hmac`.
+-- `None` for a path with no `stdlib` segment.
+export
+stdlibModuleOf : String -> Option String
+stdlibModuleOf path = stdlibModuleGo (splitOnChar '/' (stripMdk path)) None
+
+stdlibModuleGo : List String -> Option String -> Option String
+stdlibModuleGo [] found = found
+stdlibModuleGo (seg :: rest) found =
+  if seg == "stdlib" then
+    stdlibModuleGo rest (Some (joinWith "." rest))
+  else
+    stdlibModuleGo rest found
+
+-- Sorted, duplicate-free `String` list.  Local to lint: `support.util.sortUniqS`
+-- is an insertion sort and these call sites run once per file or per def.
+export
+sortUniqS : List String -> List String
+sortUniqS xs = dedupSortedS (sortBy stringCompare xs)
+
+dedupSortedS : List String -> List String
+dedupSortedS (a :: b :: rest) =
+  if a == b then dedupSortedS (b :: rest) else a :: dedupSortedS (b :: rest)
+dedupSortedS xs = xs
+
+export
+zipDeclPos : List Decl -> List DeclPos -> List (Decl, DeclPos)
+zipDeclPos [] _ = []
+zipDeclPos _ [] = []
+zipDeclPos (d :: ds) (p :: ps) = (d, p) :: zipDeclPos ds ps
+
+export
+collectDirectives : List Comment -> List Directive
+collectDirectives cmts = flatMap (c => dirToList (parseDirective c)) cmts
+
+dirToList : Option Directive -> List Directive
+dirToList None = []
+dirToList (Some d) = [d]
+
+-- A comment becomes a directive iff it is a `--` line comment whose trimmed body
+-- (after the `--`) starts with a directive keyword.  `commentText` includes the
+-- delimiters, so we strip a leading `--` then re-trim.
+export
+parseDirective : Comment -> Option Directive
+parseDirective c =
+  let body = trimWs (commentText c)
+  if startsWith "--" body then
+    parseDirectiveBody
+      (commentLine c)
+      (trimWs (stringSlice 2 (stringLength body) body))
+  else
+    None
+
+lintDisableNextLineRe : Regex
+lintDisableNextLineRe = keywordRe "lint-disable-next-line"
+
+lintDisableLineRe : Regex
+lintDisableLineRe = keywordRe "lint-disable-line"
+
+lintDisableFileRe : Regex
+lintDisableFileRe = keywordRe "lint-disable-file"
+
+-- `kw` at the start of `s`, followed by end-of-string or whitespace (so
+-- `lint-disable-lineXYZ` does NOT match `lint-disable-line`), with the
+-- remainder captured in group 1.
+keywordRe : String -> Regex
+keywordRe kw = mustCompile ("^" ++ escape kw ++ "($|[ \\t].*)$")
+
+parseDirectiveBody : Int -> String -> Option Directive
+parseDirectiveBody line s =
+  if startsWith "lint-" s then parseDirectiveKeyword line s else None
+
+-- Every directive keyword begins `lint-`, so `parseDirectiveBody` only reaches
+-- the regexes for text that can match one.
+parseDirectiveKeyword : Int -> String -> Option Directive
+parseDirectiveKeyword line s = match matchKeyword lintDisableNextLineRe s
+  Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
+  None => match matchKeyword lintDisableLineRe s
+    Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
+    None =>
+      map
+        (names => Directive DScopeFile (parseRuleNames names))
+        (matchKeyword lintDisableFileRe s)
+
+-- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
+-- trimmed remainder (the rule-name list) captured in group 1; else None.
+matchKeyword : Regex -> String -> Option String
+matchKeyword re s = match reFind re s
+  Some m => match m.groups
+    (Some g) :: _ => Some (trimWs g.text)
+    _ => None
+  None => None
+
+-- Split a rule-name list on commas and/or spaces, dropping empty fragments.
+parseRuleNames : String -> List String
+parseRuleNames s =
+  filterList nonEmptyStr (flatMap (splitOnChar ' ') (splitOnChar ',' s))
+
+nonEmptyStr : String -> Bool
+nonEmptyStr n = n /= ""
+
+-- trim ASCII whitespace from both ends. Narrower than stdlib `string.trim`
+-- (space/tab/CR/LF only, vs. `isSpace`'s broader VT/FF) — inputs here are
+-- lint-directive comment bodies, where a stray VT/FF is plausible source
+-- text and swapping to `trim` would silently change what counts as a
+-- directive boundary. Kept intentionally; see #2349.
+export
+trimWs : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
+trimWs s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  let a = trimWsStart cs n 0
+  let b = trimWsEnd cs a n
+  stringSlice a b s
+
+trimWsStart : Array Char -> Int -> Int -> Int
+trimWsStart cs n i
+  | i >= n = i
+  | isWsChar (arrayGetUnsafe i cs) = trimWsStart cs n (i + 1)
+  | otherwise = i
+
+trimWsEnd : Array Char -> Int -> Int -> Int
+trimWsEnd cs a n
+  | n <= a = a
+  | isWsChar (arrayGetUnsafe (n - 1) cs) = trimWsEnd cs a (n - 1)
+  | otherwise = n
+
+isWsChar : Char -> Bool
+isWsChar c = c == ' ' || c == '\t' || c == '\r' || c == '\n'
+
+-- ── small AST helpers ─────────────────────────────────────────────────────────
+
+-- strip the transparent ELoc wrapper(s) to reach the real node
+export
+unwrapLoc : Expr -> Expr
+unwrapLoc (ELoc _ e) = unwrapLoc e
+unwrapLoc e = e
+
+-- ── per-decl source locations (Task B) ─────────────────────────────────────────
+-- `Positions` carries one `DeclPos` per top-level decl, parallel to the decl
+-- list.  We pair each decl with `Some (Loc … startLine 1 startLine 1)` so a rule
+-- can stamp its finding with the decl's REAL start line (decls themselves carry
+-- no `Loc`).  This is the only location source the carat path (CLI) needs; the
+-- golden line format (`findingLine`) ignores it, so goldens stay location-stripped.
+export
+declLocList : Positions -> List Decl -> List (Decl, Option Loc)
+declLocList pos prog = zipDeclLoc prog (positionsDecls pos)
+
+zipDeclLoc : List Decl -> List DeclPos -> List (Decl, Option Loc)
+zipDeclLoc [] _ = []
+zipDeclLoc (d :: ds) [] = (d, None) :: zipDeclLoc ds []
+zipDeclLoc (d :: ds) (p :: ps) = (d, Some (declPosToLoc p)) :: zipDeclLoc ds ps
+
+declPosToLoc : DeclPos -> Loc
+declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1

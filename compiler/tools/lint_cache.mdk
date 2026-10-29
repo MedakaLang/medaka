@@ -48,7 +48,7 @@ import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import io.{runCommandOk}
 import u64 as U64
-import tools.lint.{Finding(..), Directive(..), DirScope(..)}
+import tools.lint_core.{Finding(..), Directive(..), DirScope(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
 import support.char.{isAlnum}
 import json.{
