@@ -651,7 +651,8 @@ patterns starts an equation guard instead, as in `f x | x > 0 = x`.
 - An alternative that an earlier arm, or an earlier alternative of the same arm,
   already covers warns `W-UNREACHABLE-ALT`. An arm whose alternatives are all covered
   warns `W-UNREACHABLE-ARM` instead. Only the alternatives at the top of an arm's
-  pattern are checked.
+  pattern are checked, and only constructor patterns: a literal is not checked for
+  redundancy, so a repeated literal arm or alternative does not warn.
 - Exhaustiveness counts the constructors the alternatives name. On a type with a
   third constructor `Tc`, the arm `Ta | Tb => 1` alone warns `W-NONEXHAUSTIVE`, naming
   `Tc`.
