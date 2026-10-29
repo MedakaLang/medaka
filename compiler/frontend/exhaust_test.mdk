@@ -164,3 +164,13 @@ test "a range in an or-pattern behaves like the separate arms" =
 
 test "a range does not cover a constructor field" =
   expectEqual (Some "Full _") (witnessOf [con "Empty", full rng])
+
+test "a column of byte-literal ranges leaves a witness until a catch-all joins it" =
+  let byteRng = PRng (LByte 97) (LByte 122) True
+  expectEqual
+    (Some "_", Some "_", None)
+    (
+      witnessOf [byteRng],
+      witnessOf [POr [byteRng, PRng (LByte 65) (LByte 90) True]],
+      witnessOf [byteRng, PWild],
+    )

@@ -228,10 +228,19 @@ unifyOrBinder env k binds (name, Forall _ _ _ _ _ t1) =
           TOrPatternBinderTypes
           "the alternatives of an or-pattern must bind `\{name}` at one type, but alternative 1 binds it as \{ppMono (normalize t1)} and alternative \{intToString k} as \{ppMono (normalize t2)}"
 
--- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
--- binds no variables
+-- range pattern `lo..hi` / `lo..=hi`: Int, Char, byte and fixed-width bounds
+-- are valid; binds no variables.  Integer bounds are typed by the scrutinee
+-- exactly as integer literal patterns are (`inferIntLitPat`), one parked
+-- literal per bound, so both are range-checked against a fixed-width head.
 inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
-inferPatRng mctx (LInt _) (LInt _) = (tconBuiltin "Int", [])
+inferPatRng mctx (LInt lo) (LInt hi) =
+  let a = freshVar mctx ()
+  mctx.mcCells.patLitPending :=
+    (a, hi, mctx.mcLoc)
+      :: (a, lo, mctx.mcLoc)
+      :: mctx.mcCells.patLitPending.value
+  (a, [])
+inferPatRng mctx (LByte _) (LByte _) = (tconBuiltin "U8", [])
 inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
 inferPatRng mctx lo hi =
   pushTypeError

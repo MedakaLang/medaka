@@ -1,5 +1,5 @@
 # META
-source_lines=5076
+source_lines=5084
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -1953,6 +1953,7 @@ intBoundFor TMinusTight = defer
   match t
     TInt n _ => emit (LInt (negateLiteral n))
     _ => failP "expected an integer after `-` in the range bound"
+intBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 intBoundFor _ = failP "expected an integer range bound"
 
 charBound : Parser Lit
@@ -1967,10 +1968,17 @@ byteBound = defer
 
 byteBoundFor : Token -> Parser Lit
 byteBoundFor (TByte n) = emit (LByte n)
+byteBoundFor (TInt _ _) = fatalP (GenericParse mixedByteBoundMsg)
+byteBoundFor (TChar _) = fatalP (GenericParse mixedByteBoundMsg)
 byteBoundFor _ = failP "expected a byte range bound"
+
+mixedByteBoundMsg : String
+mixedByteBoundMsg =
+  "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither"
 
 charBoundFor : Token -> Parser Lit
 charBoundFor (TChar s) = emit (LChar s)
+charBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 charBoundFor _ = failP "expected a character range bound"
 
 tuplePatOrSingle : List Pat -> Pat
@@ -5743,6 +5751,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "intBoundFor" ((PCon "TWideInt" PWild PWild (PVar "lx"))) (EApp (EVar "fatalP") (EApp (EVar "widePatMsg") (EVar "lx"))))
 (DFunDef false "intBoundFor" ((PCon "TMinus")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) () (EApp (EVar "emit") (EApp (EVar "LInt") (EApp (EVar "negateLiteral") (EVar "n"))))) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected an integer after `-` in the range bound"))))))))))
 (DFunDef false "intBoundFor" ((PCon "TMinusTight")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) () (EApp (EVar "emit") (EApp (EVar "LInt") (EApp (EVar "negateLiteral") (EVar "n"))))) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected an integer after `-` in the range bound"))))))))))
+(DFunDef false "intBoundFor" ((PCon "TByte" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "intBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected an integer range bound"))))
 (DTypeSig false "charBound" (TyApp (TyCon "Parser") (TyCon "Lit")))
 (DFunDef false "charBound" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "charBoundFor") (EVar "t")))))
@@ -5750,9 +5759,14 @@ parseResultWith mode src tokList offList =
 (DFunDef false "byteBound" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "byteBoundFor") (EVar "t")))))
 (DTypeSig false "byteBoundFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Lit"))))
 (DFunDef false "byteBoundFor" ((PCon "TByte" (PVar "n"))) (EApp (EVar "emit") (EApp (EVar "LByte") (EVar "n"))))
+(DFunDef false "byteBoundFor" ((PCon "TInt" PWild PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
+(DFunDef false "byteBoundFor" ((PCon "TChar" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "byteBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected a byte range bound"))))
+(DTypeSig false "mixedByteBoundMsg" (TyCon "String"))
+(DFunDef false "mixedByteBoundMsg" () (ELit (LString "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither")))
 (DTypeSig false "charBoundFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Lit"))))
 (DFunDef false "charBoundFor" ((PCon "TChar" (PVar "s"))) (EApp (EVar "emit") (EApp (EVar "LChar") (EVar "s"))))
+(DFunDef false "charBoundFor" ((PCon "TByte" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "charBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected a character range bound"))))
 (DTypeSig false "tuplePatOrSingle" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "tuplePatOrSingle" ((PList (PVar "p"))) (EVar "p"))
@@ -7236,6 +7250,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "intBoundFor" ((PCon "TWideInt" PWild PWild (PVar "lx"))) (EApp (EVar "fatalP") (EApp (EVar "widePatMsg") (EVar "lx"))))
 (DFunDef false "intBoundFor" ((PCon "TMinus")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) () (EApp (EVar "emit") (EApp (EVar "LInt") (EApp (EVar "negateLiteral") (EVar "n"))))) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected an integer after `-` in the range bound"))))))))))
 (DFunDef false "intBoundFor" ((PCon "TMinusTight")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) () (EApp (EVar "emit") (EApp (EVar "LInt") (EApp (EVar "negateLiteral") (EVar "n"))))) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected an integer after `-` in the range bound"))))))))))
+(DFunDef false "intBoundFor" ((PCon "TByte" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "intBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected an integer range bound"))))
 (DTypeSig false "charBound" (TyApp (TyCon "Parser") (TyCon "Lit")))
 (DFunDef false "charBound" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "charBoundFor") (EVar "t")))))
@@ -7243,9 +7258,14 @@ parseResultWith mode src tokList offList =
 (DFunDef false "byteBound" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "byteBoundFor") (EVar "t")))))
 (DTypeSig false "byteBoundFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Lit"))))
 (DFunDef false "byteBoundFor" ((PCon "TByte" (PVar "n"))) (EApp (EVar "emit") (EApp (EVar "LByte") (EVar "n"))))
+(DFunDef false "byteBoundFor" ((PCon "TInt" PWild PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
+(DFunDef false "byteBoundFor" ((PCon "TChar" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "byteBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected a byte range bound"))))
+(DTypeSig false "mixedByteBoundMsg" (TyCon "String"))
+(DFunDef false "mixedByteBoundMsg" () (ELit (LString "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither")))
 (DTypeSig false "charBoundFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Lit"))))
 (DFunDef false "charBoundFor" ((PCon "TChar" (PVar "s"))) (EApp (EVar "emit") (EApp (EVar "LChar") (EVar "s"))))
+(DFunDef false "charBoundFor" ((PCon "TByte" PWild)) (EApp (EVar "fatalP") (EApp (EVar "GenericParse") (EVar "mixedByteBoundMsg"))))
 (DFunDef false "charBoundFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected a character range bound"))))
 (DTypeSig false "tuplePatOrSingle" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "tuplePatOrSingle" ((PList (PVar "p"))) (EVar "p"))
