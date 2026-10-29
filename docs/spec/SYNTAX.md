@@ -134,12 +134,28 @@ character and otherwise uses the escapes above, so `b'\x0A'` is written `b'\n'`,
 `b'\x41'` is written `b'A'`, and `b'\x7F'` stays `b'\x7F'`. Byte strings `b"…"` are
 not part of the language yet.
 
-An identifier spelled `b'a'` is refused as `L-BYTE-LITERAL-IDENT`, with a rename
-fix-it (`b_a`). The lexer reports it in three places and no others: when the
-`b'a'` is glued to a following letter, digit, `_` or `'` (`b'a'z`); right after
-`let`, `rec` or `mut` (`let b'a' = 3`); and at column 0, where a top-level binder
-starts, so a byte literal cannot begin a line at column 0. Elsewhere `b'a'` is a
-byte literal, and a binder spelled that way is a literal pattern, not a name:
+A primed name `b'` is an ordinary identifier. `b'` opens a byte literal only when
+the `b` does not continue a longer identifier and what follows the apostrophe is
+either a backslash (an escape) or one character, optionally followed by combining
+marks, closed by `'`. So `swap (a',b') = (b',a')`, `[b',b']`, `b'+b'` and `let b'' = 5`
+are plain names, while `b'`, `b'ab'`, `b''` and `b',b'` never start a literal. Once
+the lexer commits, a malformed literal is an error and never falls back to a name:
+`b'\` and `b'\x41` (no closing quote) are `L-BAD-BYTE-LITERAL`.
+
+| Source | Reads as |
+|---|---|
+| `b'a'`, `b'\n'`, `b'\x41'` | byte literal |
+| `b'é'` | `L-BYTE-NON-ASCII` |
+| `b'\'`, `b'\x41`, `b'\x100'`, `b'\q'` | `L-BAD-BYTE-LITERAL` |
+| `b''`, `b'ab'`, `b',b'`, `b'+b'`, `b'` before a space | identifier |
+
+An identifier spelled `b'a'` is refused as `L-BYTE-LITERAL-IDENT`; the help text asks
+for a rename of every occurrence (`b_a`), and there is no machine fix because the
+use sites are not binder-shaped. The lexer reports it in three places and no others:
+when the `b'a'` is glued to a following letter, digit, `_` or `'` (`b'a'z`); right
+after `let`, `rec` or `mut` (`let b'a' = 3`); and at column 0, where a top-level
+binder starts, so a byte literal cannot begin a line at column 0. Elsewhere `b'a'` is
+a byte literal, and a binder spelled that way is a literal pattern, not a name:
 `(b'a' => 1) b'a'` is `1`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take

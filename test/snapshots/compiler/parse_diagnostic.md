@@ -268,7 +268,8 @@ problemHelp PositiveIntOverflow =
     "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
 problemHelp (NonAsciiByte _ fixIt) =
   Some "write the character as its UTF-8 bytes, \{fixIt}"
-problemHelp (ByteLikeIdent _ new) = Some "rename the identifier to `\{new}`"
+problemHelp (ByteLikeIdent _ new) =
+  Some "rename every occurrence of the identifier, for example to `\{new}`"
 problemHelp (BareUnicodeEscape _ _) =
   Some "write the unicode escape braced, `\\u{XXXX}`"
 problemHelp (MalformedRadix _ _ _) =
@@ -312,7 +313,6 @@ problemEdits : ParseDiagnosticKind -> Loc -> List ParseEdit
 problemEdits BadNeq loc = replacementEdit loc "!=" "/="
 problemEdits HsSignature loc = replacementEdit loc "::" ":"
 problemEdits (BareUnicodeEscape old new) loc = replacementEdit loc old new
-problemEdits (ByteLikeIdent old new) loc = replacementEdit loc old new
 problemEdits (MalformedRadix bad prefix digits) loc =
   if digits == "" then [] else replacementEdit loc bad (prefix ++ digits)
 problemEdits (MalformedFloat bad good _) loc = replacementEdit loc bad good
@@ -460,7 +460,7 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DFunDef false "problemHelp" ((PCon "BadNeq")) (EApp (EVar "Some") (ELit (LString "replace `!=` with `/=`"))))
 (DFunDef false "problemHelp" ((PCon "PositiveIntOverflow")) (EApp (EVar "Some") (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"))))
 (DFunDef false "problemHelp" ((PCon "NonAsciiByte" PWild (PVar "fixIt"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "write the character as its UTF-8 bytes, ")) (EApp (EVar "display") (EVar "fixIt"))) (ELit (LString "")))))
-(DFunDef false "problemHelp" ((PCon "ByteLikeIdent" PWild (PVar "new"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename the identifier to `")) (EApp (EVar "display") (EVar "new"))) (ELit (LString "`")))))
+(DFunDef false "problemHelp" ((PCon "ByteLikeIdent" PWild (PVar "new"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename every occurrence of the identifier, for example to `")) (EApp (EVar "display") (EVar "new"))) (ELit (LString "`")))))
 (DFunDef false "problemHelp" ((PCon "BareUnicodeEscape" PWild PWild)) (EApp (EVar "Some") (ELit (LString "write the unicode escape braced, `\\u{XXXX}`"))))
 (DFunDef false "problemHelp" ((PCon "MalformedRadix" PWild PWild PWild)) (EApp (EVar "Some") (ELit (LString "the digit separator `_` may only appear between digits"))))
 (DFunDef false "problemHelp" ((PCon "MalformedFloat" PWild PWild PWild)) (EApp (EVar "Some") (ELit (LString "a float literal needs a digit on both sides of the decimal point"))))
@@ -480,7 +480,6 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DFunDef false "problemEdits" ((PCon "BadNeq") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "!="))) (ELit (LString "/="))))
 (DFunDef false "problemEdits" ((PCon "HsSignature") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "::"))) (ELit (LString ":"))))
 (DFunDef false "problemEdits" ((PCon "BareUnicodeEscape" (PVar "old") (PVar "new")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "old")) (EVar "new")))
-(DFunDef false "problemEdits" ((PCon "ByteLikeIdent" (PVar "old") (PVar "new")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "old")) (EVar "new")))
 (DFunDef false "problemEdits" ((PCon "MalformedRadix" (PVar "bad") (PVar "prefix") (PVar "digits")) (PVar "loc")) (EIf (EBinOp "==" (EVar "digits") (ELit (LString ""))) (EListLit) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "bad")) (EBinOp "++" (EVar "prefix") (EVar "digits")))))
 (DFunDef false "problemEdits" ((PCon "MalformedFloat" (PVar "bad") (PVar "good") PWild) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "bad")) (EVar "good")))
 (DFunDef false "problemEdits" ((PCon "ReservedKeyword" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "name")) (EBinOp "++" (EVar "name") (ELit (LString "_")))))
@@ -625,7 +624,7 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DFunDef false "problemHelp" ((PCon "BadNeq")) (EApp (EVar "Some") (ELit (LString "replace `!=` with `/=`"))))
 (DFunDef false "problemHelp" ((PCon "PositiveIntOverflow")) (EApp (EVar "Some") (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"))))
 (DFunDef false "problemHelp" ((PCon "NonAsciiByte" PWild (PVar "fixIt"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "write the character as its UTF-8 bytes, ")) (EApp (EMethodRef "display") (EVar "fixIt"))) (ELit (LString "")))))
-(DFunDef false "problemHelp" ((PCon "ByteLikeIdent" PWild (PVar "new"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename the identifier to `")) (EApp (EMethodRef "display") (EVar "new"))) (ELit (LString "`")))))
+(DFunDef false "problemHelp" ((PCon "ByteLikeIdent" PWild (PVar "new"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "rename every occurrence of the identifier, for example to `")) (EApp (EMethodRef "display") (EVar "new"))) (ELit (LString "`")))))
 (DFunDef false "problemHelp" ((PCon "BareUnicodeEscape" PWild PWild)) (EApp (EVar "Some") (ELit (LString "write the unicode escape braced, `\\u{XXXX}`"))))
 (DFunDef false "problemHelp" ((PCon "MalformedRadix" PWild PWild PWild)) (EApp (EVar "Some") (ELit (LString "the digit separator `_` may only appear between digits"))))
 (DFunDef false "problemHelp" ((PCon "MalformedFloat" PWild PWild PWild)) (EApp (EVar "Some") (ELit (LString "a float literal needs a digit on both sides of the decimal point"))))
@@ -645,7 +644,6 @@ makeParseDiagnostic kind loc = ParseDiagnostic kind loc (problemEdits kind loc)
 (DFunDef false "problemEdits" ((PCon "BadNeq") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "!="))) (ELit (LString "/="))))
 (DFunDef false "problemEdits" ((PCon "HsSignature") (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (ELit (LString "::"))) (ELit (LString ":"))))
 (DFunDef false "problemEdits" ((PCon "BareUnicodeEscape" (PVar "old") (PVar "new")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "old")) (EVar "new")))
-(DFunDef false "problemEdits" ((PCon "ByteLikeIdent" (PVar "old") (PVar "new")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "old")) (EVar "new")))
 (DFunDef false "problemEdits" ((PCon "MalformedRadix" (PVar "bad") (PVar "prefix") (PVar "digits")) (PVar "loc")) (EIf (EBinOp "==" (EVar "digits") (ELit (LString ""))) (EListLit) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "bad")) (EBinOp "++" (EVar "prefix") (EVar "digits")))))
 (DFunDef false "problemEdits" ((PCon "MalformedFloat" (PVar "bad") (PVar "good") PWild) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "bad")) (EVar "good")))
 (DFunDef false "problemEdits" ((PCon "ReservedKeyword" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EVar "replacementEdit") (EVar "loc")) (EVar "name")) (EBinOp "++" (EVar "name") (ELit (LString "_")))))

@@ -1223,24 +1223,11 @@ IDENT "c"
 EQ_EQ
 CHAR "b"
 AND
-IDENT "pos"
-PLUS
-INT 1
-LT
-IDENT "len"
-AND
-IDENT "isApos"
-LPAREN
-IDENT "at"
+IDENT "opensByteLiteral"
 IDENT "src"
-LPAREN
+IDENT "len"
 IDENT "pos"
-PLUS
-INT 1
-RPAREN
-RPAREN
 EQUAL
-INDENT
 IDENT "scanByte"
 IDENT "ctx"
 IDENT "src"
@@ -1248,8 +1235,6 @@ IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
-NEWLINE
-DEDENT
 NEWLINE
 PIPE
 IDENT "isLower"
@@ -4286,6 +4271,219 @@ IDENT "frame"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "opensByteLiteral"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "opensByteLiteral"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "pos"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "afterIdentChar"
+IDENT "src"
+IDENT "pos"
+RPAREN
+AND
+LPAREN
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+OR
+IDENT "singleCharBody"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "afterIdentChar"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "afterIdentChar"
+IDENT "src"
+IDENT "pos"
+EQUAL
+IDENT "pos"
+GT
+INT 0
+AND
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+IDENT "singleCharBody"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "singleCharBody"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "not"
+LPAREN
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+RPAREN
+AND
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closesAfterMarks"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+UPPER "False"
+NEWLINE
+PIPE
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "isCombiningMark"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isCombiningMark"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isCombiningMark"
+IDENT "c"
+EQUAL
+IDENT "charCode"
+IDENT "c"
+GEQ
+INT 768
+AND
+IDENT "charCode"
+IDENT "c"
+LEQ
+INT 879
+NEWLINE
 IDENT "scanByte"
 COLON
 UPPER "ScanCursor"
@@ -4371,73 +4569,6 @@ RPAREN
 IDENT "next"
 IDENT "depth"
 IDENT "id"
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-UPPER "Err"
-LPAREN
-UPPER "LexError"
-UPPER "UnterminatedChar"
-UNDERSCORE
-UNDERSCORE
-RPAREN
-FAT_ARROW
-IDENT "scanLower"
-IDENT "ctx"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-NEWLINE
-UPPER "Err"
-LPAREN
-UPPER "LexError"
-LPAREN
-UPPER "BadByteLiteral"
-IDENT "msg"
-RPAREN
-IDENT "start"
-IDENT "end"
-RPAREN
-FAT_ARROW
-INDENT
-IF
-IDENT "spansWhitespace"
-IDENT "src"
-LPAREN
-IDENT "pos"
-PLUS
-INT 2
-RPAREN
-LPAREN
-IDENT "end"
-MINUS
-INT 1
-RPAREN
-THEN
-INDENT
-IDENT "scanLower"
-IDENT "ctx"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-NEWLINE
-DEDENT
-ELSE
-INDENT
-IDENT "lexErrorTok"
-IDENT "ctx"
-IDENT "start"
-IDENT "end"
-LPAREN
-UPPER "BadByteLiteral"
-IDENT "msg"
-RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -4667,67 +4798,6 @@ RPAREN
 RPAREN
 RPAREN
 RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "spansWhitespace"
-COLON
-UPPER "Array"
-UPPER "Char"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Bool"
-NEWLINE
-IDENT "spansWhitespace"
-IDENT "src"
-IDENT "p"
-IDENT "endp"
-INDENT
-PIPE
-IDENT "p"
-GEQ
-IDENT "endp"
-EQUAL
-UPPER "False"
-NEWLINE
-PIPE
-IDENT "isSpace"
-LPAREN
-IDENT "at"
-IDENT "src"
-IDENT "p"
-RPAREN
-OR
-IDENT "isNL"
-LPAREN
-IDENT "at"
-IDENT "src"
-IDENT "p"
-RPAREN
-OR
-IDENT "isCR"
-LPAREN
-IDENT "at"
-IDENT "src"
-IDENT "p"
-RPAREN
-EQUAL
-UPPER "True"
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-IDENT "spansWhitespace"
-IDENT "src"
-LPAREN
-IDENT "p"
-PLUS
-INT 1
-RPAREN
-IDENT "endp"
 NEWLINE
 DEDENT
 NEWLINE

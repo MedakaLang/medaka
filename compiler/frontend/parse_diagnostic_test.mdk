@@ -267,3 +267,14 @@ test "shared diagnostic construction retains typed edits" =
       [((2, 3, 2, 5), "!=", "/=", True)]
       (map editText (diagnosticEdits diagnostic)),
   ]
+
+test "a byte-literal-shaped identifier carries help but no machine edit" =
+  let diagnostic =
+    makeParseDiagnostic (ByteLikeIdent "b'a'" "b_a") (Loc "" 1 4 1 8)
+  expectAll [
+    expectEqual "L-BYTE-LITERAL-IDENT" (codeText (diagnosticCode diagnostic)),
+    expectEqual [] (map editText (diagnosticEdits diagnostic)),
+    expectEqual
+      (Some "rename every occurrence of the identifier, for example to `b_a`")
+      (diagnosticHelp diagnostic),
+  ]
