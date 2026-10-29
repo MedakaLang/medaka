@@ -84,7 +84,49 @@ independent errors after a 1 MiB comment allocated about 772 MB because each
 error built another full-source index; sharing eliminates that repeated work.
 This is a component measurement, not a claim about total end-to-end cost.
 
-The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
+The immutable `frontend/syntax_source.mdk` publishes original text, token spans, scanner-proven comments and opaque gaps alongside the checked `ParsedSource` and bounded recovery. It does not provide general expression extents or cross-edit node identity. `parse_engine` owns invocation-scoped parse state. The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
+
+## Source-fidelity decision
+
+The source-fidelity sprint selects a source-backed lexical value alongside the
+existing immutable strict parse and recovery results. The value preserves the
+original text, scanner-proven comments, token ranges and opaque gaps. Gaps are
+not necessarily whitespace: interpolation prefixes and suffixes and malformed
+tails can also occur there. Recovery completeness does not replace the strict
+parse verdict. `parse_engine.mdk` owns transient parser state; published values
+must not retain it. The existing snapshot owner supplies revision identity and
+may reuse this value within a bounded session cache.
+
+Existing definition queries use whole-file located syntax parsing, which can
+succeed when strict prescans reject a removed form. Preserve that structural
+result separately from the checked verdict and fenced recovery. A checked
+success can share its parsed value with located syntax; a checked failure may
+require one additional located-syntax attempt over the same tokens. A cached
+structural failure is a result, not a request to reparse. Structural success
+does not authorize compilation, diagnostics or formatting.
+
+LSP publishes this value on the first structural request for a revision, not on
+every document notification. When the existing analysis memo has a successful
+checked parse for the exact source, publication keeps those declarations and
+obtains positions and formatting metadata from one located-syntax pass. A
+failed completion falls back to the checked parse over the prepared tokens;
+cached declarations alone cannot manufacture success. Project requests
+prepare visited open sources on demand under the session cache's capacity.
+
+Closing a document retains last-good project sources only for paths still open
+in the session; an open broken dependency may need its previous source even
+when another project closes. Once the last document closes and graph analysis
+and diagnostic rendering are quiescent, the loader's last-source records and
+the driver's cached pass entries can release their source roots. Clearing pass
+entries preserves the generation serial used by remaining cache keys.
+
+This is not a lossless grammar tree. Expression locations do not generally
+cover a whole expression, and an interpolated literal's location need not start
+at its opening quote. Source edits require an independently authoritative span
+and an expected old text. F1/F2 and the increment-4 decision remain in force:
+the measured carrier does not justify a wholesale declaration-field migration.
+A future concrete syntax tree could provide complete node ownership and
+cross-edit identity, but requires grammar instrumentation and verified lowering.
 
 ## Decisions (locked 2026-07-22 by Val)
 

@@ -2396,6 +2396,10 @@ retainPassEntries mids =
     pcFold = omRestrict mids c.pcFold,
   }
 
+export
+clearProjectPassEntries : Unit -> Unit
+clearProjectPassEntries () = retainPassEntries []
+
 keepPassEntry : PassKind -> String -> PassEntry -> Unit
 keepPassEntry kind mid entry =
   let c = passCacheRef.value

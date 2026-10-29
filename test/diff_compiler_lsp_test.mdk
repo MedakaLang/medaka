@@ -1658,17 +1658,22 @@ test "references on an or-pattern binder reach every alternative's site" = withS
     ("medaka.toml", """[project]
 name = "orrefs"
 """),
-    ("main.mdk", """data E = L Int Int | R Int Int
+    (
+      "main.mdk",
+      """data E = L Int Int | R Int Int
 f e = match e
   L x y | R y x => x * 10 + y
 main = f (L 1 2)
-"""),
+""",
+    ),
   ]
     Err e => fail e
     Ok _ =>
       let main = stringConcat ["file://", dir, "/main.mdk"]
       let (errors, out) = drive [
-        didOpenMsg main """data E = L Int Int | R Int Int
+        didOpenMsg
+          main
+          """data E = L Int Int | R Int Int
 f e = match e
   L x y | R y x => x * 10 + y
 main = f (L 1 2)
@@ -2386,3 +2391,184 @@ f x = x
             (map (get "range") valid),
         ),
       ]
+
+test "definition reuses open strict-rejected sibling syntax" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"syntaxcache\"\n"),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", """import lib.{value}
+main = value
+"""),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let (errors, out) = drive [
+        didOpenMsg main """import lib.{value}
+main = value
+""",
+        didOpenMsg lib """record P : Int
+export value = 9
+""",
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let expected = Some (jArray [coordLocation lib 1 7 12])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("first definition", expectEqual expected (resultTo 10 objs)),
+            ("second definition", expectEqual expected (resultTo 11 objs)),
+          ])
+
+test "project definition retains requested root across cache eviction" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"capacity\"\n"),
+    ("a.mdk", "export value = 1\n"),
+    ("b.mdk", "export b = 1\n"),
+    ("c.mdk", "export c = 1\n"),
+    ("d.mdk", "export d = 1\n"),
+    ("e.mdk", "export e = 1\n"),
+    ("main.mdk", "import a.{value}\nmain = value\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let uri name = stringConcat ["file://", dir, "/", name, ".mdk"]
+      let main = uri "main"
+      let (errors, out) = drive [
+        didOpenMsg (uri "a") "export value = 9\n",
+        didOpenMsg (uri "b") "export b = 2\n",
+        didOpenMsg (uri "c") "export c = 2\n",
+        didOpenMsg (uri "d") "export d = 2\n",
+        didOpenMsg (uri "e") "export e = 2\n",
+        didOpenMsg main "import a.{value}\nmain = value\n",
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let expected = Some (jArray [coordLocation (uri "a") 0 7 12])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("first", expectEqual expected (resultTo 10 objs)),
+            ("second", expectEqual expected (resultTo 11 objs)),
+          ])
+
+test "closing another project keeps an open broken dependency last good source" = withScratchDir
+  (dir =>
+    let a = dir ++ "/a"
+    let b = dir ++ "/b"
+    let files = [
+      ("medaka.toml", "[project]\nname = \"lifetime\"\n"),
+      ("dep.mdk", "export\nvalue = \"disk\"\n"),
+      ("main.mdk", "import dep.{value}\nmain = value + 1\n"),
+    ]
+    match (layOut a files, layOut b files)
+      (Ok _, Ok _) =>
+        let uri path name = stringConcat ["file://", path, "/", name, ".mdk"]
+        let ad = uri a "dep"
+        let am = uri a "main"
+        let bd = uri b "dep"
+        let bm = uri b "main"
+        let root = "import dep.{value}\nmain = value + 1\n"
+        let good = "export\nvalue = 11\n"
+        let (errors, out) = drive [
+          didOpenMsg ad good,
+          didOpenMsg am root,
+          didOpenMsg bd good,
+          didOpenMsg bm root,
+          didChangeMsg bd "export\nvalue = )\n",
+          rpc 101 "textDocument/hover" (posParams bm 1 8),
+          notify "textDocument/didClose" (docParams ad),
+          notify "textDocument/didClose" (docParams am),
+          rpc 102 "textDocument/hover" (posParams bm 1 8),
+          bye,
+        ]
+        match decodeFrames out
+          Err e => fail e
+          Ok objs =>
+            let expected =
+              Some
+                (jObject [
+                  ("kind", JString "markdown"),
+                  ("value", JString "```medaka\nvalue : Int\n```"),
+                ])
+            expectEach [
+              ("process", expectEqual [] errors),
+              ("before", expectEqual expected (hoverContents 101 objs)),
+              ("after", expectEqual expected (hoverContents 102 objs)),
+            ]
+      _ => fail "could not create project fixtures")
+
+test "cached open sibling preserves or-pattern references across edits" =
+  let mainSource = """import lib.{value}
+main = value
+"""
+  withScratchDir (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"orcache\"\n"),
+    ("lib.mdk", "export value = 1\n"),
+    ("main.mdk", mainSource),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let lib = stringConcat ["file://", dir, "/lib.mdk"]
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let src =
+        """data E = L Int | R Int
+export value = match L 1
+  L x | R x => x
+"""
+      let changed =
+        """data E = L Int | R Int
+export value = match R 2
+  L x | R x => x + 1
+"""
+      let referenceParams = jObject [
+        ("textDocument", jObject [("uri", JString lib)]),
+        ("position", coordPos 2 15),
+        ("context", jObject [("includeDeclaration", JBool True)]),
+      ]
+      let (errors, out) = drive [
+        didOpenMsg main mainSource,
+        didOpenMsg lib src,
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        rpc 12 "textDocument/references" referenceParams,
+        didChangeMsg lib changed,
+        rpc 13 "textDocument/definition" (posParams main 1 8),
+        rpc 14 "textDocument/references" referenceParams,
+        notify "textDocument/didClose" (docParams lib),
+        rpc 15 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let definition = Some (jArray [coordLocation lib 1 7 12])
+          let refs =
+            Some
+              (jArray [
+                coordLocation lib 2 4 5,
+                coordLocation lib 2 10 11,
+                coordLocation lib 2 15 16,
+              ])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("cold definition", expectEqual definition (resultTo 10 objs)),
+            ("warm definition", expectEqual definition (resultTo 11 objs)),
+            ("cold references", expectEqual refs (resultTo 12 objs)),
+            ("edited definition", expectEqual definition (resultTo 13 objs)),
+            ("edited references", expectEqual refs (resultTo 14 objs)),
+            (
+              "closed sibling reads disk",
+              expectEqual
+                (Some (jArray [coordLocation lib 0 7 12]))
+                (resultTo 15 objs),
+            ),
+          ])

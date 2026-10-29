@@ -1,5 +1,5 @@
 # META
-source_lines=149
+source_lines=157
 stages=DESUGAR,MARK
 # SOURCE
 import driver.diagnostic_value.{
@@ -8,13 +8,14 @@ import driver.diagnostic_value.{
 import support.source_index.{SourceIndex, sourcePositionToOffset}
 import tools.lsp_positions.{locToLspRange}
 import tools.source_snapshot.{SourceSnapshot(..), SnapshotId(..), snapshotId}
+import tools.source_edits.{SourceEdit(..), validateSourceEdits}
+import frontend.syntax_source.{SourceSpan(..)}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseEdit(..), EditApplicability(..), diagnosticCode,
   diagnosticLoc, diagnosticEdits
 }
 import json.{Json(..), jObject, jArray}
-import string.{sliceClamped}
 
 severityCode : Severity -> Int
 severityCode SevError = 1
@@ -91,7 +92,7 @@ parseDiagnosticJson snapshot fallback d pd = match snapshot
         base
 
 actionForEdit : SourceSnapshot -> ParseEdit -> List Json
-actionForEdit (SourceSnapshot uri version _ text index) (ParseEdit loc expected replacement applicability) =
+actionForEdit (snapshot@(SourceSnapshot uri version _ _ index)) (ParseEdit loc expected replacement applicability) =
   match loc
     Loc _ sl sc el ec => match (
       sourcePositionToOffset index sl sc,
@@ -100,8 +101,15 @@ actionForEdit (SourceSnapshot uri version _ text index) (ParseEdit loc expected 
     )
       (Some start, Some end, Some range) =>
         if applicability == MachineApplicable
-          && end >= start
-          && sliceClamped start end text == expected then
+          && (match (validateSourceEdits snapshot [
+            SourceEdit
+              (snapshotId snapshot)
+              (SourceSpan start end)
+              expected
+              replacement,
+          ])
+            Ok _ => True
+            Err _ => False) then
           [
             jObject [
               ("title", JString ("Replace with " ++ replacement)),
@@ -156,10 +164,11 @@ parseDiagnosticActions snapshot diagnostics =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "sourcePositionToOffset" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" true) (mem "snapshotId" false))))
+(DUse false (UseGroup ("tools" "source_edits") ((mem "SourceEdit" true) (mem "validateSourceEdits" false))))
+(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseEdit" true) (mem "EditApplicability" true) (mem "diagnosticCode" false) (mem "diagnosticLoc" false) (mem "diagnosticEdits" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
-(DUse false (UseGroup ("string") ((mem "sliceClamped" false))))
 (DTypeSig false "severityCode" (TyFun (TyCon "Severity") (TyCon "Int")))
 (DFunDef false "severityCode" ((PCon "SevError")) (ELit (LInt 1)))
 (DFunDef false "severityCode" ((PCon "SevWarning")) (ELit (LInt 2)))
@@ -179,7 +188,7 @@ parseDiagnosticActions snapshot diagnostics =
 (DTypeSig true "parseDiagnosticJson" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyFun (TyCon "ParseDiagnostic") (TyCon "Json"))))))
 (DFunDef false "parseDiagnosticJson" ((PVar "snapshot") (PVar "fallback") (PVar "d") (PVar "pd")) (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index")) () (EMatch (EVar "d") (arm (PCon "Diag" PWild (PVar "code") PWild (PVar "loc") PWild PWild) () (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EVar "fallback")) (EVar "d"))) (DoLet false false (PVar "matching") (EBinOp "&&" (EBinOp "==" (EVar "code") (EApp (EVar "Coded") (EApp (EVar "diagnosticCode") (EVar "pd")))) (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "l")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EApp (EVar "diagnosticLoc") (EVar "pd"))))) (arm (PCon "None") () (EVar "False"))))) (DoExpr (EIf (EBinOp "&&" (EVar "matching") (EBinOp ">" (EApp (EVar "length") (EApp (EApp (EVar "parseDiagnosticActions") (EVar "snapshot")) (EListLit (EVar "pd")))) (ELit (LInt 0)))) (EMatch (EVar "base") (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EBinOp "++" (EApp (EVar "toList") (EVar "fields")) (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "snapshotJson") (EVar "snapshot"))))))) (arm PWild () (EVar "base"))) (EVar "base")))))))))
 (DTypeSig false "actionForEdit" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "ParseEdit") (TyApp (TyCon "List") (TyCon "Json")))))
-(DFunDef false "actionForEdit" ((PCon "SourceSnapshot" (PVar "uri") (PVar "version") PWild (PVar "text") (PVar "index")) (PCon "ParseEdit" (PVar "loc") (PVar "expected") (PVar "replacement") (PVar "applicability"))) (EMatch (EVar "loc") (arm (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end")) (PCon "Some" (PVar "range"))) () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "applicability") (EVar "MachineApplicable")) (EBinOp ">=" (EVar "end") (EVar "start"))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "start")) (EVar "end")) (EVar "text")) (EVar "expected"))) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "title")) (EApp (EVar "JString") (EBinOp "++" (ELit (LString "Replace with ")) (EVar "replacement")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "quickfix")))) (ETuple (ELit (LString "edit")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "documentChanges")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocument")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "version")) (EMatch (EVar "version") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "JInt") (EVar "v"))) (arm (PCon "None") () (EVar "JNull"))))))) (ETuple (ELit (LString "edits")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "replacement"))))))))))))))))))) (EListLit))) (arm PWild () (EListLit))))))
+(DFunDef false "actionForEdit" ((PAs "snapshot" (PCon "SourceSnapshot" (PVar "uri") (PVar "version") PWild PWild (PVar "index"))) (PCon "ParseEdit" (PVar "loc") (PVar "expected") (PVar "replacement") (PVar "applicability"))) (EMatch (EVar "loc") (arm (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end")) (PCon "Some" (PVar "range"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "applicability") (EVar "MachineApplicable")) (EMatch (EApp (EApp (EVar "validateSourceEdits") (EVar "snapshot")) (EListLit (EApp (EApp (EApp (EApp (EVar "SourceEdit") (EApp (EVar "snapshotId") (EVar "snapshot"))) (EApp (EApp (EVar "SourceSpan") (EVar "start")) (EVar "end"))) (EVar "expected")) (EVar "replacement")))) (arm (PCon "Ok" PWild) () (EVar "True")) (arm (PCon "Err" PWild) () (EVar "False")))) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "title")) (EApp (EVar "JString") (EBinOp "++" (ELit (LString "Replace with ")) (EVar "replacement")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "quickfix")))) (ETuple (ELit (LString "edit")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "documentChanges")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocument")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "version")) (EMatch (EVar "version") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "JInt") (EVar "v"))) (arm (PCon "None") () (EVar "JNull"))))))) (ETuple (ELit (LString "edits")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "replacement"))))))))))))))))))) (EListLit))) (arm PWild () (EListLit))))))
 (DTypeSig true "parseDiagnosticActions" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "ParseDiagnostic")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "parseDiagnosticActions" ((PVar "snapshot") (PVar "diagnostics")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "flatMap") (EApp (EVar "actionForEdit") (EVar "snapshot"))) (EApp (EVar "diagnosticEdits") (EVar "d"))))) (EVar "diagnostics")))
 # MARK
@@ -187,10 +196,11 @@ parseDiagnosticActions snapshot diagnostics =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "sourcePositionToOffset" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" true) (mem "snapshotId" false))))
+(DUse false (UseGroup ("tools" "source_edits") ((mem "SourceEdit" true) (mem "validateSourceEdits" false))))
+(DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseEdit" true) (mem "EditApplicability" true) (mem "diagnosticCode" false) (mem "diagnosticLoc" false) (mem "diagnosticEdits" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
-(DUse false (UseGroup ("string") ((mem "sliceClamped" false))))
 (DTypeSig false "severityCode" (TyFun (TyCon "Severity") (TyCon "Int")))
 (DFunDef false "severityCode" ((PCon "SevError")) (ELit (LInt 1)))
 (DFunDef false "severityCode" ((PCon "SevWarning")) (ELit (LInt 2)))
@@ -210,6 +220,6 @@ parseDiagnosticActions snapshot diagnostics =
 (DTypeSig true "parseDiagnosticJson" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "Json") (TyFun (TyCon "Diag") (TyFun (TyCon "ParseDiagnostic") (TyCon "Json"))))))
 (DFunDef false "parseDiagnosticJson" ((PVar "snapshot") (PVar "fallback") (PVar "d") (PVar "pd")) (EMatch (EVar "snapshot") (arm (PCon "SourceSnapshot" PWild PWild PWild PWild (PVar "index")) () (EMatch (EVar "d") (arm (PCon "Diag" PWild (PVar "code") PWild (PVar "loc") PWild PWild) () (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EVar "fallback")) (EVar "d"))) (DoLet false false (PVar "matching") (EBinOp "&&" (EBinOp "==" (EVar "code") (EApp (EVar "Coded") (EApp (EVar "diagnosticCode") (EVar "pd")))) (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "l")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EApp (EVar "diagnosticLoc") (EVar "pd"))))) (arm (PCon "None") () (EVar "False"))))) (DoExpr (EIf (EBinOp "&&" (EVar "matching") (EBinOp ">" (EApp (EMethodRef "length") (EApp (EApp (EVar "parseDiagnosticActions") (EVar "snapshot")) (EListLit (EVar "pd")))) (ELit (LInt 0)))) (EMatch (EVar "base") (arm (PCon "JObject" (PVar "fields")) () (EApp (EVar "jObject") (EBinOp "++" (EApp (EMethodRef "toList") (EVar "fields")) (EListLit (ETuple (ELit (LString "data")) (EApp (EVar "snapshotJson") (EVar "snapshot"))))))) (arm PWild () (EVar "base"))) (EVar "base")))))))))
 (DTypeSig false "actionForEdit" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "ParseEdit") (TyApp (TyCon "List") (TyCon "Json")))))
-(DFunDef false "actionForEdit" ((PCon "SourceSnapshot" (PVar "uri") (PVar "version") PWild (PVar "text") (PVar "index")) (PCon "ParseEdit" (PVar "loc") (PVar "expected") (PVar "replacement") (PVar "applicability"))) (EMatch (EVar "loc") (arm (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end")) (PCon "Some" (PVar "range"))) () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "applicability") (EVar "MachineApplicable")) (EBinOp ">=" (EVar "end") (EVar "start"))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "start")) (EVar "end")) (EVar "text")) (EVar "expected"))) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "title")) (EApp (EVar "JString") (EBinOp "++" (ELit (LString "Replace with ")) (EVar "replacement")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "quickfix")))) (ETuple (ELit (LString "edit")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "documentChanges")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocument")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "version")) (EMatch (EVar "version") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "JInt") (EVar "v"))) (arm (PCon "None") () (EVar "JNull"))))))) (ETuple (ELit (LString "edits")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "replacement"))))))))))))))))))) (EListLit))) (arm PWild () (EListLit))))))
+(DFunDef false "actionForEdit" ((PAs "snapshot" (PCon "SourceSnapshot" (PVar "uri") (PVar "version") PWild PWild (PVar "index"))) (PCon "ParseEdit" (PVar "loc") (PVar "expected") (PVar "replacement") (PVar "applicability"))) (EMatch (EVar "loc") (arm (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc"))) (arm (PTuple (PCon "Some" (PVar "start")) (PCon "Some" (PVar "end")) (PCon "Some" (PVar "range"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "applicability") (EVar "MachineApplicable")) (EMatch (EApp (EApp (EVar "validateSourceEdits") (EVar "snapshot")) (EListLit (EApp (EApp (EApp (EApp (EVar "SourceEdit") (EApp (EVar "snapshotId") (EVar "snapshot"))) (EApp (EApp (EVar "SourceSpan") (EVar "start")) (EVar "end"))) (EVar "expected")) (EVar "replacement")))) (arm (PCon "Ok" PWild) () (EVar "True")) (arm (PCon "Err" PWild) () (EVar "False")))) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "title")) (EApp (EVar "JString") (EBinOp "++" (ELit (LString "Replace with ")) (EVar "replacement")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "quickfix")))) (ETuple (ELit (LString "edit")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "documentChanges")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocument")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "version")) (EMatch (EVar "version") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "JInt") (EVar "v"))) (arm (PCon "None") () (EVar "JNull"))))))) (ETuple (ELit (LString "edits")) (EApp (EVar "jArray") (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "replacement"))))))))))))))))))) (EListLit))) (arm PWild () (EListLit))))))
 (DTypeSig true "parseDiagnosticActions" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "ParseDiagnostic")) (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "parseDiagnosticActions" ((PVar "snapshot") (PVar "diagnostics")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "actionForEdit") (EVar "snapshot"))) (EApp (EVar "diagnosticEdits") (EVar "d"))))) (EVar "diagnostics")))
