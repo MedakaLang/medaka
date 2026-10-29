@@ -2506,11 +2506,14 @@ test "closing another project keeps an open broken dependency last good source" 
             ]
       _ => fail "could not create project fixtures")
 
-test "cached open sibling preserves or-pattern references across edits" = withScratchDir
-  (dir => match layOut dir [
+test "cached open sibling preserves or-pattern references across edits" =
+  let mainSource = """import lib.{value}
+main = value
+"""
+  withScratchDir (dir => match layOut dir [
     ("medaka.toml", "[project]\nname = \"orcache\"\n"),
     ("lib.mdk", "export value = 1\n"),
-    ("main.mdk", "import lib.{value}\nmain = value\n"),
+    ("main.mdk", mainSource),
   ]
     Err e => fail e
     Ok _ =>
@@ -2526,29 +2529,20 @@ export value = match L 1
 export value = match R 2
   L x | R x => x + 1
 """
+      let referenceParams = jObject [
+        ("textDocument", jObject [("uri", JString lib)]),
+        ("position", coordPos 2 15),
+        ("context", jObject [("includeDeclaration", JBool True)]),
+      ]
       let (errors, out) = drive [
-        didOpenMsg main "import lib.{value}\nmain = value\n",
+        didOpenMsg main mainSource,
         didOpenMsg lib src,
         rpc 10 "textDocument/definition" (posParams main 1 8),
         rpc 11 "textDocument/definition" (posParams main 1 8),
-        rpc
-          12
-          "textDocument/references"
-          (jObject [
-            ("textDocument", jObject [("uri", JString lib)]),
-            ("position", coordPos 2 15),
-            ("context", jObject [("includeDeclaration", JBool True)]),
-          ]),
+        rpc 12 "textDocument/references" referenceParams,
         didChangeMsg lib changed,
         rpc 13 "textDocument/definition" (posParams main 1 8),
-        rpc
-          14
-          "textDocument/references"
-          (jObject [
-            ("textDocument", jObject [("uri", JString lib)]),
-            ("position", coordPos 2 15),
-            ("context", jObject [("includeDeclaration", JBool True)]),
-          ]),
+        rpc 14 "textDocument/references" referenceParams,
         notify "textDocument/didClose" (docParams lib),
         rpc 15 "textDocument/definition" (posParams main 1 8),
         bye,
