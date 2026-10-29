@@ -91,7 +91,9 @@ literal 300 does not fit U8 (0..255)`). A computed value never narrows silently:
 `fromInt` panics out of range, `tryFromInt` answers `None`, and `truncate` is
 the only masking conversion. A literal **pattern** is typed by its scrutinee
 when that is `U8`/`U16`/`U32` (`classify : U8 -> String; classify 10 = …`) and
-is range-checked the same way; otherwise it is an `Int`.
+is range-checked the same way; otherwise it is an `Int`. A range pattern
+(`lo..=hi`) on one of these scrutinees types its integer bounds the same way;
+see § Match & patterns.
 
 **`U64`** holds `0 .. 2^64 - 1` in a boxed cell (it does not fit `Int`'s tagged
 word; the native backend keeps it in a register where its type is known); its
@@ -117,6 +119,28 @@ literal 2^63. A literal **pattern** is typed by an `I32` scrutinee (a negative
 literal arm does not parse for any integer type; use a guard); it cannot match
 an `I64`. Every `Int` fits an `I64`, so `fromInt` at `I64` never panics,
 and `I64.toInt` answers an `Option Int`.
+
+**Byte literals.** `b'a'` is a `U8` constant: the one ASCII character `a`, typed
+`U8` directly. It is character notation, not a new integer literal, and takes no
+`Num` route. Its body takes the char-literal escapes (`\n \t \r \0 \\ \'`, `\u{…}`)
+and `\xNN`, exactly two hex digits from `\x00` to `\xFF`, so `b'\xFF'` is 255. The
+literal and literal patterns need no import. Comparing bytes (`==`, `<`) needs
+`import u8`, and so does an integer literal in `U8` position: `kind 10` against a
+`U8` scrutinee needs it, `kind b'\n'` does not. A non-ASCII character is refused as
+`L-BYTE-NON-ASCII`, whose fix-it lists its UTF-8 bytes: `b'é'` gets the fix-it
+`b'\xC3'`, `b'\xA9'`. An empty or multi-character body, or a bad `\x` escape, is
+`L-BAD-BYTE-LITERAL`. `fmt` writes a byte literal as `b'c'` for a printable ASCII
+character and otherwise uses the escapes above, so `b'\x0A'` is written `b'\n'`,
+`b'\x41'` is written `b'A'`, and `b'\x7F'` stays `b'\x7F'`. Byte strings `b"…"` are
+not part of the language yet.
+
+An identifier spelled `b'a'` is refused as `L-BYTE-LITERAL-IDENT`, with a rename
+fix-it (`b_a`). The lexer reports it in three places and no others: when the
+`b'a'` is glued to a following letter, digit, `_` or `'` (`b'a'z`); right after
+`let`, `rec` or `mut` (`let b'a' = 3`); and at column 0, where a top-level binder
+starts, so a byte literal cannot begin a line at column 0. Elsewhere `b'a'` is a
+byte literal, and a binder spelled that way is a literal pattern, not a name:
+`(b'a' => 1) b'a'` is `1`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take
 `\'`). `\{` is **not** a literal-brace escape — it is the interpolation opener (see
@@ -613,6 +637,31 @@ m9 p = match p
 
 m10 p = match p
   Person { ... } => 0  -- record rest only
+```
+
+**Fixed-width range patterns.** On a `U8`, `U16` or `U32` scrutinee, `lo..=hi` (and
+the exclusive `lo..hi`) takes integer bounds typed by the scrutinee and range-checked
+the way a literal pattern is: `0..=300` on a `U8` scrutinee is `integer literal 300 does
+not fit U8 (0..255)`. A byte-literal bound is a `U8` bound, so `b'a'..=b'z'` matches
+the ASCII lowercase letters. A range that mixes a byte bound with an integer or
+character bound is a parse error; write both bounds as byte literals, or neither. A
+reversed range such as `b'z'..=b'a'` is accepted and never matches. A range does not
+make a `U8` match exhaustive: a range-only match warns `non-exhaustive match on U8:
+missing _`, so it needs a `_` arm.
+
+```medaka
+kind : U8 -> String
+kind b = match b
+  b'0'..=b'9' => "digit"
+  b'a'..=b'z' | b'A'..=b'Z' => "letter"
+  0..=31 => "control"
+  _ => "other"
+
+main = (kind b'7', kind b'q', kind b'\n', kind b' ')
+```
+
+```medaka-expect
+(digit, letter, control, other)
 ```
 
 Match-arm guards — the SAME qualifiers as equation guards (`cond`, comma-`,`

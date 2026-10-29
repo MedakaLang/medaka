@@ -119,7 +119,9 @@ interface's doc comment). That is a call per operation.
 1. **The model does not change.** A literal stays `fromInt n : Num a => a`.
    Each U type gets a `Num` impl, so `emitU8 65`, `x + 1 : U32` and
    `sum ws : U64` compile exactly as they would for a user newtype today.
-   No literal suffixes, no new literal syntax for the tagged tier.
+   No literal suffixes, no new literal syntax for the tagged tier. A byte literal
+   `b'a'` is character notation for a `U8` constant (`docs/spec/SYNTAX.md`
+   § Literals), not a new integer literal: it is typed `U8` directly, not through `Num`.
 
 2. **A compile-time range check** hooks the existing post-inference
    grounding pass, where the literal's ground type is known. A literal

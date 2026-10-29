@@ -150,6 +150,13 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check("char literal 'a'", typeOf(t, "'a'") === 'character', 'got ' + typeOf(t, "'a'"));
 }
 
+// 10b. byte literal b'a' and b'\xFF' are character tokens (the b prefix included)
+{
+  const t = tokenize("c = b'a' + b'\\xFF'");
+  check("byte literal b'a'", typeOf(t, "b'a'") === 'character', 'got ' + typeOf(t, "b'a'"));
+  check("byte literal b'\\xFF'", typeOf(t, "b'\\xFF'") === 'character', 'got ' + typeOf(t, "b'\\xFF'"));
+}
+
 // N. type names vs data constructors (positional, see tokenizer header)
 {
   const t = tokenize('data Shape\n  = Circle Float\n  | Rect Float Float\n\narea : Shape -> Float\narea (Circle r) = 3.14 * r * r\n\nmain =\n  let shapes = [Circle 1.0, Rect 3.0 4.0]\n  println "\\{map area shapes}"');

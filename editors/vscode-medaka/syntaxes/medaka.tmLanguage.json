@@ -80,7 +80,8 @@
     },
     "char": {
       "name": "string.quoted.single.medaka",
-      "match": "'[^'\\\\]'|'\\\\.[^']*'"
+      "comment": "a byte literal b'x' (U8 character notation) is a char literal with a b prefix; the \\b keeps it off the tail of an identifier such as fib'",
+      "match": "\\bb'[^'\\\\]'|\\bb'\\\\.[^']*'|'[^'\\\\]'|'\\\\.[^']*'"
     },
     "effect-annotation": {
       "match": "(<)(?:[A-Z][a-zA-Z0-9_']*,?\\s*)+(>)",
