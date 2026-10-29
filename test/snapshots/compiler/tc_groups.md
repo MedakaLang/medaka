@@ -1,5 +1,5 @@
 # META
-source_lines=2223
+source_lines=2226
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -611,6 +611,7 @@ eagerRefs (EGuards arms) = flatMap eagerRefsGuardArm arms
 eagerRefs (ESection (SecRight _ e0)) = eagerRefs e0
 eagerRefs (ESection (SecLeft e0 _)) = eagerRefs e0
 eagerRefs (EAsPat _ e0) = eagerRefs e0
+eagerRefs (EOrPat es) = flatMap eagerRefs es
 eagerRefs (EMapLit _ kvs) = flatMap eagerRefsPair kvs
 eagerRefs (ESetLit _ es) = flatMap eagerRefs es
 eagerRefs (ELoc _ e) = eagerRefs e
@@ -977,6 +978,7 @@ allEVars (ELoc _ e) = allEVars e
 allEVars (EDoOrigin _ e) = allEVars e
 allEVars (EHeadAnnot e _) = allEVars e
 allEVars (EAsPat _ e) = allEVars e
+allEVars (EOrPat es) = flatMap allEVars es
 allEVars (EMapLit _ kvs) = flatMap kvEVars kvs
 allEVars (ESetLit _ es) = flatMap allEVars es
 allEVars (EDo _ stmts) = flatMap doStmtEVars stmts
@@ -1085,6 +1087,7 @@ freeEVars bound (ELoc _ e) = freeEVars bound e
 freeEVars bound (EDoOrigin _ e) = freeEVars bound e
 freeEVars bound (EHeadAnnot e _) = freeEVars bound e
 freeEVars bound (EAsPat _ e) = freeEVars bound e
+freeEVars bound (EOrPat es) = flatMap (freeEVars bound) es
 freeEVars bound (EMapLit _ kvs) = flatMap (freeKvEVars bound) kvs
 freeEVars bound (ESetLit _ es) = flatMap (freeEVars bound) es
 freeEVars bound (EDo _ stmts) = freeStmtsEVars bound stmts
@@ -2368,6 +2371,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "eagerRefs" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "eagerRefs") (EVar "e0")))
 (DFunDef false "eagerRefs" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "eagerRefs") (EVar "e0")))
 (DFunDef false "eagerRefs" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "eagerRefs") (EVar "e0")))
+(DFunDef false "eagerRefs" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefsPair")) (EVar "kvs")))
 (DFunDef false "eagerRefs" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
@@ -2468,6 +2472,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "allEVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EAsPat" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "kvEVars")) (EVar "kvs")))
 (DFunDef false "allEVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
@@ -2534,6 +2539,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EAsPat" PWild (PVar "e"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeKvEVars") (EVar "bound"))) (EVar "kvs")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "stmts")))
@@ -2903,6 +2909,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "eagerRefs" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "eagerRefs") (EVar "e0")))
 (DFunDef false "eagerRefs" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "eagerRefs") (EVar "e0")))
 (DFunDef false "eagerRefs" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "eagerRefs") (EVar "e0")))
+(DFunDef false "eagerRefs" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefsPair")) (EVar "kvs")))
 (DFunDef false "eagerRefs" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
@@ -3003,6 +3010,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "allEVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EAsPat" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EOrPat" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "kvEVars")) (EVar "kvs")))
 (DFunDef false "allEVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
@@ -3069,6 +3077,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EAsPat" PWild (PVar "e"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeKvEVars") (EVar "bound"))) (EVar "kvs")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "stmts")))

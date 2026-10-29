@@ -1395,6 +1395,15 @@ walkArms ctx scope ((CArm pat guards body) :: rest) w =
     scope
     rest
     (walkGuarded ctx (bindPatScope pat scope) guards body w)
+walkArms ctx scope ((CArmAlt pat guards _) :: rest) w =
+  walkArms ctx scope rest (walkGuards ctx (bindPatScope pat scope) guards w)
+
+walkGuards : Ctx -> CallScope -> List CGuard -> Walk -> Walk
+walkGuards _ _ [] w = w
+walkGuards ctx scope ((CGBool c) :: rest) w =
+  walkGuards ctx scope rest (walkE ctx scope c w)
+walkGuards ctx scope ((CGBind pat e) :: rest) w =
+  walkGuards ctx (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
 walkGuarded ctx scope [] body w = walkE ctx scope body w
@@ -1420,7 +1429,8 @@ walkStmts ctx scope ((CSAssign _ e) :: rest) w =
 -- applies them, so the two can disagree.  Tail position starts at the body of a
 -- clause with a parameter and of a lambda, and passes through the branches of
 -- an `if`, the arms of a match, the body of a `let` or let-group and the last
--- statement of a block.
+-- statement of a block.  The same walk refuses an or-pattern candidate whose
+-- body index names no earlier `CArm` of its list.
 export
 validateTails : CProgram -> List String
 validateTails (CProgram groups _ _ impls _ _) =
@@ -1463,9 +1473,9 @@ tailE b tl (CLet _ _ rhs body) acc = tailE b tl body (tailE b False rhs acc)
 tailE b tl (CLetGroup binds body) acc =
   tailE b tl body (tailLocalBinds b binds acc)
 tailE b tl (CMatch scrut arms) acc =
-  tailArms b tl arms (tailE b False scrut acc)
+  tailArms b tl arms (armAltFaults b arms 0 arms (tailE b False scrut acc))
 tailE b tl (CDecision scrut arms _) acc =
-  tailArms b tl arms (tailE b False scrut acc)
+  tailArms b tl arms (armAltFaults b arms 0 arms (tailE b False scrut acc))
 tailE b tl (CIf c t f) acc = tailE b tl f (tailE b tl t (tailE b False c acc))
 tailE b _ (CBinPrim _ l r _ _) acc = tailList b [l, r] acc
 tailE b _ (CUnOp _ x) acc = tailE b False x acc
@@ -1532,6 +1542,32 @@ tailArms : String -> Bool -> List CArm -> List String -> List String
 tailArms _ _ [] acc = acc
 tailArms b tl ((CArm _ guards body) :: rest) acc =
   tailArms b tl rest (tailE b tl body (tailGuards b guards acc))
+tailArms b tl ((CArmAlt _ guards _) :: rest) acc =
+  tailArms b tl rest (tailGuards b guards acc)
+
+-- [arms] is the whole list, [i] the index of the head of [rest].
+armAltFaults : String ->
+  List CArm ->
+  Int ->
+  List CArm ->
+  List String ->
+  List String
+armAltFaults _ _ _ [] acc = acc
+armAltFaults b arms i ((CArmAlt _ _ owner) :: rest) acc =
+  let ok = owner < i && bodyArmAt arms owner
+  let acc2 =
+    if ok then
+      acc
+    else
+      "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
+        :: acc
+  armAltFaults b arms (i + 1) rest acc2
+armAltFaults b arms i (_ :: rest) acc = armAltFaults b arms (i + 1) rest acc
+
+bodyArmAt : List CArm -> Int -> Bool
+bodyArmAt ((CArm _ _ _) :: _) 0 = True
+bodyArmAt (_ :: rest) n = n > 0 && bodyArmAt rest (n - 1)
+bodyArmAt [] _ = False
 
 tailGuards : String -> List CGuard -> List String -> List String
 tailGuards _ [] acc = acc

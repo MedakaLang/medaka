@@ -35,7 +35,7 @@ import types.tc_pat.{
   takePatLits,
 }
 import types.tc_test_support.{
-  at, boolM, codesOf, fresh, fst3, intM, pvar, snd3, varM
+  at, boolM, codesOf, fresh, fst3, intM, messagesOf, pvar, snd3, varM
 }
 import types.tc_types.{
   ModuleCtx(..),
@@ -363,3 +363,62 @@ test "a binder with a minted id is queued for the runtime-type table and one wit
       (p => match p
         PendingBinder _ name _ arity signed => (name, arity, signed))
       m.mcGraph.graphRun.binderPending.value)
+
+-- ── or-patterns ───────────────────────────────────────────────────────────
+
+test "an or-pattern whose alternatives bind a name at one type is accepted, binding it once" =
+  let (m, env) = setup ()
+  let alts = POr [PCon "Wrap" [pvar "x"], PCon "Wrap" [pvar "x"]]
+  let (t, binds) = inferPat env alts
+  expectEqual ("Wrap a", ["x"], []) (ppMono t, map fst binds, codesOf m)
+
+-- `Pair x _` and `Pair _ x` agree on the scrutinee, but bind `x` at Int and at Bool.
+test "an or-pattern whose alternatives bind a name at different types is rejected, naming both" =
+  let (m, env) = setup ()
+  let alts = POr [PCon "Pair" [pvar "x", PWild], PCon "Pair" [PWild, pvar "x"]]
+  let _ = inferPat env alts
+  expectEqual ["T-TYPE-MISMATCH", "T-OR-PATTERN-BINDER-TYPES"] (codesOf m)
+
+orOfInts : Int -> Pat
+orOfInts k = POr (map (i => PLit (LInt i)) [1..=k])
+
+-- Each tuple column is a two-way or-pattern, so n columns expand to 2^n candidates.
+orTupleOf : Int -> Pat
+orTupleOf n = PTuple (map (_ => orOfInts 2) [1..=n])
+
+test "or-pattern columns whose product is at most 256 are accepted" =
+  let (m, env) = setup ()
+  let _ = inferPat env (orTupleOf 8)
+  let _ = inferPat env (PTuple [orOfInts 16, orOfInts 16])
+  expectEqual [] (codesOf m)
+
+test "or-pattern columns whose product exceeds 256 are rejected, naming the count and the limit" =
+  let (m, env) = setup ()
+  let _ = inferPat env (orTupleOf 9)
+  expectAll [
+    expectEqual ["T-OR-PATTERN-TOO-MANY"] (codesOf m),
+    expectEqual
+      [
+        "the or-patterns here expand to 512 alternatives, over the limit of 256; split the pattern into nested matches",
+      ]
+      (messagesOf m),
+  ]
+
+test "the product limit applies across a clause's parameters" =
+  let (m, env) = setup ()
+  let _ = inferPats env (map (_ => orOfInts 2) [1..=9])
+  expectEqual ["T-OR-PATTERN-TOO-MANY"] (codesOf m)
+
+test "an or-pattern's alternatives must agree on the scrutinee type" =
+  let (m, env) = setup ()
+  let _ = inferPat env (POr [PLit (LChar "a"), PLit (LBool True)])
+  expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "an or-pattern opens existentials when any alternative's constructor does" =
+  let (_, env) = setup ()
+  expectEqual
+    (True, False)
+    (
+      patOpensExistentials env (POr [PWild, PCon "Packed" []]),
+      patOpensExistentials env (POr [PWild, PCon "Pair" [PWild, PWild]]),
+    )

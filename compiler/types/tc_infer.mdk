@@ -91,6 +91,7 @@ import types.tc_diag_text.{
   u64RangeText,
   unboundVarMsg,
   unknownFieldMsg,
+  unreachableAltWarning,
   unreachableArmWarning,
   wideAnnotateHelp,
   writtenDiag,
@@ -370,6 +371,8 @@ import support.util.{
 import types.effect_infer.{captureEffects}
 import frontend.exhaust.{
   desugarPat,
+  Oracle,
+  oracleForPats,
   patHasRange,
   patUnreachable,
   renderWitness,
@@ -3006,13 +3009,10 @@ checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
 checkMatchExhaustive : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchExhaustive mctx scrutTy arms =
   let rows = nonGuardedRows mctx arms
-  if useful
-    mctx.mcCells.matchOracle.value
-    (matchCol0Type scrutTy)
-    rows
-    [PWild] then
+  let oracle = armsOracle mctx arms
+  if useful oracle (matchCol0Type scrutTy) rows [PWild] then
     let binder = isBinderArms arms
-    let (msg, help) = nonExhaustiveMsg mctx scrutTy rows binder
+    let (msg, help) = nonExhaustiveMsg mctx oracle scrutTy rows binder
     -- A let-bound function is nested one-parameter lambdas that share the
     -- binding's location; the first refutable parameter's warning is the one.
     if binder
@@ -3029,7 +3029,19 @@ warnedAt loc (TcDiag code _ at _ _ _) =
 
 checkMatchRedundant : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchRedundant mctx scrutTy arms =
-  checkRedundantGo mctx (matchCol0Type scrutTy) [] omEmpty False arms
+  checkRedundantGo
+    mctx
+    (armsOracle mctx arms)
+    (matchCol0Type scrutTy)
+    []
+    omEmpty
+    False
+    arms
+
+-- The match oracle, told whether these arms hold an or-pattern.
+armsOracle : ModuleCtx -> List Arm -> Oracle
+armsOracle mctx arms =
+  oracleForPats mctx.mcCells.matchOracle.value (map ((Arm pat _ _) => pat) arms)
 
 -- PERF: `prec` accumulates the preceding arms' patterns and is PREPENDED to, so
 -- it holds them in REVERSE arm order.  Appending (`prec ++ [[dp]]`) would copy the
@@ -3044,16 +3056,17 @@ checkMatchRedundant mctx scrutTy arms =
 -- arm carries a constructor pattern and there is no head constructor to find in
 -- either order.
 checkRedundantGo : ModuleCtx ->
+  Oracle ->
   Option TabKey ->
   List (List Pat) ->
   OrdMap Unit ->
   Bool ->
   List Arm ->
   Unit
-checkRedundantGo mctx _ _ _ _ [] = ()
-checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
+checkRedundantGo mctx oracle _ _ _ _ [] = ()
+checkRedundantGo mctx oracle col0 prec heads offCol ((Arm pat gs body) :: rest) =
   let dp = desugarPat mctx.mcCells.matchOracle.value pat
-  if armUnreachable mctx col0 prec heads offCol dp then
+  if armUnreachable mctx oracle col0 prec heads offCol dp then
     mctx.mcCells.matchWarnings :=
       TcDiag
           WUnreachableArm
@@ -3063,14 +3076,78 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
           None
           None
         :: mctx.mcCells.matchWarnings.value
+  warnUnreachableAlts mctx oracle col0 prec (armIsUnguarded gs) pat dp body
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
-  -- may not fire, and a range collapses to a wildcard that over-states coverage
+  -- may not fire, and a range covers part of its type that the matrix cannot name
   -- (patHasRange) — either would produce a false "redundant" on a later arm.
   let contributes = armIsUnguarded gs && not (patHasRange pat)
   let prec2 = if contributes then [dp] :: prec else prec
   let heads2 = if contributes then noteHeadCtor dp heads else heads
   let offCol2 = offCol || contributes && not (isConPat dp)
-  checkRedundantGo mctx col0 prec2 heads2 offCol2 rest
+  checkRedundantGo mctx oracle col0 prec2 heads2 offCol2 rest
+
+-- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or (in
+-- an unguarded arm only) the alternatives before it in the same arm, already cover.
+-- A guarded arm re-tries later alternatives when the guard fails (D1), so an earlier
+-- alternative of the same arm never covers a later one.  The arm as a whole being
+-- unreachable is reported once, as the arm.  An arm with a range stays out: a range
+-- is not in the covered matrix, so its alternatives cannot be judged against it.
+warnUnreachableAlts : ModuleCtx ->
+  Oracle ->
+  Option TabKey ->
+  List (List Pat) ->
+  Bool ->
+  Pat ->
+  Pat ->
+  Expr ->
+  Unit
+warnUnreachableAlts mctx oracle col0 prec unguarded pat (POr alts) body
+  | patHasRange pat = ()
+  | otherwise =
+    each
+      (k =>
+        mctx.mcCells.matchWarnings :=
+          TcDiag
+              WUnreachableAlt
+              2
+              (orElseLoc (exprLoc body) mctx.mcLoc)
+              (unreachableAltWarning k)
+              None
+              None
+            :: mctx.mcCells.matchWarnings.value)
+      (unreachableAltIndexes mctx oracle col0 prec unguarded 1 alts)
+warnUnreachableAlts _ _ _ _ _ _ _ _ = ()
+
+-- 1-based positions of the alternatives covered by [prec] and the alternatives
+-- before them ([seen], newest first).  Empty when every alternative is covered:
+-- that is an unreachable arm, which the caller reports as one.
+unreachableAltIndexes : ModuleCtx ->
+  Oracle ->
+  Option TabKey ->
+  List (List Pat) ->
+  Bool ->
+  Int ->
+  List Pat ->
+  List Int
+unreachableAltIndexes mctx oracle col0 prec unguarded k alts =
+  let ks = deadAltIndexes mctx oracle col0 prec unguarded [] k alts
+  if listLen ks == listLen alts then [] else ks
+
+deadAltIndexes : ModuleCtx ->
+  Oracle ->
+  Option TabKey ->
+  List (List Pat) ->
+  Bool ->
+  List (List Pat) ->
+  Int ->
+  List Pat ->
+  List Int
+deadAltIndexes _ _ _ _ _ _ _ [] = []
+deadAltIndexes mctx oracle col0 prec unguarded seen k (a :: rest) =
+  let dead = patUnreachable oracle col0 (seen ++ prec) a
+  let seen2 = if unguarded then [a] :: seen else seen
+  let more = deadAltIndexes mctx oracle col0 prec unguarded seen2 (k + 1) rest
+  if dead then k :: more else more
 
 -- PERF fast path.  `patUnreachable` runs the full Maranget `useful` recursion, which
 -- re-scans EVERY preceding row — so the fold as a whole is O(arms²) on a wide match.
@@ -3087,25 +3164,26 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
 -- head, which `specializeCon` would in fact discard): erring towards `True` only ever
 -- costs us the fast path and falls back to the exact check, never an answer.
 armUnreachable : ModuleCtx ->
+  Oracle ->
   Option TabKey ->
   List (List Pat) ->
   OrdMap Unit ->
   Bool ->
   Pat ->
   Bool
-armUnreachable mctx col0 prec heads offCol (PCon c args)
+armUnreachable mctx oracle col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
-  | otherwise =
-    patUnreachable mctx.mcCells.matchOracle.value col0 prec (PCon c args)
-armUnreachable mctx col0 prec _ _ dp =
-  patUnreachable mctx.mcCells.matchOracle.value col0 prec dp
+  | otherwise = patUnreachable oracle col0 prec (PCon c args)
+armUnreachable mctx oracle col0 prec _ _ dp = patUnreachable oracle col0 prec dp
 
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
+noteHeadCtor (POr alts) heads = fold (h a => noteHeadCtor a h) heads alts
 noteHeadCtor _ heads = heads
 
 isConPat : Pat -> Bool
 isConPat (PCon _ _) = True
+isConPat (POr alts) = allList isConPat alts
 isConPat _ = False
 
 -- Only UNGUARDED arms contribute to the covered set (a guarded arm may not fire).
@@ -3124,11 +3202,12 @@ armIsUnguarded (_ :: _) = False
 -- `(message, Option help)` so the caller can stash both in the warning's TcDiag —
 -- no more message-keyed `matchWarningHelp` side channel.
 nonExhaustiveMsg : ModuleCtx ->
+  Oracle ->
   Mono ->
   List (List Pat) ->
   Bool ->
   (String, Option String)
-nonExhaustiveMsg mctx scrutTy rows binder =
+nonExhaustiveMsg mctx oracle scrutTy rows binder =
   match (usefulWitness
     mctx.mcCells.matchOracle.value
     (matchCol0Type scrutTy)

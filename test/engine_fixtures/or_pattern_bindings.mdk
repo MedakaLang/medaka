@@ -1,0 +1,86 @@
+-- Or-patterns outside match arms: `let`, lambda, `do`-bind, clause parameters,
+-- impl method and default method parameters, and clause guards, which re-try
+-- the next alternative before the next clause.  `seen` prints each guard run.
+-- Expected, derived from the source:
+-- unpair (R 4) = 8; lam over [L 1, R 2] = [2, 3]; viaDo (Some (R 5)) = Some 50;
+-- side (L 6) = 6; add2 (R 1) (L 2) = 3; size (R 7) = 7; twice (L 4) = 8.
+-- firstPos (-1, 5): the clause guard runs with x = -1 (fails), then x = 5 ->
+-- `clause -1`, `clause 5`, `5`; firstPos (-1, -2): both fail, the next
+-- clause -> `clause -1`, `clause -2`, `0`.
+-- two (-1, 20): each alternative tries the guard arms in order before the
+-- next alternative -> `g1 -1`, `g2 -11`, `g1 20`, `20`.
+-- bound (Rect 2 7): a clause guard-bind re-tries its alternatives -> `cb 2`,
+-- `cb 7`, `7`.
+-- wh (-1, 5): the `where` binding is computed per alternative -> `wh -2`,
+-- `wh 10`, `10`.
+-- offset (R 3) (L 4), a default method with an or-pattern parameter, = 3 + 4 = 7.
+seen : String -> Int -> <IO> Bool
+seen tag x =
+  println "\{tag} \{x}"
+  x > 5
+
+data Pair = L Int | R Int
+
+data Shape = Sq Int | Rect Int Int
+
+unpair : Pair -> Int
+unpair p =
+  let (L n | R n) = p
+  n * 2
+
+lam : List Pair -> List Int
+lam ps = map ((L n | R n) => n + 1) ps
+
+viaDo : Option Pair -> Option Int
+viaDo o = do
+  (L n | R n) <- o
+  pure (n * 10)
+
+side : Pair -> Int
+side (L n | R n) = n
+
+add2 : Pair -> Pair -> Int
+add2 (L a | R a) (L b | R b) = a + b
+
+interface Sized a where
+  size : a -> Int
+  twice : a -> Int
+  twice x = 2 * size x
+  offset : Pair -> a -> Int
+  offset (L n | R n) x = n + size x
+
+impl Sized Pair where
+  size (L n | R n) = n
+
+firstPos : (Int, Int) -> <IO> Int
+firstPos ((x, _) | (_, x))
+  | seen "clause" x || x > 0 = x
+firstPos _ = 0
+
+two : (Int, Int) -> <IO> Int
+two ((x, _) | (_, x))
+  | seen "g1" x = x
+  | seen "g2" (x - 10) = x * 100
+two _ = 0
+
+bound : Shape -> <IO> Int
+bound s
+  | (Sq n | Rect n _ | Rect _ n) <- s, seen "cb" n = n
+bound _ = 0
+
+wh : (Int, Int) -> <IO> Int
+wh ((x, _) | (_, x))
+  | seen "wh" y = y
+  where
+    y = x * 2
+wh _ = 0
+
+main =
+  println
+    "\{unpair (R 4)} \{lam [L 1, R 2]} \{viaDo (Some (R 5))} \{side (L 6)} \{add2 (R 1) (L 2)} \{size (R 7)} \{twice (L 4)}"
+  println (firstPos (0 - 1, 5))
+  println (firstPos (0 - 1, 0 - 2))
+  println (two (0 - 1, 20))
+  println (bound (Rect 2 7))
+  println (wh (0 - 1, 5))
+  println (offset (R 3) (L 4))

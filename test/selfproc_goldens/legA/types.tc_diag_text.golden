@@ -124,6 +124,7 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 notAFunctionMsgFor : Option String -> String -> String
 openRowHint : List Atom -> String
+orTooManyMsg : Int -> Int -> String
 ordinalSentinelMsg : String
 ordinalWord : Int -> String
 ordinaryInPatternSlotMsg : String -> String -> String
@@ -181,6 +182,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 unknownCtorMsg : String -> String
 unknownFieldMsg : String -> String -> String
 unknownRecordMsg : String -> String
+unreachableAltWarning : Int -> String
 unreachableArmWarning : String
 updateMultiCtorMsg : String -> String -> String -> List String -> List String -> String
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String

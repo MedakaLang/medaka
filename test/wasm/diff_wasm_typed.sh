@@ -127,8 +127,8 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
-  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, -- arms whose body an or-pattern candidate shares, by index orBlocks : OrdMap OrArm, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, orBlocks = omEmpty, }' \
   'progInFn prog = progWithFnCtx prog { freshFnCtx () | binding = (progFnCtx prog).binding, origin = (progFnCtx prog).origin, }' \
   'progWithTrmc ctx prog =' \
   'progWithDisp ctx prog ='; do
@@ -330,8 +330,8 @@ for required in \
   }
 done
 for required in \
-  'site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, }' \
-  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, }' \
+  'site : Int, binding : String, origin : SymbolOrigin, localSlots : Ref (OrdMap LocalSlot), localTypes : Ref (List WasmRepr), nextLocal : Ref Int, -- arms whose body an or-pattern candidate shares, by index orBlocks : OrdMap OrArm, }' \
+  'freshFnCtx () = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?", origin = SymbolOrigin "?" "" 0 0, localSlots = Ref omEmpty, localTypes = Ref [], nextLocal = Ref 0, orBlocks = omEmpty, }' \
   'progBinding : Prog -> String' \
   'progBinding prog = (progFnCtx prog).binding' \
   'progForBinding : String -> Loc -> Int -> Prog -> Prog' \

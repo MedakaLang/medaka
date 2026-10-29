@@ -19,8 +19,10 @@ appToPat : Expr -> Pat
 appToPatCtor : String -> List Expr -> Pat
 appToPatH : Expr -> List Expr -> Pat
 applyAll : Expr -> List Expr -> Expr
+armAltEnd : List Pat -> Token -> ParserE <> Pat
 armGuardFor : Token -> ParserE <> (List Guard)
 armGuardOpt : ParserE <> (List Guard)
+armPatAlts : List Pat -> Token -> ParserE <> Pat
 armsCons : Int -> ParserE <> (List Arm)
 armsLoop : Int -> ParserE <> (List Arm)
 arrayAfterComma : Expr -> Token -> ParserE <> Expr
@@ -38,6 +40,8 @@ authJoinTail : ParserE <> (List EffParamTy)
 authJoinTailFor : Token -> ParserE <> (List EffParamTy)
 authTermFor : Token -> Token -> ParserE <> EffParamTy
 authTermP : ParserE <> EffParamTy
+barSteer : ParserE <> a -> ParserE <> a
+barSteerKind : PR Token -> ParseDiagnosticKind
 bareAttr : String -> Option Attr
 bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
@@ -252,7 +256,6 @@ located : ParserE <> Expr -> ParserE <> Expr
 locatedUpperNameP : ParserE <> (String, Loc)
 lowerNameFor : Token -> ParserE <> String
 lowerNameP : ParserE <> String
-matchArmBarGuardMsg : ParseDiagnosticKind
 matchArrow : ParserE <> Unit
 matchBody : ParserE <> Expr
 maxNestDepth : Int
@@ -291,7 +294,11 @@ optPipeFor : Token -> ParserE <> Unit
 optTrailingComma : ParserE <> Unit
 optTrailingCommaFor : Token -> ParserE <> Unit
 optTrailingCommaTuple : List a -> ParserE <> Unit
+orAltExpr : ParserE <> Expr
+orAlts : Pat -> List Pat
+orExprOf : Expr -> List Expr -> Expr
 orLevel : Int
+orPatOf : List Pat -> Pat
 paramsForCtor : String -> Expr -> List Pat
 paramsForHead : Expr -> Expr -> List Pat
 parenFor : Token -> ParserE <> Expr
@@ -300,6 +307,7 @@ parenSectionOr : Token -> ParserE <> Expr
 parse : String -> List Decl
 parseApp : ParserE <> Expr
 parseArm : Int -> ParserE <> Arm
+parseArmPat : ParserE <> Pat
 parseArmRest : Int -> Pat -> ParserE <> Arm
 parseArms : Int -> ParserE <> (List Arm)
 parseArray : ParserE <> Expr
@@ -360,11 +368,13 @@ parseNamedFields : ParserE <> (List Field)
 parseNamedPayload : ParserE <> ConPayload
 parseNewtype : Bool -> ParserE <> Decl
 parseOr : ParserE <> Expr
+parseOrAltsExpr : ParserE <> Expr
 parseParamAsPat : ParserE <> Pat
 parseParamPat : ParserE <> Pat
 parseParen : ParserE <> Expr
 parseParenExpr : ParserE <> Expr
 parsePat : ParserE <> Pat
+parsePatAlts : ParserE <> Pat
 parsePatApp : ParserE <> Pat
 parsePatAtom : ParserE <> Pat
 parsePatAtomRaw : ParserE <> Pat
@@ -414,6 +424,7 @@ parseWithPositions : String -> (List Decl, Positions)
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
 parseWithPositionsOptPairs : String -> List Token -> List (Int, Int) -> Option (List Decl, Positions)
+patAlt : ParserE <> Pat
 patAppFor : Token -> ParserE <> Pat
 patConsTail : Pat -> ParserE <> Pat
 patListFor : Token -> ParserE <> Pat

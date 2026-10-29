@@ -10,6 +10,7 @@
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patHasOr,
   stripLocE,
   noBinderId,
   unminted,
@@ -63,6 +64,7 @@ import support.util.{
   filterList,
   anyList,
   reverseL,
+  lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
@@ -272,8 +274,11 @@ fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 armChain : List Guard -> Expr -> Expr -> Expr
 armChain [] body _ = body
 armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
-armChain ((GBind p e) :: qs) body els =
-  EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
+-- A guard-bind through an or-pattern keeps the guards after it on its match
+-- arm, so a later guard that fails under one alternative re-tries the next.
+armChain ((GBind p e) :: qs) body els
+  | patHasOr p = EMatch e [Arm p qs body, Arm PWild [] els]
+  | otherwise = EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
@@ -1339,18 +1344,53 @@ stampStmt mid (DoLet m r p e site) = DoLet m r (stampPat mid p) e site
 stampStmt _ s = s
 
 stampPat : String -> Pat -> Pat
-stampPat mid (PVar x l _) = PVar x l (freshBinderId mid)
-stampPat mid (PAs x l _ p) = PAs x l (freshBinderId mid) (stampPat mid p)
-stampPat mid (PCon c ps) = PCon c (map (stampPat mid) ps)
-stampPat mid (PCons h t) = PCons (stampPat mid h) (stampPat mid t)
-stampPat mid (PTuple ps) = PTuple (map (stampPat mid) ps)
-stampPat mid (PList ps) = PList (map (stampPat mid) ps)
-stampPat mid (PRec n fields isOpen) =
-  PRec n (map (stampRecField mid) fields) isOpen
-stampPat _ p = p
+stampPat mid p = stampPatBy (_ => freshBinderId mid) p
 
-stampRecField : String -> RecPatField -> RecPatField
-stampRecField mid (RecPatField l loc _ None) =
-  RecPatField l loc (freshBinderId mid) None
-stampRecField mid (RecPatField l loc _ (Some p)) =
-  RecPatField l loc noBinderId (Some (stampPat mid p))
+-- Stamp binders with ids drawn from `mint` (called with the binder's name).  An
+-- or-pattern's alternatives bind the same names, so alternative 1 mints and the
+-- rest reuse its ids: one binder per name, several definition sites.
+stampPatBy : (String -> BinderId) -> Pat -> Pat
+stampPatBy mint (PVar x l _) = PVar x l (mint x)
+stampPatBy mint (PAs x l _ p) = PAs x l (mint x) (stampPatBy mint p)
+stampPatBy mint (PCon c ps) = PCon c (map (stampPatBy mint) ps)
+stampPatBy mint (PCons h t) = PCons (stampPatBy mint h) (stampPatBy mint t)
+stampPatBy mint (PTuple ps) = PTuple (map (stampPatBy mint) ps)
+stampPatBy mint (PList ps) = PList (map (stampPatBy mint) ps)
+stampPatBy mint (PRec n fields isOpen) =
+  PRec n (map (stampRecFieldBy mint) fields) isOpen
+stampPatBy mint (POr (p :: ps)) =
+  let first = stampPatBy mint p
+  let shared = patBinderIds first
+  POr (first :: map (stampPatBy (x => sharedBinderId mint shared x)) ps)
+stampPatBy _ p = p
+
+sharedBinderId : (String -> BinderId) ->
+  List (String, BinderId) ->
+  String ->
+  BinderId
+sharedBinderId mint shared x = match lookupAssoc x shared
+  Some b => b
+  None => mint x
+
+-- The (name, id) pairs a stamped pattern binds; an or-pattern reads its first
+-- alternative.
+patBinderIds : Pat -> List (String, BinderId)
+patBinderIds (PVar x _ b) = [(x, b)]
+patBinderIds (PAs x _ b p) = (x, b) :: patBinderIds p
+patBinderIds (PCon _ ps) = flatMap patBinderIds ps
+patBinderIds (PCons h t) = patBinderIds h ++ patBinderIds t
+patBinderIds (PTuple ps) = flatMap patBinderIds ps
+patBinderIds (PList ps) = flatMap patBinderIds ps
+patBinderIds (PRec _ fields _) = flatMap recFieldBinderIds fields
+patBinderIds (POr (p :: _)) = patBinderIds p
+patBinderIds _ = []
+
+recFieldBinderIds : RecPatField -> List (String, BinderId)
+recFieldBinderIds (RecPatField l _ b None) = [(l, b)]
+recFieldBinderIds (RecPatField _ _ _ (Some p)) = patBinderIds p
+
+stampRecFieldBy : (String -> BinderId) -> RecPatField -> RecPatField
+stampRecFieldBy mint (RecPatField l loc _ None) =
+  RecPatField l loc (mint l) None
+stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
+  RecPatField l loc noBinderId (Some (stampPatBy mint p))

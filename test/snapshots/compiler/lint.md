@@ -1,5 +1,5 @@
 # META
-source_lines=7263
+source_lines=7270
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -3021,6 +3021,7 @@ childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
 childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
 childExprs (ESetLit _ es) = es
 childExprs (EAsPat _ e) = [e]
+childExprs (EOrPat es) = es
 childExprs _ = []
 
 armExprs : Arm -> List Expr
@@ -3135,6 +3136,7 @@ rewriteBindExpr orc (EVariantUpdate c e fs) =
 rewriteBindExpr orc (EMapLit n kvs) = EMapLit n (map (rewriteBindKv orc) kvs)
 rewriteBindExpr orc (ESetLit n es) = ESetLit n (map (rewriteBindExpr orc) es)
 rewriteBindExpr orc (EAsPat x e) = EAsPat x (rewriteBindExpr orc e)
+rewriteBindExpr orc (EOrPat es) = EOrPat (map (rewriteBindExpr orc) es)
 rewriteBindExpr _ e = e
 
 -- collapse a (already child-rewritten) statement list: if its last two statements
@@ -3423,6 +3425,7 @@ rewriteLamExpr (EVariantUpdate c e fs) =
 rewriteLamExpr (EMapLit n kvs) = EMapLit n (map rewriteLamKv kvs)
 rewriteLamExpr (ESetLit n es) = ESetLit n (map rewriteLamExpr es)
 rewriteLamExpr (EAsPat x e) = EAsPat x (rewriteLamExpr e)
+rewriteLamExpr (EOrPat es) = EOrPat (map rewriteLamExpr es)
 rewriteLamExpr e = e
 
 rewriteLamStmt : DoStmt -> DoStmt
@@ -3670,6 +3673,7 @@ rewriteIfMaxMinExpr (EVariantUpdate c e fs) =
 rewriteIfMaxMinExpr (EMapLit n kvs) = EMapLit n (map rewriteIfMaxMinKv kvs)
 rewriteIfMaxMinExpr (ESetLit n es) = ESetLit n (map rewriteIfMaxMinExpr es)
 rewriteIfMaxMinExpr (EAsPat x e) = EAsPat x (rewriteIfMaxMinExpr e)
+rewriteIfMaxMinExpr (EOrPat es) = EOrPat (map rewriteIfMaxMinExpr es)
 rewriteIfMaxMinExpr e = e
 
 rewriteIfMaxMinStmt : DoStmt -> DoStmt
@@ -3955,6 +3959,8 @@ rewriteAndThenPureMapExpr (EMapLit n kvs) =
 rewriteAndThenPureMapExpr (ESetLit n es) =
   ESetLit n (map rewriteAndThenPureMapExpr es)
 rewriteAndThenPureMapExpr (EAsPat x e) = EAsPat x (rewriteAndThenPureMapExpr e)
+rewriteAndThenPureMapExpr (EOrPat es) =
+  EOrPat (map rewriteAndThenPureMapExpr es)
 rewriteAndThenPureMapExpr e = e
 
 rewriteAndThenPureMapStmt : DoStmt -> DoStmt
@@ -4031,6 +4037,7 @@ rewriteAndThenPureMapKv (k, v) =
 -- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
 mapChildExprs : (Expr -> Expr) -> Expr -> Expr
 mapChildExprs g (EAsPat x e) = EAsPat x (g e)
+mapChildExprs g (EOrPat es) = EOrPat (map g es)
 mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
@@ -8084,6 +8091,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "childExprs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "kvExprs")) (EVar "kvs")))
 (DFunDef false "childExprs" ((PCon "ESetLit" PWild (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" ((PCon "EAsPat" PWild (PVar "e"))) (EListLit (EVar "e")))
+(DFunDef false "childExprs" ((PCon "EOrPat" (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" (PWild) (EListLit))
 (DTypeSig false "armExprs" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "armExprs" ((PCon "Arm" PWild (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
@@ -8150,6 +8158,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindKv") (EVar "orc"))) (EVar "kvs"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "collapseBindTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
@@ -8274,6 +8283,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteLamExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteLamKv")) (EVar "kvs"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteLamExpr") (EVar "e"))))
+(DFunDef false "rewriteLamExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteLamStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteLamStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteLamExpr") (EVar "e"))))
@@ -8376,6 +8386,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinKv")) (EVar "kvs"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteIfMaxMinStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteIfMaxMinStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))))
@@ -8488,6 +8499,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapKv")) (EVar "kvs"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAndThenPureMapStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteAndThenPureMapStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))))
@@ -8519,6 +8531,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapKv" ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "k")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "v"))))
 (DTypeSig false "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig false "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
@@ -10174,6 +10187,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "childExprs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "kvExprs")) (EVar "kvs")))
 (DFunDef false "childExprs" ((PCon "ESetLit" PWild (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" ((PCon "EAsPat" PWild (PVar "e"))) (EListLit (EVar "e")))
+(DFunDef false "childExprs" ((PCon "EOrPat" (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" (PWild) (EListLit))
 (DTypeSig false "armExprs" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "armExprs" ((PCon "Arm" PWild (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
@@ -10240,6 +10254,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindKv") (EVar "orc"))) (EVar "kvs"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "collapseBindTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
@@ -10364,6 +10379,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteLamExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteLamKv")) (EVar "kvs"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteLamExpr") (EVar "e"))))
+(DFunDef false "rewriteLamExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteLamStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteLamStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteLamExpr") (EVar "e"))))
@@ -10466,6 +10482,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinKv")) (EVar "kvs"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteIfMaxMinStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteIfMaxMinStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))))
@@ -10578,6 +10595,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapKv")) (EVar "kvs"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAndThenPureMapStmt" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
 (DFunDef false "rewriteAndThenPureMapStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))))
@@ -10609,6 +10627,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapKv" ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "k")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "v"))))
 (DTypeSig false "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig false "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))

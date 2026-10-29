@@ -1,5 +1,5 @@
 # META
-source_lines=590
+source_lines=595
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -231,6 +231,11 @@ export
 carmSexp : SexpMode -> CArm -> String
 carmSexp m (CArm pat guards body) =
   node "arm" [patSexp pat, slist (map (cguardSexp m) guards), cexprSexp m body]
+carmSexp m (CArmAlt pat guards owner) = node "armalt" [
+  patSexp pat,
+  slist (map (cguardSexp m) guards),
+  intToString owner,
+]
 
 export
 cguardSexp : SexpMode -> CGuard -> String
@@ -663,6 +668,7 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cfieldSexp" ((PVar "m") (PCon "CField" (PVar "name") (PVar "o") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "cf"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "intToString") (EVar "o")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))
 (DTypeSig true "carmSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CArm") (TyCon "String"))))
 (DFunDef false "carmSexp" ((PVar "m") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "arm"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cguardSexp") (EVar "m"))) (EVar "guards"))) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "body")))))
+(DFunDef false "carmSexp" ((PVar "m") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EApp (EApp (EVar "node") (ELit (LString "armalt"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cguardSexp") (EVar "m"))) (EVar "guards"))) (EApp (EVar "intToString") (EVar "owner")))))
 (DTypeSig true "cguardSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CGuard") (TyCon "String"))))
 (DFunDef false "cguardSexp" ((PVar "m") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "CGBool"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))
 (DFunDef false "cguardSexp" ((PVar "m") (PCon "CGBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "CGBind"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))
@@ -821,6 +827,7 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cfieldSexp" ((PVar "m") (PCon "CField" (PVar "name") (PVar "o") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "cf"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "intToString") (EVar "o")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))
 (DTypeSig true "carmSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CArm") (TyCon "String"))))
 (DFunDef false "carmSexp" ((PVar "m") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "arm"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cguardSexp") (EVar "m"))) (EVar "guards"))) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "body")))))
+(DFunDef false "carmSexp" ((PVar "m") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EApp (EApp (EVar "node") (ELit (LString "armalt"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cguardSexp") (EVar "m"))) (EVar "guards"))) (EApp (EVar "intToString") (EVar "owner")))))
 (DTypeSig true "cguardSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CGuard") (TyCon "String"))))
 (DFunDef false "cguardSexp" ((PVar "m") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "CGBool"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))
 (DFunDef false "cguardSexp" ((PVar "m") (PCon "CGBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "CGBind"))) (EListLit (EApp (EVar "patSexp") (EVar "pat")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e")))))

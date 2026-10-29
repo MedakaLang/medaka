@@ -60,6 +60,7 @@ checkedInt : String -> Int -> Int -> Option Int -> Value a
 clauseClosure : EvalEnv (Value a) -> Loc -> (List Pat, Expr, Loc) -> Value a
 clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
 clausesForName : String -> List (String, (List Pat, Expr, Loc)) -> List (List Pat, Expr, Loc)
+clausesValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> <a> Value a
 coalesceImpls : List (String, (Int, Value a)) -> List (String, Value a)
 coalesceOne : String -> List (String, (Int, Value a)) -> Value a
 collectCtors : List Decl -> List (String, Value a)
@@ -135,6 +136,7 @@ evalOneFacts : ProgramFacts -> List Decl -> (String, List Decl) -> <a> List (Str
 evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
 evalOneRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOr : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
+evalOrArm : Loc -> EvalEnv (Value a) -> Value a -> List (Pat, List Guard) -> Expr -> List Arm -> <a> Value a
 evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
 evalRange : Value a -> Value a -> Bool -> (List Int -> Value a) -> Value a
 evalRecLet : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
@@ -294,8 +296,12 @@ noTrapLoc : Loc
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
+orClause : (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
+orClauses : List (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
+orMethod : ImplMethod -> List ImplMethod
 ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
+orderBinds : List String -> List (String, Value a) -> List (String, Value a)
 orderingToValue : Ordering -> Value a
 outputRef : Ref String
 overflowOperand : Int -> String
@@ -533,6 +539,7 @@ subClampZero : Int -> Int -> Int
 sumInts : List Int -> Int
 takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value <IO>)
+topClausesValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
 tupleHeadTag : Int -> String
 twoDistinctKeys : List (Value a) -> List (String, String) -> Bool

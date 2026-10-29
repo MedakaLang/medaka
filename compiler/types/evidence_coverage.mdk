@@ -209,6 +209,7 @@ exprFaults idx (EVariantUpdate _ e0 fs) acc =
 exprFaults idx (EMapLit _ kvs) acc = kvsFaults idx kvs acc
 exprFaults idx (ESetLit _ es) acc = exprsFaults idx es acc
 exprFaults idx (EAsPat _ e0) acc = exprFaults idx e0 acc
+exprFaults idx (EOrPat es) acc = exprsFaults idx es acc
 exprFaults _ (EMethodRef _) acc = acc
 exprFaults _ (EDictApp _) acc = acc
 exprFaults _ (EVarAt _ _) acc = acc

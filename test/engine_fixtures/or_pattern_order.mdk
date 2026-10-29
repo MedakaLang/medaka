@@ -1,0 +1,103 @@
+-- Or-pattern alternatives that bind the same names in different orders: each
+-- name reads the field its own alternative binds it to, whatever its position
+-- in that alternative, in every place a body is shared by the alternatives.
+-- Expected, derived from the source:
+-- arm (L 1 2) = 12, arm (R 1 2) = 21 (R y x binds x = 2, y = 1).
+-- vp (R 1 2) = 1000 + 21 = 1021 (the match in value position).
+-- ga (L 1 2): x = 1, y = 2 fails the guard -> 0; ga (R 1 2): x = 2, y = 1 -> 1.
+-- gb (L 1 2) = 12, gb (R 1 2) = 21 (a guard-bind).
+-- viaLet (L 3 4) = 34, viaLet (R 3 4) = 43.
+-- lm [L 1 2, R 1 2] = [12, 21] (a lambda parameter).
+-- viaDo (Some (R 5 6)) = Some 65 (a do-bind).
+-- clause (R 1 2) (L 3 4): b = 1, a = 2, c = 3 -> 213 (two parameters, no guard).
+-- recp (P 1 2) = 12, recp (Q 1 2) = 21 (Q binds px to field py and py to px).
+-- fl (C "ab" 0.5) = 0.5 + 2 = 2.5, fl (D 0.25 "xyz") = 0.25 + 3 = 3.25.
+-- wb (W1 True 'q') = "True q", wb (W2 'z' False) = "False z".
+-- rot (A3 1 2 3) = 123, rot (B3 1 2 3) = 312, rot (C3 1 2 3) = 231.
+-- nest (Some (R 7 8)) = 87 (the alternatives under a constructor).
+data E = L Int Int | R Int Int
+
+data P = P { px : Int, py : Int } | Q { px : Int, py : Int }
+
+data F = C String Float | D Float String
+
+data W = W1 Bool Char | W2 Char Bool
+
+data T3 = A3 Int Int Int | B3 Int Int Int | C3 Int Int Int
+
+arm : E -> Int
+arm e = match e
+  L x y | R y x => x * 10 + y
+
+vp : E -> Int
+vp e =
+  1000
+    + (match e
+      L x y | R y x => x * 10 + y)
+
+ga : E -> Int
+-- A match arm, not a clause: a guarded clause repeats its body per alternative.
+-- lint-disable-next-line rule-match-on-param
+ga e = match e
+  L x y | R y x if x > y => x - y
+  _ => 0
+
+gb : E -> Int
+gb e = match ()
+  _ if (L x y | R y x) <- e, x > 0 => x * 10 + y
+  _ => 0
+
+viaLet : E -> Int
+viaLet e =
+  let (L x y | R y x) = e
+  x * 10 + y
+
+lm : List E -> List Int
+lm es = map ((L x y | R y x) => x * 10 + y) es
+
+viaDo : Option E -> Option Int
+viaDo m = do
+  (L x y | R y x) <- m
+  Some (x * 10 + y)
+
+clause : E -> E -> Int
+clause (L a b | R b a) (L c _ | R _ c) = a * 100 + b * 10 + c
+
+recp : P -> Int
+recp p = match p
+  P { px, py } | Q { px = py, py = px } => px * 10 + py
+
+fl : F -> Float
+fl v = match v
+  C s x | D x s => x + intToFloat (stringLength s)
+
+wb : W -> String
+wb w = match w
+  W1 b c | W2 c b => "\{b} \{c}"
+
+rot : T3 -> Int
+rot t = match t
+  A3 x y z | B3 y z x | C3 z x y => x * 100 + y * 10 + z
+
+nest : Option E -> Int
+-- A match arm, not a clause: the arm under test is the one sharing a body.
+-- lint-disable-next-line rule-match-on-param
+nest o = match o
+  Some (L x y | R y x) => x * 10 + y
+  None => 0
+
+main =
+  println "\{arm (L 1 2)} \{arm (R 1 2)}"
+  println (vp (R 1 2))
+  println [ga (L 1 2), ga (R 1 2)]
+  println [gb (L 1 2), gb (R 1 2)]
+  println [viaLet (L 3 4), viaLet (R 3 4)]
+  println (lm [L 1 2, R 1 2])
+  println (viaDo (Some (R 5 6)))
+  println (clause (R 1 2) (L 3 4))
+  println [recp P { px = 1, py = 2 }, recp Q { px = 1, py = 2 }]
+  println [fl (C "ab" 0.5), fl (D 0.25 "xyz")]
+  println (wb (W1 True 'q'))
+  println (wb (W2 'z' False))
+  println [rot (A3 1 2 3), rot (B3 1 2 3), rot (C3 1 2 3)]
+  println (nest (Some (R 7 8)))

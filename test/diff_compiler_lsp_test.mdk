@@ -1653,6 +1653,53 @@ main = ("😀", value + "x")
           ),
         ])
 
+test "references on an or-pattern binder reach every alternative's site" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", """[project]
+name = "orrefs"
+"""),
+    ("main.mdk", """data E = L Int Int | R Int Int
+f e = match e
+  L x y | R y x => x * 10 + y
+main = f (L 1 2)
+"""),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let main = stringConcat ["file://", dir, "/main.mdk"]
+      let (errors, out) = drive [
+        didOpenMsg main """data E = L Int Int | R Int Int
+f e = match e
+  L x y | R y x => x * 10 + y
+main = f (L 1 2)
+""",
+        rpc
+          2
+          "textDocument/references"
+          (jObject [
+            ("textDocument", jObject [("uri", JString main)]),
+            ("position", coordPos 2 19),
+            ("context", jObject [("includeDeclaration", JBool True)]),
+          ]),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs => expectEach [
+          ("process", expectEqual [] errors),
+          (
+            "references",
+            expectEqual
+              (Some
+                (jArray [
+                  coordLocation main 2 4 5,
+                  coordLocation main 2 14 15,
+                  coordLocation main 2 19 20,
+                ]))
+              (resultTo 2 objs),
+          ),
+        ])
+
 {- | One row's outcome. `findings` is the whole list rather than the first,
    so a red run names every disagreement at once. -}
 data Outcome = Outcome { name : String, findings : List String }

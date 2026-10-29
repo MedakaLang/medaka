@@ -44,6 +44,7 @@ public export data ParseDiagnosticKind =
   | BraceBlock
   | Semicolon
   | MatchGuardBar
+  | MatchGuardBarWrapped
   | ExpectedMatchArm
   | ExpectedMatchArrow
   | MatchContinuationHint
@@ -91,6 +92,7 @@ problemCode BlockComment = LBlockcomment
 problemCode BraceBlock = PBraceBlock
 problemCode Semicolon = LSemicolon
 problemCode MatchGuardBar = PGuardBarInMatch
+problemCode MatchGuardBarWrapped = PGuardBarInMatch
 problemCode ExpectedMatchArm = PParse
 problemCode ExpectedMatchArrow = PParse
 problemCode MatchContinuationHint = PParse
@@ -160,6 +162,8 @@ renderParseProblem Semicolon =
   "Medaka has no statement terminator `;`; write each statement on its own line"
 renderParseProblem MatchGuardBar =
   "a match-arm guard uses `if`, not `|`; write `pat if cond => body`"
+renderParseProblem MatchGuardBarWrapped =
+  "a `|` ending a line cannot continue an or-pattern; wrap the alternatives in parentheses, `(A | B | C) => body`, or write them on one line"
 renderParseProblem ExpectedMatchArm = "expected a match arm (`pattern => body`)"
 renderParseProblem ExpectedMatchArrow =
   "expected `=>` after the match pattern or guard"

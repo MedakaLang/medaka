@@ -1,5 +1,5 @@
 # META
-source_lines=172
+source_lines=175
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Pat(..)}
@@ -165,6 +165,9 @@ ubArm : OrdMap Int -> CArm -> CArm
 ubArm sc (CArm pat guards body) =
   let (guards2, sc2) = ubGuards (ubExtend sc [pat]) guards
   CArm (ubPat sc pat) guards2 (ubExpr sc2 body)
+ubArm sc (CArmAlt pat guards owner) =
+  let (guards2, _) = ubGuards (ubExtend sc [pat]) guards
+  CArmAlt (ubPat sc pat) guards2 owner
 
 ubGuards : OrdMap Int -> List CGuard -> (List CGuard, OrdMap Int)
 ubGuards sc [] = ([], sc)
@@ -251,6 +254,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubStmts" ((PVar "sc") (PCons (PCon "CSAssign" (PVar "n") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EApp (EApp (EVar "ubRef") (EVar "sc")) (EVar "n"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "e"))) (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "rest"))))
 (DTypeSig false "ubArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CArm") (TyCon "CArm"))))
 (DFunDef false "ubArm" ((PVar "sc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "guards2") (PVar "sc2")) (EApp (EApp (EVar "ubGuards") (EApp (EApp (EVar "ubExtend") (EVar "sc")) (EListLit (EVar "pat")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "pat"))) (EVar "guards2")) (EApp (EApp (EVar "ubExpr") (EVar "sc2")) (EVar "body"))))))
+(DFunDef false "ubArm" ((PVar "sc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EBlock (DoLet false false (PTuple (PVar "guards2") PWild) (EApp (EApp (EVar "ubGuards") (EApp (EApp (EVar "ubExtend") (EVar "sc")) (EListLit (EVar "pat")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArmAlt") (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "pat"))) (EVar "guards2")) (EVar "owner")))))
 (DTypeSig false "ubGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "CGuard")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
 (DFunDef false "ubGuards" ((PVar "sc") (PList)) (ETuple (EListLit) (EVar "sc")))
 (DFunDef false "ubGuards" ((PVar "sc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "sc2")) (EApp (EApp (EVar "ubGuards") (EVar "sc")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "CGBool") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "g"))) (EVar "rest2")) (EVar "sc2")))))
@@ -332,6 +336,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubStmts" ((PVar "sc") (PCons (PCon "CSAssign" (PVar "n") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EApp (EApp (EVar "ubRef") (EVar "sc")) (EVar "n"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "e"))) (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "rest"))))
 (DTypeSig false "ubArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CArm") (TyCon "CArm"))))
 (DFunDef false "ubArm" ((PVar "sc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "guards2") (PVar "sc2")) (EApp (EApp (EVar "ubGuards") (EApp (EApp (EVar "ubExtend") (EVar "sc")) (EListLit (EVar "pat")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "pat"))) (EVar "guards2")) (EApp (EApp (EVar "ubExpr") (EVar "sc2")) (EVar "body"))))))
+(DFunDef false "ubArm" ((PVar "sc") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EBlock (DoLet false false (PTuple (PVar "guards2") PWild) (EApp (EApp (EVar "ubGuards") (EApp (EApp (EVar "ubExtend") (EVar "sc")) (EListLit (EVar "pat")))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArmAlt") (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "pat"))) (EVar "guards2")) (EVar "owner")))))
 (DTypeSig false "ubGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "CGuard")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
 (DFunDef false "ubGuards" ((PVar "sc") (PList)) (ETuple (EListLit) (EVar "sc")))
 (DFunDef false "ubGuards" ((PVar "sc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "sc2")) (EApp (EApp (EVar "ubGuards") (EVar "sc")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "CGBool") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "g"))) (EVar "rest2")) (EVar "sc2")))))

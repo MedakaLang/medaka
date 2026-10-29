@@ -3017,6 +3017,7 @@ childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
 childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
 childExprs (ESetLit _ es) = es
 childExprs (EAsPat _ e) = [e]
+childExprs (EOrPat es) = es
 childExprs _ = []
 
 armExprs : Arm -> List Expr
@@ -3131,6 +3132,7 @@ rewriteBindExpr orc (EVariantUpdate c e fs) =
 rewriteBindExpr orc (EMapLit n kvs) = EMapLit n (map (rewriteBindKv orc) kvs)
 rewriteBindExpr orc (ESetLit n es) = ESetLit n (map (rewriteBindExpr orc) es)
 rewriteBindExpr orc (EAsPat x e) = EAsPat x (rewriteBindExpr orc e)
+rewriteBindExpr orc (EOrPat es) = EOrPat (map (rewriteBindExpr orc) es)
 rewriteBindExpr _ e = e
 
 -- collapse a (already child-rewritten) statement list: if its last two statements
@@ -3419,6 +3421,7 @@ rewriteLamExpr (EVariantUpdate c e fs) =
 rewriteLamExpr (EMapLit n kvs) = EMapLit n (map rewriteLamKv kvs)
 rewriteLamExpr (ESetLit n es) = ESetLit n (map rewriteLamExpr es)
 rewriteLamExpr (EAsPat x e) = EAsPat x (rewriteLamExpr e)
+rewriteLamExpr (EOrPat es) = EOrPat (map rewriteLamExpr es)
 rewriteLamExpr e = e
 
 rewriteLamStmt : DoStmt -> DoStmt
@@ -3666,6 +3669,7 @@ rewriteIfMaxMinExpr (EVariantUpdate c e fs) =
 rewriteIfMaxMinExpr (EMapLit n kvs) = EMapLit n (map rewriteIfMaxMinKv kvs)
 rewriteIfMaxMinExpr (ESetLit n es) = ESetLit n (map rewriteIfMaxMinExpr es)
 rewriteIfMaxMinExpr (EAsPat x e) = EAsPat x (rewriteIfMaxMinExpr e)
+rewriteIfMaxMinExpr (EOrPat es) = EOrPat (map rewriteIfMaxMinExpr es)
 rewriteIfMaxMinExpr e = e
 
 rewriteIfMaxMinStmt : DoStmt -> DoStmt
@@ -3951,6 +3955,8 @@ rewriteAndThenPureMapExpr (EMapLit n kvs) =
 rewriteAndThenPureMapExpr (ESetLit n es) =
   ESetLit n (map rewriteAndThenPureMapExpr es)
 rewriteAndThenPureMapExpr (EAsPat x e) = EAsPat x (rewriteAndThenPureMapExpr e)
+rewriteAndThenPureMapExpr (EOrPat es) =
+  EOrPat (map rewriteAndThenPureMapExpr es)
 rewriteAndThenPureMapExpr e = e
 
 rewriteAndThenPureMapStmt : DoStmt -> DoStmt
@@ -4027,6 +4033,7 @@ rewriteAndThenPureMapKv (k, v) =
 -- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
 mapChildExprs : (Expr -> Expr) -> Expr -> Expr
 mapChildExprs g (EAsPat x e) = EAsPat x (g e)
+mapChildExprs g (EOrPat es) = EOrPat (map g es)
 mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local

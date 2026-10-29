@@ -1,5 +1,5 @@
 # META
-source_lines=3826
+source_lines=3828
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -2760,6 +2760,8 @@ rewriteArgScoped mctx rw bound (ESetLit n es) =
   ESetLit n (map (rewriteArgScoped mctx rw bound) es)
 rewriteArgScoped mctx rw bound (EAsPat x sub) =
   EAsPat x (rewriteArgScoped mctx rw bound sub)
+rewriteArgScoped mctx rw bound (EOrPat es) =
+  EOrPat (map (rewriteArgScoped mctx rw bound) es)
 -- Numeric literals carry a site id that is minted here, like operators.
 rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
   ENumLit n (mintedOr (mintLitSite mctx) ev) lx
@@ -4214,6 +4216,7 @@ methodReturnSlotOwnershipProbe _ =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rewriteArgKv") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "sub"))))
+(DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PVar "e")) (EVar "e"))
@@ -4755,6 +4758,7 @@ methodReturnSlotOwnershipProbe _ =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rewriteArgKv") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EMethodRef "sub"))))
+(DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PVar "e")) (EVar "e"))

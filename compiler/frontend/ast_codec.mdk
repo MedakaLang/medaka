@@ -381,6 +381,8 @@ tagPRng : Unit -> Int
 tagPRng () = 8
 tagPRec : Unit -> Int
 tagPRec () = 9
+tagPOr : Unit -> Int
+tagPOr () = 10
 
 -- Guard
 tagGBool : Unit -> Int
@@ -499,6 +501,8 @@ tagENumLit : Unit -> Int
 tagENumLit () = 40
 tagEWideLit : Unit -> Int
 tagEWideLit () = 41
+tagEOrPat : Unit -> Int
+tagEOrPat () = 42
 
 -- UsePath
 tagUseName : Unit -> Int
@@ -715,6 +719,7 @@ sexpPat (PAs a0 a1 a2 a3) = SList [
   sexpBinderId a2,
   sexpPat a3,
 ]
+sexpPat (POr a0) = SList [tagAtom (tagPOr ()), sexpList sexpPat a0]
 sexpPat (PRng a0 a1 a2) =
   SList [tagAtom (tagPRng ()), sexpLit a0, sexpLit a1, sexpBool a2]
 sexpPat (PRec a0 a1 a2) = SList [
@@ -867,6 +872,7 @@ sexpExpr (ESetLit a0 a1) =
   SList [tagAtom (tagESetLit ()), sexpString a0, sexpList sexpExpr a1]
 sexpExpr (EAsPat a0 a1) =
   SList [tagAtom (tagEAsPat ()), sexpString a0, sexpExpr a1]
+sexpExpr (EOrPat a0) = SList [tagAtom (tagEOrPat ()), sexpList sexpExpr a0]
 sexpExpr (EMethodRef a0) = SList [tagAtom (tagEMethodRef ()), sexpString a0]
 sexpExpr (EDictApp a0) = SList [tagAtom (tagEDictApp ()), sexpString a0]
 sexpExpr (EVarAt a0 a1) =
@@ -1456,6 +1462,9 @@ readPatTagged t cur
     let a2 = readBinderId cur
     let a3 = readPat cur
     PAs a0 a1 a2 a3
+  | t == tagPOr () =
+    let a0 = cursorList readPat cur
+    POr a0
   | t == tagPRng () =
     let a0 = readLit cur
     let a1 = readLit cur
@@ -1742,6 +1751,9 @@ readExprTagged t cur
     let a0 = readString cur
     let a1 = readExpr cur
     EAsPat a0 a1
+  | t == tagEOrPat () =
+    let a0 = cursorList readExpr cur
+    EOrPat a0
   | t == tagEMethodRef () =
     let a0 = readString cur
     EMethodRef a0

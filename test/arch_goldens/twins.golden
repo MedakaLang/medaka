@@ -39,6 +39,7 @@ emitRecordUpdate
 emitStrExtern
 emitSwitch
 emitTree
+emitTreeShared
 emitTuple
 emitU64Bin
 emitU64Kernel
@@ -63,6 +64,7 @@ isFfiExtern
 isFnBind
 isInheritedEntry
 isLazyGlobal
+leafArm
 methodEntries
 methodValueArity
 narrowImplsByArity

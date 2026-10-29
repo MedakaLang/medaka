@@ -1878,6 +1878,7 @@ renameScoped rm bound (EMapLit n kvs) = EMapLit n (map (renameKv rm bound) kvs)
 renameScoped rm bound (ESetLit n es) =
   ESetLit n (map (renameScoped rm bound) es)
 renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
+renameScoped rm bound (EOrPat es) = EOrPat (map (renameScoped rm bound) es)
 -- ── ELABORATED-TREE ARMS (#2809) ──────────────────────────────────────────────
 -- These two nodes exist only in a tree `elaborateModules` has already produced, so they
 -- were unreachable while the mangler ran FIRST -- and each carries a TOP-LEVEL FUNCTION
@@ -1991,6 +1992,7 @@ patVarsPM (PCons h t) = patVarsPM h ++ patVarsPM t
 patVarsPM (PTuple ps) = patVarsListPM ps
 patVarsPM (PList ps) = patVarsListPM ps
 patVarsPM (PAs x _ _ p) = x :: patVarsPM p
+patVarsPM (POr (p :: _)) = patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
 patVarsPM _ = []
 
@@ -2008,6 +2010,7 @@ renamePat rm (PCons h t) = PCons (renamePat rm h) (renamePat rm t)
 renamePat rm (PTuple ps) = PTuple (map (renamePat rm) ps)
 renamePat rm (PList ps) = PList (map (renamePat rm) ps)
 renamePat rm (PAs x l bid p) = PAs x l bid (renamePat rm p)
+renamePat rm (POr ps) = POr (map (renamePat rm) ps)
 renamePat rm (PRec n fields open) =
   PRec (renameDefName rm n) (map (renameRecPatField rm) fields) open
 -- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────

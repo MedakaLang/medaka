@@ -38,6 +38,8 @@ digitVal : Char -> Int
 doStmtBinds : DoStmt -> List LetBind
 exhaustToLines : List Decl -> String
 exhaustToLinesWith : List Decl -> List Decl -> String
+expandOrHeads : Oracle -> List (List Pat) -> List (List Pat)
+expandOrRows : List (List Pat) -> List (List Pat)
 fieldAssignBinds : FieldAssign -> List LetBind
 findRecField : String -> List RecPatField -> Option (Option Pat)
 firstMissing : List String -> List String -> Option String
@@ -68,6 +70,7 @@ interpBinds : InterpPart -> List LetBind
 isDigitC : Char -> Bool
 isEmptyArgs : List Pat -> Bool
 isIrrefutablePat : Pat -> Bool
+isOrHead : List Pat -> Bool
 letGroupWarnings : Oracle -> Expr -> List (DiagCode, String, Option Loc)
 listConsCtor : String
 listNilCtor : String
@@ -85,6 +88,7 @@ oGetCtorSiblings : Oracle -> String -> Option (List String)
 oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtors : Oracle -> TabKey -> Option (List String)
 oracleCtorName : Oracle -> String -> String
+oracleForPats : Oracle -> List Pat -> Oracle
 oracleKnownName : Oracle -> String -> String -> String
 oracleMap : List (String, a) -> Map String a
 parenWrapWit : Bool -> String -> String
