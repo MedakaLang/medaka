@@ -226,7 +226,7 @@ inlang-backend-trmc-analysis-test:
 ## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 ## definer) is private; its sibling drives the exported mangleUnits.
 inlang-types-private-mangle-test:
-	./medaka test compiler/types/private_mangle_test.mdk
+	./medaka test compiler/types/private_mangle_test.mdk compiler/types/symbol_origins_test.mdk
 
 ## support/hooks.mdk has no importer until the first hooks consumer lands, so
 ## no entry's closure reaches it.

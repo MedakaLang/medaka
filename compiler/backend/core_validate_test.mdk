@@ -1,3 +1,5 @@
+import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
+import backend.core_validate.{validateSymbolOrigins}
 import support.diag_codes.{codeText}
 import types.capability_manifest.{
   ManifestRequirement(..), CapabilityManifest(..), ManifestRequest(..),
@@ -1390,6 +1392,7 @@ evidenceProg body =
     []
     []
     DeclFacts {
+      factSymbolOrigins = None,
       factMethodResults = [],
       factRequires = [("K", 0), ("S", 0)],
       factSupers = [("K", 0), ("S", 1)],
@@ -1685,6 +1688,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   impls
   mctx
   DeclFacts {
+    factSymbolOrigins = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -1702,6 +1706,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
   impls
   mctx
   DeclFacts {
+    factSymbolOrigins = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -1792,6 +1797,7 @@ intLetProg ty =
     []
     []
     DeclFacts {
+      factSymbolOrigins = None,
       factMethodResults = [],
       factRequires = [],
       factSupers = [],
@@ -1892,6 +1898,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   impls
   mctx
   DeclFacts {
+    factSymbolOrigins = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -3067,3 +3074,22 @@ test "explicit raw and checked Float protocol controls emit nonempty modules in 
               ))
               ["manifest-raw", "manifest-host", "manifest-valid"])
           emissionRoutes)
+
+test "origin validation checks each constructor owner and function" =
+  let origins = CoreSymbolOrigins {
+    functions = omInsert "main" (SingleOrigin "main") omEmpty,
+    constructors =
+      omInsert "A" (omInsert "Cons" (ModuleOrigin "a" "Cons") omEmpty) omEmpty,
+  }
+  let facts = { noDeclFacts | factSymbolOrigins = Some origins }
+  let cp =
+    CProgram
+      [synthBind "main" []]
+      [("Cons", 0)]
+      [("Cons", "A"), ("Cons", "B")]
+      []
+      []
+      facts
+  expectEqual
+    ["symbol origin: missing constructor owner B"]
+    (validateSymbolOrigins cp)

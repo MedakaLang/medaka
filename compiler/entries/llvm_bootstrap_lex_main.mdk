@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import types.extern_source.{externSourceHeadRows}
 -- BOOTSTRAP (B1) emit driver — the gap-TOLERANT multi-module emitter behind the
@@ -68,7 +69,8 @@ runEmit inputs runtimeDecls coreDecls modules =
   let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let (coreD, modules2, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
@@ -89,7 +91,9 @@ runEmit inputs runtimeDecls coreDecls modules =
       ""
 
   let cp =
-    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
+    lowerProgramEmitWith
+      (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
+      allDecls
   let emitted =
     emitProgramRecord
       input
