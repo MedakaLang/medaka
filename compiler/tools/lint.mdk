@@ -1,6 +1,6 @@
 -- compiler/tools/lint.mdk — the `medaka lint` facade.  The framework lives in
--- `lint_core` (types), `lint_shared` (common helpers), `lint_rules_staging`
--- (rule bodies), `lint_registry` (THE REGISTRY) and `lint_walk` (the runner);
+-- `lint_core` (types), `lint_shared` (common helpers), the `lint_rule_*`
+-- modules (rule bodies), `lint_registry` (THE REGISTRY) and `lint_walk` (the runner);
 -- this module re-exports the surface the CLI, MCP server and tests consume.
 
 export import tools.lint_core.{

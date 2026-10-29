@@ -1,5 +1,25 @@
 -- lint rule bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
 
+-- ── rule: bind-then-destructure ───────────────────────────────────────────────
+-- Inside any do/bare block, a `v <- e` bind immediately followed by a FINAL
+-- statement `match v { pat => body }` (exactly one arm, no guards) where `pat` is
+-- IRREFUTABLE (tuple/record/var/wildcard, recursively — OR a single-constructor
+-- pattern `PCon c subps` where `c` is the SOLE constructor of its datatype, as
+-- decided by the syntactic constructor `Oracle`, with all sub-patterns
+-- recursively irrefutable) and `v` does NOT appear free in `body`.  Such a pair
+-- is just `pat <- e` with `body` inlined.  Detection recurses into every nested
+-- do/bare block in the decl body; the autofix is a pure AST rewrite (the
+-- framework re-renders the returned Decl via the printer).
+--
+-- The `Oracle` is `frontend.exhaust.buildOracle` over the whole target file's
+-- decls — a purely SYNTACTIC scan of constructor declarations (no typecheck),
+-- so multi-ctor wrappers (`Some v <-`, `Ok x <-`, `Cons`/`Nil`) stay refutable
+-- and are skipped, while genuine newtype/single-variant wrappers collapse.
+--
+-- `v`-not-free-in-`body` uses the same conservative printed whole-word scan the
+-- §8 fixer relies on (`wholeWordIn`): it can only over-bail (suppress a real
+-- finding), never produce an unsound fix.
+
 import frontend.ast.{
   Loc(..),
   Pat(..),

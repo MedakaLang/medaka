@@ -1,0 +1,307 @@
+# META
+source_lines=203
+stages=DESUGAR,MARK
+# SOURCE
+-- lint rule rule-orelse-staircase: a nested first-match probe staircase of `None`/`Err` fall-throughs. Prefer `orElse` or `findMap` (suggest-only).
+
+import frontend.ast.{
+  Loc(..),
+  Pat(..),
+  Arm(..),
+  ImplMethod(..),
+  Expr(..),
+  Decl(..),
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{isEmptyL}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  childExprs,
+  ctorVarPassthru,
+  declLocList,
+  isEVarNamed,
+  isNilPCon,
+  matchScrutOf,
+  ruleNameOrElseStaircase,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameOrElseStaircase,
+      summary =
+        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
+      doc =
+        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleOrElseStaircase
+    None
+
+-- Flag a first-match PROBE STAIRCASE: nested `match`es where every level tries a
+-- fresh probe, hands that probe's own payload straight back on success, and falls
+-- through to the next probe on failure:
+--   Option:  match <probe> { Some v => v  (or `Some v`) ; None  => <next level> }
+--   Result:  match <probe> { Ok   v => v  (or `Ok   v`) ; Err _ => <next level> }
+-- Two or more such levels — a probe, at least one re-probe, then a fallback — is
+-- the staircase `orElse` and `findMap` exist for.  A single level is a
+-- `withDefault`, not a staircase, and does not fire.
+-- Arm order is either way; the chain must be all-Option or all-Result.
+--
+-- This is the DUAL of rule-bind-chain-to-do: there the FAILURE arm is the verbatim
+-- passthrough and the SUCCESS arm continues the chain; here the SUCCESS arm is the
+-- verbatim passthrough and the FAILURE arm continues.  The two shapes are disjoint,
+-- so one chain can never fire both rules.
+--
+-- The passthrough demand is what keeps the rule true rather than merely plausible.
+-- A level whose success arm CONSUMES its payload (`Some (a, b) => f a b`) is a
+-- heterogeneous probe chain: the levels do not share a result type, so `orElse`
+-- does not even typecheck over them, and Medaka being strict, an eager rewrite
+-- would run every probe rather than stopping at the first hit.  #2565 scopes those
+-- out; requiring the identity success arm excludes them syntactically, with no type
+-- environment (which the linter does not have).
+--
+-- Deliberately NOT matched: a fallthrough continuation reached through interspersed
+-- `let`s (an `EBlock`), and an `Err e` failure arm that binds its payload — both are
+-- rarer shapes whose rewrite is not the plain combinator.
+
+-- one staircase level rooted at `e`; returns the failure-arm continuation.
+orElseLevel : Bool -> Expr -> Option Expr
+orElseLevel isResult e = match unwrapLoc e
+  EMatch _ arms => match arms
+    [a1, a2] => match orElseTry isResult a1 a2
+      Some c => Some c
+      None => orElseTry isResult a2 a1
+    _ => None
+  _ => None
+
+-- (candidate success arm, candidate failure arm) → the failure continuation.
+orElseTry : Bool -> Arm -> Arm -> Option Expr
+orElseTry isResult (Arm okP okGs okBody) (Arm failP failGs failBody)
+  | isEmptyL okGs
+    && isEmptyL failGs
+    && orElseOkPassthru isResult okP okBody
+    && orElseFailPat isResult failP = Some failBody
+  | otherwise = None
+
+-- success arm hands the probe's payload straight back: `Some v => v` (unwrapping
+-- staircase) or `Some v => Some v` (Option-returning staircase).
+orElseOkPassthru : Bool -> Pat -> Expr -> Bool
+orElseOkPassthru isResult p body =
+  let ctor = if isResult then "Ok" else "Some"
+  orElseBareVarArm ctor p body || ctorVarPassthru ctor p body
+
+orElseBareVarArm : String -> Pat -> Expr -> Bool
+orElseBareVarArm ctor (PCon c [PVar v _ _]) body =
+  c == ctor && isEVarNamed v body
+orElseBareVarArm _ _ _ = False
+
+-- failure arm falls through WITHOUT inspecting the failure: `None` / `Err _`.
+orElseFailPat : Bool -> Pat -> Bool
+orElseFailPat isResult p =
+  if isResult then orElseErrWildPat p else isNilPCon "None" p
+
+orElseErrWildPat : Pat -> Bool
+orElseErrWildPat (PCon "Err" [PWild]) = True
+orElseErrWildPat _ = False
+
+-- number of staircase levels rooted at `e` for the chosen monad, 0 if `e` is not
+-- a level at all.
+orElseDepth : Bool -> Expr -> Int
+orElseDepth isResult e = match orElseLevel isResult e
+  Some cont => 1 + orElseDepth isResult cont
+  None => 0
+
+-- off-chain sub-exprs of a staircase: every level's probe, plus the final fallback
+-- the last failure arm lands on.  The fallthrough continuations are consumed by
+-- the recursion, so a level of THIS staircase is never re-reported as its own head.
+orElseOffChain : Bool -> Expr -> List Expr
+orElseOffChain isResult e = match orElseLevel isResult e
+  Some cont => matchScrutOf e :: orElseOffChain isResult cont
+  None => [e]
+
+-- report a node as a staircase HEAD iff its depth (in whichever monad) is ≥ 2,
+-- then consume the chain; otherwise descend generically into children.  Each
+-- head is paired with the monad it was read in (`True` = Result), because the
+-- two monads have different rewrites and only this traversal knows which one a
+-- given head is.
+orElseHeads : Expr -> List (Bool, Expr)
+orElseHeads e =
+  let rd = orElseDepth True e
+  let od = orElseDepth False e
+  if rd >= 2 || od >= 2 then
+    (rd >= od, e) :: flatMap orElseHeads (orElseOffChain (rd >= od) e)
+  else
+    flatMap orElseHeads (childExprs e)
+
+orElseDeclHeads : Decl -> List (Bool, Expr)
+orElseDeclHeads (DFunDef _ _ _ body _ _) = orElseHeads body
+orElseDeclHeads (DImpl { methods, ... }) = flatMap orElseImplHeads methods
+orElseDeclHeads (DAttrib _ d) = orElseDeclHeads d
+orElseDeclHeads _ = []
+
+orElseImplHeads : ImplMethod -> List (Bool, Expr)
+orElseImplHeads (ImplMethod _ _ body) = orElseHeads body
+
+ruleOrElseStaircase : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleOrElseStaircase _ _ _ pos prog = flatMap orElseDeclL (declLocList pos prog)
+
+orElseDeclL : (Decl, Option Loc) -> List Finding
+orElseDeclL (d, loc) = map (orElseHeadFinding loc) (orElseDeclHeads d)
+
+orElseHeadFinding : Option Loc -> (Bool, Expr) -> Finding
+orElseHeadFinding declLoc (isResult, e) =
+  orElseFinding isResult (orElseHeadLoc declLoc e)
+
+-- the staircase's OWN location where the head carries one (the `ELoc` the
+-- traversal reaches before its raw `EMatch`), else the enclosing decl's — a
+-- staircase buried in a long function is not usefully reported at the decl head.
+orElseHeadLoc : Option Loc -> Expr -> Option Loc
+orElseHeadLoc _ (ELoc l _) = Some l
+orElseHeadLoc declLoc _ = declLoc
+
+-- The rewrite differs by monad, so the message does too.  `orElse` and `findMap`
+-- come from `Alternative`, which `stdlib/core.mdk` implements for `List` and
+-- `Option` only -- there is no `Alternative Result`, so recommending either over
+-- a Result staircase names something that does not typecheck.  And both are
+-- eager: Medaka is strict, so the Option rewrite evaluates every probe instead
+-- of stopping at the first hit, which makes it a readability change rather than
+-- an unconditional improvement.
+orElseFinding : Bool -> Option Loc -> Finding
+orElseFinding isResult loc = Finding {
+  rule = ruleNameOrElseStaircase,
+  message = orElseMessage isResult,
+  severity = SevWarning,
+  loc = loc,
+}
+
+orElseMessage : Bool -> String
+orElseMessage True =
+  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`"
+orElseMessage False =
+  "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe"
+# DESUGAR
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "childExprs" false) (mem "ctorVarPassthru" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
+(DTypeSig true "rule" (TyCon "Rule"))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
+(DTypeSig false "orElseLevel" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "orElseLevel" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "Some") (EVar "c"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "orElseTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "orElseTry" ((PVar "isResult") (PCon "Arm" (PVar "okP") (PVar "okGs") (PVar "okBody")) (PCon "Arm" (PVar "failP") (PVar "failGs") (PVar "failBody"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "okGs")) (EApp (EVar "isEmptyL") (EVar "failGs"))) (EApp (EApp (EApp (EVar "orElseOkPassthru") (EVar "isResult")) (EVar "okP")) (EVar "okBody"))) (EApp (EApp (EVar "orElseFailPat") (EVar "isResult")) (EVar "failP"))) (EApp (EVar "Some") (EVar "failBody")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "orElseOkPassthru" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "orElseOkPassthru" ((PVar "isResult") (PVar "p") (PVar "body")) (EBlock (DoLet false false (PVar "ctor") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (DoExpr (EBinOp "||" (EApp (EApp (EApp (EVar "orElseBareVarArm") (EVar "ctor")) (EVar "p")) (EVar "body")) (EApp (EApp (EApp (EVar "ctorVarPassthru") (EVar "ctor")) (EVar "p")) (EVar "body"))))))
+(DTypeSig false "orElseBareVarArm" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "orElseBareVarArm" ((PVar "ctor") (PCon "PCon" (PVar "c") (PList (PCon "PVar" (PVar "v") PWild PWild))) (PVar "body")) (EBinOp "&&" (EBinOp "==" (EVar "c") (EVar "ctor")) (EApp (EApp (EVar "isEVarNamed") (EVar "v")) (EVar "body"))))
+(DFunDef false "orElseBareVarArm" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "orElseFailPat" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "orElseFailPat" ((PVar "isResult") (PVar "p")) (EIf (EVar "isResult") (EApp (EVar "orElseErrWildPat") (EVar "p")) (EApp (EApp (EVar "isNilPCon") (ELit (LString "None"))) (EVar "p"))))
+(DTypeSig false "orElseErrWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "orElseErrWildPat" ((PCon "PCon" (PLit (LString "Err")) (PList (PCon "PWild")))) (EVar "True"))
+(DFunDef false "orElseErrWildPat" (PWild) (EVar "False"))
+(DTypeSig false "orElseDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
+(DFunDef false "orElseDepth" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EApp (EVar "orElseLevel") (EVar "isResult")) (EVar "e")) (arm (PCon "Some" (PVar "cont")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "orElseDepth") (EVar "isResult")) (EVar "cont")))) (arm (PCon "None") () (ELit (LInt 0)))))
+(DTypeSig false "orElseOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
+(DFunDef false "orElseOffChain" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EApp (EVar "orElseLevel") (EVar "isResult")) (EVar "e")) (arm (PCon "Some" (PVar "cont")) () (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "e")) (EApp (EApp (EVar "orElseOffChain") (EVar "isResult")) (EVar "cont")))) (arm (PCon "None") () (EListLit (EVar "e")))))
+(DTypeSig false "orElseHeads" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseHeads" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "orElseDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "orElseDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 2))) (EBinOp ">=" (EVar "od") (ELit (LInt 2)))) (EBinOp "::" (ETuple (EBinOp ">=" (EVar "rd") (EVar "od")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "orElseHeads")) (EApp (EApp (EVar "orElseOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EApp (EApp (EVar "flatMap") (EVar "orElseHeads")) (EApp (EVar "childExprs") (EVar "e")))))))
+(DTypeSig false "orElseDeclHeads" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseDeclHeads" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EVar "orElseHeads") (EVar "body")))
+(DFunDef false "orElseDeclHeads" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "orElseImplHeads")) (EVar "methods")))
+(DFunDef false "orElseDeclHeads" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "orElseDeclHeads") (EVar "d")))
+(DFunDef false "orElseDeclHeads" (PWild) (EListLit))
+(DTypeSig false "orElseImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "orElseHeads") (EVar "body")))
+(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleOrElseStaircase" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "orElseDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DTypeSig false "orElseDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "orElseDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "orElseHeadFinding") (EVar "loc"))) (EApp (EVar "orElseDeclHeads") (EVar "d"))))
+(DTypeSig false "orElseHeadFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Finding"))))
+(DFunDef false "orElseHeadFinding" ((PVar "declLoc") (PTuple (PVar "isResult") (PVar "e"))) (EApp (EApp (EVar "orElseFinding") (EVar "isResult")) (EApp (EApp (EVar "orElseHeadLoc") (EVar "declLoc")) (EVar "e"))))
+(DTypeSig false "orElseHeadLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "orElseHeadLoc" (PWild (PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "orElseHeadLoc" ((PVar "declLoc") PWild) (EVar "declLoc"))
+(DTypeSig false "orElseFinding" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
+(DFunDef false "orElseFinding" ((PVar "isResult") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (EApp (EVar "orElseMessage") (EVar "isResult"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "orElseMessage" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`")))
+(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe")))
+# MARK
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "childExprs" false) (mem "ctorVarPassthru" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
+(DTypeSig true "rule" (TyCon "Rule"))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
+(DTypeSig false "orElseLevel" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "orElseLevel" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "Some") (EVar "c"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "orElseTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "orElseTry" ((PVar "isResult") (PCon "Arm" (PVar "okP") (PVar "okGs") (PVar "okBody")) (PCon "Arm" (PVar "failP") (PVar "failGs") (PVar "failBody"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "okGs")) (EApp (EVar "isEmptyL") (EVar "failGs"))) (EApp (EApp (EApp (EVar "orElseOkPassthru") (EVar "isResult")) (EVar "okP")) (EVar "okBody"))) (EApp (EApp (EVar "orElseFailPat") (EVar "isResult")) (EVar "failP"))) (EApp (EVar "Some") (EVar "failBody")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "orElseOkPassthru" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "orElseOkPassthru" ((PVar "isResult") (PVar "p") (PVar "body")) (EBlock (DoLet false false (PVar "ctor") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (DoExpr (EBinOp "||" (EApp (EApp (EApp (EVar "orElseBareVarArm") (EVar "ctor")) (EVar "p")) (EVar "body")) (EApp (EApp (EApp (EVar "ctorVarPassthru") (EVar "ctor")) (EVar "p")) (EVar "body"))))))
+(DTypeSig false "orElseBareVarArm" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "orElseBareVarArm" ((PVar "ctor") (PCon "PCon" (PVar "c") (PList (PCon "PVar" (PVar "v") PWild PWild))) (PVar "body")) (EBinOp "&&" (EBinOp "==" (EVar "c") (EVar "ctor")) (EApp (EApp (EVar "isEVarNamed") (EVar "v")) (EVar "body"))))
+(DFunDef false "orElseBareVarArm" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "orElseFailPat" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "orElseFailPat" ((PVar "isResult") (PVar "p")) (EIf (EVar "isResult") (EApp (EVar "orElseErrWildPat") (EVar "p")) (EApp (EApp (EVar "isNilPCon") (ELit (LString "None"))) (EVar "p"))))
+(DTypeSig false "orElseErrWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "orElseErrWildPat" ((PCon "PCon" (PLit (LString "Err")) (PList (PCon "PWild")))) (EVar "True"))
+(DFunDef false "orElseErrWildPat" (PWild) (EVar "False"))
+(DTypeSig false "orElseDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
+(DFunDef false "orElseDepth" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EApp (EVar "orElseLevel") (EVar "isResult")) (EVar "e")) (arm (PCon "Some" (PVar "cont")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "orElseDepth") (EVar "isResult")) (EVar "cont")))) (arm (PCon "None") () (ELit (LInt 0)))))
+(DTypeSig false "orElseOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
+(DFunDef false "orElseOffChain" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EApp (EVar "orElseLevel") (EVar "isResult")) (EVar "e")) (arm (PCon "Some" (PVar "cont")) () (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "e")) (EApp (EApp (EVar "orElseOffChain") (EVar "isResult")) (EVar "cont")))) (arm (PCon "None") () (EListLit (EVar "e")))))
+(DTypeSig false "orElseHeads" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseHeads" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "orElseDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "orElseDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 2))) (EBinOp ">=" (EVar "od") (ELit (LInt 2)))) (EBinOp "::" (ETuple (EBinOp ">=" (EVar "rd") (EVar "od")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "orElseHeads")) (EApp (EApp (EVar "orElseOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EApp (EApp (EDictApp "flatMap") (EVar "orElseHeads")) (EApp (EVar "childExprs") (EVar "e")))))))
+(DTypeSig false "orElseDeclHeads" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseDeclHeads" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EVar "orElseHeads") (EVar "body")))
+(DFunDef false "orElseDeclHeads" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "orElseImplHeads")) (EVar "methods")))
+(DFunDef false "orElseDeclHeads" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "orElseDeclHeads") (EVar "d")))
+(DFunDef false "orElseDeclHeads" (PWild) (EListLit))
+(DTypeSig false "orElseImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
+(DFunDef false "orElseImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "orElseHeads") (EVar "body")))
+(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleOrElseStaircase" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "orElseDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DTypeSig false "orElseDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "orElseDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "orElseHeadFinding") (EVar "loc"))) (EApp (EVar "orElseDeclHeads") (EVar "d"))))
+(DTypeSig false "orElseHeadFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Finding"))))
+(DFunDef false "orElseHeadFinding" ((PVar "declLoc") (PTuple (PVar "isResult") (PVar "e"))) (EApp (EApp (EVar "orElseFinding") (EVar "isResult")) (EApp (EApp (EVar "orElseHeadLoc") (EVar "declLoc")) (EVar "e"))))
+(DTypeSig false "orElseHeadLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "orElseHeadLoc" (PWild (PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "orElseHeadLoc" ((PVar "declLoc") PWild) (EVar "declLoc"))
+(DTypeSig false "orElseFinding" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
+(DFunDef false "orElseFinding" ((PVar "isResult") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (EApp (EVar "orElseMessage") (EVar "isResult"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "orElseMessage" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`")))
+(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe")))

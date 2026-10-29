@@ -251,6 +251,8 @@ Reinstall: `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre
   so they can suppress exit 1.
   Suppress with `-- lint-disable-next-line <rule>`. `--fix` bails on decls with interior
   comments.
+  Rule lists come from `medaka lint --list-rules`, never a hand copy; internal-scope rules run
+  only under `--internal` or `[lint] internal = true`. New rule: `add-lint-rule` skill.
 - **[H-SNAPSHOT]** Check only: `make snapshot-check`. Bless with
   `sh test/snapshot_bless.sh --bless <file>` and stage `test/snapshots/`.
   **[H-SNAPSHOT-NEW]** For a new source file use `--new` (suite-wide), then re-run the check.

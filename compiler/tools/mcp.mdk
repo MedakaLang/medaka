@@ -85,7 +85,7 @@ import tools.lsp.{
   methodOf,
   unit,
 }
-import tools.lint_cmd.{quadToParseTriple, quadToSrc}
+import tools.lint_cmd.{internalDisabledFor, quadToParseTriple, quadToSrc}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{
@@ -1495,7 +1495,15 @@ lintPathsToDiagQuads : StdlibIndex ->
   List String ->
   <IO> List (String, String, List Diag, Positions, List Decl)
 lintPathsToDiagQuads idx disable only deny paths =
-  map (lintFileDiagTripleParsed idx disable only deny) paths
+  map
+    (f =>
+      lintFileDiagTripleParsed
+        idx
+        (disable ++ internalDisabledFor False f)
+        only
+        deny
+        f)
+    paths
 
 -- Run the cross-file tier (`runCrossFileRules`) over the parses `quads`
 -- already carries, honoring `only`/`disable` (inside `runCrossFileRules`),

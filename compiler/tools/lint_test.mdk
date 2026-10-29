@@ -284,3 +284,23 @@ test "an internal rule is silent on a manifest-less project" =
       let triples = lintFilesToDiagTriples idx False [] [] [] None verbFixtures
       expectFalse
         (anyList (t => anyList isTestVerbDiag (tripleDiags t)) triples)
+
+-- The MCP entry applies the same activation as the CLI: `rule-directive-reason`
+-- (scope Internal) is silent under a manifest without `[lint] internal = true`
+-- and fires under one that has it.
+mcpDirectiveReasonFires : String -> <IO> Bool
+mcpDirectiveReasonFires path = match buildStdlibIndexResult
+  Err _ => False
+  Ok idx =>
+    let quads = lintPathsToDiagQuads idx [] ["rule-directive-reason"] [] [path]
+    anyList
+      (t =>
+        anyList (d => diagCode d == "rule-directive-reason") (tripleDiags t))
+      (map dropQuadParse quads)
+
+test "the MCP lint entry keeps internal rules off without the manifest key" =
+  expectFalse
+    (mcpDirectiveReasonFires "test/lint_internal_fixtures/no_key/leak.mdk")
+
+test "the MCP lint entry runs internal rules under [lint] internal = true" =
+  expectTrue (mcpDirectiveReasonFires "test/lint_internal_fixtures/on/leak.mdk")
