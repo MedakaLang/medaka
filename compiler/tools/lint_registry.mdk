@@ -24,22 +24,17 @@ import tools.lint_shared.{
   ruleNameBindChainToDo,
   ruleNameBindThenDestructure,
   ruleNameBoolSimplify,
-  ruleNameCloneType,
   ruleNameComplementPredicate,
-  ruleNameConcatToInterp,
   ruleNameDeadCode,
   ruleNameDerivable,
-  ruleNameDestructureInParam,
   ruleNameDirectiveReason,
   ruleNameDuplicateBody,
   ruleNameIfMaxMin,
   ruleNameLambdaSection,
   ruleNamePreferAssignOp,
-  ruleNamePromissoryReader,
   ruleNameRegexLiteral,
   ruleNameRemParity,
   ruleNameTestEqualInTrue,
-  ruleNameWhenUnless,
 }
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
@@ -53,12 +48,15 @@ import tools.lint_rule_match_to_map as MatchToMap
 import tools.lint_rule_orelse_staircase as OrElseStaircase
 import tools.lint_rule_clause_map as ClauseMap
 import tools.lint_rule_internal_test_bool_literal_equal as TestBoolLiteralEqual
+import tools.lint_rule_destructure_in_param as DestructureInParam
+import tools.lint_rule_when_unless as WhenUnless
+import tools.lint_rule_concat_to_interp as ConcatToInterp
+import tools.lint_rule_internal_promissory_reader as PromissoryReader
+import tools.lint_rule_clone_type as CloneType
 import tools.lint_rules_staging.{
   bindThenDestructureFix,
   boolSimplifyFix,
   complementPredicateFix,
-  concatToInterpFix,
-  destructureInParamFix,
   duplicateBodySameFileRule,
   ifMaxMinFix,
   lambdaSectionFix,
@@ -67,24 +65,18 @@ import tools.lint_rules_staging.{
   ruleBindChainToDo,
   ruleBindThenDestructure,
   ruleBoolSimplify,
-  ruleCloneType,
   ruleComplementPredicate,
-  ruleConcatToInterp,
   ruleDeadCode,
   ruleDerivable,
-  ruleDestructureInParam,
   ruleDirectiveReason,
   ruleDuplicateBody,
   ruleForPreferAssign,
   ruleIfMaxMin,
   ruleLambdaSection,
-  rulePromissoryReader,
   ruleRegexLiteral,
   ruleRemParity,
   ruleTestEqualInTrue,
-  ruleWhenUnless,
   testEqualInTrueFix,
-  whenUnlessFix,
 }
 
 -- ── the registry ─────────────────────────────────────────────────────────────
@@ -169,25 +161,6 @@ ifMaxMinRule =
     ruleIfMaxMin
     (Some ifMaxMinFix)
 
-destructureInParamRule : Rule
-destructureInParamRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameDestructureInParam,
-      summary =
-        "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
-      doc =
-        "A function body that is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple, record, single-constructor) can destructure in the parameter position.\n\nBefore:\n  f p = match p\n    (a, b) => a + b\nAfter:\n  f (a, b) = a + b",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleDestructureInParam
-    (Some destructureInParamFix)
-
 boolSimplifyRule : Rule
 boolSimplifyRule =
   mkRule
@@ -225,25 +198,6 @@ remParityRule =
     }
     ruleRemParity
     (Some remParityFix)
-
-whenUnlessRule : Rule
-whenUnlessRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameWhenUnless,
-      summary =
-        "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
-      doc =
-        "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleWhenUnless
-    (Some whenUnlessFix)
 
 complementPredicateRule : Rule
 complementPredicateRule =
@@ -302,25 +256,6 @@ deadCodeRule =
     ruleDeadCode
     None
 
-concatToInterpRule : Rule
-concatToInterpRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameConcatToInterp,
-      summary =
-        "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
-      doc =
-        "A `++` chain mixing string literals with expressions reads better as string interpolation.\n\nBefore:\n  \"n = \" ++ show n ++ \"!\"\nAfter:\n  \"n = \\{show n}!\"",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleConcatToInterp
-    (Some concatToInterpFix)
-
 preferAssignOpRule : Rule
 preferAssignOpRule =
   mkRule
@@ -339,44 +274,6 @@ preferAssignOpRule =
     }
     ruleForPreferAssign
     (Some preferAssignFix)
-
-promissoryReaderRule : Rule
-promissoryReaderRule =
-  mkRule
-    RuleMeta {
-      name = ruleNamePromissoryReader,
-      summary =
-        "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)",
-      doc =
-        "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment",
-      category = Style,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    rulePromissoryReader
-    None
-
-cloneTypeRule : Rule
-cloneTypeRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameCloneType,
-      summary =
-        "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
-      doc =
-        "A two-constructor `data` with the arities of `Option` or `Result` and no `impl` in its file duplicates the stdlib type and loses its instances. Suggest-only.\n\nBefore:\n  data Maybe2 a = Nope | Yep a\nAfter:\n  use `Option a`",
-      category = Style,
-      scope = Universal,
-      ratchet = Baselined,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleCloneType
-    None
 
 directiveReasonRule : Rule
 directiveReasonRule =
@@ -445,23 +342,23 @@ allRules = [
   lambdaSectionRule,
   ifMaxMinRule,
   AndThenPureMap.rule,
-  destructureInParamRule,
+  DestructureInParam.rule,
   MissingSignature.rule,
   NotEq.rule,
   boolSimplifyRule,
   remParityRule,
   DoubleReverse.rule,
-  whenUnlessRule,
+  WhenUnless.rule,
   complementPredicateRule,
   MatchToMap.rule,
   bindChainToDoRule,
   deadCodeRule,
-  concatToInterpRule,
+  ConcatToInterp.rule,
   SelfShadowExtern.rule,
   preferAssignOpRule,
-  promissoryReaderRule,
+  PromissoryReader.rule,
   OrElseStaircase.rule,
-  cloneTypeRule,
+  CloneType.rule,
   ClauseMap.rule,
   duplicateBodySameFileRule,
   directiveReasonRule,

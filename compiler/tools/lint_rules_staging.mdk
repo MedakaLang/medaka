@@ -45,7 +45,6 @@ import support.util.{
   contains,
   listLen,
   anyList,
-  allList,
   filterList,
   joinNl,
   isEmptyL,
@@ -65,14 +64,9 @@ import support.char.{isAlnum, isLower, isUpper}
 import regex.{
   Regex,
   RegexError(..),
-  Match,
   compile,
   mustCompile,
   isMatch,
-  find as reFind,
-  findAll as reFindAll,
-  replaceAll,
-  escape,
 }
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, oGetCtors, oGetCtorSiblings}
@@ -96,156 +90,70 @@ import tools.lint_core.{
   factOracle,
 }
 import tools.lint_shared.{
-  CommentBlock(..), andThenEtaFn, appSpineOf, armToClause, childExprs,
-  clausesOf, codeLineAt, codePortions, commentBlocks, ctorIsSingle,
-  ctorVarPassthru, declLocList, dedupeNamesLoc, detApply, exprRuleFindings,
-  exprRuleFindingsInTests, exprRuleFix, exprRuleFixInTests, implMethodsBodyKey,
-  isBoolLit, isEVarNamed, isFalseLit, isNilPCon, isStdlibPath, isTrueLit,
-  lastSegOf, mapChildExprs, matchBodyOnBareParam, matchScrutOf,
-  matchToMapErrPassthru, matchToMapTransform, memberLocalIfOrigin, mentionsVar,
-  nameSetOf, noExcl, notArgOf, paramNameOf, parseDirective,
-  ruleNameAndThenPureMap, ruleNameBindChainToDo, ruleNameBindThenDestructure,
-  ruleNameBoolSimplify, ruleNameClauseMap, ruleNameCloneType,
-  ruleNameComplementPredicate, ruleNameConcatToInterp, ruleNameDeadCode,
-  ruleNameDerivable, ruleNameDestructureInParam, ruleNameDirectiveReason,
-  ruleNameDuplicateBody, ruleNameIfMaxMin, ruleNameLambdaSection,
-  ruleNameMatchToMap, ruleNameMissingSignature, ruleNameOrElseStaircase,
-  ruleNamePreferAssignOp, ruleNamePromissoryReader, ruleNameRegexLiteral,
-  ruleNameRemParity, ruleNameTestBoolLiteralEqual, ruleNameTestEqualInTrue,
-  ruleNameWhenUnless, sortUniqS, stmtExprs, stripELoc, topDefNameL, trimWs,
-  tyHeadName, unwrapLoc, wholeWordIn, zipDeclPos
+  CommentBlock(..),
+  andThenEtaFn,
+  appSpineOf,
+  childExprs,
+  clausesOf,
+  codePortions,
+  commentBlocks,
+  ctorIsSingle,
+  ctorVarPassthru,
+  declLocList,
+  dedupeNamesLoc,
+  detApply,
+  exprRuleFindings,
+  exprRuleFindingsInTests,
+  exprRuleFix,
+  exprRuleFixInTests,
+  implMethodsBodyKey,
+  isBoolLit,
+  isEVarNamed,
+  isFalseLit,
+  isNilPCon,
+  isStdlibPath,
+  isTrueLit,
+  lastSegOf,
+  matchScrutOf,
+  matchToMapErrPassthru,
+  matchToMapTransform,
+  memberLocalIfOrigin,
+  mentionsVar,
+  nameSetOf,
+  noExcl,
+  notArgOf,
+  parseDirective,
+  ruleNameAndThenPureMap,
+  ruleNameBindChainToDo,
+  ruleNameBindThenDestructure,
+  ruleNameBoolSimplify,
+  ruleNameClauseMap,
+  ruleNameComplementPredicate,
+  ruleNameDeadCode,
+  ruleNameDerivable,
+  ruleNameDirectiveReason,
+  ruleNameDuplicateBody,
+  ruleNameIfMaxMin,
+  ruleNameLambdaSection,
+  ruleNameMatchToMap,
+  ruleNameMissingSignature,
+  ruleNameOrElseStaircase,
+  ruleNamePreferAssignOp,
+  ruleNameRegexLiteral,
+  ruleNameRemParity,
+  ruleNameTestBoolLiteralEqual,
+  ruleNameTestEqualInTrue,
+  sortUniqS,
+  stmtExprs,
+  stripELoc,
+  topDefNameL,
+  trimWs,
+  tyHeadName,
+  unwrapLoc,
+  wholeWordIn,
+  zipDeclPos,
 }
 import tools.lint_dup.{dupJoin, fileDupOccs}
-
--- ── rule: destructure-in-param ────────────────────────────────────────────────
--- The single-arm sibling of `rule-match-on-param`.  A `DFunDef _ name pats body`
--- whose body is a ONE-arm, guard-free `match <p>` over a bare parameter `p`, where
--- the arm pattern is an IRREFUTABLE destructuring pattern (a tuple, or a record /
--- single-payload / nullary constructor of a SINGLE-constructor type) and the arm
--- body does NOT reference `p` anywhere else (Medaka has no as-patterns, so hoisting
--- the pattern into the parameter position drops `p`'s binding).  In that case
--- prefer destructuring directly in the parameter position:
---   `f q = match q { AggQuery { from = t, … } => body }`
---     → `f (AggQuery { from = t, … }) = body`.
--- Irrefutability is proved via the Tier-0 `Oracle`: a constructor whose type has
--- exactly ONE constructor is irrefutable; an unknown ctor (e.g. an imported type
--- not declared in this file) is treated as NOT provably irrefutable → SKIP.  This
--- is deliberately conservative: false negatives are fine, false positives corrupt
--- code (they could turn a total match into a partial function clause).
-export
-ruleDestructureInParam : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Finding
-ruleDestructureInParam _ _ facts pos prog =
-  let orc = factOracle facts
-  flatMap (destructureDeclL orc) (declLocList pos prog)
-
-destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
-destructureDeclL orc (d, loc) = match d
-  DFunDef _ name pats body _ _ => destructureFinding orc loc name pats body
-  _ => []
-
-destructureFinding : Oracle ->
-  Option Loc ->
-  String ->
-  List Pat ->
-  Expr ->
-  List Finding
-destructureFinding orc loc name pats body = match matchBodyOnBareParam pats body
-  Some (p, _, arms) => destructureArmsFinding orc loc name p arms
-  None => []
-
-destructureArmsFinding : Oracle ->
-  Option Loc ->
-  String ->
-  String ->
-  List Arm ->
-  List Finding
-destructureArmsFinding orc loc name p [arm] =
-  if destructureArmFires orc p arm then
-    [
-      Finding {
-        rule = ruleNameDestructureInParam,
-        message =
-          "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
-        severity = SevWarning,
-        loc = loc,
-      },
-    ]
-  else
-    []
-destructureArmsFinding _ _ _ _ _ = []
-
--- the single arm can be hoisted iff: guard-free, its pattern is an irrefutable
--- destructuring pattern (not a bare var/wild/literal), and the arm body does NOT
--- otherwise mention the scrutinee param (conservative printed whole-word scan —
--- over-bail only, matching `armMentionsParam`).
-destructureArmFires : Oracle -> String -> Arm -> Bool
-destructureArmFires orc p (Arm pat guards body) =
-  isEmptyL guards
-    && destructurablePat orc pat
-    && not (wholeWordIn p (exprToString body))
-
--- the TOP pattern is a real destructuring pattern (tuple / record / single-ctor
--- constructor) whose sub-patterns are all irrefutable.  Bare var/wild (pointless
--- to hoist), literals, `::`/`[…]` list patterns and ranges are excluded.
-destructurablePat : Oracle -> Pat -> Bool
-destructurablePat orc (PTuple ps) = allList (patIrrefutable orc) ps
-destructurablePat orc (PCon c ps) =
-  ctorIsSingle orc c && allList (patIrrefutable orc) ps
-destructurablePat orc (PRec c fs _) =
-  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
-destructurablePat _ _ = False
-
--- irrefutability of an arbitrary (possibly nested) pattern.  A var/wildcard binds
--- unconditionally; a tuple is irrefutable iff every element is; a constructor /
--- record iff its type is single-ctor AND every sub-pattern is; literals, `::`,
--- list and range patterns are refutable.
-patIrrefutable : Oracle -> Pat -> Bool
-patIrrefutable _ (PVar _ _ _) = True
-patIrrefutable _ PWild = True
-patIrrefutable orc (PTuple ps) = allList (patIrrefutable orc) ps
-patIrrefutable orc (PCon c ps) =
-  ctorIsSingle orc c && allList (patIrrefutable orc) ps
-patIrrefutable orc (PRec c fs _) =
-  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
-patIrrefutable orc (PAs _ _ _ p) = patIrrefutable orc p
-patIrrefutable _ _ = False
-
-recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
-recPatFieldIrrefutable _ (RecPatField _ _ _ None) = True
-recPatFieldIrrefutable orc (RecPatField _ _ _ (Some p)) = patIrrefutable orc p
-
--- ── destructure-in-param autofixer ────────────────────────────────────────────
--- Reuses the shared `matchBodyOnBareParam` detector and the shared `armToClause`
--- pattern-hoist transform (the N = 1 case).  The `destructureArmFires` gate has
--- already proved the pattern irrefutable and the param unreferenced, so
--- `armToClause`'s PWild re-bind special-case never triggers here.
-export
-destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
-    None => None
-destructureInParamFix _ _ = None
-
-destructureInParamFixArms : Oracle ->
-  Bool ->
-  String ->
-  List Pat ->
-  String ->
-  Int ->
-  List Arm ->
-  Option (List Decl)
-destructureInParamFixArms orc vis name pats p k [arm] =
-  if destructureArmFires orc p arm then
-    Some [armToClause vis name p pats k arm]
-  else
-    None
-destructureInParamFixArms _ _ _ _ _ _ _ = None
 
 -- ── rule: hand-rolled-derivable (STYLE §6) ────────────────────────────────────
 -- A `DImpl` for Eq/Ord/Debug over a single named (TyCon-headed) type.  DImpl
@@ -1124,154 +1032,6 @@ isIntLit k e = match unwrapLoc e
 -- bespoke TOP-DOWN rewrite that fires once at the maximal chain and descends only
 -- into hole operands (`rewriteConcatExpr`).
 
--- flatten a `++` spine into its operands, left-to-right (each still ELoc-wrapped).
-concatOperands : Expr -> List Expr
-concatOperands e = match unwrapLoc e
-  EBinOp "++" l r _ => concatOperands l ++ [r]
-  _ => [e]
-
--- an operand that is a string literal (possibly under ELoc); the decoded value.
-strLitValueOf : Expr -> Option String
-strLitValueOf e = match unwrapLoc e
-  ELit (LString s) => Some s
-  _ => None
-
-isStrLitOperand : Expr -> Bool
-isStrLitOperand e = match strLitValueOf e
-  Some _ => True
-  None => False
-
--- decoded literal value contains the 2-char sequence `\{` (would open an interp
--- hole) — such a literal is unsafe to inline into an interpolated string.
-hasBackslashBrace : String -> Bool
-hasBackslashBrace s =
-  let cs = stringToChars s
-  backslashBraceGo cs (arrayLength cs) 0
-
-backslashBraceGo : Array Char -> Int -> Int -> Bool
-backslashBraceGo cs n i
-  | i + 1 >= n = False
-  | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
-  | otherwise = backslashBraceGo cs n (i + 1)
-
--- the chain qualifies: ≥1 literal, ≥2 non-literals, no literal already holds `\{`.
-concatChainQualifies : List Expr -> Bool
-concatChainQualifies ops =
-  let lits = filterExprs isStrLitOperand ops
-  let holes = filterExprs (e => not (isStrLitOperand e)) ops
-  isNonEmptyL lits
-    && listLen holes >= 2
-    && not (anyList litHasBackslashBrace lits)
-
-litHasBackslashBrace : Expr -> Bool
-litHasBackslashBrace e = match strLitValueOf e
-  Some s => hasBackslashBrace s
-  None => False
-
-filterExprs : (Expr -> Bool) -> List Expr -> List Expr
-filterExprs p es = filter p es
-
--- build the interpolated-string parts, merging adjacent literal text.  A literal
--- operand contributes its decoded text; a non-literal operand `e` becomes the hole
--- `\{e}` with `e` recursively rewritten (so a nested chain inside a hole is fixed).
-buildInterpParts : List Expr -> List InterpPart
-buildInterpParts ops = mergeInterpStr (map operandToInterp ops)
-
-operandToInterp : Expr -> InterpPart
-operandToInterp e = match strLitValueOf e
-  Some s => InterpStr s
-  None => InterpExpr (rewriteConcatExpr e)
-
--- coalesce consecutive `InterpStr` parts into one (cosmetic + matches how the
--- lexer would re-tokenise the emitted string).
-mergeInterpStr : List InterpPart -> List InterpPart
-mergeInterpStr [] = []
-mergeInterpStr ((InterpStr a) :: (InterpStr b) :: rest) =
-  mergeInterpStr (InterpStr (a ++ b) :: rest)
-mergeInterpStr (p :: rest) = p :: mergeInterpStr rest
-
--- fire on the RAW node only when it is a qualifying `++` chain top; return the
--- interpolated-string node.
-concatChainOf : Expr -> Option Expr
-concatChainOf (EBinOp "++" l r rf) =
-  let ops = concatOperands (EBinOp "++" l r rf)
-  if concatChainQualifies ops then
-    Some (EStringInterp (buildInterpParts ops))
-  else
-    None
-concatChainOf _ = None
-
--- top-down rewrite: fire once at the maximal chain, else descend into children.
-rewriteConcatExpr : Expr -> Expr
-rewriteConcatExpr e = match concatChainOf e
-  Some e2 => e2
-  None => mapChildExprs rewriteConcatExpr e
-
--- one rewritten node per maximal chain; when a chain fires, still look for nested
--- chains inside its hole operands (NOT its consumed `++` spine).
-collectConcatHits : Expr -> List Expr
-collectConcatHits e = match concatChainOf e
-  Some e2 => e2 :: flatMap collectConcatHits (concatOperands e)
-  None => flatMap collectConcatHits (childExprs e)
-
-export
-ruleConcatToInterp : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Finding
-ruleConcatToInterp _ _ _ pos prog =
-  flatMap concatToInterpDeclL (declLocList pos prog)
-
-concatToInterpDeclL : (Decl, Option Loc) -> List Finding
-concatToInterpDeclL (d, loc) =
-  map (concatToInterpFinding loc) (declConcatHits d)
-
-declConcatHits : Decl -> List Expr
-declConcatHits (DFunDef _ _ _ body _ _) = collectConcatHits body
-declConcatHits (DImpl { methods, ... }) = flatMap implMethodConcatHits methods
-declConcatHits (DAttrib _ d) = declConcatHits d
-declConcatHits _ = []
-
-implMethodConcatHits : ImplMethod -> List Expr
-implMethodConcatHits (ImplMethod _ _ body) = collectConcatHits body
-
-concatToInterpFinding : Option Loc -> Expr -> Finding
-concatToInterpFinding loc rewritten = Finding {
-  rule = ruleNameConcatToInterp,
-  message =
-    "`++` chain of string literals and expressions. Rewrite as an interpolated string '"
-      ++ exprToString rewritten
-      ++ "'",
-  severity = SevWarning,
-  loc = loc,
-}
-
-export
-concatToInterpFix : Oracle -> Decl -> Option (List Decl)
-concatToInterpFix _ (DFunDef vis name pats body site bid) =
-  let body2 = rewriteConcatExpr body
-  if exprSexp body2 == exprSexp body then
-    None
-  else
-    Some [DFunDef vis name pats body2 site bid]
-concatToInterpFix orc (DAttrib a d) = match concatToInterpFix orc d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-concatToInterpFix _ (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map fixImplMethodConcat methods
-  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
-    None
-  else
-    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
-    Some [DImpl { d | methods = methods2 }]
-concatToInterpFix _ _ = None
-
-fixImplMethodConcat : ImplMethod -> ImplMethod
-fixImplMethodConcat (ImplMethod nm ps body) =
-  ImplMethod nm ps (rewriteConcatExpr body)
-
 -- ── rule: bool-simplify ───────────────────────────────────────────────────────
 -- Redundant boolean shapes, each rewritten to an EXACTLY equivalent one:
 --   if c then True else False → c        if c then False else True → not c
@@ -1492,55 +1252,6 @@ preferAssignMessage rewritten =
 export
 preferAssignFix : Oracle -> Decl -> Option (List Decl)
 preferAssignFix _ d = exprRuleFix noExcl (detApply preferAssignOf) d
-
--- ── rule: when-unless ─────────────────────────────────────────────────────────
--- `if b then m else pure ()` → `when b m`; `if b then pure () else m` → `unless b
--- m`.  Fires ONLY when the OTHER branch is EXACTLY `pure ()` (`EApp (EVar "pure")
--- (ELit LUnit)`).  Excludes the `when`/`unless` definitions themselves (their
--- bodies ARE this idiom → rewriting them would yield `when b m = when b m`).
-whenUnlessExcl : String -> Bool
-whenUnlessExcl name = name == "when" || name == "unless"
-
-isPureUnit : Expr -> Bool
-isPureUnit e = match unwrapLoc e
-  EApp hd arg => isEVarNamed "pure" hd && isUnitLit (unwrapLoc arg)
-  _ => False
-
-isUnitLit : Expr -> Bool
-isUnitLit (ELit LUnit) = True
-isUnitLit _ = False
-
-whenUnlessOf : Expr -> Option Expr
-whenUnlessOf (EIf c t el)
-  | isPureUnit el = Some (EApp (EApp (EVar "when") c) t)
-  | isPureUnit t = Some (EApp (EApp (EVar "unless") c) el)
-  | otherwise = None
-whenUnlessOf _ = None
-
-export
-ruleWhenUnless : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Finding
-ruleWhenUnless _ _ _ pos prog =
-  exprRuleFindings whenUnlessExcl whenUnlessOf whenUnlessFinding pos prog
-
-whenUnlessFinding : Option Loc -> Expr -> Finding
-whenUnlessFinding loc rewritten = Finding {
-  rule = ruleNameWhenUnless,
-  message =
-    "conditional effect with a `pure ()` branch. Rewrite as '"
-      ++ exprToString rewritten
-      ++ "'",
-  severity = SevWarning,
-  loc = loc,
-}
-
-export
-whenUnlessFix : Oracle -> Decl -> Option (List Decl)
-whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d
 
 -- ── rule: complement-predicate ────────────────────────────────────────────────
 -- `not (p args…)` where `p` is a registered predicate with a defined complement
@@ -1785,366 +1496,6 @@ bindChainFinding loc _ = Finding {
 -- directly above it, so the exclusion sits at the declaration it exonerates and
 -- binds to THAT declaration alone; a global list of names would exclude every
 -- like-named type anywhere in the tree, including ones nobody has read.
-
--- payload width of one constructor: positional arity, or field count for a
--- record-style payload.
-cloneCtorArity : Variant -> Int
-cloneCtorArity (Variant _ (ConPos ts)) = listLen ts
-cloneCtorArity (Variant _ (ConNamed fs _)) = listLen fs
-
--- the prelude type these constructors clone, if any.  Either arm order counts:
--- `Some a | None` is the same shape as `None | Some a`.
-cloneShapeName : List Variant -> Option String
-cloneShapeName [a, b] =
-  cloneShapeOfArities (cloneCtorArity a) (cloneCtorArity b)
-cloneShapeName _ = None
-
-cloneShapeOfArities : Int -> Int -> Option String
-cloneShapeOfArities x y
-  | x == 1 && y == 1 = Some "Result"
-  | x + y == 1 = Some "Option"
-  | otherwise = None
-
--- head names of every type this file writes an `impl` for.
-cloneImplTargets : List Decl -> List String
-cloneImplTargets ds = flatMap cloneImplTargetsOf ds
-
-cloneImplTargetsOf : Decl -> List String
-cloneImplTargetsOf (DImpl { tys, ... }) = flatMap cloneTyHeadList tys
-cloneImplTargetsOf (DAttrib _ d) = cloneImplTargetsOf d
-cloneImplTargetsOf _ = []
-
-cloneTyHeadList : Ty -> List String
-cloneTyHeadList t = match tyHeadName t
-  Some n => [n]
-  None => []
-
-export
-ruleCloneType : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Finding
-ruleCloneType _ _ _ pos prog =
-  let impls = cloneImplTargets prog
-  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
-
-cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
-cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
-
-cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
-cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
-  cloneTypeHit impls loc dataName dataCtors
-cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
-cloneTypeDecl _ _ _ = []
-
-cloneTypeHit : List String ->
-  Option Loc ->
-  String ->
-  List Variant ->
-  List Finding
-cloneTypeHit impls loc n ctors
-  | contains n impls = []
-  | otherwise = match cloneShapeName ctors
-    Some shape => [cloneTypeFinding loc n shape]
-    None => []
-
-cloneTypeFinding : Option Loc -> String -> String -> Finding
-cloneTypeFinding loc n shape = Finding {
-  rule = ruleNameCloneType,
-  message =
-    "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
-  severity = SevWarning,
-  loc = loc,
-}
-
--- ── rule: promissory-reader (#2550) ───────────────────────────────────────────
--- A comment claiming a symbol is not read YET ("nothing reads this yet",
--- "no reader yet", "do not add a reader") is a negative about the whole file that
--- expires the moment a reader lands, and no other gate notices (#2550 has the
--- measured failure rate).  This rule asserts the claim: the subject must occur in
--- no code line of the file other than its own definition.
---
--- The SUBJECT is, in order: the identifier the claim names in backticks right
--- after "reads" (the claim names its subject in backticks); for a trailing comment, the field or
--- binding declared on the comment's own line; for a leading block, the first
--- declaration after the block (an `export` line is skipped).  A READER is any
--- whole-word occurrence of the subject on a code line that is not the subject's
--- own signature, clause head, field declaration or record initializer, and is not
--- an assignment target (`x := …`).  Double-quoted spans are removed before the
--- phrase test, so a retraction that quotes the old claim is not a claim.
---
--- Deliberately NOT matched: the backward-looking form ("inert BECAUSE x was
--- reverted", "MEASURED constant-True").  Those carry their own evidence and do not
--- expire; each one in the tree stopped a deletion that a body-only reading would
--- have licensed.  The defect this rule fixes is the grammatical form, not the
--- practice of recording inertness.
-export
-rulePromissoryReader : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Finding
-rulePromissoryReader _ path facts _ _ =
-  let ls = splitNl facts.ffSrc
-  let comments = factComments facts
-  let codeLines = arrayFromList (codePortions ls comments 1)
-  flatMap
-    (promissoryFinding path codeLines)
-    (promissoryClaims (commentBlocks comments codeLines))
-
--- Blocks whose (quote-stripped, lowercased) text makes a promissory claim, as
--- (claim line, its raw text, the block).
-promissoryClaims : List CommentBlock -> List (Int, String, CommentBlock)
-promissoryClaims blocks = flatMap promissoryClaimOf blocks
-
-promissoryClaimOf : CommentBlock -> List (Int, String, CommentBlock)
-promissoryClaimOf (b@(CommentBlock first _ _ text)) =
-  if not (mayBePromissory (stringToLower text)) then
-    []
-  else
-    let lines = splitNl text
-    match promissoryLine lines 0
-      Some (i, l) => [(first + i, l, b)]
-      None =>
-        -- a claim wrapped across lines: test the block as one line
-        let joined = joinWith " " lines
-        if isPromissoryText (stringToLower (stripQuoted joined)) then
-          [(first, joined, b)]
-        else
-          []
-
--- Necessary condition of `isPromissoryText` on lowercased RAW text: every
--- phrase contains `yet` or `reader`.  Both are space-free, so a quoted span
--- replaced by a space in `stripQuoted` cannot create one.
-mayBePromissory : String -> Bool
-mayBePromissory low =
-  isSome (stringIndexOf "yet" low) || isSome (stringIndexOf "reader" low)
-
-promissoryLine : List String -> Int -> Option (Int, String)
-promissoryLine [] _ = None
-promissoryLine (l :: rest) i
-  | mayBePromissory (stringToLower l)
-    && isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
-  | otherwise = promissoryLine rest (i + 1)
-
-nothingReadsRe : Regex
-nothingReadsRe = mustCompile (escape "nothing reads")
-
-yetRe : Regex
-yetRe = mustCompile (escape "yet")
-
-promissoryPhraseRe : Regex
-promissoryPhraseRe =
-  mustCompile
-    (joinWith
-      "|"
-      (map escape [
-        "no reader yet",
-        "no readers yet",
-        "no consumer yet",
-        "no consumers yet",
-        "do not add a reader",
-        "don't add a reader",
-      ]))
-
-isPromissoryText : String -> Bool
-isPromissoryText t =
-  isMatch nothingReadsRe t && isMatch yetRe t || isMatch promissoryPhraseRe t
-
-quoteCharRe : Regex
-quoteCharRe = mustCompile "\""
-
-pairedQuoteRe : Regex
-pairedQuoteRe = mustCompile "\"[^\"]*\""
-
--- Drop every double-quoted span (an unterminated quote runs to end of line).
--- Pairing is sequential from the start (1st+2nd quote, 3rd+4th, …), so an odd
--- total count means the LAST quote is the unpaired one; truncate there first
--- (matching the original recursion's per-line "runs to end of line" base
--- case), then replace every remaining paired span with a single space.
-stripQuoted : String -> String
-stripQuoted s =
-  let quotes = reFindAll quoteCharRe s
-  let truncated =
-    if listLen quotes % 2 == 1 then match last quotes
-      Some m => stringSlice 0 m.start s
-      None => s
-    else
-      s
-  replaceAll pairedQuoteRe " " truncated
-
--- The subject of a claim, per the header's order.
-claimSubject : Array String -> (Int, String, CommentBlock) -> Option String
-claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
-  match backtickedAfterReads text
-    Some n => Some n
-    None =>
-      if trailing then
-        declaredNameOf (codeLineAt codeLines line)
-      else
-        nextDeclaredName codeLines (last + 1)
-
--- The backticked subject: the identifier right after "reads `" in the claim.
-backtickedAfterReads : String -> Option String
-backtickedAfterReads t =
-  let lower = stringToLower t
-  match stringIndexOf "reads `" lower
-    None => None
-    Some i =>
-      let start = i + stringLength "reads `"
-      let rest = stringSlice start (stringLength t) t
-      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
-
--- The first declaration at or after `line`: a signature, clause head, field or
--- data/type name; `export` lines are skipped; a blank line ends the search (the
--- comment did not precede a declaration).
-nextDeclaredName : Array String -> Int -> Option String
-nextDeclaredName codeLines line
-  | line > arrayLength codeLines = None
-  | otherwise =
-    let t = trimWs (codeLineAt codeLines line)
-    if t == "export" || t == "public export" then
-      nextDeclaredName codeLines (line + 1)
-    else
-      declaredNameOf t
-
--- The identifier a code line declares: the leading word of `name : …`,
--- `name args = …`, `  field : …`, `data Name` / `type Name`, after an optional
--- `export` / `public export` prefix.
-declaredNameOf : String -> Option String
-declaredNameOf c =
-  let t = trimWs c
-  let t1 = dropPrefixWord "public" t
-  let t2 = dropPrefixWord "export" t1
-  let t3 =
-    dropPrefixWord
-      "data"
-      (dropPrefixWord "type" (dropPrefixWord "interface" t2))
-  let w = leadingIdent t3
-  if w == "" then None else Some w
-
-dropPrefixWord : String -> String -> String
-dropPrefixWord w s
-  | startsWith (w ++ " ") s =
-    trimWs (stringSlice (stringLength w) (stringLength s) s)
-  | otherwise = s
-
-leadingIdentRe : Regex
-leadingIdentRe = mustCompile "^[A-Za-z0-9_']+"
-
-leadingIdent : String -> String
-leadingIdent s = match reFind leadingIdentRe s
-  Some m => m.text
-  None => ""
-
-isIdentChar : Char -> Bool
-isIdentChar ch = isAlnum ch || ch == '_' || ch == '\''
-
--- The finding: a claim whose subject has a reader.
-promissoryFinding : String ->
-  Array String ->
-  (Int, String, CommentBlock) ->
-  List Finding
-promissoryFinding path codeLines claim = match claimSubject codeLines claim
-  None => []
-  Some subject =>
-    -- a claim about a name this file does not declare is another file's to bear
-    -- out (and a bare word from the prose would otherwise match any use of it)
-    if declaredInFile subject codeLines then
-      readerFinding path subject claim (readerLines subject codeLines)
-    else
-      []
-
-readerFinding : String ->
-  String ->
-  (Int, String, CommentBlock) ->
-  List Int ->
-  List Finding
-readerFinding _ _ _ [] = []
-readerFinding path subject (line, _, _) (firstReader :: more) = [
-  Finding {
-    rule = ruleNamePromissoryReader,
-    message =
-      "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
-    severity = SevWarning,
-    loc = Some (Loc path line 1 line 1),
-  },
-]
-
-declaredInFile : String -> Array String -> Bool
-declaredInFile subject codeLines =
-  declaredInFileGo subject codeLines (arrayLength codeLines) 1
-
-declaredInFileGo : String -> Array String -> Int -> Int -> Bool
-declaredInFileGo subject codeLines n line
-  | line > n = False
-  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
-  | otherwise = declaredInFileGo subject codeLines n (line + 1)
-
-readerCountSuffix : Int -> String
-readerCountSuffix 0 = ""
-readerCountSuffix n = " and \{n} more line(s)"
-
--- Every code line on which `subject` occurs as a reader, ascending.
-readerLines : String -> Array String -> List Int
-readerLines subject codeLines =
-  readerLinesGo subject codeLines (arrayLength codeLines) 1
-
-readerLinesGo : String -> Array String -> Int -> Int -> List Int
-readerLinesGo subject codeLines n line
-  | line > n = []
-  | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
-    line :: readerLinesGo subject codeLines n (line + 1)
-  | otherwise = readerLinesGo subject codeLines n (line + 1)
-
-isReaderLine : String -> String -> Bool
-isReaderLine subject c =
-  not (isDefinitionLine subject c) && wordReadIn subject c
-
--- `subject` at column 0 (signature / clause head, optionally `export`-prefixed),
--- or indented and followed by `:` (field declaration) or `=` (record initializer).
-isDefinitionLine : String -> String -> Bool
-isDefinitionLine subject c =
-  let t = dropPrefixWord "export" (dropPrefixWord "public" (trimWs c))
-  let after = trimWs (stringSlice (stringLength subject) (stringLength t) t)
-  startsWith subject t
-    && identBoundaryAt (stringToChars t) (stringLength subject)
-    && (not (startsWith " " c || startsWith "\t" c)
-      || startsWith ":" after && not (startsWith ":=" after)
-      || startsWith "=" after && not (startsWith "==" after))
-
-identBoundaryAt : Array Char -> Int -> Bool
-identBoundaryAt cs i =
-  i >= arrayLength cs || not (isIdentChar (arrayGetUnsafe i cs))
-
--- Whole-word occurrence of `w` in `line` that is not an assignment target.
--- `reFindAll` locates every raw occurrence of `w`; the boundary and
--- assignment-target checks stay plain code and are applied to each match's
--- OWN position afterward (match, then test the tail), rather than folded
--- into the pattern — a consuming boundary class baked into the pattern would
--- make two occurrences of `w` separated by exactly one boundary char (e.g.
--- `a[a]`) invisible to a left-to-right non-overlapping scan, since the first
--- match would consume the shared boundary character the second needs.
-wordReadIn : String -> String -> Bool
-wordReadIn w line =
-  let cs = stringToChars line
-  let n = arrayLength cs
-  anyList (m => wordReadOk cs n m) (reFindAll (mustCompile (escape w)) line)
-
-wordReadOk : Array Char -> Int -> Match -> Bool
-wordReadOk cs n m =
-  (m.start == 0 || not (isIdentChar (arrayGetUnsafe (m.start - 1) cs)))
-    && identBoundaryAt cs m.end
-    && not (assignFollows cs n m.end)
-
-assignFollows : Array Char -> Int -> Int -> Bool
-assignFollows cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
-  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
-  | otherwise = False
 
 -- ── rule: dead-code (per-file reachability) ───────────────────────────────────
 -- Flag a PRIVATE (unexported) top-level value/function binding that is NOT
