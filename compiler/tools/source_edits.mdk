@@ -1,0 +1,57 @@
+import list.{sortBy}
+import tools.source_snapshot.{SourceSnapshot(..), SnapshotId, matchesSnapshot}
+import frontend.syntax_source.{SourceSpan(..)}
+
+public export data SourceEdit = SourceEdit SnapshotId SourceSpan String String
+public export data EditError =
+  | StaleSnapshot
+  | InvalidRange
+  | OverlappingEdits
+  | ExpectedTextMismatch
+
+compareEdit : SourceEdit -> SourceEdit -> Ordering
+compareEdit (SourceEdit _ (SourceSpan a b) _ _) (SourceEdit _ (SourceSpan c d) _ _) =
+  if a == c then compare b d else compare a c
+
+validateEach : SourceSnapshot ->
+  String ->
+  List SourceEdit ->
+  Result EditError Unit
+validateEach _ _ [] = Ok ()
+validateEach snapshot text ((SourceEdit id (SourceSpan lo hi) expected _) :: rest) =
+  if not (matchesSnapshot id snapshot) then
+    Err StaleSnapshot
+  else if lo < 0 || hi < lo || hi > stringLength text then
+    Err InvalidRange
+  else if stringSlice lo hi text /= expected then
+    Err ExpectedTextMismatch
+  else
+    validateEach snapshot text rest
+
+validateOverlap : List SourceEdit -> Result EditError Unit
+validateOverlap [] = Ok ()
+validateOverlap [_] = Ok ()
+validateOverlap ((SourceEdit _ (SourceSpan a b) _ _) :: (next@(SourceEdit _ (SourceSpan c d) _ _)) :: rest) =
+  if c < b || a == b && c == d && a == c then
+    Err OverlappingEdits
+  else
+    validateOverlap (next :: rest)
+
+export
+validateSourceEdits : SourceSnapshot -> List SourceEdit -> Result EditError Unit
+validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
+  match validateEach snapshot text edits
+    Err e => Err e
+    Ok _ => validateOverlap (sortBy compareEdit edits)
+
+editParts : String -> Int -> List SourceEdit -> List String
+editParts text pos [] = [stringSlice pos (stringLength text) text]
+editParts text pos ((SourceEdit _ (SourceSpan lo hi) _ replacement) :: rest) =
+  stringSlice pos lo text :: replacement :: editParts text hi rest
+
+export
+applySourceEdits : SourceSnapshot -> List SourceEdit -> Result EditError String
+applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
+  map
+    (_ => stringConcat (editParts text 0 (sortBy compareEdit edits)))
+    (validateSourceEdits snapshot edits)

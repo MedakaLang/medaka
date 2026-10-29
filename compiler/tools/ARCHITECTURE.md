@@ -29,6 +29,9 @@ set of entries (#4141).
 | `refindex.mdk` | The whole-project binder-keyed reference index under references and rename | reference index |
 | `repl.mdk` | The self-hosted REPL | REPL loop |
 | `new_cmd.mdk` | `medaka new`: project scaffolding | `newProject` |
+| `syntax_cache.mdk` | Session-owned bounded FIFO reuse of exact prepared syntax | `lookupSyntax`, `insertSyntax`, `invalidateSyntax` |
+| `source_edits.mdk` | Validate and apply immutable source edits | `validateSourceEdits`, `applySourceEdits` |
+| `snapshot_syntax.mdk` | Binds a source revision to admitted syntax and the shared source index, or budget metadata alone | `prepareSnapshotSyntax`, `snapshotSyntaxSource` |
 | `snapshot.mdk` | `medaka snapshot`: the in-process snapshot runner | snapshot verb |
 | `test_cmd.mdk` | `medaka test`: doctests, properties and `test` blocks, shared by CLI and probe | `runTest` |
 | `test_runner.mdk` | The `test "…"` declaration runner returning an `Expectation` value | test rows |

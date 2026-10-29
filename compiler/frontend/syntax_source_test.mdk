@@ -1,0 +1,284 @@
+import frontend.syntax_source.{
+  publishSyntax, syntaxSourceText, renderOriginal, syntaxPieces, syntaxTrivia,
+  syntaxStrict, syntaxStructural, syntaxRecovered, syntaxSlice, spanFromLoc,
+  publishSyntaxWithCheckedDecls, SourceSpan(..), SourcePiece(..), Trivia(..)
+}
+import frontend.parse_diagnostic.{ParseDiagnostic(..), ParseDiagnosticKind(..)}
+import frontend.parse_recovery.{defaultRecoveryLimits}
+import frontend.recovery_result.{recoveredStats, RecoveryStats(..)}
+import frontend.parser.{parseSource, parseSourceSyntaxPairs, parseLocatedResult}
+import frontend.lexer.{tokenizeWithOffsetPairs}
+import frontend.ast_codec.{declsSExp}
+import support.sexp_value.{renderSExp}
+import frontend.ast.{Loc(..)}
+import frontend.parse_result.{
+  ParsedSource, parsedDecls, parsedPositions, parsedMetadata,
+  metadataTrailingCommas, metadataUnitStarts
+}
+import frontend.parse_positions.{Positions(..), DeclPos(..)}
+import test_process.{underRoot}
+import frontend.lex_scan.{scanRawChars}
+import frontend.lex_token.{RawTok(..)}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectOkThen, expectTrue
+}
+import list.{filterMap}
+
+spans : List RawTok -> List (Int, Int)
+spans = filterMap (raw => match raw
+  RComment a b => Some (a, b)
+  _ => None)
+
+triviaSpan : Trivia -> (Int, Int)
+triviaSpan (Trivia _ (SourceSpan a b)) = (a, b)
+
+reconstruct : String -> List SourcePiece -> String
+reconstruct src pieces =
+  stringConcat
+    (map ((SourcePiece _ (SourceSpan a b)) => stringSlice a b src) pieces)
+
+partitionEnd : Int -> List SourcePiece -> Option Int
+partitionEnd pos [] = Some pos
+partitionEnd pos ((SourcePiece _ (SourceSpan a b)) :: rest) =
+  if a /= pos || b <= a then None else partitionEnd b rest
+
+caseSource : String -> String -> (String, Expectation)
+caseSource label src = (
+  label,
+  expectOkThen
+    (syntax =>
+      let pieces = toList (syntaxPieces syntax)
+      expectAll [
+        expectEqual src (syntaxSourceText syntax),
+        expectEqual src (renderOriginal syntax),
+        expectEqual src (reconstruct src pieces),
+        expectEqual (Some (stringLength src)) (partitionEnd 0 pieces),
+        expectEqual
+          (spans (scanRawChars (stringToChars src)))
+          (map triviaSpan (toList (syntaxTrivia syntax))),
+        expectEqual
+          (Some src)
+          (syntaxSlice syntax (SourceSpan 0 (stringLength src))),
+        expectTrue (isNone (syntaxSlice syntax (SourceSpan (-1) 0))),
+      ])
+    (publishSyntax defaultRecoveryLimits src),
+)
+
+test "source partitions and scanner comments preserve text" = expectEach [
+  caseSource "valid" """main = 3
+-- a
+{- b -}
+""",
+  caseSource "removed" "main = 1 != 2\n",
+  caseSource "malformed" "main = \"unterminated\n-- tail",
+  caseSource "unicode" "-- 😀\r\nmain = \"é\"\rnext = 2\r",
+  caseSource "interpolation" "main = \"hello \\{1}\"\n",
+  caseSource "triple" "main = \"\"\"hello\nworld\"\"\"\n",
+]
+
+test "removed and malformed syntax cannot pass strict parse" =
+  expectEach
+    (map
+      ((src, kind) => (
+        src,
+        expectOkThen
+          (syntax => match syntaxStrict syntax
+            Err (ParseDiagnostic actual _ _) => match (kind, actual)
+              (BadNeq, BadNeq) => expectTrue True
+              (GenericParse expected, GenericParse message) =>
+                expectEqual expected message
+              _ => expectTrue False
+            Ok _ => expectTrue False)
+          (publishSyntax defaultRecoveryLimits src),
+      ))
+      [
+        ("main = 1 != 2", BadNeq),
+        ("main = )", GenericParse "expected an expression"),
+      ])
+
+spanView : SourceSpan -> (Int, Int)
+spanView (SourceSpan lo hi) = (lo, hi)
+
+test "locations preserve unicode and line ending boundaries" =
+  expectOkThen
+    (syntax => expectAll [
+      expectEqual
+        (Some (0, 2))
+        (map spanView (spanFromLoc syntax (Loc "" 1 0 1 2))),
+      expectEqual
+        (Some (4, 5))
+        (map spanView (spanFromLoc syntax (Loc "" 2 0 2 1))),
+      expectEqual
+        (Some (6, 7))
+        (map spanView (spanFromLoc syntax (Loc "" 3 0 3 1))),
+      expectEqual None (map spanView (spanFromLoc syntax (Loc "" 0 0 1 0))),
+      expectEqual None (map spanView (spanFromLoc syntax (Loc "" 1 3 1 3))),
+      expectEqual None (map spanView (spanFromLoc syntax (Loc "" 2 1 1 0))),
+    ])
+    (publishSyntax defaultRecoveryLimits "é😀\r\nx\ry")
+
+test "recovery attempts count only additional bounded work" =
+  expectOkThen
+    (syntax => match recoveredStats (syntaxRecovered syntax)
+      RecoveryStats _ attempts diagnostics =>
+        expectEqual (3, 1) (attempts, diagnostics))
+    (publishSyntax defaultRecoveryLimits """before = 1
+broken = )
+after = 2
+""")
+
+locView : Loc -> (String, Int, Int, Int, Int)
+locView (Loc file line col endLine endCol) = (file, line, col, endLine, endCol)
+
+positionView : Positions -> String
+positionView (Positions ds variants last chains) = debug (
+  map
+    ((DeclPos s e loc children) =>
+      (s, e, map locView loc, map (map locView) children))
+    ds,
+  variants,
+  last,
+  chains,
+)
+
+parsedView : ParsedSource -> String
+parsedView parsed =
+  let metadata = parsedMetadata parsed
+  stringConcat [
+    renderSExp (declsSExp (parsedDecls parsed)),
+    positionView (parsedPositions parsed),
+    debug (metadataTrailingCommas metadata),
+    debug (metadataUnitStarts metadata),
+  ]
+
+corpusCase : String -> <Env "MEDAKA_ROOT", FileRead> (String, Expectation)
+corpusCase path =
+  let src = match readFile (underRoot path)
+    Ok value => value
+    Err e => panic e
+  let actual = publishSyntax defaultRecoveryLimits src
+  let expected = parseSource src
+  let completion =
+    map
+      (publishSyntaxWithCheckedDecls defaultRecoveryLimits src)
+      (parseLocatedResult src)
+  (
+    path,
+    match (actual, expected)
+      (Ok syntax, Ok strict) => match (
+        syntaxStrict syntax,
+        syntaxStructural syntax,
+      )
+        (Ok published, Some structural) =>
+          let (tokens, offsets) = tokenizeWithOffsetPairs src
+          match parseSourceSyntaxPairs src tokens offsets
+            Some syntaxOnly => expectAll [
+              expectEqual (parsedView strict) (parsedView published),
+              expectEqual (parsedView strict) (parsedView structural),
+              expectEqual (parsedView strict) (parsedView syntaxOnly),
+              match completion
+                Ok (Ok completed) => match syntaxStrict completed
+                  Ok result => expectAll [
+                    expectEqual (parsedView strict) (parsedView result),
+                    expectEqual src (renderOriginal completed),
+                  ]
+                  Err _ => expectTrue False
+                _ => expectTrue False,
+            ]
+            None => expectTrue False
+        _ => expectTrue False
+      _ => expectTrue False,
+  )
+
+test "published checked parse retains AST positions and metadata" =
+  expectEach
+    (map corpusCase [
+      "stdlib/core.mdk", "compiler/tools/fmt.mdk",
+      "compiler/frontend/parser.mdk"
+    ])
+
+test "structural syntax keeps checked rejection separate" = expectEach [
+  (
+    "removed record",
+    expectOkThen
+      (syntax => expectAll [
+        match syntaxStrict syntax
+          Err (ParseDiagnostic (GenericParse message) _ _) =>
+            expectEqual
+              "`record` is not a keyword; declare a record as `data X = { field : T }`"
+              message
+          _ => expectTrue False,
+        expectTrue (isSome (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits """record P : Int
+main = 1
+"""),
+  ),
+  (
+    "malformed",
+    expectOkThen
+      (syntax => expectAll [
+        match syntaxStrict syntax
+          Err (ParseDiagnostic (GenericParse message) _ _) =>
+            expectEqual "expected an expression" message
+          _ => expectTrue False,
+        expectTrue (isNone (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits "main = )"),
+  ),
+  (
+    "unterminated",
+    expectOkThen
+      (syntax => expectAll [
+        match syntaxStrict syntax
+          Err (ParseDiagnostic UnterminatedString _ _) => expectTrue True
+          _ => expectTrue False,
+        expectTrue (isNone (syntaxStructural syntax)),
+      ])
+      (publishSyntax defaultRecoveryLimits "main = \"unfinished"),
+  ),
+]
+
+test "checked and syntax modes agree on complete source details" =
+  expectEach
+    (map
+      (src => (
+        src,
+        match (publishSyntax defaultRecoveryLimits src, parseSource src)
+          (Ok syntax, Ok checked) =>
+            let (tokens, offsets) = tokenizeWithOffsetPairs src
+            let completed =
+              map
+                (publishSyntaxWithCheckedDecls defaultRecoveryLimits src)
+                (parseLocatedResult src)
+            match (
+              syntaxStructural syntax,
+              parseSourceSyntaxPairs src tokens offsets,
+            )
+              (Some shared, Some located) => expectAll [
+                expectEqual (parsedView checked) (parsedView shared),
+                expectEqual (parsedView checked) (parsedView located),
+                match completed
+                  Ok (Ok result) => match syntaxStrict result
+                    Ok parsed =>
+                      expectEqual (parsedView checked) (parsedView parsed)
+                    Err _ => expectTrue False
+                  _ => expectTrue False,
+              ]
+              _ => expectTrue False
+          _ => expectTrue False,
+      ))
+      [
+        "-- 😀\r\nmain = (1, 2,)\r\n",
+        """f () = 1
+main = f ()
+""",
+        """{- comment -}
+main = [1, 2,]
+""",
+        """data E = L Int | R Int
+f e = match e
+  L x | R x => x
+main = f (L 1)
+""",
+      ])

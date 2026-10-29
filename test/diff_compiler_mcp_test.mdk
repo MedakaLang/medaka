@@ -987,3 +987,37 @@ budgetSymbolsWire dir =
 
 test "mcp symbols budget endpoint uses UTF-16" =
   withScratchDir budgetSymbolsWire
+
+test "mcp repeats symbols and local definition in one session" = withScratchDir
+  (dir =>
+    let path = dir ++ "/repeat.mdk"
+    let request = dir ++ "/repeat.jsonl"
+    let definition =
+      jObject [("file", JString path), ("line", JInt 1), ("col", JInt 1)]
+    let calls = [
+      coordinateCall 1 "medaka_symbols" (coordinateFile path),
+      coordinateCall 2 "medaka_definition" definition,
+      coordinateCall 3 "medaka_symbols" (coordinateFile path),
+      coordinateCall 4 "medaka_definition" definition,
+    ]
+    match (
+      writeOk path "-- 😀\r\nmain = 1\r\n",
+      writeOk request (join "\n" calls ++ "\n"),
+    )
+      (Ok _, Ok _) => match mcpRun 30 request "" []
+        Err e => fail e
+        Ok (code, out, _) => match map coordinateResponse (split "\n" out)
+          (Some symbols) :: (Some def) :: (Some symbolsAgain) :: (Some defAgain) :: _ => expectEach
+            [
+              ("exit", expectEqual 0 code),
+              ("symbols", expectEqual symbols symbolsAgain),
+              ("definition", expectEqual def defAgain),
+              (
+                "definition range",
+                expectTextContainsAll
+                  ["\"line\":1", "\"character\":0", "\"character\":4"]
+                  def,
+              ),
+            ]
+          _ => fail "expected four MCP responses"
+      _ => fail "repeat fixture write failed")

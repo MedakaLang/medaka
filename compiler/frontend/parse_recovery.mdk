@@ -8,7 +8,7 @@ import frontend.parse_engine.{
   contextLineStarts, peekTok, mark, rewind, failProblem, locOfSpan
 }
 import frontend.parse_result.{
-  parsedDecls, parsedPositions, parseErrorDiagnostic
+  ParsedSource, parsedDecls, parsedPositions, parseErrorDiagnostic
 }
 import frontend.parse_positions.{Positions(..), positionsFromSpans}
 import frontend.parse_diagnostic.{
@@ -25,7 +25,7 @@ import frontend.recovery_result.{
   invalidRegions, recoveredCompleteness, recoveredStats
 }
 
-public export data RecoveryLimits = RecoveryLimits Int Int Int Int
+public export data RecoveryLimits = RecoveryLimits Int Int Int Int deriving (Eq)
 
 export
 defaultRecoveryLimits : RecoveryLimits
@@ -369,7 +369,36 @@ recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src index =
   let count = length ts
   if count > maxTokens then
     budgetResult src count
-  else match P.parseSourcePairsWithIndex src ts os index
+  else
+    recoverPrepared
+      limits
+      src
+      index
+      ts
+      os
+      (P.parseSourcePairsWithIndex src ts os index)
+
+export
+recoverSourcePairsWithIndex : RecoveryLimits ->
+  SourceIndex ->
+  String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseDiagnostic ParsedSource ->
+  RecoveredSource
+recoverSourcePairsWithIndex limits index src ts os strict =
+  recoverPrepared limits src (() => index) ts os strict
+
+recoverPrepared : RecoveryLimits ->
+  String ->
+  (Unit -> SourceIndex) ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseDiagnostic ParsedSource ->
+  RecoveredSource
+recoverPrepared limits src index ts os strict =
+  let count = length ts
+  match strict
     Ok result =>
       makeRecoveredSource
         (parsedDecls result)

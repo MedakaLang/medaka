@@ -2,8 +2,11 @@ import string.{repeat}
 import tools.source_snapshot.{SourceRevision(..)}
 import tools.snapshot_syntax.{
   parseSnapshotSyntax, snapshotSyntaxMatches, snapshotSyntaxSnapshot,
-  snapshotSyntaxResult
+  snapshotSyntaxResult, snapshotSyntaxSource, prepareSnapshotSyntax,
+  ParseOptions(..)
 }
+import frontend.parse_recovery.{RecoveryLimits(..)}
+import frontend.syntax_source.{renderOriginal}
 import tools.syntax_queries.{symbolsFromRecovered}
 import frontend.recovery_result.{
   recoveredCompleteness, RecoveryCompleteness(..), RecoveryStop(..)
@@ -16,6 +19,7 @@ test "over-budget revisions retain metadata and provenance without an index" =
   let prepared = parseSnapshotSyntax original
   expectAll [
     expectTrue (isNone (snapshotSyntaxSnapshot prepared)),
+    expectTrue (isNone (snapshotSyntaxSource prepared)),
     expectEqual
       "partial/exhaustedBudget"
       (match recoveredCompleteness (snapshotSyntaxResult prepared)
@@ -49,4 +53,25 @@ test "over-budget revisions retain metadata and provenance without an index" =
       (snapshotSyntaxMatches
         (SourceRevision "file:///a" (Some 8) 1 text)
         prepared),
+  ]
+
+test "snapshot publication shares admitted source and rejects token budgets" =
+  let revision = SourceRevision "file:///a" None 2 "main = 1\n"
+  let admitted = parseSnapshotSyntax revision
+  let rejected =
+    prepareSnapshotSyntax (ParseOptions (RecoveryLimits 100 1 10 10)) revision
+  let negative =
+    prepareSnapshotSyntax
+      (ParseOptions (RecoveryLimits 100 100 (-1) 10))
+      revision
+  expectAll [
+    expectEqual
+      (Some "main = 1\n")
+      (map renderOriginal (snapshotSyntaxSource admitted)),
+    expectTrue (isSome (snapshotSyntaxSnapshot admitted)),
+    expectTrue (isNone (snapshotSyntaxSnapshot rejected)),
+    expectTrue (isNone (snapshotSyntaxSource rejected)),
+    expectTrue (isNone (snapshotSyntaxSnapshot negative)),
+    expectTrue (isNone (snapshotSyntaxSource negative)),
+    expectTrue (snapshotSyntaxMatches revision rejected),
   ]

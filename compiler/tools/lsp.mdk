@@ -3,12 +3,26 @@ import tools.syntax_queries.{
   strictDocumentSymbols, symbolsFromRecovered, wholeLineRange, innerDecl,
   jPosition, jRange
 }
-import tools.snapshot_syntax.{parseSnapshotSyntax}
+import tools.snapshot_syntax.{
+  PreparedSyntax, parseSnapshotSyntax, prepareSnapshotSyntaxWithCheckedDecls,
+  defaultParseOptions, snapshotSyntaxSource
+}
+import tools.syntax_cache.{
+  SyntaxCache, emptySyntaxCache, defaultSyntaxCacheLimits, lookupSyntax,
+  insertSyntax, invalidateSyntax, syntaxCacheEntryLimit
+}
+import frontend.syntax_source.{
+  syntaxStructural, syntaxIndex, syntaxTokens, syntaxTokenSpans, SourceSpan(..)
+}
+import frontend.parse_result.{parsedDecls, parsedPositions}
+
 import tools.lsp_diagnostics.{
   diagnosticJsonOr, diagnosticWithRange, parseDiagnosticJson,
   parseDiagnosticActions, snapshotJson
 }
-import tools.source_snapshot.{SourceSnapshot, SourceRevision(..), makeSnapshot}
+import tools.source_snapshot.{
+  SourceSnapshot, SourceRevision(..), SnapshotId(..), makeSnapshot
+}
 import frontend.parse_diagnostic.{diagnosticCode, diagnosticLoc}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- lint-disable-file rule-duplicate-body
@@ -62,9 +76,14 @@ import driver.diagnostics.{
   GraphId,
   graphIdSame,
   stdlibExportsReader,
+  clearProjectPassEntries,
 }
-import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
-import support.ordmap.{OrdMap, omEmpty, omLookup}
+import driver.loader.{
+  findProjectRootOrSelf, parseCachedLocated, retainParsed,
+  clearLoadedSourceRecords
+}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omFromNames, omHasKey}
+import support.stage_count.{stageBump}
 import support.path.{dirOf}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToSourcePosition,
@@ -106,7 +125,9 @@ import types.publish.{
 import types.typecheck.{driveInputsFor, checkOneReportK, entrySplit}
 import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
-import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
+import tools.refindex.{
+  RefIndex, buildRefIndexProjectWithParsed, binderAt, usesOf, defsOf
+}
 import list.{sortBy, zipWith}
 import frontend.ast.{
   fieldName,
@@ -134,7 +155,7 @@ import frontend.ast.{
 -- hover, completion and inlay to answer from (`Kept`).
 
 public export data Docs =
-  Docs (List (String, String)) (List String) (List (String, Kept)) (List (String, Option Int)) (List (String, Int)) Int
+  Docs (List (String, String)) (List String) (List (String, Kept)) (List (String, Option Int)) (List (String, Int)) Int SyntaxCache
 
 -- What the last publish of a buffer kept, with the buffer source it analyzed.
 -- A single-document publish keeps the env its drive gave.  A project publish
@@ -150,11 +171,11 @@ export data Kept =
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
 emptyDocs : Docs
-emptyDocs = Docs [] [] [] [] [] 0
+emptyDocs = Docs [] [] [] [] [] 0 (emptySyntaxCache defaultSyntaxCacheLimits)
 
 export
 docsPut : String -> String -> Docs -> Docs
-docsPut uri src (Docs xs flagged kept versions generations next) =
+docsPut uri src (Docs xs flagged kept versions generations next cache) =
   Docs
     ((uri, src) :: docsRemove uri xs)
     flagged
@@ -162,18 +183,19 @@ docsPut uri src (Docs xs flagged kept versions generations next) =
     versions
     ((uri, next) :: docsRemove uri generations)
     (next + 1)
+    (invalidateSyntax uri cache)
 
 -- Replace what `uri`'s publish kept; `None` drops the previous entry.
 docsKeep : String -> Option Kept -> Docs -> Docs
-docsKeep uri k (Docs xs flagged kept versions generations next) =
+docsKeep uri k (Docs xs flagged kept versions generations next cache) =
   let rest = docsRemove uri kept
   let kept2 = match k
     Some v => (uri, v) :: rest
     None => rest
-  Docs xs flagged kept2 versions generations next
+  Docs xs flagged kept2 versions generations next cache
 
 docsKept : String -> Docs -> Option Kept
-docsKept uri (Docs _ _ kept _ _ _) = docsLookup uri kept
+docsKept uri (Docs _ _ kept _ _ _ _) = docsLookup uri kept
 
 docsRemove : String -> List (String, a) -> List (String, a)
 docsRemove _ [] = []
@@ -182,11 +204,11 @@ docsRemove uri ((k, v) :: rest)
   | otherwise = (k, v) :: docsRemove uri rest
 
 docsVersion : String -> Docs -> Option Int
-docsVersion uri (Docs _ _ _ versions _ _) =
+docsVersion uri (Docs _ _ _ versions _ _ _) =
   optionOr None (docsLookup uri versions)
 
 docsSetVersion : String -> Option Int -> Docs -> Docs
-docsSetVersion uri version (Docs xs flagged kept versions generations next) =
+docsSetVersion uri version (Docs xs flagged kept versions generations next cache) =
   Docs
     xs
     flagged
@@ -194,15 +216,65 @@ docsSetVersion uri version (Docs xs flagged kept versions generations next) =
     ((uri, version) :: docsRemove uri versions)
     generations
     next
+    cache
 
 docsSnapshot : String -> Docs -> Option SourceSnapshot
 docsSnapshot uri docs = match docs
-  Docs _ _ _ _ generations _ => match docsLookup uri generations
+  Docs _ _ _ _ generations _ _ => match docsLookup uri generations
     Some generation =>
       map
         (makeSnapshot uri (docsVersion uri docs) generation)
         (docsGet uri docs)
     None => None
+
+docsRevision : String -> Docs -> Option SourceRevision
+docsRevision uri (docs@(Docs _ _ _ _ generations _ _)) = do
+  generation <- docsLookup uri generations
+  text <- docsGet uri docs
+  Some (SourceRevision uri (docsVersion uri docs) generation text)
+
+docsResident : String -> Docs -> Option PreparedSyntax
+docsResident uri (docs@(Docs _ _ _ _ _ _ cache)) = do
+  (SourceRevision _ version generation _) <- docsRevision uri docs
+  lookupSyntax (SnapshotId uri generation) version defaultParseOptions cache
+
+docsPrepared : String -> Docs -> Option PreparedSyntax
+docsPrepared uri docs = docsResident uri docs
+
+docsPrepare : String -> Docs -> Docs
+docsPrepare uri docs = fst (docsPrepareResult uri docs)
+
+docsPrepareResult : String -> Docs -> (Docs, Option PreparedSyntax)
+docsPrepareResult uri (docs@(Docs xs flagged kept versions generations next cache)) =
+  match (docsResident uri docs, docsRevision uri docs)
+    (Some prepared, _) => (docs, Some prepared)
+    (_, None) => (docs, None)
+    (None, Some (revision@(SourceRevision _ _ _ text))) =>
+      let prepared = match omLookup text !projectParseCache
+        Some decls =>
+          prepareSnapshotSyntaxWithCheckedDecls
+            defaultParseOptions
+            revision
+            decls
+        None => parseSnapshotSyntax revision
+      (
+        Docs
+          xs
+          flagged
+          kept
+          versions
+          generations
+          next
+          (insertSyntax defaultParseOptions prepared cache),
+        Some prepared,
+      )
+
+export
+structuralParsed : PreparedSyntax -> Option (List Decl, Positions)
+structuralParsed prepared = do
+  syntax <- snapshotSyntaxSource prepared
+  parsed <- syntaxStructural syntax
+  Some (parsedDecls parsed, parsedPositions parsed)
 
 -- ── JSON helpers ────────────────────────────────────────────────────────────
 
@@ -222,7 +294,7 @@ diagsToJson src diags =
 -- Look up an open document's source by uri.  Request handlers (formatting/
 -- documentSymbol/definition/highlight) read the buffer the client last sent.
 docsGet : String -> Docs -> Option String
-docsGet uri (Docs xs _ _ _ _ _) = docsLookup uri xs
+docsGet uri (Docs xs _ _ _ _ _ _) = docsLookup uri xs
 
 docsLookup : String -> List (String, a) -> Option a
 docsLookup _ [] = None
@@ -428,16 +500,18 @@ locAtIndex 0 (l :: _) = l
 locAtIndex i (_ :: ls) = locAtIndex (i - 1) ls
 
 -- The DeclPos of the first decl defining `name`, or None.
-definitionRange : String -> String -> Option Json
-definitionRange src name = match parseWithPositionsOpt src
-  None => None
-  Some (decls, positions) =>
-    defZip
-      (indexSource src)
-      (stringLength src)
-      decls
-      (positionsDecls positions)
-      name
+definitionRangeParsed : String ->
+  String ->
+  Option (List Decl, Positions) ->
+  Option Json
+definitionRangeParsed _ _ None = None
+definitionRangeParsed src name (Some (decls, positions)) =
+  defZip
+    (indexSource src)
+    (stringLength src)
+    decls
+    (positionsDecls positions)
+    name
 
 -- #331: the go-to-definition RANGE for `name` in the decl (`d`, `p`) that
 -- defines it — own-name span first, else the matching child's span
@@ -1451,6 +1525,20 @@ semanticTokensData src =
     (toks, pairs) =>
       map (encodeSemToks 0 0) (semToksOf arr toks pairs (SemCtx 0 True MExpr))
 
+semanticTokensPrepared : PreparedSyntax -> Result String (List Int)
+semanticTokensPrepared prepared = match snapshotSyntaxSource prepared
+  None => Err "syntax unavailable"
+  Some syntax =>
+    let pairs =
+      map ((SourceSpan a b) => (a, b)) (toList (syntaxTokenSpans syntax))
+    map
+      (encodeSemToks 0 0)
+      (semToksOf
+        (syntaxIndex syntax)
+        (toList (syntaxTokens syntax))
+        pairs
+        (SemCtx 0 True MExpr))
+
 -- ── request dispatch ────────────────────────────────────────────────────────
 --
 -- The driver loops: read headers → read body → parse JSON → dispatch.  The
@@ -1556,6 +1644,16 @@ projectCache = Ref []
 -- decls), bounded inside loadProgramFilesLocatedCached.
 projectParseCache : Ref (OrdMap (List Decl))
 projectParseCache = Ref omEmpty
+
+retainOpenProjectSources : Docs -> Unit
+retainOpenProjectSources (Docs xs _ _ _ _ _ _) =
+  let openPaths = omFromNames (map ((uri, _) => pathOfUri uri) xs) omEmpty
+  projectCache := filter ((path, _) => omHasKey path openPaths) !projectCache
+
+clearSessionSourceOwners : Unit -> Unit
+clearSessionSourceOwners () =
+  clearLoadedSourceRecords ()
+  clearProjectPassEntries ()
 
 -- file:// URI ↔ filesystem path.  LSP clients send `file://<abs-path>`; the
 -- loader works in plain paths.  pathOfUri strips the scheme; uriOfPath re-adds
@@ -1739,18 +1837,18 @@ clearFlaggedManifest file docs = match manifestPathOf file
       docs
 
 docsFlagged : String -> Docs -> Bool
-docsFlagged path (Docs _ flagged _ _ _ _) = contains path flagged
+docsFlagged path (Docs _ flagged _ _ _ _ _) = contains path flagged
 
 docsFlag : String -> Docs -> Docs
-docsFlag path (Docs xs flagged kept versions generations next) =
+docsFlag path (Docs xs flagged kept versions generations next cache) =
   if contains path flagged then
-    Docs xs flagged kept versions generations next
+    Docs xs flagged kept versions generations next cache
   else
-    Docs xs (path :: flagged) kept versions generations next
+    Docs xs (path :: flagged) kept versions generations next cache
 
 docsUnflag : String -> Docs -> Docs
-docsUnflag path (Docs xs flagged kept versions generations next) =
-  Docs xs (filter (/= path) flagged) kept versions generations next
+docsUnflag path (Docs xs flagged kept versions generations next cache) =
+  Docs xs (filter (/= path) flagged) kept versions generations next cache
 
 publishForSelected : String ->
   String ->
@@ -1877,16 +1975,11 @@ handleDocumentSymbol : Json -> Json -> Docs -> <IO> Unit
 handleDocumentSymbol idJson params docs =
   let result = match requestUri params
     None => JNull
-    Some uri => match (docsGet uri docs, docs)
-      (Some text, Docs _ _ _ _ generations _) =>
-        match docsLookup uri generations
-          None => JNull
-          Some generation =>
-            let revision =
-              SourceRevision uri (docsVersion uri docs) generation text
-            match symbolsFromRecovered revision (parseSnapshotSyntax revision)
-              Err _ => JNull
-              Ok symbols => jArray symbols
+    Some uri => match (docsRevision uri docs, docsPrepared uri docs)
+      (Some revision, Some prepared) =>
+        match symbolsFromRecovered revision prepared
+          Err _ => JNull
+          Ok symbols => jArray symbols
       _ => JNull
   writeMessage (responseMsg idJson result)
 
@@ -1896,39 +1989,88 @@ cursorIdentifier src params = do
   name <- identifierAt src line col
   Some (line, col, name)
 
-projectRefIndex : String -> String -> String -> Docs -> <IO> RefIndex
-projectRefIndex runtimeSrc coreSrc rootFile docs =
+projectRefIndexPrepared : String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> (RefIndex, Docs, Option PreparedSyntax)
+projectRefIndexPrepared runtimeSrc coreSrc rootFile docs =
   let projectDir = findProjectRootOrSelf (dirOf rootFile)
-  let read = path => docsGet (uriOfPath path) docs
-  buildRefIndexProject read projectDir runtimeSrc coreSrc
+  let rootUri = uriOfPath rootFile
+  let (initial, rootPrepared) = docsPrepareResult rootUri docs
+  let current = Ref initial
+  let (Docs _ _ _ _ _ _ cache) = docs
+  let budget =
+    Ref
+      (max
+        0
+        (max 1 (syntaxCacheEntryLimit cache)
+          - (match docsResident rootUri docs
+            None => 1
+            Some _ => 0)))
+  let root = Ref rootPrepared
+  let read = path => docsGet (uriOfPath path) !current
+  let parse =
+    path src =>
+      let uri = uriOfPath path
+      match docsGet uri !current
+        Some text if text == src =>
+          let before =
+            if path == rootFile then !root else docsResident uri !current
+          let prepared = match before
+            None if !budget > 0 =>
+              budget := !budget - 1
+              let (updated, fresh) = docsPrepareResult uri !current
+              current := updated
+              fresh
+            _ => before
+          match prepared
+            Some value => match snapshotSyntaxSource value
+              Some _ =>
+                let _ = stageBump "lsp.project.parsed_hit"
+                structuralParsed value
+              None => parseWithPositionsOpt src
+            None => parseWithPositionsOpt src
+        _ => parseWithPositionsOpt src
+  let idx =
+    buildRefIndexProjectWithParsed read parse projectDir runtimeSrc coreSrc
+  (idx, !current, !root)
 
 -- textDocument/definition → Location[] (singleton) or null.
-handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleDefinition : String -> String -> Json -> Json -> Docs -> <IO> Docs
 handleDefinition runtimeSrc coreSrc idJson params docs =
-  let result = match requestUri params
-    None => JNull
+  let (result, updated) = match requestUri params
+    None => (JNull, docs)
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => projectDefinition runtimeSrc coreSrc uri src params docs
-  writeMessage (responseMsg idJson result)
+      None => (JNull, docs)
+      Some src =>
+        projectDefinitionPrepared runtimeSrc coreSrc uri src params docs
+  let _ = writeMessage (responseMsg idJson result)
+  updated
 
-projectDefinition : String ->
+projectDefinitionPrepared : String ->
   String ->
   String ->
   String ->
   Json ->
   Docs ->
-  <IO> Json
-projectDefinition runtimeSrc coreSrc uri src params docs =
+  <IO> (Json, Docs)
+projectDefinitionPrepared runtimeSrc coreSrc uri src params docs =
   match cursorIdentifier src params
-    None => JNull
+    None => (JNull, docs)
     Some (line, col, _) =>
       let rootFile = pathOfUri uri
-      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
-      match binderAt idx rootFile (line + 1) col
-        None => definitionResult uri src params
+      let (idx, updated, root) =
+        projectRefIndexPrepared runtimeSrc coreSrc rootFile docs
+      let result = match binderAt idx rootFile (line + 1) col
+        None => definitionResultParsed uri src params (match root
+          None => parseWithPositionsOpt src
+          Some prepared => match snapshotSyntaxSource prepared
+            None => parseWithPositionsOpt src
+            Some _ => structuralParsed prepared)
         Some key =>
-          jArray (locationsJson docs (sortBy compareUseLoc (defsOf idx key)))
+          jArray (locationsJson updated (sortBy compareUseLoc (defsOf idx key)))
+      (result, updated)
 
 -- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
@@ -1939,8 +2081,17 @@ projectDefinition runtimeSrc coreSrc uri src params docs =
 -- relative in the result (path-stable for a golden).
 export
 definitionResult : String -> String -> Json -> Json
-definitionResult uri src params = match cursorIdentifier src params
-  Some (_, _, name) => match definitionRange src name
+definitionResult uri src params =
+  definitionResultParsed uri src params (parseWithPositionsOpt src)
+
+export
+definitionResultParsed : String ->
+  String ->
+  Json ->
+  Option (List Decl, Positions) ->
+  Json
+definitionResultParsed uri src params parsed = match cursorIdentifier src params
+  Some (_, _, name) => match definitionRangeParsed src name parsed
     None => JNull
     Some range => jArray [jObject [("uri", JString uri), ("range", range)]]
   None => JNull
@@ -1954,8 +2105,18 @@ definitionResultsWithIndex : SourceIndex ->
   List Int ->
   List Json
 definitionResultsWithIndex index uri src line cols =
+  definitionResultsParsed index uri src line cols (parseWithPositionsOpt src)
+
+export
+definitionResultsParsed : SourceIndex ->
+  String ->
+  String ->
+  Int ->
+  List Int ->
+  Option (List Decl, Positions) ->
+  List Json
+definitionResultsParsed index uri src line cols parsed =
   let chars = stringToChars src
-  let parsed = parseWithPositionsOpt src
   map
     (col =>
       definitionIndexed uri (arrayLength chars) index chars parsed line col)
@@ -1994,14 +2155,16 @@ definitionIndexed uri sourceLength index chars parsed line col =
 -- `identifierAt` gates the (potentially whole-project) index build the same
 -- way `hoverFor`/`typeAtPoint` gate their env build: resolve the cheap,
 -- pure check first, only pay for the project load on an actual identifier.
-handleReferences : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleReferences : String -> String -> Json -> Json -> Docs -> <IO> Docs
 handleReferences runtimeSrc coreSrc idJson params docs =
-  let result = match requestUri params
-    None => JNull
+  let (result, updated) = match requestUri params
+    None => (JNull, docs)
     Some uri => match docsGet uri docs
-      None => JNull
-      Some src => referencesResult runtimeSrc coreSrc uri src params docs
-  writeMessage (responseMsg idJson result)
+      None => (JNull, docs)
+      Some src =>
+        referencesResultPrepared runtimeSrc coreSrc uri src params docs
+  let _ = writeMessage (responseMsg idJson result)
+  updated
 
 -- Exported for `medaka_references` (#254) — TRUE WHOLE-PROJECT scope, not
 -- one entry's import closure (#254 Stage 1.1: the entry-rooted
@@ -2033,15 +2196,30 @@ referencesResult : String ->
   Docs ->
   <IO> Json
 referencesResult runtimeSrc coreSrc uri src params docs =
+  let (result, _) =
+    referencesResultPrepared runtimeSrc coreSrc uri src params docs
+  result
+
+referencesResultPrepared : String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Docs ->
+  <IO> (Json, Docs)
+referencesResultPrepared runtimeSrc coreSrc uri src params docs =
   match cursorIdentifier src params
-    None => jArray []
+    None => (jArray [], docs)
     Some (line, col, _) =>
       let rootFile = pathOfUri uri
-      let idx = projectRefIndex runtimeSrc coreSrc rootFile docs
-      match binderAt idx rootFile (line + 1) col
+      let (idx, updated, _) =
+        projectRefIndexPrepared runtimeSrc coreSrc rootFile docs
+      let result = match binderAt idx rootFile (line + 1) col
         None => jArray []
         Some key =>
-          jArray (referenceLocations docs idx key (includeDeclarationOf params))
+          jArray
+            (referenceLocations updated idx key (includeDeclarationOf params))
+      (result, updated)
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
 -- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
@@ -2158,7 +2336,11 @@ handleSemanticTokens idJson params docs =
       Some src =>
         map
           (tokens => jObject [("data", jArray (map JInt tokens))])
-          (semanticTokensData src)
+          (match docsPrepared uri docs
+            Some prepared => match snapshotSyntaxSource prepared
+              Some _ => semanticTokensPrepared prepared
+              None => semanticTokensData src
+            None => semanticTokensData src)
   match result
     Ok value => writeMessage (responseMsg idJson value)
     Err message =>
@@ -2225,7 +2407,7 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
     else if meth == "textDocument/didClose" then
       let uri = fieldStr "uri" (fieldOr "textDocument" (fieldOr "params" msg))
       let docs2 = match (uri, docs)
-        (Some u, Docs xs flagged kept versions generations next) =>
+        (Some u, Docs xs flagged kept versions generations next cache) =>
           Docs
             (docsRemove u xs)
             flagged
@@ -2233,7 +2415,13 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
             (docsRemove u versions)
             (docsRemove u generations)
             next
+            (invalidateSyntax u cache)
         _ => docs
+      let _ = match docs2
+        Docs xs _ _ _ _ _ _ =>
+          let _ = retainParsed projectParseCache (map snd xs)
+          let _ = retainOpenProjectSources docs2
+          if isEmpty xs then clearSessionSourceOwners ()
       Step docs2 True
     else if meth == "textDocument/codeAction" then
       let _ = handleCodeAction (requestId msg) (fieldOr "params" msg) docs
@@ -2242,29 +2430,32 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
       let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/documentSymbol" then
-      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs
-      Step docs True
+      let docs2 = match requestUri (fieldOr "params" msg)
+        Some uri => docsPrepare uri docs
+        None => docs
+      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs2
+      Step docs2 True
     else if meth == "textDocument/definition" then
-      let _ =
+      let docs2 =
         handleDefinition
           runtimeSrc
           coreSrc
           (requestId msg)
           (fieldOr "params" msg)
           docs
-      Step docs True
+      Step docs2 True
     else if meth == "textDocument/documentHighlight" then
       let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/references" then
-      let _ =
+      let docs2 =
         handleReferences
           runtimeSrc
           coreSrc
           (requestId msg)
           (fieldOr "params" msg)
           docs
-      Step docs True
+      Step docs2 True
     else if meth == "textDocument/hover" then
       let _ =
         handleHover
@@ -2293,8 +2484,11 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
           docs
       Step docs True
     else if meth == "textDocument/semanticTokens/full" then
-      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs
-      Step docs True
+      let docs2 = match requestUri (fieldOr "params" msg)
+        Some uri => docsPrepare uri docs
+        None => docs
+      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs2
+      Step docs2 True
     else if meth == "shutdown" then
       let _ = writeMessage (responseMsg (requestId msg) JNull)
       Step docs True
@@ -2345,7 +2539,12 @@ export
 runServer : String -> String -> String -> <IO> Unit
 runServer runtimeSrc coreSrc serverVersion =
   let _ = logLine "=== medaka-lsp session start ==="
-  serve runtimeSrc coreSrc serverVersion emptyDocs
+  projectCache := []
+  projectParseCache := omEmpty
+  let _ = serve runtimeSrc coreSrc serverVersion emptyDocs
+  projectCache := []
+  projectParseCache := omEmpty
+  clearSessionSourceOwners ()
 
 export
 unit : Unit

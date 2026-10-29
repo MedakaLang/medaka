@@ -1,0 +1,187 @@
+import support.stage_count.{stageBump}
+import frontend.lex_token.{Token, RawTok(..)}
+import frontend.lex_scan.{scanRawChars}
+import frontend.lex_layout.{applyLayoutRanges}
+import frontend.parser.{parseSourcePairsWithIndex, parseSourceSyntaxPairs}
+import frontend.parse_result.{
+  ParsedSource, makeParsedSource, parsedPositions, parsedMetadata
+}
+import frontend.parse_diagnostic.{ParseDiagnostic}
+import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
+import frontend.recovery_result.{RecoveredSource}
+import frontend.ast.{Loc(..), Decl}
+import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
+
+public export data SourceSpan = SourceSpan Int Int
+public export data TriviaKind = LineComment | BlockComment
+public export data Trivia = Trivia TriviaKind SourceSpan
+public export data PieceKind = TokenCoverage | CommentCoverage | SourceGap
+public export data SourcePiece = SourcePiece PieceKind SourceSpan
+-- Source and token limits identify distinct admission failures.
+-- lint-disable-next-line rule-clone-type
+public export data SyntaxAdmission =
+  | SourceLimit Int
+  | TokenLimit Int
+  deriving (Debug, Display)
+
+export data SyntaxSource =
+  SyntaxSource String SourceIndex (Array Token) (Array SourceSpan) (Array Trivia) (Array SourcePiece) (Result ParseDiagnostic ParsedSource) (Option ParsedSource) RecoveredSource
+
+rawRange : RawTok -> (Int, Int, PieceKind)
+rawRange (RTok _ s e) = (s, e, TokenCoverage)
+rawRange (RTripleInterpOpen _ s e) = (s, e, TokenCoverage)
+rawRange (RComment s e) = (s, e, CommentCoverage)
+rawRange (RNewline _ s) = (s, s, SourceGap)
+rawRange (RClauseNl _ s) = (s, s, SourceGap)
+rawRange (RClauseOpen _ s _) = (s, s, SourceGap)
+
+pieces : Int -> Int -> List RawTok -> List SourcePiece
+pieces size pos [] =
+  if pos < size then [SourcePiece SourceGap (SourceSpan pos size)] else []
+pieces size pos (r :: rest) =
+  let (s, end, kind) = rawRange r
+  let e = min size end
+  if e <= pos then
+    pieces size pos rest
+  else if s > pos then
+    SourcePiece SourceGap (SourceSpan pos (min size s))
+      :: pieces size s (r :: rest)
+  else
+    SourcePiece kind (SourceSpan pos e) :: pieces size e rest
+
+comments : String -> List RawTok -> List Trivia
+comments _ [] = []
+comments src ((RComment s e) :: rest) =
+  let kind =
+    if stringSlice s (s + 2) src == "--" then LineComment else BlockComment
+  Trivia kind (SourceSpan s e) :: comments src rest
+comments src (_ :: rest) = comments src rest
+
+export
+publishSyntax : RecoveryLimits -> String -> Result SyntaxAdmission SyntaxSource
+publishSyntax = publishSyntaxPrepared None
+
+export
+publishSyntaxWithCheckedDecls : RecoveryLimits ->
+  String ->
+  List Decl ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxWithCheckedDecls limits src decls =
+  publishSyntaxPrepared (Some decls) limits src
+
+publishSyntaxPrepared : Option (List Decl) ->
+  RecoveryLimits ->
+  String ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
+  let _ = stageBump "syntax.publish"
+  if min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0
+    || stringLength src > maxSource then
+    Err (SourceLimit (stringLength src))
+  else
+    let _ = stageBump "syntax.scan_raw"
+    let raw = scanRawChars (stringToChars src)
+    let ranges = applyLayoutRanges raw
+    let tokens = map ((t, _, _) => t) ranges
+    let offsets = map ((_, s, e) => (s, e)) ranges
+    let count = length tokens
+    if count > maxTokens then
+      Err (TokenLimit count)
+    else
+      let index = indexSource src
+      let positioned = match known
+        Some _ =>
+          let _ = stageBump "syntax.parse_only"
+          parseSourceSyntaxPairs src tokens offsets
+        None => None
+      let strict = match (known, positioned)
+        (Some decls, Some parsed) =>
+          Ok
+            (makeParsedSource
+              decls
+              (parsedPositions parsed)
+              (parsedMetadata parsed))
+        _ =>
+          let _ = stageBump "syntax.parse_checked"
+          parseSourcePairsWithIndex src tokens offsets (() => index)
+      let structural = match strict
+        Ok parsed => Some parsed
+        Err _ => match known
+          Some _ => positioned
+          None =>
+            let _ = stageBump "syntax.parse_only"
+            parseSourceSyntaxPairs src tokens offsets
+      let recovered =
+        recoverSourcePairsWithIndex limits index src tokens offsets strict
+      Ok
+        (SyntaxSource
+          src
+          index
+          (arrayFromList tokens)
+          (arrayFromList (map ((s, e) => SourceSpan s e) offsets))
+          (arrayFromList (comments src raw))
+          (arrayFromList (pieces (stringLength src) 0 raw))
+          strict
+          structural
+          recovered)
+
+export
+syntaxSourceText : SyntaxSource -> String
+syntaxSourceText (SyntaxSource src _ _ _ _ _ _ _ _) = src
+
+export
+renderOriginal : SyntaxSource -> String
+renderOriginal = syntaxSourceText
+
+export
+syntaxIndex : SyntaxSource -> SourceIndex
+syntaxIndex (SyntaxSource _ index _ _ _ _ _ _ _) = index
+
+export
+syntaxTokens : SyntaxSource -> Array Token
+syntaxTokens (SyntaxSource _ _ tokens _ _ _ _ _ _) =
+  arrayFromList (toList tokens)
+
+export
+syntaxTokenSpans : SyntaxSource -> Array SourceSpan
+syntaxTokenSpans (SyntaxSource _ _ _ spans _ _ _ _ _) =
+  arrayFromList (toList spans)
+
+export
+syntaxTrivia : SyntaxSource -> Array Trivia
+syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _ _) =
+  arrayFromList (toList trivia)
+
+export
+syntaxPieces : SyntaxSource -> Array SourcePiece
+syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _ _) =
+  arrayFromList (toList pieces)
+
+export
+syntaxStrict : SyntaxSource -> Result ParseDiagnostic ParsedSource
+syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _ _) = strict
+
+export
+syntaxRecovered : SyntaxSource -> RecoveredSource
+syntaxRecovered (SyntaxSource _ _ _ _ _ _ _ _ recovered) = recovered
+
+export
+syntaxSlice : SyntaxSource -> SourceSpan -> Option String
+syntaxSlice syntax (SourceSpan lo hi) =
+  let src = syntaxSourceText syntax
+  if lo < 0 || hi < lo || hi > stringLength src then
+    None
+  else
+    Some (stringSlice lo hi src)
+
+export
+spanFromLoc : SyntaxSource -> Loc -> Option SourceSpan
+spanFromLoc syntax (Loc _ line col endLine endCol) = do
+  let index = syntaxIndex syntax
+  lo <- sourcePositionToOffset index line col
+  hi <- sourcePositionToOffset index endLine endCol
+  if lo <= hi then Some (SourceSpan lo hi) else None
+
+export
+syntaxStructural : SyntaxSource -> Option ParsedSource
+syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
