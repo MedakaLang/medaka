@@ -1,0 +1,136 @@
+import frontend.syntax_source.{
+  publishSyntax, syntaxSourceText, renderOriginal, syntaxPieces, syntaxTrivia,
+  syntaxStrict, syntaxRecovered, syntaxSlice, SourceSpan(..), SourcePiece(..),
+  Trivia(..), TriviaKind(..)
+}
+import frontend.parse_recovery.{defaultRecoveryLimits}
+import frontend.recovery_result.{recoveredStats, RecoveryStats(..)}
+import frontend.parser.{parseSource}
+import frontend.ast_codec.{declsSExp}
+import support.sexp_value.{renderSExp}
+import frontend.ast.{Loc(..)}
+import frontend.parse_result.{
+  ParsedSource, parsedDecls, parsedPositions, parsedMetadata,
+  metadataTrailingCommas, metadataUnitStarts
+}
+import frontend.parse_positions.{Positions(..), DeclPos(..)}
+import test_process.{underRoot}
+import frontend.lex_scan.{scanRawChars}
+import frontend.lex_token.{RawTok(..)}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectOkThen, expectTrue
+}
+
+spans : List RawTok -> List (Int, Int)
+spans [] = []
+spans ((RComment a b) :: rest) = (a, b) :: spans rest
+spans (_ :: rest) = spans rest
+
+triviaSpan : Trivia -> (Int, Int)
+triviaSpan (Trivia _ (SourceSpan a b)) = (a, b)
+
+reconstruct : String -> List SourcePiece -> String
+reconstruct src pieces =
+  stringConcat
+    (map ((SourcePiece _ (SourceSpan a b)) => stringSlice a b src) pieces)
+
+partition : Int -> List SourcePiece -> Int
+partition pos [] = pos
+partition pos ((SourcePiece _ (SourceSpan a b)) :: rest) =
+  if a /= pos || b <= a then -1 else partition b rest
+
+caseSource : String -> String -> (String, Expectation)
+caseSource label src = (
+  label,
+  expectOkThen
+    (syntax =>
+      let pieces = toList (syntaxPieces syntax)
+      expectAll [
+        expectEqual src (syntaxSourceText syntax),
+        expectEqual src (renderOriginal syntax),
+        expectEqual src (reconstruct src pieces),
+        expectEqual (stringLength src) (partition 0 pieces),
+        expectEqual
+          (spans (scanRawChars (stringToChars src)))
+          (map triviaSpan (toList (syntaxTrivia syntax))),
+        expectEqual
+          (Some src)
+          (syntaxSlice syntax (SourceSpan 0 (stringLength src))),
+        expectTrue (isNone (syntaxSlice syntax (SourceSpan (-1) 0))),
+      ])
+    (publishSyntax defaultRecoveryLimits src),
+)
+
+test "source partitions and scanner comments preserve text" = expectEach [
+  caseSource "valid" "main = 3\n-- a\n{- b -}\n",
+  caseSource "removed" "main = 1 != 2\n",
+  caseSource "malformed" "main = \"unterminated\n-- tail",
+  caseSource "unicode" "-- 😀\r\nmain = \"é\"\rnext = 2\r",
+  caseSource "interpolation" "main = \"hello \\{1}\"\n",
+  caseSource "triple" "main = \"\"\"hello\nworld\"\"\"\n",
+]
+
+test "removed and malformed syntax cannot pass strict parse" =
+  expectEach
+    (map
+      (src => (
+        src,
+        expectOkThen
+          (syntax => expectTrue (isErr (syntaxStrict syntax)))
+          (publishSyntax defaultRecoveryLimits src),
+      ))
+      ["main = 1 != 2", "main = )"])
+
+test "recovery attempts count only additional bounded work" =
+  expectOkThen
+    (syntax => match recoveredStats (syntaxRecovered syntax)
+      RecoveryStats _ attempts diagnostics =>
+        expectEqual (3, 1) (attempts, diagnostics))
+    (publishSyntax defaultRecoveryLimits "before = 1\nbroken = )\nafter = 2\n")
+
+locView : Loc -> (String, Int, Int, Int, Int)
+locView (Loc file line col endLine endCol) = (file, line, col, endLine, endCol)
+
+positionView : Positions -> String
+positionView (Positions ds variants last chains) = debug (
+  map
+    ((DeclPos s e loc children) =>
+      (s, e, map locView loc, map (map locView) children))
+    ds,
+  variants,
+  last,
+  chains,
+)
+
+parsedView : ParsedSource -> String
+parsedView parsed =
+  let metadata = parsedMetadata parsed
+  stringConcat [
+    renderSExp (declsSExp (parsedDecls parsed)),
+    positionView (parsedPositions parsed),
+    debug (metadataTrailingCommas metadata),
+    debug (metadataUnitStarts metadata),
+  ]
+
+corpusCase : String -> <Env "MEDAKA_ROOT", FileRead> (String, Expectation)
+corpusCase path =
+  let src = match readFile (underRoot path)
+    Ok value => value
+    Err e => panic e
+  let actual = publishSyntax defaultRecoveryLimits src
+  let expected = parseSource src
+  (
+    path,
+    match (actual, expected)
+      (Ok syntax, Ok strict) => match syntaxStrict syntax
+        Ok published => expectEqual (parsedView strict) (parsedView published)
+        Err _ => expectTrue False
+      _ => expectTrue False,
+  )
+
+test "published checked parse retains AST positions and metadata" =
+  expectEach
+    (map corpusCase [
+      "stdlib/core.mdk", "compiler/tools/fmt.mdk",
+      "compiler/frontend/parser.mdk"
+    ])
