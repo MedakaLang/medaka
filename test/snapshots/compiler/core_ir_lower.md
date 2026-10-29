@@ -1,5 +1,5 @@
 # META
-source_lines=4112
+source_lines=4115
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -370,7 +370,10 @@ orDecision site scrut pat body tail =
 -- next before the next clause.  Any other body is lowered once, under a
 -- decision over fresh parameters whose miss falls through to the next clause.
 lowerOrClause : List Pat -> Expr -> List (List Pat, CExpr)
-lowerOrClause pats body
+lowerOrClause rawPats body = lowerErasedClause (map eraseBytePat rawPats) body
+
+lowerErasedClause : List Pat -> Expr -> List (List Pat, CExpr)
+lowerErasedClause pats body
   | any patHasOr pats =
     let lowered = lower body
     if cFallsThrough lowered then
@@ -658,8 +661,10 @@ unitName : String
 unitName = "__unit__"
 
 -- A byte literal pattern is its `U8` word, like the expression `lower` gives the
--- same literal, so no matrix, decision tree or engine sees `LByte`.  Every
--- position `lower` reads a pattern from erases through here.
+-- same literal, so no matrix, decision tree or engine sees `LByte`.  A pattern
+-- enters Core IR through `lowerOrClause` (clauses, impl methods), `orDefaultParams`
+-- (lambdas, interface defaults), `letDecision`/`CLet`, `lowerArm` or `lowerGuard`;
+-- each of those erases through here, and a new entry must too.
 eraseBytePat : Pat -> Pat
 eraseBytePat (PLit (LByte n)) = PLit (LInt n)
 eraseBytePat (PCon c ps) = PCon c (map eraseBytePat ps)
@@ -931,9 +936,7 @@ lowerClause (FunClause pats body) = lowerClauses pats body
 
 lowerClauses : List Pat -> Expr -> List CClause
 lowerClauses pats body =
-  map
-    (c => CClause (fst c) (snd c))
-    (lowerOrClause (map eraseBytePat pats) body)
+  map (c => CClause (fst c) (snd c)) (lowerOrClause pats body)
 
 lowerStmt : DoStmt -> CStmt
 lowerStmt (DoExpr e) = CSExpr (lower e)
@@ -4210,7 +4213,9 @@ nodeTag _ = "?"
 (DTypeSig false "orDecision" (TyFun (TyCon "FailSite") (TyFun (TyCon "CExpr") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CExpr")))))))
 (DFunDef false "orDecision" ((PVar "site") (PVar "scrut") (PVar "pat") (PVar "body") (PVar "tail")) (EBlock (DoLet false false (PVar "cands") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "p") (EListLit)))) (EApp (EVar "orCandidates") (EVar "pat")))) (DoLet false false (PVar "arms") (EBinOp "++" (EApp (EApp (EApp (EVar "candidateArms") (ELit (LInt 0))) (EVar "cands")) (EVar "body")) (EVar "tail"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EApp (EApp (EVar "compileArmsC") (EVar "site")) (EVar "arms"))))))
 (DTypeSig false "lowerOrClause" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))
-(DFunDef false "lowerOrClause" ((PVar "pats") (PVar "body")) (EIf (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "pats")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EIf (EApp (EVar "cFallsThrough") (EVar "lowered")) (EApp (EApp (EVar "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "lowered")))) (EApp (EVar "paramCandidates") (EVar "pats"))) (EBlock (DoLet false false (PVar "miss") (EApp (EApp (EApp (EVar "CArm") (EVar "PWild")) (EListLit)) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "fallthroughName")) (EVar "AGlobal"))) (EListLit (EApp (EVar "CLit") (EVar "LUnit")))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "orTested") (EVar "pats")) (EVar "lowered")) (EListLit (EVar "miss"))))))))) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "pats") (EApp (EVar "lower") (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lowerOrClause" ((PVar "rawPats") (PVar "body")) (EApp (EApp (EVar "lowerErasedClause") (EApp (EApp (EVar "map") (EVar "eraseBytePat")) (EVar "rawPats"))) (EVar "body")))
+(DTypeSig false "lowerErasedClause" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))
+(DFunDef false "lowerErasedClause" ((PVar "pats") (PVar "body")) (EIf (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "pats")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EIf (EApp (EVar "cFallsThrough") (EVar "lowered")) (EApp (EApp (EVar "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "lowered")))) (EApp (EVar "paramCandidates") (EVar "pats"))) (EBlock (DoLet false false (PVar "miss") (EApp (EApp (EApp (EVar "CArm") (EVar "PWild")) (EListLit)) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "fallthroughName")) (EVar "AGlobal"))) (EListLit (EApp (EVar "CLit") (EVar "LUnit")))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "orTested") (EVar "pats")) (EVar "lowered")) (EListLit (EVar "miss"))))))))) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "pats") (EApp (EVar "lower") (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cFallsThrough" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "cFallsThrough" ((PCon "CVar" (PVar "x") PWild)) (EBinOp "==" (EVar "x") (EVar "fallthroughName")))
 (DFunDef false "cFallsThrough" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "cFallsThrough") (EVar "f")) (EApp (EApp (EVar "any") (EVar "cFallsThrough")) (EVar "args"))))
@@ -4445,7 +4450,7 @@ nodeTag _ = "?"
 (DTypeSig false "lowerClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "CClause"))))
 (DFunDef false "lowerClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "lowerClauses") (EVar "pats")) (EVar "body")))
 (DTypeSig false "lowerClauses" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "CClause")))))
-(DFunDef false "lowerClauses" ((PVar "pats") (PVar "body")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EApp (EVar "CClause") (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EApp (EApp (EVar "lowerOrClause") (EApp (EApp (EVar "map") (EVar "eraseBytePat")) (EVar "pats"))) (EVar "body"))))
+(DFunDef false "lowerClauses" ((PVar "pats") (PVar "body")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EApp (EVar "CClause") (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EApp (EApp (EVar "lowerOrClause") (EVar "pats")) (EVar "body"))))
 (DTypeSig false "lowerStmt" (TyFun (TyCon "DoStmt") (TyCon "CStmt")))
 (DFunDef false "lowerStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EApp (EVar "eraseBytePat") (EVar "pat"))) (EApp (EVar "lower") (EVar "e"))))
@@ -5589,7 +5594,9 @@ nodeTag _ = "?"
 (DTypeSig false "orDecision" (TyFun (TyCon "FailSite") (TyFun (TyCon "CExpr") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CExpr")))))))
 (DFunDef false "orDecision" ((PVar "site") (PVar "scrut") (PVar "pat") (PVar "body") (PVar "tail")) (EBlock (DoLet false false (PVar "cands") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "p") (EListLit)))) (EApp (EVar "orCandidates") (EVar "pat")))) (DoLet false false (PVar "arms") (EBinOp "++" (EApp (EApp (EApp (EVar "candidateArms") (ELit (LInt 0))) (EVar "cands")) (EVar "body")) (EVar "tail"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EApp (EApp (EVar "compileArmsC") (EVar "site")) (EVar "arms"))))))
 (DTypeSig false "lowerOrClause" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))
-(DFunDef false "lowerOrClause" ((PVar "pats") (PVar "body")) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "pats")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EIf (EApp (EVar "cFallsThrough") (EVar "lowered")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "lowered")))) (EApp (EVar "paramCandidates") (EVar "pats"))) (EBlock (DoLet false false (PVar "miss") (EApp (EApp (EApp (EVar "CArm") (EVar "PWild")) (EListLit)) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "fallthroughName")) (EVar "AGlobal"))) (EListLit (EApp (EVar "CLit") (EVar "LUnit")))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "orTested") (EVar "pats")) (EVar "lowered")) (EListLit (EVar "miss"))))))))) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "pats") (EApp (EVar "lower") (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lowerOrClause" ((PVar "rawPats") (PVar "body")) (EApp (EApp (EVar "lowerErasedClause") (EApp (EApp (EMethodRef "map") (EVar "eraseBytePat")) (EVar "rawPats"))) (EVar "body")))
+(DTypeSig false "lowerErasedClause" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))
+(DFunDef false "lowerErasedClause" ((PVar "pats") (PVar "body")) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "pats")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EIf (EApp (EVar "cFallsThrough") (EVar "lowered")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "lowered")))) (EApp (EVar "paramCandidates") (EVar "pats"))) (EBlock (DoLet false false (PVar "miss") (EApp (EApp (EApp (EVar "CArm") (EVar "PWild")) (EListLit)) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "fallthroughName")) (EVar "AGlobal"))) (EListLit (EApp (EVar "CLit") (EVar "LUnit")))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "orTested") (EVar "pats")) (EVar "lowered")) (EListLit (EVar "miss"))))))))) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "pats") (EApp (EVar "lower") (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cFallsThrough" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "cFallsThrough" ((PCon "CVar" (PVar "x") PWild)) (EBinOp "==" (EVar "x") (EVar "fallthroughName")))
 (DFunDef false "cFallsThrough" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "cFallsThrough") (EVar "f")) (EApp (EApp (EDictApp "any") (EVar "cFallsThrough")) (EVar "args"))))
@@ -5824,7 +5831,7 @@ nodeTag _ = "?"
 (DTypeSig false "lowerClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "CClause"))))
 (DFunDef false "lowerClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "lowerClauses") (EVar "pats")) (EVar "body")))
 (DTypeSig false "lowerClauses" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "CClause")))))
-(DFunDef false "lowerClauses" ((PVar "pats") (PVar "body")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EApp (EVar "CClause") (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EApp (EApp (EVar "lowerOrClause") (EApp (EApp (EMethodRef "map") (EVar "eraseBytePat")) (EVar "pats"))) (EVar "body"))))
+(DFunDef false "lowerClauses" ((PVar "pats") (PVar "body")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EApp (EVar "CClause") (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EApp (EApp (EVar "lowerOrClause") (EVar "pats")) (EVar "body"))))
 (DTypeSig false "lowerStmt" (TyFun (TyCon "DoStmt") (TyCon "CStmt")))
 (DFunDef false "lowerStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EApp (EVar "eraseBytePat") (EVar "pat"))) (EApp (EVar "lower") (EVar "e"))))

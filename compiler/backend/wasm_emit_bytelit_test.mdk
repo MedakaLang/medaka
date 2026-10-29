@@ -60,3 +60,37 @@ test "byte literal patterns emit as the U8 integer words" =
       "same WAT as integer patterns"
       (expectEqual (funcBlock "cls" (watOf wordSrc)) byteBlock),
   ]
+
+-- an `impl` method clause reaches the emitter through its own lowering entry
+implByteSrc : String
+implByteSrc =
+  """
+interface Classify a where
+  cls : a -> Int
+
+impl Classify Int where
+  cls b'0'..=b'9' = 1
+  cls (Some b'x') = 2
+  cls _ = 0
+
+main = cls 5
+"""
+
+implWordSrc : String
+implWordSrc =
+  """
+interface Classify a where
+  cls : a -> Int
+
+impl Classify Int where
+  cls 48..=57 = 1
+  cls (Some 120) = 2
+  cls _ = 0
+
+main = cls 5
+"""
+
+test "byte literal patterns in an impl method clause emit as the U8 integer words" =
+  labelFail
+    "same WAT as integer patterns"
+    (expectEqual (watOf implWordSrc) (watOf implByteSrc))

@@ -1870,10 +1870,7 @@ parseParamAsPat = defer
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
-intPatRest lo = defer
-  advance
-  t <- peekP
-  rngPatRest lo intBound t
+intPatRest lo = litPatRest intBound lo
 
 -- a negative int literal pattern `-N`, or a negative-bound range `-N..hi`
 -- Mirrors OCaml grammar: only `MINUS INT` followed by `..` or `..=` is valid;
@@ -1905,16 +1902,17 @@ negIntRng lo = defer
 -- consume INT
 
 charPatRest : Lit -> Parser Pat
-charPatRest lo = defer
-  advance
-  t <- peekP
-  rngPatRest lo charBound t
+charPatRest lo = litPatRest charBound lo
 
 bytePatRest : Lit -> Parser Pat
-bytePatRest lo = defer
+bytePatRest lo = litPatRest byteBound lo
+
+-- a literal pattern of one kind, or a range whose upper bound parses with [bound]
+litPatRest : Parser Lit -> Lit -> Parser Pat
+litPatRest bound lo = defer
   advance
   t <- peekP
-  rngPatRest lo byteBound t
+  rngPatRest lo bound t
 
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
 rngPatRest lo bound TDotDot = defer

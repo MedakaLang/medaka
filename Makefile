@@ -280,6 +280,16 @@ inlang-backend-wasm-emit-orarm-test:
 inlang-backend-llvm-emit-orarm-test:
 	./medaka test compiler/backend/llvm_emit_orarm_test.mdk
 
+## Byte literals of wasm_emit.mdk: a byte literal emits as the WAT of the same
+## `U8` integer word, in expressions, patterns and `impl` clauses.
+inlang-backend-wasm-emit-bytelit-test:
+	./medaka test compiler/backend/wasm_emit_bytelit_test.mdk
+
+## Byte literals of llvm_emit.mdk: a byte literal emits as the IR of the same
+## `U8` integer word.
+inlang-backend-llvm-emit-bytelit-test:
+	./medaka test compiler/backend/llvm_emit_bytelit_test.mdk
+
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
