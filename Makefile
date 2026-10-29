@@ -294,7 +294,7 @@ inlang-backend-llvm-emit-bytelit-test:
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
-	./medaka test compiler/backend/wasm_symbols_test.mdk
+	./medaka test compiler/backend/wasm_symbols_test.mdk compiler/backend/wasm_symbol_names_test.mdk
 
 ## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
 ## defines and calls what its manifest row states, and the registry seeded from
@@ -305,7 +305,7 @@ inlang-backend-wasm-preamble-test:
 ## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-llvm-symbols-test:
-	./medaka test compiler/backend/llvm_symbols_test.mdk
+	./medaka test compiler/backend/llvm_symbols_test.mdk compiler/backend/llvm_symbol_names_test.mdk
 
 ## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as
 ## the declaration its parts describe, and the registry checks calls against it.

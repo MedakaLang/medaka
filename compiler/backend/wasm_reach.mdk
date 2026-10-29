@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
 --
 -- WHY: `ir/dce.mdk` runs at the elaborated-AST level and, by design, retains EVERY
@@ -139,7 +140,7 @@ definedKeys groups impls =
 -- path's blast radius.
 canonKey : HashMap String Unit -> String -> String
 canonKey defined n =
-  let mangled = "core__" ++ n
+  let mangled = encodePair "core" n
   if has n defined then n else if has mangled defined then mangled else n
 
 -- the `$memo_<tag>_<method>` CAFs — rooted unconditionally (see header).

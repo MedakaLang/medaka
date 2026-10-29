@@ -3054,10 +3054,10 @@ fi
 if [ ! -f "$TMP/sa4c.main.bin.ll" ] || [ ! -f "$TMP/sa4c.control.bin.ll" ]; then
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (no IR kept — build refused, see the leg above)\n'
 elif diff "$TMP/sa4c.main.bin.ll" "$TMP/sa4c.control.bin.ll" >/dev/null 2>&1 \
-  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_[A-Za-z_0-9]*Wrap_20_Int_29_[A-Za-z_0-9]*\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
+  && grep -qE 'call i64 @mdk[.]impl[.][0-9a-f]*5f32385f[0-9a-f]*577261705f32305f496e745f32395f[0-9a-f]*[.]7461674f66\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
   pass=$((pass+1)); printf 'ok   SA-4c/route-word-order-invariant (both orders IR-identical; arity-1 specific impl called)\n'
 else
-  sa4c_site="$(grep -oE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_Wrap_20_[A-Za-z_0-9]*_29_[A-Za-z_0-9]*\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
+  sa4c_site="$(grep -oE 'call i64 @mdk[.]impl[.][0-9a-f]*5f32385f[0-9a-f]*577261705f32305f[0-9a-f]*5f32395f[0-9a-f]*[.]7461674f66\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (IR differs between import orders, or the specific impl is not the arity-1 callee: [%s])\n' "$sa4c_site"
 fi
 

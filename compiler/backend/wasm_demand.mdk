@@ -1,3 +1,5 @@
+import backend.wasm_symbol_names as WN
+import support.symbol_encoding.{encodePair}
 import frontend.ast.{
   Lit(..), Pat(..), Addr(..), BinderId(..), Loc(..), isTaggedFixedHead
 }
@@ -261,7 +263,7 @@ isLocal : DemandScope -> String -> Bool
 isLocal sc x = omHasKey x sc.locals
 
 isCoreFn : DemandScope -> String -> Bool
-isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
+isCoreFn sc x = omHasKey (encodePair "core" x) sc.topFns
 
 -- a name read as a value
 dVar : DemandScope -> DemandAcc -> String -> DemandAcc
@@ -667,7 +669,11 @@ runtimeKeyD ctx symbol = optionOr "" (externRuntimeKey ctx.externFacts symbol)
 export type Env = OrdMap EnvRef
 
 -- what a name denotes inside `env`
-public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+public export data EnvRef =
+  | NotLocal
+  | LocalUnstamped
+  | LocalBinder String
+  | LocalSynthetic Int
 
 export
 envEmpty : Env
@@ -747,6 +753,7 @@ varRow : WasmTypeContext -> Env -> String -> Option BinderRow
 varRow prog env x = match envLookup x env
   LocalBinder ord => stampRowOf prog ord
   LocalUnstamped => None
+  LocalSynthetic _ => None
   NotLocal => omLookup x prog.tops
 
 -- what a reference to [x] holds; RTValue where no row states it
@@ -1758,14 +1765,9 @@ physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
             if contains ty ["Option", "Result", "Ordering"] then
               []
             else
-              ["T_" ++ injectiveIdent ty]
+              [WN.wasmName (WN.WUserType ty)]
                 ++ (if optionOr 0 (omLookup ctor ctorIndex) > 0 then
-                  [
-                    if ctor == "Cons" || ctor == "Nil" then
-                      "CU_" ++ ctor
-                    else
-                      "C_" ++ ctor,
-                  ]
+                  [WN.wasmName (WN.WConstructorType ctor)]
                 else
                   []))
           ctorTypes)
@@ -2476,7 +2478,7 @@ plannedJs : JsImport -> PlannedImport
 plannedJs imp = PlannedImport {
   namespace = "jsffi",
   field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = "jsffi.import.\{injectiveIdent imp.medakaName}",
+  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
   signature =
     joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
 }

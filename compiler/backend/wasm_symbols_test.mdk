@@ -308,13 +308,12 @@ defectFacts (d@(UndeclaredType t user (SymbolOrigin b _ _ _))) =
   [codeText (defectCode d), t, user, b]
 defectFacts d = [codeText (defectCode d)]
 
--- `gname` spells `self` as `u__self`, a name the program can also define.
-test "two bindings the emitter spells alike are refused as one duplicate function" = expectAll
+test "distinct self-like bindings have distinct physical functions" = expectAll
   [
     labelFail
       "self and u__self"
       (expectEqual
-        [["E-PHYS-DUPLICATE", "u__self", "self", "u__self"]]
+        []
         (strictDefects
           "self : Int -> Int\nself x = x + 1\nu__self : Int -> Int\nu__self x = x + 2\nmain = self 1 + u__self 1\n")),
     labelFail

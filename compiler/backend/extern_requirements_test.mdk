@@ -370,7 +370,7 @@ checkEtaArity shape name =
     Ok (text, _) =>
       let definitions =
         filter
-          (line => contains "define internal i64 @mdk_eta_" line)
+          (line => contains "define internal i64 @mdk.gen.externeta." line)
           (lines text)
       expectEqual
         [shape.loweredCoreArity]

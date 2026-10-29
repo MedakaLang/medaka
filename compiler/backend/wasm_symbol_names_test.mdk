@@ -1,0 +1,30 @@
+import backend.wasm_symbol_names.{
+  WasmName(..), WasmGeneratedFamily(..), wasmName
+}
+import test.{expectEach, expectEqual, expectNotEqual}
+
+test "Wasm descriptor components and families are disjoint" = expectEach [
+  ("UTF-8 bytes", expectEqual "u.cebb" (wasmName (WUserLocal "λ"))),
+  (
+    "user and synthetic locals",
+    expectNotEqual
+      (wasmName (WUserLocal "self"))
+      (wasmName (WSyntheticLocal WLambda 0)),
+  ),
+  (
+    "separate impl components",
+    expectNotEqual
+      (wasmName (WImplMethod "A_B" "c"))
+      (wasmName (WImplMethod "A" "B_c")),
+  ),
+  (
+    "generated family",
+    expectEqual "f.gen.lambda.782e79.2" (wasmName (WGenerated WLambda "x.y" 2)),
+  ),
+  (
+    "generated families",
+    expectNotEqual
+      (wasmName (WGenerated WLambda "x" 2))
+      (wasmName (WGenerated WGroup "x" 2)),
+  ),
+]
