@@ -33,26 +33,26 @@ import tools.lint_shared.{
   ruleNameDerivable,
   ruleNameDestructureInParam,
   ruleNameDirectiveReason,
-  ruleNameDoubleReverse,
   ruleNameDuplicateBody,
   ruleNameIfMaxMin,
   ruleNameLambdaSection,
-  ruleNameMatchParam,
   ruleNameMatchToMap,
   ruleNameMissingSignature,
-  ruleNameNotEq,
   ruleNameOrElseStaircase,
   ruleNamePreferAssignOp,
   ruleNamePromissoryReader,
   ruleNameRegexLiteral,
   ruleNameRemParity,
-  ruleNameSelfShadowExtern,
-  ruleNameStdlibReimpl,
   ruleNameTestBoolLiteralEqual,
   ruleNameTestEqualInTrue,
-  ruleNameTestPreludeShadow,
   ruleNameWhenUnless,
 }
+import tools.lint_rule_internal_match_on_param as MatchOnParam
+import tools.lint_rule_stdlib_reimpl as StdlibReimpl
+import tools.lint_rule_not_eq as NotEq
+import tools.lint_rule_double_reverse as DoubleReverse
+import tools.lint_rule_self_shadow_extern as SelfShadowExtern
+import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
 import tools.lint_rules_staging.{
   andThenPureMapFix,
   bindThenDestructureFix,
@@ -60,13 +60,10 @@ import tools.lint_rules_staging.{
   complementPredicateFix,
   concatToInterpFix,
   destructureInParamFix,
-  doubleReverseFix,
   duplicateBodySameFileRule,
   ifMaxMinFix,
   lambdaSectionFix,
-  matchParamFix,
   matchToMapFix,
-  notEqFix,
   preferAssignFix,
   remParityFix,
   ruleAndThenPureMap,
@@ -81,24 +78,18 @@ import tools.lint_rules_staging.{
   ruleDerivable,
   ruleDestructureInParam,
   ruleDirectiveReason,
-  ruleDoubleReverse,
   ruleDuplicateBody,
   ruleForPreferAssign,
   ruleIfMaxMin,
   ruleLambdaSection,
-  ruleMatchOnParam,
   ruleMatchToMap,
   ruleMissingSignature,
-  ruleNotEq,
   ruleOrElseStaircase,
   rulePromissoryReader,
   ruleRegexLiteral,
   ruleRemParity,
-  ruleSelfShadowExtern,
-  ruleStdlibReimpl,
   ruleTestBoolLiteralEqual,
   ruleTestEqualInTrue,
-  ruleTestPreludeShadow,
   ruleWhenUnless,
   testBoolLiteralEqualFix,
   testEqualInTrueFix,
@@ -111,25 +102,6 @@ import tools.lint_rules_staging.{
 -- traverses binding bodies but not into list-literal elements — registers the
 -- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
 -- + append it to `allRules`.
-matchParamRule : Rule
-matchParamRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameMatchParam,
-      summary =
-        "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
-      doc =
-        "A function whose whole body is a `match` on one of its own parameters is clearer as several clauses: the patterns move into the parameter position and the extra indentation level goes away. This enforces STYLE section 8, a repository taste ruling.\n\nBefore:\n  len xs = match xs\n    [] => 0\n    _ :: t => 1 + len t\nAfter:\n  len [] = 0\n  len (_ :: t) = 1 + len t",
-      category = Style,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleMatchOnParam
-    (Some matchParamFix)
-
 derivableRule : Rule
 derivableRule =
   mkRule
@@ -147,25 +119,6 @@ derivableRule =
       needs = [],
     }
     ruleDerivable
-    None
-
-stdlibReimplRule : Rule
-stdlibReimplRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameStdlibReimpl,
-      summary =
-        "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
-      doc =
-        "A top-level function whose declared signature equals that of an exported stdlib function, and whose body does the same work, reimplements the stdlib under another name. The rule compares against the stdlib signature index. Call the stdlib function.\n\nBefore:\n  sumAll : List Int -> Int\n  sumAll xs = foldl (+) 0 xs\nAfter:\n  use `sum` from the stdlib",
-      category = Style,
-      scope = Universal,
-      ratchet = Baselined,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [NeedsStdlibIndex],
-    }
-    ruleStdlibReimpl
     None
 
 bindThenDestructureRule : Rule
@@ -282,25 +235,6 @@ missingSignatureRule =
     ruleMissingSignature
     None
 
-notEqRule : Rule
-notEqRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameNotEq,
-      summary =
-        "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
-      doc =
-        "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleNotEq
-    (Some notEqFix)
-
 boolSimplifyRule : Rule
 boolSimplifyRule =
   mkRule
@@ -338,24 +272,6 @@ remParityRule =
     }
     ruleRemParity
     (Some remParityFix)
-
-doubleReverseRule : Rule
-doubleReverseRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameDoubleReverse,
-      summary = "`reverse (reverse x)` is `x`. Drop the double reversal",
-      doc =
-        "Reversing a list twice returns the original list after two traversals.\n\nBefore:\n  reverse (reverse xs)\nAfter:\n  xs",
-      category = Complexity,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleDoubleReverse
-    (Some doubleReverseFix)
 
 whenUnlessRule : Rule
 whenUnlessRule =
@@ -470,25 +386,6 @@ concatToInterpRule =
     }
     ruleConcatToInterp
     (Some concatToInterpFix)
-
-selfShadowExternRule : Rule
-selfShadowExternRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameSelfShadowExtern,
-      summary =
-        "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
-      doc =
-        "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name",
-      category = Correctness,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleSelfShadowExtern
-    None
 
 preferAssignOpRule : Rule
 preferAssignOpRule =
@@ -661,48 +558,29 @@ testEqualInTrueRule =
     ruleTestEqualInTrue
     (Some testEqualInTrueFix)
 
-testPreludeShadowRule : Rule
-testPreludeShadowRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameTestPreludeShadow,
-      summary =
-        "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
-      doc =
-        "A `*_test.mdk` file that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file. Suggest-only; this guards the repository test-helper convention.\n\nBefore:\n  isOk r = ...   -- in foo_test.mdk\nAfter:\n  rename the helper",
-      category = Suspicious,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleTestPreludeShadow
-    None
-
 export
 allRules : List Rule
 allRules = [
-  matchParamRule,
+  MatchOnParam.rule,
   derivableRule,
-  stdlibReimplRule,
+  StdlibReimpl.rule,
   bindThenDestructureRule,
   lambdaSectionRule,
   ifMaxMinRule,
   andThenPureMapRule,
   destructureInParamRule,
   missingSignatureRule,
-  notEqRule,
+  NotEq.rule,
   boolSimplifyRule,
   remParityRule,
-  doubleReverseRule,
+  DoubleReverse.rule,
   whenUnlessRule,
   complementPredicateRule,
   matchToMapRule,
   bindChainToDoRule,
   deadCodeRule,
   concatToInterpRule,
-  selfShadowExternRule,
+  SelfShadowExtern.rule,
   preferAssignOpRule,
   promissoryReaderRule,
   orElseStaircaseRule,
@@ -713,7 +591,7 @@ allRules = [
   regexLiteralRule,
   testBoolLiteralEqualRule,
   testEqualInTrueRule,
-  testPreludeShadowRule,
+  TestPreludeShadow.rule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
