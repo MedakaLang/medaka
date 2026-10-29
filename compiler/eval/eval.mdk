@@ -1059,6 +1059,8 @@ matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
 matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
   | inCharRange c lo hi incl = Some []
+matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
+  | inIntRange v lo hi incl = Some []
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =

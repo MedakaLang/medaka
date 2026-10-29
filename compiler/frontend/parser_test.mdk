@@ -946,3 +946,15 @@ test "a byte literal range pattern parses and formats" =
   _ => 0
 """
   expectEqual src (formatSource src)
+
+test "a range pattern mixing a byte bound with an integer or character bound is refused with one message" =
+  let msg =
+    "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither"
+  expectEqual
+    (msg, msg, msg, "parsed")
+    (
+      parseMsg "f x = match x\n  b'a'..=122 => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  48..=b'z' => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  'a'..=b'z' => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  b'a'..=b'z' => 1\n  _ => 0\n",
+    )

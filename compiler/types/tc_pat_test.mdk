@@ -208,16 +208,48 @@ test "a 64-bit wide literal pattern is rejected with T-TYPE-MISMATCH" =
   let _ = inferPat env (PLit (LI64 1 2))
   expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m)
 
-test "a range pattern of two Int bounds or two Char bounds binds nothing and has that type" =
+test "a range pattern of two Char bounds binds nothing and has that type" =
   let (m, env) = setup ()
-  let ints = shown (inferPat env (PRng (LInt 1) (LInt 9) True))
   let chars = shown (inferPat env (PRng (LChar "a") (LChar "z") False))
-  expectEqual (("Int", []), ("Char", []), []) (ints, chars, codesOf m)
+  expectEqual (("Char", []), []) (chars, codesOf m)
+
+test "a range pattern of two byte bounds has type U8" =
+  let (m, env) = setup ()
+  let bytes = shown (inferPat env (PRng (LByte 97) (LByte 122) True))
+  expectEqual (("U8", []), []) (bytes, codesOf m)
+
+-- Settles a range pattern of two integer bounds against [scrutinee]; returns the
+-- diagnostics and how many bounds joined the fixed-width range check.
+rangeSettledAgainst : Mono -> (List String, Int)
+rangeSettledAgainst scrutinee =
+  let (m, env) = setup ()
+  let saved = takePatLits m ()
+  let (t, _) = inferPat env (PRng (LInt 48) (LInt 57) True)
+  unifyIn env.teDyn scrutinee t
+  settlePatLits env.teDyn saved
+  (codesOf m, listLen m.mcCells.numlitRanges.value)
+
+test "an integer range pattern takes the scrutinee's type and range-checks both bounds on a fixed-width head" = expectAll
+  [
+    expectEqual ([], 0) (rangeSettledAgainst intM),
+    expectEqual ([], 2) (rangeSettledAgainst (tconBuiltin "U8")),
+    expectEqual ([], 2) (rangeSettledAgainst (tconBuiltin "U16")),
+    expectEqual ([], 2) (rangeSettledAgainst (tconBuiltin "U32")),
+    expectEqual
+      ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"]
+      (fst (rangeSettledAgainst (tconBuiltin "String"))),
+  ]
 
 test "a range pattern whose bounds differ in kind is rejected with T-TYPE-MISMATCH" =
   let (m, env) = setup ()
   let _ = inferPat env (PRng (LInt 1) (LChar "z") True)
   expectEqual ["T-TYPE-MISMATCH"] (codesOf m)
+
+test "a range pattern mixing a byte bound with an integer bound is rejected with T-TYPE-MISMATCH" =
+  let (m, env) = setup ()
+  let _ = inferPat env (PRng (LByte 97) (LInt 122) True)
+  let _ = inferPat env (PRng (LInt 48) (LByte 122) True)
+  expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m)
 
 -- ── literals settled against the scrutinee ────────────────────────────────
 

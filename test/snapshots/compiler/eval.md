@@ -1,5 +1,5 @@
 # META
-source_lines=5623
+source_lines=5625
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1063,6 +1063,8 @@ matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
 matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
   | inCharRange c lo hi incl = Some []
+matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
+  | inIntRange v lo hi incl = Some []
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
@@ -6003,6 +6005,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EVar "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -7847,6 +7850,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))

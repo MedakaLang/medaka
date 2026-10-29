@@ -1949,6 +1949,7 @@ intBoundFor TMinusTight = defer
   match t
     TInt n _ => emit (LInt (negateLiteral n))
     _ => failP "expected an integer after `-` in the range bound"
+intBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 intBoundFor _ = failP "expected an integer range bound"
 
 charBound : Parser Lit
@@ -1963,10 +1964,17 @@ byteBound = defer
 
 byteBoundFor : Token -> Parser Lit
 byteBoundFor (TByte n) = emit (LByte n)
+byteBoundFor (TInt _ _) = fatalP (GenericParse mixedByteBoundMsg)
+byteBoundFor (TChar _) = fatalP (GenericParse mixedByteBoundMsg)
 byteBoundFor _ = failP "expected a byte range bound"
+
+mixedByteBoundMsg : String
+mixedByteBoundMsg =
+  "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither"
 
 charBoundFor : Token -> Parser Lit
 charBoundFor (TChar s) = emit (LChar s)
+charBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 charBoundFor _ = failP "expected a character range bound"
 
 tuplePatOrSingle : List Pat -> Pat
