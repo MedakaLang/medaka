@@ -332,11 +332,11 @@ else
   # definition were dropped rather than redefined, which is the SILENT half of
   # this bug class.
   checked=$((checked + 1))
-  nsym=$(grep -o 'mdk_impl_[A-Za-z0-9_]*_size' "$IKBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  nsym=$(grep -o 'mdk[.]impl[.][0-9a-f]*[.]73697a65' "$IKBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
   if [ "$nsym" != "2" ]; then
     fail "expected 2 distinct mdk_impl_*_size symbols in the emitted IR, found $nsym"
     printf '      the two impls collapsed onto one symbol (or the IR was not kept).\n'
-    grep -o 'mdk_impl_[A-Za-z0-9_]*_size' "$IKBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
+    grep -o 'mdk[.]impl[.][0-9a-f]*[.]73697a65' "$IKBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
   else
     ok "the two impls are emitted under 2 distinct mdk_impl_*_size symbols"
   fi
@@ -377,10 +377,10 @@ else
   fi
 
   checked=$((checked + 1))
-  nmemo=$(grep -o '\$memo_[A-Za-z0-9_]*_banner' "$MEMOBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  nmemo=$(grep -o 'mdk[.]global[.]246d656d6f5f[0-9a-f]*5f62616e6e6572' "$MEMOBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
   if [ "$nmemo" != "2" ]; then
     fail "expected 2 distinct \$memo_*_banner globals in the emitted IR, found $nmemo"
-    grep -o '\$memo_[A-Za-z0-9_]*_banner' "$MEMOBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
+    grep -o 'mdk[.]global[.]246d656d6f5f[0-9a-f]*5f62616e6e6572' "$MEMOBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
   else
     ok "the two instances get 2 distinct \$memo_*_banner CAF globals"
   fi
@@ -610,6 +610,25 @@ wasm_refuses negative_wasm 'emitted dict-witness tag collision' 'tag space: nati
 
 wasm_emit "$FIX/dict_witness/default_negative.mdk" default_negative_wasm
 wasm_refuses default_negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+
+# Physical function and global names must remain distinct across modules.
+mkdir -p "$WORK/physical"
+printf 'export x : Int\nexport x = 5 * 21\n' > "$WORK/physical/m.mdk"
+printf 'export x : Int -> Int\nexport x y = y + 1000\n' > "$WORK/physical/g_m.mdk"
+printf 'import m as A\nimport g_m as B\nmain =\n  println A.x\n  println (B.x 1)\n' > "$WORK/physical/main.mdk"
+printf '105\n1001\n' > "$WORK/physical/expected"
+checked=$((checked + 1))
+if "$MEDAKA" run "$WORK/physical/main.mdk" > "$WORK/physical/eval.out" 2> "$WORK/physical/eval.err" && diff -u "$WORK/physical/expected" "$WORK/physical/eval.out"; then
+  ok "physical collision witness evaluates correctly"
+else
+  fail "physical collision witness failed eval"
+fi
+checked=$((checked + 1))
+if "$MEDAKA" build "$WORK/physical/main.mdk" -o "$WORK/physical/native" > "$WORK/physical/build.log" 2>&1 && [ -s "$WORK/physical/native" ] && "$WORK/physical/native" > "$WORK/physical/native.out" 2> "$WORK/physical/native.err" && diff -u "$WORK/physical/expected" "$WORK/physical/native.out"; then
+  ok "physical collision witness builds and runs correctly"
+else
+  fail "physical collision witness failed native build or run"
+fi
 
 printf '\nchecked %d assertions: %d failed\n' "$checked" "$fails"
 

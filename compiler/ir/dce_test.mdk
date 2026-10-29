@@ -220,8 +220,8 @@ test "DCE follows attributed function bodies and retains their wrapper" =
 
 test "DCE resolves a bare synthesized prelude reference to its core-mangled definition" =
   let decls =
-    [funDecl "main" ["not"], funDecl "core__not" [], funDecl "dead" []]
-  expectEqual ["main", "core__not"] (functionNames (dceFilter decls))
+    [funDecl "main" ["not"], funDecl "m636f7265__not" [], funDecl "dead" []]
+  expectEqual ["main", "m636f7265__not"] (functionNames (dceFilter decls))
 
 test "reached externs: each with the chain from its root, and none reached only from dead code" =
   let implDecl =

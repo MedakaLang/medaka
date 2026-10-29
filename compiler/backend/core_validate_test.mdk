@@ -1132,12 +1132,37 @@ test "(u) two distinct impls colliding on one dict-witness tag are refused, per 
     ),
   ]
 
+formerlyCollidingSymbols : CProgram
+formerlyCollidingSymbols =
+  CProgram
+    []
+    []
+    []
+    [
+      CImplEntry
+        "c"
+        0
+        0
+        (CImplTagged "A_B" "key1" "I" (ImplSym "A_B" "I" "key1") [] [] zero),
+      CImplEntry
+        "B_c"
+        0
+        0
+        (CImplTagged "A" "key2" "I" (ImplSym "A" "I" "key2") [] [] zero),
+    ]
+    []
+    noDeclFacts
+
 test "(v) two distinct impls stamped to one emitted symbol are refused" = expectEach
   [
     (
+      "different components no longer collide",
+      expectEqual [] (faultList (implSymbolCollision formerlyCollidingSymbols)),
+    ),
+    (
       "restamped to one symbol tag, the pair is refused",
       expectTextContainsAll
-        ["emitted impl-symbol collision", "mdk_impl_Same_zn"]
+        ["emitted impl-symbol collision", "mdk.impl.53616d65.7a6e"]
         (joinNl
           (faultList (implSymbolCollision (sameSymbol (lowered fullWidthSrc))))),
     ),

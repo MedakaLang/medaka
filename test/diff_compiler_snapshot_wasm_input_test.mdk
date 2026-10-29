@@ -137,14 +137,15 @@ takeWasm : List String -> List String
 takeWasm [] = []
 takeWasm (l :: rest) = if startsWith "# " l then [] else l :: takeWasm rest
 
--- grep -q 'mdk_impl_.*_score'
+-- Match the Score implementation family and method component.
 isScoreImpl : String -> Bool
-isScoreImpl l = match split "mdk_impl_" l
+isScoreImpl l = match split "f.impl." l
   [] => False
-  _ :: parts => any (part => contains "_score" part) parts
+  _ :: parts => any (part => contains ".73636f7265" part) parts
 
 scoreFuncLine : String
-scoreFuncLine = "(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (result"
+scoreFuncLine =
+  "(func $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f55.73636f7265 (result"
 
 wasmCheck : <Exec, IO, FileRead, FileWrite> Expectation
 wasmCheck = withScratchDir (work => wasmCheckIn work)

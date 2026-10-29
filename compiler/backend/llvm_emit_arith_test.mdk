@@ -313,7 +313,8 @@ test "canonical intToFloat and the existing fromInt method route convert without
       1
       (countOccurrences "call ptr @mdk_alloc_atomic(i64 16)" direct),
     expectTextContainsAll ["sitofp i64", "fadd double"] routed,
-    expectFalse (contains "call i64 @mdk_impl_Float_fromInt(" routed),
+    expectFalse
+      (contains "call i64 @mdk.impl.466c6f6174.66726f6d496e74(" routed),
   ]
 
 test "foreign same-spelled truncation keeps its ordinary foreign call" =

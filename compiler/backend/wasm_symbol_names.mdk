@@ -1,0 +1,199 @@
+import support.symbol_encoding.{encodeComponent}
+
+public export data WasmGeneratedFamily =
+  | WLambda
+  | WNamedPap
+  | WIndirectPap
+  | WMethodValue
+  | WDictValue
+  | WCtorPap
+  | WCtorEta
+  | WExternEta
+  | WWrapper
+  | WGroup
+  | WConstCell
+  | WFfi
+  | WDispatch
+  | WScratch
+  | WGuard
+  | WPosition
+  | WAbiSelf
+  | WAbiArgs
+  | WLabelAexd
+  | WLabelAexl
+  | WLabelAexcd
+  | WLabelAexcl
+  | WLabelAexfd
+  | WLabelAexfl
+  | WLabelAfld
+  | WLabelAfll
+  | WLabelRld
+  | WLabelRll
+  | WLabelRad
+  | WLabelRal
+  | WClause
+  | WGuardTail
+  | WGuardValue
+  | WDecision
+  | WTmcLoop
+  | WTmcExit
+  | WSwitch
+  | WSwitchTail
+  | WTmcTemp
+  | WScalarDivr
+  | WForceValue
+  | WTmcHead
+  | WTmcDest
+  | WTmcFirst
+  | WTmcDctor
+  | WDispSavedHead
+  | WDispSavedDest
+  | WDispSavedFirst
+  | WDispResult
+  | WSelfClosure
+  | W7Rlacc
+  | W7Rli
+  | W7Rllo
+  | W7Raarr
+  | W7Rai
+  | W7Ralo
+  | W7Racnt
+  | W7Ixarr
+  | W7Ixi
+  | W7Slsrc
+  | W7Sldst
+  | W7Sllo
+  | W7Sllen
+  | W7Aexi
+  | W7Aexn
+  | W7Aexarr
+  | W7Aexlst
+  | W7Aexf
+  | W7Aexv
+  | W7Aexbits
+  | W7Rub
+  | W7Divr
+
+public export data WasmName =
+  | WUserFunction String
+  | WUserGlobal String
+  | WGlobalState String
+  | WGlobalForcer String
+  | WImplMethod String String
+  | WDefaultMethod String String String
+  | WGenerated WasmGeneratedFamily String Int
+  | WUserLocal String
+  | WSyntheticLocal WasmGeneratedFamily Int
+  | WJSImport String
+  | WJSWrapper String
+  | WConstGlobal Int
+  | WDispatchHead String
+  | WDispatchDest String
+  | WDispatchFirst String
+  | WConstructorType String
+  | WUserType String
+  | WLabel WasmGeneratedFamily Int
+  | WLabelBranch WasmGeneratedFamily Int Int
+
+wasmFamily : WasmGeneratedFamily -> String
+wasmFamily WLambda = "lambda"
+wasmFamily WNamedPap = "namedpap"
+wasmFamily WIndirectPap = "indirectpap"
+wasmFamily WMethodValue = "methodvalue"
+wasmFamily WDictValue = "dictvalue"
+wasmFamily WCtorPap = "ctorpap"
+wasmFamily WCtorEta = "ctoreta"
+wasmFamily WExternEta = "externeta"
+wasmFamily WWrapper = "wrapper"
+wasmFamily WGroup = "group"
+wasmFamily WConstCell = "constcell"
+wasmFamily WFfi = "ffi"
+wasmFamily WDispatch = "dispatch"
+wasmFamily WScratch = "scratch"
+wasmFamily WGuard = "guard"
+wasmFamily WPosition = "position"
+wasmFamily WAbiSelf = "abiself"
+wasmFamily WAbiArgs = "abiargs"
+wasmFamily WLabelAexd = "aexd"
+wasmFamily WLabelAexl = "aexl"
+wasmFamily WLabelAexcd = "aexcd"
+wasmFamily WLabelAexcl = "aexcl"
+wasmFamily WLabelAexfd = "aexfd"
+wasmFamily WLabelAexfl = "aexfl"
+wasmFamily WLabelAfld = "afld"
+wasmFamily WLabelAfll = "afll"
+wasmFamily WLabelRld = "rld"
+wasmFamily WLabelRll = "rll"
+wasmFamily WLabelRad = "rad"
+wasmFamily WLabelRal = "ral"
+wasmFamily WClause = "clause"
+wasmFamily WGuardTail = "guardtail"
+wasmFamily WGuardValue = "guardvalue"
+wasmFamily WDecision = "decision"
+wasmFamily WTmcLoop = "tmcloop"
+wasmFamily WTmcExit = "tmcexit"
+wasmFamily WSwitch = "switch"
+wasmFamily WSwitchTail = "switchtail"
+wasmFamily WTmcTemp = "tmctemp"
+wasmFamily WScalarDivr = "scalardivr"
+wasmFamily WForceValue = "forcevalue"
+wasmFamily WTmcHead = "tmchead"
+wasmFamily WTmcDest = "tmcdest"
+wasmFamily WTmcFirst = "tmcfirst"
+wasmFamily WTmcDctor = "tmcdctor"
+wasmFamily WDispSavedHead = "dispsavedhead"
+wasmFamily WDispSavedDest = "dispsaveddest"
+wasmFamily WDispSavedFirst = "dispsavedfirst"
+wasmFamily WDispResult = "dispresult"
+wasmFamily WSelfClosure = "selfclosure"
+wasmFamily W7Rlacc = "rlacc"
+wasmFamily W7Rli = "rli"
+wasmFamily W7Rllo = "rllo"
+wasmFamily W7Raarr = "raarr"
+wasmFamily W7Rai = "rai"
+wasmFamily W7Ralo = "ralo"
+wasmFamily W7Racnt = "racnt"
+wasmFamily W7Ixarr = "ixarr"
+wasmFamily W7Ixi = "ixi"
+wasmFamily W7Slsrc = "slsrc"
+wasmFamily W7Sldst = "sldst"
+wasmFamily W7Sllo = "sllo"
+wasmFamily W7Sllen = "sllen"
+wasmFamily W7Aexi = "aexi"
+wasmFamily W7Aexn = "aexn"
+wasmFamily W7Aexarr = "aexarr"
+wasmFamily W7Aexlst = "aexlst"
+wasmFamily W7Aexf = "aexf"
+wasmFamily W7Aexv = "aexv"
+wasmFamily W7Aexbits = "aexbits"
+wasmFamily W7Rub = "rub"
+wasmFamily W7Divr = "divr"
+
+export
+wasmName : WasmName -> String
+wasmName (WUserFunction name) = "f.user." ++ encodeComponent name
+wasmName (WUserGlobal name) = "g.user." ++ encodeComponent name
+wasmName (WGlobalState name) = "g.state." ++ encodeComponent name
+wasmName (WGlobalForcer name) = "f.force." ++ encodeComponent name
+wasmName (WImplMethod tag method) =
+  "f.impl.\{encodeComponent tag}.\{encodeComponent method}"
+wasmName (WDefaultMethod iface method key) =
+  "f.default.\{encodeComponent iface}.\{encodeComponent method}.\{encodeComponent key}"
+wasmName (WGenerated family subject ordinal) =
+  "f.gen.\{wasmFamily family}.\{encodeComponent subject}.\{intToString ordinal}"
+wasmName (WUserLocal name) = "u." ++ encodeComponent name
+wasmName (WSyntheticLocal family ordinal) =
+  "s.\{wasmFamily family}.\{intToString ordinal}"
+wasmName (WJSImport name) = "f.js.import." ++ encodeComponent name
+wasmName (WJSWrapper name) = "f.js.wrapper." ++ encodeComponent name
+wasmName (WConstGlobal i) = "g.const." ++ intToString i
+wasmName (WDispatchHead root) = "g.dispatch.head." ++ encodeComponent root
+wasmName (WDispatchDest root) = "g.dispatch.dest." ++ encodeComponent root
+wasmName (WDispatchFirst root) = "g.dispatch.first." ++ encodeComponent root
+wasmName (WConstructorType name) = "t.ctor." ++ encodeComponent name
+wasmName (WUserType name) = "t.user." ++ encodeComponent name
+wasmName (WLabel family ordinal) =
+  "l.\{wasmFamily family}.\{intToString ordinal}"
+
+wasmName (WLabelBranch family depth ordinal) =
+  "l.\{wasmFamily family}.\{intToString depth}.\{intToString ordinal}"

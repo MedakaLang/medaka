@@ -1,0 +1,28 @@
+import backend.llvm_symbol_names.{LlvmName(..), GeneratedFamily(..), llvmName}
+import test.{expectEach, expectEqual, expectNotEqual}
+
+test "LLVM descriptor components and families are disjoint" = expectEach [
+  ("UTF-8 bytes", expectEqual "mdk.user.cebb" (llvmName (LUserFunction "λ"))),
+  (
+    "separate components",
+    expectNotEqual
+      (llvmName (LImplMethod "A_B" "c"))
+      (llvmName (LImplMethod "A" "B_c")),
+  ),
+  (
+    "user versus global",
+    expectNotEqual (llvmName (LUserFunction "x")) (llvmName (LUserGlobal "x")),
+  ),
+  (
+    "scoped generated name",
+    expectEqual
+      "mdk.gen.lambda.6d2e61.78.2"
+      (llvmName (LGeneratedName GenLambda "m.a" "x" 2)),
+  ),
+  (
+    "generated families",
+    expectNotEqual
+      (llvmName (LGeneratedName GenLambda "s" "x" 2))
+      (llvmName (LGeneratedName GenEta "s" "x" 2)),
+  ),
+]

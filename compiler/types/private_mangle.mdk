@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 import types.symbol_origins.{
   SymbolOrigins, emptyOrigins, unitOrigins, mergeOrigins
 }
@@ -1486,7 +1487,7 @@ unitDefNames (_, decls) = flatMap declBinderNames decls
 -- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.
 export
 mangledName : String -> String -> String
-mangledName mid name = "\{sanitizeId mid}__\{name}"
+mangledName mid name = encodePair mid name
 
 export
 sanitizeId : String -> String
