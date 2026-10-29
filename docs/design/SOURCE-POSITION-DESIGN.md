@@ -113,6 +113,13 @@ failed completion falls back to the checked parse over the prepared tokens;
 cached declarations alone cannot manufacture success. Project requests
 prepare visited open sources on demand under the session cache's capacity.
 
+Closing a document retains last-good project sources only for paths still open
+in the session; an open broken dependency may need its previous source even
+when another project closes. Once the last document closes and graph analysis
+and diagnostic rendering are quiescent, the loader's last-source records and
+the driver's cached pass entries can release their source roots. Clearing pass
+entries preserves the generation serial used by remaining cache keys.
+
 This is not a lossless grammar tree. Expression locations do not generally
 cover a whole expression, and an interpolated literal's location need not start
 at its opening quote. Source edits require an independently authoritative span
