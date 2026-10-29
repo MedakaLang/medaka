@@ -1,5 +1,5 @@
 # META
-source_lines=355
+source_lines=356
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
@@ -347,6 +347,7 @@ unexpectedTokenText (TInterpOpen _) = "string"
 unexpectedTokenText (TInterpMid _) = "string"
 unexpectedTokenText (TInterpEnd _) = "string"
 unexpectedTokenText (TChar _) = "character literal"
+unexpectedTokenText (TByte _) = "byte literal"
 unexpectedTokenText TNewline = "line break"
 unexpectedTokenText TIndent = "indentation"
 unexpectedTokenText TDedent = "end of block"
@@ -475,6 +476,7 @@ expectedTokenMsg t = describeToken t
 (DFunDef false "unexpectedTokenText" ((PCon "TInterpMid" PWild)) (ELit (LString "string")))
 (DFunDef false "unexpectedTokenText" ((PCon "TInterpEnd" PWild)) (ELit (LString "string")))
 (DFunDef false "unexpectedTokenText" ((PCon "TChar" PWild)) (ELit (LString "character literal")))
+(DFunDef false "unexpectedTokenText" ((PCon "TByte" PWild)) (ELit (LString "byte literal")))
 (DFunDef false "unexpectedTokenText" ((PCon "TNewline")) (ELit (LString "line break")))
 (DFunDef false "unexpectedTokenText" ((PCon "TIndent")) (ELit (LString "indentation")))
 (DFunDef false "unexpectedTokenText" ((PCon "TDedent")) (ELit (LString "end of block")))
@@ -601,6 +603,7 @@ expectedTokenMsg t = describeToken t
 (DFunDef false "unexpectedTokenText" ((PCon "TInterpMid" PWild)) (ELit (LString "string")))
 (DFunDef false "unexpectedTokenText" ((PCon "TInterpEnd" PWild)) (ELit (LString "string")))
 (DFunDef false "unexpectedTokenText" ((PCon "TChar" PWild)) (ELit (LString "character literal")))
+(DFunDef false "unexpectedTokenText" ((PCon "TByte" PWild)) (ELit (LString "byte literal")))
 (DFunDef false "unexpectedTokenText" ((PCon "TNewline")) (ELit (LString "line break")))
 (DFunDef false "unexpectedTokenText" ((PCon "TIndent")) (ELit (LString "indentation")))
 (DFunDef false "unexpectedTokenText" ((PCon "TDedent")) (ELit (LString "end of block")))

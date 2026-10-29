@@ -1,5 +1,5 @@
 # META
-source_lines=1515
+source_lines=1516
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -861,6 +861,7 @@ renderCallArg (ELit (LBool True)) = Some "True"
 renderCallArg (ELit (LBool False)) = Some "False"
 renderCallArg (ELit (LString s)) = Some ("\"" ++ s ++ "\"")
 renderCallArg (ELit (LChar c)) = Some ("'" ++ c ++ "'")
+renderCallArg (ELit (LByte n)) = Some (intToString n)
 renderCallArg (EVar n) = Some n
 renderCallArg (EVarId n _) = Some n
 renderCallArg (EMethodAt n _ _) = Some n
@@ -1763,6 +1764,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LBool" (PCon "False")))) (EApp (EVar "Some") (ELit (LString "False"))))
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\"")))))
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "c")) (ELit (LString "'")))))
+(DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n"))))
 (DFunDef false "renderCallArg" ((PCon "EVar" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
@@ -2222,6 +2224,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LBool" (PCon "False")))) (EApp (EVar "Some") (ELit (LString "False"))))
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\"")))))
 (DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "c")) (ELit (LString "'")))))
+(DFunDef false "renderCallArg" ((PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n"))))
 (DFunDef false "renderCallArg" ((PCon "EVar" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))

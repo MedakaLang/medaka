@@ -64,6 +64,8 @@ IDENT "readLiteral"
 COMMA
 IDENT "readCharacter"
 COMMA
+IDENT "readByteLiteral"
+COMMA
 IDENT "copyCharRange"
 COMMA
 IDENT "dedentSegments"
@@ -1212,6 +1214,24 @@ EQUAL
 IDENT "scanChar"
 IDENT "ctx"
 IDENT "src"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+PIPE
+IDENT "c"
+EQ_EQ
+CHAR "b"
+AND
+IDENT "opensByteLiteral"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+IDENT "scanByte"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -4248,6 +4268,580 @@ RPAREN
 IDENT "next"
 IDENT "depth"
 IDENT "frame"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "opensByteLiteral"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "opensByteLiteral"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "pos"
+PLUS
+INT 2
+LT
+IDENT "len"
+AND
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "afterIdentChar"
+IDENT "src"
+IDENT "pos"
+RPAREN
+AND
+LPAREN
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+OR
+IDENT "singleCharBody"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "afterIdentChar"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "afterIdentChar"
+IDENT "src"
+IDENT "pos"
+EQUAL
+IDENT "pos"
+GT
+INT 0
+AND
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+IDENT "singleCharBody"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "singleCharBody"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+EQUAL
+INDENT
+IDENT "p"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "not"
+LPAREN
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+RPAREN
+AND
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closesAfterMarks"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+UPPER "False"
+NEWLINE
+PIPE
+IDENT "isApos"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "isCombiningMark"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "closesAfterMarks"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isCombiningMark"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isCombiningMark"
+IDENT "c"
+EQUAL
+IDENT "charCode"
+IDENT "c"
+GEQ
+INT 768
+AND
+IDENT "charCode"
+IDENT "c"
+LEQ
+INT 879
+NEWLINE
+IDENT "scanByte"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanByte"
+IDENT "ctx"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+EQUAL
+MATCH
+IDENT "readByteLiteral"
+IDENT "src"
+IDENT "pos"
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "value"
+COMMA
+IDENT "next"
+RPAREN
+FAT_ARROW
+INDENT
+IF
+IDENT "byteLiteralIsName"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "next"
+THEN
+INDENT
+LET
+IDENT "old"
+EQUAL
+IDENT "copyCharRange"
+IDENT "src"
+IDENT "pos"
+IDENT "next"
+NEWLINE
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "pos"
+IDENT "next"
+LPAREN
+UPPER "ByteLikeIdent"
+IDENT "old"
+LPAREN
+IDENT "byteRename"
+IDENT "src"
+IDENT "pos"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TByte"
+IDENT "value"
+RPAREN
+IDENT "pos"
+IDENT "next"
+RPAREN
+IDENT "next"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+IDENT "start"
+IDENT "end"
+RPAREN
+FAT_ARROW
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "start"
+IDENT "end"
+IDENT "kind"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteLiteralIsName"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "byteLiteralIsName"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "next"
+EQUAL
+INDENT
+IDENT "next"
+LT
+IDENT "len"
+AND
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "next"
+RPAREN
+OR
+IDENT "atLineStart"
+IDENT "src"
+IDENT "pos"
+OR
+IDENT "afterBinderKeyword"
+IDENT "src"
+IDENT "pos"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "atLineStart"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "atLineStart"
+IDENT "src"
+IDENT "pos"
+EQUAL
+IDENT "pos"
+EQ_EQ
+INT 0
+OR
+IDENT "isNL"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+RPAREN
+NEWLINE
+IDENT "afterBinderKeyword"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "afterBinderKeyword"
+IDENT "src"
+IDENT "pos"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "skipBlanksBack"
+IDENT "src"
+LPAREN
+IDENT "pos"
+MINUS
+INT 1
+RPAREN
+NEWLINE
+IDENT "e"
+GEQ
+INT 2
+AND
+LPAREN
+IDENT "wordEndsAt"
+IDENT "src"
+IDENT "e"
+STRING "let"
+OR
+IDENT "wordEndsAt"
+IDENT "src"
+IDENT "e"
+STRING "rec"
+OR
+IDENT "wordEndsAt"
+IDENT "src"
+IDENT "e"
+STRING "mut"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "skipBlanksBack"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "skipBlanksBack"
+IDENT "src"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+INT 0
+AND
+IDENT "isSp"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
+RPAREN
+EQUAL
+IDENT "skipBlanksBack"
+IDENT "src"
+LPAREN
+IDENT "p"
+MINUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "p"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wordEndsAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "wordEndsAt"
+IDENT "src"
+IDENT "e"
+IDENT "word"
+EQUAL
+INDENT
+IDENT "copyCharRange"
+IDENT "src"
+LPAREN
+IDENT "e"
+MINUS
+INT 2
+RPAREN
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+EQ_EQ
+IDENT "word"
+AND
+LPAREN
+IDENT "e"
+LT
+INT 3
+OR
+IDENT "not"
+LPAREN
+IDENT "isAlnum"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "e"
+MINUS
+INT 3
+RPAREN
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteRename"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "byteRename"
+IDENT "src"
+IDENT "pos"
+EQUAL
+INDENT
+LET
+IDENT "c"
+EQUAL
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+NEWLINE
+IF
+IDENT "isLower"
+IDENT "c"
+OR
+IDENT "isUpper"
+IDENT "c"
+OR
+IDENT "isDigit"
+IDENT "c"
+THEN
+STRING "b_"
+PLUSPLUS
+IDENT "charToStr"
+IDENT "c"
+ELSE
+STRING "b_byte"
 NEWLINE
 DEDENT
 NEWLINE

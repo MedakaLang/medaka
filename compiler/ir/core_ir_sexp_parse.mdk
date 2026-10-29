@@ -244,6 +244,7 @@ toLit (SList ((SAtom "LFloat") :: [SAtom f])) = match stringToFloat f
   None => panic "core_ir_sexp_parse: bad float"
 toLit (SList ((SAtom "LString") :: [s])) = LString (toStr s)
 toLit (SList ((SAtom "LChar") :: [c])) = LChar (toStr c)
+toLit (SList ((SAtom "LByte") :: [n])) = LByte (toInt n)
 toLit (SList ((SAtom "LBool") :: [b])) = LBool (toBool b)
 toLit (SAtom "LUnit") = LUnit
 toLit (SList ((SAtom "LU64") :: [hi, lo])) = LU64 (toInt hi) (toInt lo)

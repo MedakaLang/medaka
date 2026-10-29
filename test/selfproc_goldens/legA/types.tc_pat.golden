@@ -28,6 +28,7 @@ instantiateRecordOpening : ModuleCtx -> RecordInfo -> ((Mono, List (String, Mono
 openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
 openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
 orCandidateCap : Int
+parkIntLit : ModuleCtx -> Mono -> Int -> Unit
 parkOpenedExistentials : ModuleCtx -> Unit -> Unit
 patOpensExistentials : TcEnv -> Pat -> Bool
 recPatFieldOpens : TcEnv -> RecPatField -> Bool

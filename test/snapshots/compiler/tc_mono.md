@@ -1,5 +1,5 @@
 # META
-source_lines=2268
+source_lines=2269
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -276,6 +276,7 @@ litType (LInt _) = tconBuiltin "Int"
 litType (LFloat _) = tconBuiltin "Float"
 litType (LString _) = tconBuiltin "String"
 litType (LChar _) = tconBuiltin "Char"
+litType (LByte _) = tconBuiltin "U8"
 litType (LBool _) = tconBuiltin "Bool"
 litType LUnit = tconBuiltin "Unit"
 litType (LU64 _ _) = tconBuiltin "U64"
@@ -2340,6 +2341,7 @@ implDeclWithReqs _ = []
 (DFunDef false "litType" ((PCon "LFloat" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Float"))))
 (DFunDef false "litType" ((PCon "LString" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "String"))))
 (DFunDef false "litType" ((PCon "LChar" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Char"))))
+(DFunDef false "litType" ((PCon "LByte" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "U8"))))
 (DFunDef false "litType" ((PCon "LBool" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
 (DFunDef false "litType" ((PCon "LUnit")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))
 (DFunDef false "litType" ((PCon "LU64" PWild PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "U64"))))
@@ -2939,6 +2941,7 @@ implDeclWithReqs _ = []
 (DFunDef false "litType" ((PCon "LFloat" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Float"))))
 (DFunDef false "litType" ((PCon "LString" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "String"))))
 (DFunDef false "litType" ((PCon "LChar" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Char"))))
+(DFunDef false "litType" ((PCon "LByte" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "U8"))))
 (DFunDef false "litType" ((PCon "LBool" PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))
 (DFunDef false "litType" ((PCon "LUnit")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))
 (DFunDef false "litType" ((PCon "LU64" PWild PWild)) (EApp (EVar "tconBuiltin") (ELit (LString "U64"))))

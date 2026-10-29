@@ -878,6 +878,7 @@ parseAtomRaw = defer
     TFloat f => emit (ELit (LFloat f))
     TString s => emit (ELit (LString s))
     TChar s => emit (ELit (LChar s))
+    TByte n => emit (ELit (LByte n))
     TIdent x => emit (EVar x)
     TUpper x => parseUpperAtom x
     TUnderscore => emit (EVar "_")
@@ -1835,6 +1836,7 @@ parsePatAtomRaw = defer
     TFloat f => emit (PLit (LFloat f))
     TString s => emit (PLit (LString s))
     TChar s => charPatRest (LChar s)
+    TByte n => bytePatRest (LByte n)
     TUpper c => defer
       advance
       n <- upperQualTail c
@@ -1868,10 +1870,7 @@ parseParamAsPat = defer
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
-intPatRest lo = defer
-  advance
-  t <- peekP
-  rngPatRest lo intBound t
+intPatRest lo = litPatRest intBound lo
 
 -- a negative int literal pattern `-N`, or a negative-bound range `-N..hi`
 -- Mirrors OCaml grammar: only `MINUS INT` followed by `..` or `..=` is valid;
@@ -1903,10 +1902,17 @@ negIntRng lo = defer
 -- consume INT
 
 charPatRest : Lit -> Parser Pat
-charPatRest lo = defer
+charPatRest lo = litPatRest charBound lo
+
+bytePatRest : Lit -> Parser Pat
+bytePatRest lo = litPatRest byteBound lo
+
+-- a literal pattern of one kind, or a range whose upper bound parses with [bound]
+litPatRest : Parser Lit -> Lit -> Parser Pat
+litPatRest bound lo = defer
   advance
   t <- peekP
-  rngPatRest lo charBound t
+  rngPatRest lo bound t
 
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
 rngPatRest lo bound TDotDot = defer
@@ -1941,6 +1947,7 @@ intBoundFor TMinusTight = defer
   match t
     TInt n _ => emit (LInt (negateLiteral n))
     _ => failP "expected an integer after `-` in the range bound"
+intBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 intBoundFor _ = failP "expected an integer range bound"
 
 charBound : Parser Lit
@@ -1948,8 +1955,24 @@ charBound = defer
   t <- peekP
   charBoundFor t
 
+byteBound : Parser Lit
+byteBound = defer
+  t <- peekP
+  byteBoundFor t
+
+byteBoundFor : Token -> Parser Lit
+byteBoundFor (TByte n) = emit (LByte n)
+byteBoundFor (TInt _ _) = fatalP (GenericParse mixedByteBoundMsg)
+byteBoundFor (TChar _) = fatalP (GenericParse mixedByteBoundMsg)
+byteBoundFor _ = failP "expected a byte range bound"
+
+mixedByteBoundMsg : String
+mixedByteBoundMsg =
+  "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither"
+
 charBoundFor : Token -> Parser Lit
 charBoundFor (TChar s) = emit (LChar s)
+charBoundFor (TByte _) = fatalP (GenericParse mixedByteBoundMsg)
 charBoundFor _ = failP "expected a character range bound"
 
 tuplePatOrSingle : List Pat -> Pat

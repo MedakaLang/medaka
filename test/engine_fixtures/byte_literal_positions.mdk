@@ -1,0 +1,74 @@
+-- Byte literal patterns in every position a clause or lambda parameter can
+-- sit: an `impl` method, an interface default method, a local `let` function
+-- and a lambda.  Each form (literal, range, nested `Some`, list, tuple,
+-- or-pattern) must select the same arm as the equal integer pattern, so the
+-- three engines agree with the pin.
+
+interface Cls a where
+  lit : a -> Int
+  opt : Option a -> Int
+  lst : List a -> Int
+  tup : (a, a) -> Int
+  alt : a -> Int
+
+interface Dflt a where
+  dlit : a -> U8 -> Int
+  dlit _ b'q' = 7
+  dopt : a -> Option U8 -> Int
+  dopt _ (Some b'x') = 5
+  dalt : a -> U8 -> Int
+  dalt _ (b'a' | b'b') = 9
+
+impl Dflt Unit where
+
+impl Cls U8 where
+  lit b'a' = 1
+  lit b'\xFF' = 2
+  lit _ = 0
+  opt (Some b'x') = 1
+  opt _ = 0
+  lst [b'h', b'i'] = 1
+  lst _ = 0
+  tup (b'a', b'z') = 1
+  tup _ = 0
+  alt (b'y' | b'n') = 1
+  alt _ = 0
+
+localLit : U8 -> Int
+localLit x = f x
+  where
+    f b'a' = 1
+    f _ = 0
+
+localOpt : Option U8 -> Int
+localOpt x = f x
+  where
+    f (Some b'x') = 1
+    f _ = 0
+
+localAlt : U8 -> Int
+localAlt x = f x
+  where
+    f (b'y' | b'n') = 1
+    f _ = 0
+
+lamLit : U8 -> Int
+lamLit = b'a' => 1
+
+lamTup : (U8, U8) -> Int
+lamTup = (b'a', b'z') => 1
+
+lamAlt : U8 -> Int
+lamAlt = (b'y' | b'n') => 1
+
+main =
+  [lit b'a', lit b'\xFF', lit b'b']
+    ++ [opt (Some b'x'), opt (Some b'y'), opt None]
+    ++ [lst [b'h', b'i'], lst [b'h']]
+    ++ [tup (b'a', b'z'), tup (b'a', b'a')]
+    ++ [alt b'y', alt b'n', alt b'm']
+    ++ [dlit () b'q', dopt () (Some b'x'), dalt () b'a', dalt () b'b']
+    ++ [localLit b'a', localLit b'b']
+    ++ [localOpt (Some b'x'), localOpt None]
+    ++ [localAlt b'n', localAlt b'q']
+    ++ [lamLit b'a', lamTup (b'a', b'z'), lamAlt b'y']

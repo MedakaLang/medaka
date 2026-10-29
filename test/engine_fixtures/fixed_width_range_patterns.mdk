@@ -1,0 +1,46 @@
+-- Range patterns over `U8`/`U16`/`U32` scrutinees: integer bounds are typed by
+-- the scrutinee, byte-literal bounds are `U8`.  Boundaries 0 and 2^n - 1 of each
+-- width, ranges crossing 255 and 65535, an exclusive range and an or-pattern of
+-- two ranges; the three engines agree.
+
+import u8
+import u16
+import u32
+
+c8 : U8 -> Int
+c8 b = match b
+  b'a'..=b'z' | b'A'..=b'Z' => 1
+  b'0'..=b'9' => 2
+  0..=3 => 3
+  250..=255 => 4
+  _ => 0
+
+cx : U8 -> Int
+cx b = match b
+  10..20 => 1
+  _ => 0
+
+c16 : U16 -> Int
+c16 b = match b
+  0..=0 => 1
+  200..=300 => 2
+  65280..=65535 => 3
+  _ => 0
+
+c32 : U32 -> Int
+c32 b = match b
+  0..=0 => 3
+  65536..=70000 => 1
+  4294967200..=4294967294 => 4
+  4294967295..=4294967295 => 2
+  _ => 0
+
+main = (
+  map c8 [b'a', b'z', b'A', b'Z', b'5', b'/', b':', 0, 3, 4, 250, 255, 249],
+  map cx [9, 10, 19, 20],
+  map c16 [0, 199, 200, 255, 256, 300, 301, 65279, 65280, 65535],
+  map c32 [
+    0, 65535, 65536, 70000, 70001, 4294967199, 4294967200, 4294967294,
+    4294967295
+  ],
+)

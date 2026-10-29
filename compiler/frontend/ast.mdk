@@ -26,6 +26,9 @@ public export data Lit =
   | LI64 Int Int
   | LString String
   | LChar String
+  -- A byte literal `b'a'`: a `U8` constant, 0-255.  Typed `U8` directly (never via
+  -- `Num`), and replaced by the integer word before an engine sees it.
+  | LByte Int
   | LBool Bool
   | LUnit
   deriving (Eq)

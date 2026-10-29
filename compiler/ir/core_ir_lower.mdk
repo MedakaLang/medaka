@@ -167,6 +167,9 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
   CMethod name (MethodEvidence iface arity route implRoutes methodRoutes)
 
 lower : Expr -> CExpr
+-- A byte literal is its `U8` word: the same constant an in-range `(97 : U8)`
+-- is rewritten to, so no later stage learns a new literal.
+lower (ELit (LByte n)) = CLit (LInt n)
 lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
 -- arm is defensive (a non-rewritten path) and lowers to an int constant.
@@ -183,7 +186,8 @@ lower (ELam pats body) =
   CLam params lowered
 lower (ELet site False pat e1 e2)
   | patMayFail pat = letDecision site pat (lower e1) (lower e2)
-lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
+lower (ELet _ recFlag pat e1 e2) =
+  CLet recFlag (eraseBytePat pat) (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
@@ -263,11 +267,12 @@ composeLam first second =
     (mkApp second [mkApp first [CVar composeVar AGlobal]])
 
 lowerArm : Arm -> CArm
-lowerArm (Arm pat guards body) = CArm pat (map lowerGuard guards) (lower body)
+lowerArm (Arm pat guards body) =
+  CArm (eraseBytePat pat) (map lowerGuard guards) (lower body)
 
 lowerGuard : Guard -> CGuard
 lowerGuard (GBool e) = CGBool (lower e)
-lowerGuard (GBind p e) = CGBind p (lower e)
+lowerGuard (GBind p e) = CGBind (eraseBytePat p) (lower e)
 
 -- ── decision-tree match compilation (§2.1) ─────────────────────────────────
 -- Compile a `match`'s ordered arms into a CDecision (decision tree) when every
@@ -277,7 +282,12 @@ lowerGuard (GBind p e) = CGBind p (lower e)
 -- the constructor/list/tuple/literal matches that dominate the lexer + parser.
 -- [site] is the `match` keyword's span, which a miss reports.
 lowerMatch : Loc -> CExpr -> List Arm -> CExpr
-lowerMatch site cscrut arms
+lowerMatch site cscrut rawArms =
+  let arms = map eraseByteArm rawArms
+  lowerMatchErased site cscrut arms
+
+lowerMatchErased : Loc -> CExpr -> List Arm -> CExpr
+lowerMatchErased site cscrut arms
   | any armOr arms =
     let carms = lowerOrArms 0 arms
     CDecision cscrut carms (compileArmsC (NoArm site) carms)
@@ -290,7 +300,8 @@ lowerMatch site cscrut arms
 -- fields included, through the match machinery.  `refoldLets` turns it back into
 -- the plain `CLet` for every lowering that does not use that check.
 letDecision : Loc -> Pat -> CExpr -> CExpr -> CExpr
-letDecision site pat scrut body =
+letDecision site rawPat scrut body =
+  let pat = eraseBytePat rawPat
   let arms = candidateArms 0 (map (p => (p, [])) (orCandidates pat)) body
   CDecision scrut arms (compileArmsC (LetRefuted site) arms)
 
@@ -355,7 +366,10 @@ orDecision site scrut pat body tail =
 -- next before the next clause.  Any other body is lowered once, under a
 -- decision over fresh parameters whose miss falls through to the next clause.
 lowerOrClause : List Pat -> Expr -> List (List Pat, CExpr)
-lowerOrClause pats body
+lowerOrClause rawPats body = lowerErasedClause (map eraseBytePat rawPats) body
+
+lowerErasedClause : List Pat -> Expr -> List (List Pat, CExpr)
+lowerErasedClause pats body
   | any patHasOr pats =
     let lowered = lower body
     if cFallsThrough lowered then
@@ -642,6 +656,39 @@ nilName = "__nil__"
 unitName : String
 unitName = "__unit__"
 
+-- A byte literal pattern is its `U8` word, like the expression `lower` gives the
+-- same literal, so no matrix, decision tree or engine sees `LByte`.  A pattern
+-- enters Core IR through `lowerOrClause` (clauses, impl methods), `orDefaultParams`
+-- (lambdas, interface defaults), `letDecision`/`CLet`, `lowerArm` or `lowerGuard`;
+-- each of those erases through here, and a new entry must too.
+eraseBytePat : Pat -> Pat
+eraseBytePat (PLit (LByte n)) = PLit (LInt n)
+eraseBytePat (PCon c ps) = PCon c (map eraseBytePat ps)
+eraseBytePat (PCons h t) = PCons (eraseBytePat h) (eraseBytePat t)
+eraseBytePat (PTuple ps) = PTuple (map eraseBytePat ps)
+eraseBytePat (PList ps) = PList (map eraseBytePat ps)
+eraseBytePat (PAs x l bid p) = PAs x l bid (eraseBytePat p)
+eraseBytePat (POr ps) = POr (map eraseBytePat ps)
+eraseBytePat (PRng lo hi incl) = PRng (eraseByteLit lo) (eraseByteLit hi) incl
+eraseBytePat (PRec n fs open) = PRec n (map eraseBytePatField fs) open
+eraseBytePat p = p
+
+eraseBytePatField : RecPatField -> RecPatField
+eraseBytePatField (RecPatField n l bid sub) =
+  RecPatField n l bid (map eraseBytePat sub)
+
+eraseByteLit : Lit -> Lit
+eraseByteLit (LByte n) = LInt n
+eraseByteLit l = l
+
+eraseByteArm : Arm -> Arm
+eraseByteArm (Arm pat guards body) =
+  Arm (eraseBytePat pat) (map eraseByteGuard guards) body
+
+eraseByteGuard : Guard -> Guard
+eraseByteGuard (GBind p e) = GBind (eraseBytePat p) e
+eraseByteGuard g = g
+
 -- exported for the LLVM backend (slice 7): impl-method clauses are canonicalised
 -- into the matrix form before `compileTree` (same as `initialRows` does for match
 -- arms) — part of the shared backend-neutral decision-tree pass (Axis-1).
@@ -742,6 +789,7 @@ dedupLits (l :: rest) seen =
 litKey : Lit -> String
 litKey (LInt n) = "i" ++ intToString n
 litKey (LChar c) = "c" ++ c
+litKey (LByte n) = "y" ++ intToString n
 litKey (LString s) = "s" ++ s
 litKey (LFloat f) = "f" ++ floatToString (normLitZero f)
 litKey (LBool True) = "bT"
@@ -888,7 +936,7 @@ lowerClauses pats body =
 
 lowerStmt : DoStmt -> CStmt
 lowerStmt (DoExpr e) = CSExpr (lower e)
-lowerStmt (DoLet _ recFlag pat e _) = CSLet recFlag pat (lower e)
+lowerStmt (DoLet _ recFlag pat e _) = CSLet recFlag (eraseBytePat pat) (lower e)
 lowerStmt (DoAssign x e) = CSAssign x (lower e)
 lowerStmt _ = panic "core_ir lower: unsupported block statement"
 
@@ -3337,9 +3385,12 @@ lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _
 -- no guards, so parameters holding or-patterns are tested by a decision whose
 -- miss is a non-exhaustive match.
 orDefaultParams : List Pat -> Expr -> (List Pat, CExpr)
-orDefaultParams pats body
-  | any patHasOr pats = orTested pats (lower body) []
-  | otherwise = (pats, lower body)
+orDefaultParams rawPats body =
+  let pats = map eraseBytePat rawPats
+  if any patHasOr pats then
+    orTested pats (lower body) []
+  else
+    (pats, lower body)
 
 -- Fresh parameters for [pats] and a decision over their candidates sharing
 -- [body], then [tail]'s arms.

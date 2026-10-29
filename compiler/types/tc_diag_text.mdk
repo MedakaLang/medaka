@@ -857,6 +857,7 @@ renderCallArg (ELit (LBool True)) = Some "True"
 renderCallArg (ELit (LBool False)) = Some "False"
 renderCallArg (ELit (LString s)) = Some ("\"" ++ s ++ "\"")
 renderCallArg (ELit (LChar c)) = Some ("'" ++ c ++ "'")
+renderCallArg (ELit (LByte n)) = Some (intToString n)
 renderCallArg (EVar n) = Some n
 renderCallArg (EVarId n _) = Some n
 renderCallArg (EMethodAt n _ _) = Some n

@@ -2121,3 +2121,23 @@ test "a deferred match warns at the span it was deferred from" =
   expectEqual
     ["m.mdk:9:3"]
     (map (d => locKey (tcLoc d)) m.mcCells.matchWarnings.value)
+
+test "a byte literal is a U8, not an Int or a Char" = expectAll [
+  checks "main = b'a'" "U8" [],
+  says "main = if True then b'a' else 'b'" "U8" ["type mismatch: U8 vs Char"],
+]
+
+test "a byte literal pattern joins the scrutinee's type to U8" = expectAll [
+  checks """
+main = match b'c'
+  b'a' => True
+  _ => False
+""" "Bool" [],
+  checks """
+main = match 'c'
+  b'a' => True
+  _ => False
+""" "Bool" [
+    "T-TYPE-MISMATCH",
+  ],
+]

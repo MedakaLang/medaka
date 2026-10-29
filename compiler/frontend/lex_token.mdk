@@ -14,6 +14,7 @@ public export data Token =
   | TFloat Float
   | TString String
   | TChar String
+  | TByte Int
   | TBool Bool
   | TInterpOpen String
   | TInterpMid String
@@ -115,6 +116,7 @@ tokenToString (TWideInt hi lo _) = "INT 0x" ++ u64HalvesHex hi lo
 tokenToString (TFloat f) = "FLOAT " ++ floatToString f
 tokenToString (TString s) = "STRING " ++ debugStringLit s
 tokenToString (TChar s) = "CHAR " ++ debugStringLit s
+tokenToString (TByte n) = "BYTE " ++ intToString n
 tokenToString (TBool True) = "BOOL true"
 tokenToString (TBool False) = "BOOL false"
 tokenToString (TInterpOpen s) = "INTERP_OPEN " ++ debugStringLit s
@@ -221,6 +223,7 @@ describeToken (TWideInt _ _ _) = "a number"
 describeToken (TFloat _) = "a number"
 describeToken (TString _) = "a string"
 describeToken (TChar _) = "a character literal"
+describeToken (TByte _) = "a byte literal"
 describeToken (TBool True) = "`true`"
 describeToken (TBool False) = "`false`"
 describeToken (TInterpOpen _) = "a string"

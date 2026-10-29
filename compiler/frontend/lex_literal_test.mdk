@@ -1,8 +1,11 @@
 import frontend.lex_literal.{
   LiteralCursor(..), LiteralFlavor(..), LiteralPart(..), LiteralRead(..),
-  LiteralStop(..), LexError(..), readLiteral, readCharacter
+  LiteralStop(..), LexError(..), readLiteral, readCharacter, readByteLiteral,
+  utf8FixIt
 }
-import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
+}
 import test.{expectEqual, expectAll}
 
 literalResult : String -> Bool -> String
@@ -32,3 +35,73 @@ test "literal reader preserves escapes and reports the nested opener" = expectAl
       "out-of-range:\\u{110000}:1:11"
       (characterResult "'\\u{110000}'"),
   ]
+
+byteResult : String -> String
+byteResult source = match readByteLiteral (stringToChars source) 0
+  Ok (v, n) => "\{intToString v}:\{intToString n}"
+  Err (LexError (NonAsciiByte _ fixIt) _ _) => "non-ascii:\{fixIt}"
+  Err (LexError (BadByteLiteral _) s e) =>
+    "bad:\{intToString s}:\{intToString e}"
+  Err _ => "other error"
+
+test "byte literal decodes the char escapes and xNN" = expectAll [
+  expectEqual "97:4" (byteResult "b'a'"),
+  expectEqual "10:5" (byteResult "b'\\n'"),
+  expectEqual "9:5" (byteResult "b'\\t'"),
+  expectEqual "13:5" (byteResult "b'\\r'"),
+  expectEqual "0:5" (byteResult "b'\\0'"),
+  expectEqual "92:5" (byteResult "b'\\\\'"),
+  expectEqual "34:5" (byteResult "b'\\\"'"),
+  expectEqual "39:5" (byteResult "b'\\''"),
+  expectEqual "65:9" (byteResult "b'\\u{41}'"),
+  expectEqual "0:7" (byteResult "b'\\x00'"),
+  expectEqual "127:7" (byteResult "b'\\x7F'"),
+  expectEqual "255:7" (byteResult "b'\\xFF'"),
+  expectEqual "255:7" (byteResult "b'\\xff'"),
+]
+
+test "byte literal refuses malformed bodies" = expectAll [
+  expectEqual "bad:0:7" (byteResult "b'\\x100'"),
+  expectEqual "bad:0:5" (byteResult "b'\\x1'"),
+  expectEqual "bad:0:4" (byteResult "b'\\xZZ'"),
+  expectEqual "bad:0:3" (byteResult "b''"),
+  expectEqual "bad:0:5" (byteResult "b'ab'"),
+  expectEqual "bad:0:4" (byteResult "b'\\v'"),
+  expectEqual "bad:0:3" (byteResult "b'a"),
+  expectEqual "bad:0:3" (byteResult "b'\\"),
+  expectEqual "bad:0:6" (byteResult "b'\\x41"),
+]
+
+byteMessage : String -> String
+byteMessage source = match readByteLiteral (stringToChars source) 0
+  Ok _ => "ok"
+  Err (LexError kind _ _) => renderParseProblem kind
+
+test "byte literal errors say what is wrong" = expectAll [
+  expectEqual
+    "unterminated byte literal; expected a closing `'`"
+    (byteMessage "b'\\"),
+  expectEqual
+    "unterminated byte literal; expected a closing `'`"
+    (byteMessage "b'\\x41"),
+  expectEqual
+    "invalid escape sequence `\\q` in byte literal; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\\" \\xNN \\u{...}"
+    (byteMessage "b'\\q'"),
+  expectEqual
+    "byte literal `b'\\u{E9}'` is not ASCII; a byte literal holds one byte, so write its UTF-8 bytes as `b'\\xC3'`, `b'\\xA9'`"
+    (byteMessage "b'\\u{E9}'"),
+  expectEqual
+    "byte literal `b'é'` has more than one character; a byte literal is exactly one ASCII character, so write the UTF-8 bytes of its body as `b'\\x65'`, `b'\\xCC'`, `b'\\x81'`"
+    (byteMessage "b'é'"),
+]
+
+test "non-ASCII byte literal fix-it lists the UTF-8 bytes" = expectAll [
+  expectEqual "non-ascii:`b'\\xC3'`, `b'\\xA9'`" (byteResult "b'é'"),
+  expectEqual
+    "non-ascii:`b'\\xE2'`, `b'\\x82'`, `b'\\xAC'`"
+    (byteResult "b'€'"),
+  expectEqual
+    "non-ascii:`b'\\xF0'`, `b'\\x9F'`, `b'\\x98'`, `b'\\x80'`"
+    (byteResult "b'😀'"),
+  expectEqual "`b'\\xC3'`, `b'\\xA9'`" (utf8FixIt "é"),
+]

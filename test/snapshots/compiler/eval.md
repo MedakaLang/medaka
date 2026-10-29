@@ -1,5 +1,5 @@
 # META
-source_lines=5621
+source_lines=5625
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1029,6 +1029,7 @@ matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
 matchPat (PLit (LString s)) (VString t) = if s == t then Some [] else None
 matchPat (PLit (LChar c)) (VChar d) = if c == d then Some [] else None
+matchPat (PLit (LByte n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LBool b)) (VBool c) = if boolEq b c then Some [] else None
 matchPat (PLit LUnit) VUnit = Some []
 matchPat (PCon "True" []) (VBool True) = Some []
@@ -1062,6 +1063,8 @@ matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
 matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
   | inCharRange c lo hi incl = Some []
+matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
+  | inIntRange v lo hi incl = Some []
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
@@ -1670,6 +1673,7 @@ eval _ (ELit (LI64 hi lo)) = VI64 hi lo
 eval _ (EWideLit hi lo _ _) = VU64 hi lo
 eval _ (ELit (LString s)) = VString s
 eval _ (ELit (LChar c)) = VChar c
+eval _ (ELit (LByte n)) = VInt n
 eval _ (ELit (LBool b)) = VBool b
 eval _ (ELit LUnit) = VUnit
 eval env (EVar x) = if startsWithAt x then VUnit else lookupEnv env x
@@ -5986,6 +5990,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LString" (PVar "s"))) (PCon "VString" (PVar "t"))) (EIf (EBinOp "==" (EVar "s") (EVar "t")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PCon "VChar" (PVar "d"))) (EIf (EBinOp "==" (EVar "c") (EVar "d")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
+(DFunDef false "matchPat" ((PCon "PLit" (PCon "LByte" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PCon "VBool" (PVar "c"))) (EIf (EApp (EApp (EVar "boolEq") (EVar "b")) (EVar "c")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LUnit")) (PCon "VUnit")) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PCon" (PLit (LString "True")) (PList)) (PCon "VBool" (PCon "True"))) (EApp (EVar "Some") (EListLit)))
@@ -6000,6 +6005,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EVar "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -6202,6 +6208,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
+(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LUnit"))) (EVar "VUnit"))
 (DFunDef false "eval" ((PVar "env") (PCon "EVar" (PVar "x"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
@@ -7828,6 +7835,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LString" (PVar "s"))) (PCon "VString" (PVar "t"))) (EIf (EBinOp "==" (EVar "s") (EVar "t")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PCon "VChar" (PVar "d"))) (EIf (EBinOp "==" (EVar "c") (EVar "d")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
+(DFunDef false "matchPat" ((PCon "PLit" (PCon "LByte" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PCon "VBool" (PVar "c"))) (EIf (EApp (EApp (EVar "boolEq") (EVar "b")) (EVar "c")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LUnit")) (PCon "VUnit")) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PCon" (PLit (LString "True")) (PList)) (PCon "VBool" (PCon "True"))) (EApp (EVar "Some") (EListLit)))
@@ -7842,6 +7850,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "POr" (PVar "alts")) (PVar "v")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orderBinds") (EApp (EVar "patBindings") (EApp (EVar "POr") (EVar "alts"))))) (EApp (EApp (EVar "findMap") (ELam ((PVar "a")) (EApp (EApp (EVar "matchPat") (EVar "a")) (EVar "v")))) (EVar "alts"))))
 (DFunDef false "matchPat" (PWild PWild) (EVar "None"))
 (DTypeSig false "orderBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -8044,6 +8053,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
+(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LByte" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LUnit"))) (EVar "VUnit"))
 (DFunDef false "eval" ((PVar "env") (PCon "EVar" (PVar "x"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))

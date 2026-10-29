@@ -1,5 +1,5 @@
 # META
-source_lines=779
+source_lines=780
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -248,6 +248,7 @@ toLit (SList ((SAtom "LFloat") :: [SAtom f])) = match stringToFloat f
   None => panic "core_ir_sexp_parse: bad float"
 toLit (SList ((SAtom "LString") :: [s])) = LString (toStr s)
 toLit (SList ((SAtom "LChar") :: [c])) = LChar (toStr c)
+toLit (SList ((SAtom "LByte") :: [n])) = LByte (toInt n)
 toLit (SList ((SAtom "LBool") :: [b])) = LBool (toBool b)
 toLit (SAtom "LUnit") = LUnit
 toLit (SList ((SAtom "LU64") :: [hi, lo])) = LU64 (toInt hi) (toInt lo)
@@ -862,6 +863,7 @@ toManifestString other =
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LFloat"))) (PList (PCon "SAtom" (PVar "f")))))) (EMatch (EApp (EVar "stringToFloat") (EVar "f")) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "LFloat") (EVar "x"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad float"))))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LString"))) (PList (PVar "s"))))) (EApp (EVar "LString") (EApp (EVar "toStr") (EVar "s"))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LChar"))) (PList (PVar "c"))))) (EApp (EVar "LChar") (EApp (EVar "toStr") (EVar "c"))))
+(DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LByte"))) (PList (PVar "n"))))) (EApp (EVar "LByte") (EApp (EVar "toInt") (EVar "n"))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LBool"))) (PList (PVar "b"))))) (EApp (EVar "LBool") (EApp (EVar "toBool") (EVar "b"))))
 (DFunDef false "toLit" ((PCon "SAtom" (PLit (LString "LUnit")))) (EVar "LUnit"))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LU64"))) (PList (PVar "hi") (PVar "lo"))))) (EApp (EApp (EVar "LU64") (EApp (EVar "toInt") (EVar "hi"))) (EApp (EVar "toInt") (EVar "lo"))))
@@ -1152,6 +1154,7 @@ toManifestString other =
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LFloat"))) (PList (PCon "SAtom" (PVar "f")))))) (EMatch (EApp (EVar "stringToFloat") (EVar "f")) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "LFloat") (EVar "x"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad float"))))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LString"))) (PList (PVar "s"))))) (EApp (EVar "LString") (EApp (EVar "toStr") (EVar "s"))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LChar"))) (PList (PVar "c"))))) (EApp (EVar "LChar") (EApp (EVar "toStr") (EVar "c"))))
+(DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LByte"))) (PList (PVar "n"))))) (EApp (EVar "LByte") (EApp (EVar "toInt") (EVar "n"))))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LBool"))) (PList (PVar "b"))))) (EApp (EVar "LBool") (EApp (EVar "toBool") (EVar "b"))))
 (DFunDef false "toLit" ((PCon "SAtom" (PLit (LString "LUnit")))) (EVar "LUnit"))
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LU64"))) (PList (PVar "hi") (PVar "lo"))))) (EApp (EApp (EVar "LU64") (EApp (EVar "toInt") (EVar "hi"))) (EApp (EVar "toInt") (EVar "lo"))))

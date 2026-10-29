@@ -38,7 +38,7 @@ sampleSize : Int
 sampleSize = 40
 
 sampleSeed : Int
-sampleSeed = 4395
+sampleSeed = 4396
 
 -- A linear congruential step; the sample is a function of the seed and the
 -- directory listing, so a failure replays.
@@ -250,7 +250,7 @@ seenSample s =
 allCtors : List String
 allCtors = [
   "Lit.LInt", "Lit.LFloat", "Lit.LU64", "Lit.LI64", "Lit.LString", "Lit.LChar",
-  "Lit.LBool", "Lit.LUnit", "TyConOrigin.OriginUnresolved",
+  "Lit.LByte", "Lit.LBool", "Lit.LUnit", "TyConOrigin.OriginUnresolved",
   "TyConOrigin.OriginBuiltin", "TyConOrigin.OriginModule", "Ty.TyCon",
   "Ty.TyVar", "Ty.TyApp", "Ty.TyFun", "Ty.TyTuple", "Ty.TyEffect",
   "Ty.TyConstrained", "Ty.TyNamed", "Ty.TyQual", "Ty.TyRow", "Ty.TyAuth",
@@ -567,6 +567,7 @@ dumpLit (LU64 a0 a1) = SList [SAtom "ctor:Lit.LU64", dumpInt a0, dumpInt a1]
 dumpLit (LI64 a0 a1) = SList [SAtom "ctor:Lit.LI64", dumpInt a0, dumpInt a1]
 dumpLit (LString a0) = SList [SAtom "ctor:Lit.LString", dumpString a0]
 dumpLit (LChar a0) = SList [SAtom "ctor:Lit.LChar", dumpString a0]
+dumpLit (LByte a0) = SList [SAtom "ctor:Lit.LByte", dumpInt a0]
 dumpLit (LBool a0) = SList [SAtom "ctor:Lit.LBool", dumpBool a0]
 dumpLit LUnit = SList [SAtom "ctor:Lit.LUnit"]
 

@@ -1,5 +1,5 @@
 # META
-source_lines=2550
+source_lines=2551
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -1439,6 +1439,7 @@ roleOf (TIdent _) depth lineStart _ =
 roleOf (TBacktickIdent _) _ _ _ = Some 3
 roleOf (TString _) _ _ _ = Some 5
 roleOf (TChar _) _ _ _ = Some 5
+roleOf (TByte _) _ _ _ = Some 5
 roleOf (TInterpOpen _) _ _ _ = Some 5
 roleOf (TInterpMid _) _ _ _ = Some 5
 roleOf (TInterpEnd _) _ _ _ = Some 5
@@ -2858,6 +2859,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TBacktickIdent" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 3))))
 (DFunDef false "roleOf" ((PCon "TString" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TChar" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
+(DFunDef false "roleOf" ((PCon "TByte" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpOpen" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpMid" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpEnd" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
@@ -3349,6 +3351,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TBacktickIdent" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 3))))
 (DFunDef false "roleOf" ((PCon "TString" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TChar" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
+(DFunDef false "roleOf" ((PCon "TByte" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpOpen" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpMid" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpEnd" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))

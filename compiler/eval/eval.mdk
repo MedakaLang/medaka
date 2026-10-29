@@ -1025,6 +1025,7 @@ matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
 matchPat (PLit (LString s)) (VString t) = if s == t then Some [] else None
 matchPat (PLit (LChar c)) (VChar d) = if c == d then Some [] else None
+matchPat (PLit (LByte n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LBool b)) (VBool c) = if boolEq b c then Some [] else None
 matchPat (PLit LUnit) VUnit = Some []
 matchPat (PCon "True" []) (VBool True) = Some []
@@ -1058,6 +1059,8 @@ matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
 matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
   | inCharRange c lo hi incl = Some []
+matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
+  | inIntRange v lo hi incl = Some []
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
@@ -1666,6 +1669,7 @@ eval _ (ELit (LI64 hi lo)) = VI64 hi lo
 eval _ (EWideLit hi lo _ _) = VU64 hi lo
 eval _ (ELit (LString s)) = VString s
 eval _ (ELit (LChar c)) = VChar c
+eval _ (ELit (LByte n)) = VInt n
 eval _ (ELit (LBool b)) = VBool b
 eval _ (ELit LUnit) = VUnit
 eval env (EVar x) = if startsWithAt x then VUnit else lookupEnv env x

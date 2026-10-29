@@ -64,6 +64,9 @@ braceItemsFor : String -> Token -> ParserE <> Expr
 bracketIndexRest : Expr -> Expr -> Token -> ParserE <> Expr
 bracketIndexTail : Expr -> ParserE <> Expr
 branchBlock : ParserE <> Expr
+byteBound : ParserE <> Lit
+byteBoundFor : Token -> ParserE <> Lit
+bytePatRest : Lit -> ParserE <> Pat
 charBound : ParserE <> Lit
 charBoundFor : Token -> ParserE <> Lit
 charPatRest : Lit -> ParserE <> Pat
@@ -252,6 +255,7 @@ letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
 listAfterComma : Expr -> Token -> ParserE <> Expr
 listFor : Token -> ParserE <> Expr
 listRest : Expr -> Token -> ParserE <> Expr
+litPatRest : ParserE <> Lit -> Lit -> ParserE <> Pat
 located : ParserE <> Expr -> ParserE <> Expr
 locatedUpperNameP : ParserE <> (String, Loc)
 lowerNameFor : Token -> ParserE <> String
@@ -265,6 +269,7 @@ memberAliasNameFor : Token -> ParserE <> String
 memberAliasOrNot : Int -> String -> Bool -> ParserE <> UseMember
 missingWhereIfaceMsg : ParseDiagnosticKind
 missingWhereImplMsg : ParseDiagnosticKind
+mixedByteBoundMsg : String
 mkAttr : Int -> String -> Option String -> ParserE <> Attr
 mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
 mkLocated : (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> Int -> ParseDiagnosticKind -> Int -> ParseError

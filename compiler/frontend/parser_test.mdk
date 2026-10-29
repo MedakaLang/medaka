@@ -910,3 +910,51 @@ test "formatting an or-pattern is stable and keeps parentheses where needed" =
     expectEqual src (formatSource src),
     expectEqual (formatSource src) (formatSource (formatSource src)),
   ]
+
+test "formatting byte literals is canonical: printable ASCII as itself, the rest escaped" =
+  let src =
+    """x = [b'a', b'\\n', b'\\t', b'\\r', b'\\0', b'\\'', b'\\\\', b'\\xFF', b'\\x7F']
+"""
+  expectAll [
+    expectEqual src (formatSource src),
+    expectEqual
+      src
+      (formatSource
+        """x = [b'\\x61', b'\\x0a', b'\\x09', b'\\x0D', b'\\x00', b'\\x27', b'\\x5C', b'\\xff', b'\\x7f']
+"""),
+  ]
+
+test "formatting a byte literal in each pattern position is stable" =
+  let src =
+    """f x = match x
+  b'a' => 1
+  b'\\n' | b' ' => 2
+  _ => 0
+
+g b'a' = 1
+g _ = 0
+"""
+  expectAll [
+    expectEqual src (formatSource src),
+    expectEqual (formatSource src) (formatSource (formatSource src)),
+  ]
+
+test "a byte literal range pattern parses and formats" =
+  let src = """f x = match x
+  b'a'..=b'z' => 3
+  b'0'..b'9' => 4
+  _ => 0
+"""
+  expectEqual src (formatSource src)
+
+test "a range pattern mixing a byte bound with an integer or character bound is refused with one message" =
+  let msg =
+    "a range pattern cannot mix a byte literal bound with an integer or character bound; write both bounds as byte literals (`b'a'..=b'z'`) or neither"
+  expectEqual
+    (msg, msg, msg, "parsed")
+    (
+      parseMsg "f x = match x\n  b'a'..=122 => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  48..=b'z' => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  'a'..=b'z' => 1\n  _ => 0\n",
+      parseMsg "f x = match x\n  b'a'..=b'z' => 1\n  _ => 0\n",
+    )

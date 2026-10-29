@@ -228,10 +228,17 @@ unifyOrBinder env k binds (name, Forall _ _ _ _ _ t1) =
           TOrPatternBinderTypes
           "the alternatives of an or-pattern must bind `\{name}` at one type, but alternative 1 binds it as \{ppMono (normalize t1)} and alternative \{intToString k} as \{ppMono (normalize t2)}"
 
--- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
--- binds no variables
+-- range pattern `lo..hi` / `lo..=hi`: Int, Char, byte and fixed-width bounds
+-- are valid; binds no variables.  Integer bounds are typed by the scrutinee
+-- exactly as integer literal patterns are (`inferIntLitPat`), one parked
+-- literal per bound, so both are range-checked against a fixed-width head.
 inferPatRng : ModuleCtx -> Lit -> Lit -> (Mono, List (String, Scheme))
-inferPatRng mctx (LInt _) (LInt _) = (tconBuiltin "Int", [])
+inferPatRng mctx (LInt lo) (LInt hi) =
+  let a = freshVar mctx ()
+  parkIntLit mctx a lo
+  parkIntLit mctx a hi
+  (a, [])
+inferPatRng mctx (LByte _) (LByte _) = (tconBuiltin "U8", [])
 inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
 inferPatRng mctx lo hi =
   pushTypeError
@@ -321,9 +328,13 @@ inferRecPatFieldWith env ft _ _ (Some p) =
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
 inferIntLitPat mctx n =
   let a = freshVar mctx ()
+  parkIntLit mctx a n
+  (a, [])
+
+parkIntLit : ModuleCtx -> Mono -> Int -> Unit
+parkIntLit mctx a n =
   mctx.mcCells.patLitPending :=
     (a, n, mctx.mcLoc) :: mctx.mcCells.patLitPending.value
-  (a, [])
 
 -- Open a pattern site: park the literals of any enclosing site and start
 -- empty.  The existentials a pattern opens are parked the same way; a match

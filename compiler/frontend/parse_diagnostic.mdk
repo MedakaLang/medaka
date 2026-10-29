@@ -54,6 +54,9 @@ public export data ParseDiagnosticKind =
   | BadUnicodeEscape UnicodeProblem
   | BareUnicodeEscape String String
   | LongChar String
+  | NonAsciiByte String String
+  | BadByteLiteral String
+  | ByteLikeIdent String String
   | UnexpectedCharacter String
   | WidePattern String
   | MalformedRadix String String String
@@ -103,6 +106,9 @@ problemCode (BadUnicodeEscape _) = LBadUnicodeEscape
 problemCode (BareUnicodeEscape _ _) = LBareUnicodeEscape
 problemCode (LongChar _) = LBadCharLiteral
 problemCode (UnexpectedCharacter _) = LBadChar
+problemCode (NonAsciiByte _ _) = LByteNonAscii
+problemCode (BadByteLiteral _) = LBadByteLiteral
+problemCode (ByteLikeIdent _ _) = LByteLiteralIdent
 problemCode (WidePattern _) = LIntOverflow
 problemCode (MalformedRadix _ _ _) = LMalformedRadix
 problemCode (MalformedFloat _ _ _) = LMalformedFloat
@@ -182,6 +188,11 @@ renderParseProblem (BareUnicodeEscape old new) =
   "bare unicode escape `\{old}` is not valid; did you mean `\{new}`?"
 renderParseProblem (LongChar text) =
   "character literal `'\{text}'` has more than one codepoint; write a `\"...\"` string for text"
+renderParseProblem (NonAsciiByte ch fixIt) =
+  "byte literal `b'\{ch}'` is not ASCII; a byte literal holds one byte, so write its UTF-8 bytes as \{fixIt}"
+renderParseProblem (BadByteLiteral msg) = msg
+renderParseProblem (ByteLikeIdent old new) =
+  "`\{old}` is a byte literal, not an identifier; rename it, for example `\{new}`"
 renderParseProblem (UnexpectedCharacter text) = "unexpected character `\{text}`"
 renderParseProblem (WidePattern lx) =
   "integer literal too large for a pattern: `\{lx}` exceeds Int; match it in a guard instead, `x if x == \{lx}`"
@@ -251,6 +262,10 @@ problemHelp BadNeq = Some "replace `!=` with `/=`"
 problemHelp PositiveIntOverflow =
   Some
     "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
+problemHelp (NonAsciiByte _ fixIt) =
+  Some "write the character as its UTF-8 bytes, \{fixIt}"
+problemHelp (ByteLikeIdent _ new) =
+  Some "rename every occurrence of the identifier, for example to `\{new}`"
 problemHelp (BareUnicodeEscape _ _) =
   Some "write the unicode escape braced, `\\u{XXXX}`"
 problemHelp (MalformedRadix _ _ _) =
