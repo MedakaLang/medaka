@@ -1,3 +1,6 @@
+import types.symbol_origins.{
+  SymbolOrigins, emptyOrigins, unitOrigins, mergeOrigins
+}
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
 --
 -- The gap-tolerant / multi-module emit drivers FLATTEN every module's decls into
@@ -192,9 +195,8 @@ mangleUnits : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
-  let allUnits = ("core", coreDecls) :: modules
-  symbolInjectivityGuard (entryUnitMid allUnits) allUnits
-  renameUnits externSymbolName [] coreDecls modules
+  let (coreOut, modsOut, _) = mangleUnitsWithOrigins coreDecls modules
+  (coreOut, modsOut)
 
 -- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
 -- which must tell which declaration each reference denotes.  Every extern takes
@@ -283,7 +285,7 @@ export
 mangleUnitsEv : EvTable ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl), EvTable)
+  (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
 mangleUnitsEv table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
@@ -316,7 +318,20 @@ mangleUnitsEv table coreDecls modules =
     _ :: rest => rest
   let remap =
     mangleEvEntry (omFromPairs (reverseL (map dropUnitDecls units)) omEmpty)
-  (coreOut, modsOut, map remap table)
+  let origins =
+    fold
+      (acc (mid, (rm, _, decls)) => mergeOrigins acc (unitOrigins mid rm decls))
+      emptyOrigins
+      units
+  (coreOut, modsOut, map remap table, origins)
+
+export
+mangleUnitsWithOrigins : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl), SymbolOrigins)
+mangleUnitsWithOrigins coreDecls modules =
+  let (coreOut, modsOut, _, origins) = mangleUnitsEv [] coreDecls modules
+  (coreOut, modsOut, origins)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a

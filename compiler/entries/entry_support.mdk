@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import driver.main_autoprint.{executedMainInputs, mainEntryKey}
 import types.capability_manifest.{
   EntryKey(..), ManifestRequirement(..), ManifestSelector(..),
@@ -752,13 +753,15 @@ emitElaborated outputs requirement asyncDriver emitTail runtimeDecls coreDecls m
                 coreW
                 modulesW
                 (factsOfChecked checked)
-            let (coreD, modules2, table) =
+            let (coreD, modules2, table, origins) =
               mangleUnitsEv checked.cpEvidence coreW modulesW
             emitTail
               requirement
               outputs
               (factsForExecutedTrees
-                (factsWithEvidence table externFacts)
+                (withSymbolOrigins
+                  origins
+                  (factsWithEvidence table externFacts))
                 modulesW)
               runtimeDecls
               coreD

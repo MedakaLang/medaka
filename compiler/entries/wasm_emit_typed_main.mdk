@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
@@ -211,8 +212,12 @@ typedElaboratedFacts runtimeDecls preludeDecls userDecls =
   let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
-  (coreD ++ flatMap snd modules2, factsWithEvidence evTableM externFacts)
+  let (coreD, modules2, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
+  (
+    coreD ++ flatMap snd modules2,
+    withSymbolOrigins origins (factsWithEvidence evTableM externFacts),
+  )
 
 typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =

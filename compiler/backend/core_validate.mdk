@@ -227,6 +227,7 @@ emissionDefects backend domain requirement plan cp =
         () => validatePhysicalDemand backend plan cp,
         () => validateRecords cp,
         () => validateBinderStamps cp,
+        () => validateSymbolOrigins cp,
         () =>
           validateScalarOperators cp
             ++ validateCalls cp
@@ -1584,6 +1585,29 @@ tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
+
+export
+validateSymbolOrigins : CProgram -> List String
+validateSymbolOrigins (CProgram groups _ ctorTypes _ _ facts) =
+  match facts.factSymbolOrigins
+    None => []
+    Some origins =>
+      flatMap
+          ((CBind name _ _ _) =>
+            if omHasKey name origins.functions then
+              []
+            else
+              ["symbol origin: missing function " ++ name])
+          groups
+        ++ flatMap
+          ((name, owner) => match omLookup owner origins.constructors
+            None => ["symbol origin: missing constructor owner " ++ owner]
+            Some rows =>
+              if omHasKey name rows then
+                []
+              else
+                ["symbol origin: missing constructor \{name} in \{owner}"])
+          ctorTypes
 
 -- ── binder stamps ─────────────────────────────────────────────────────────────
 -- One line per binder with no row, per binder stamped against the literal,
