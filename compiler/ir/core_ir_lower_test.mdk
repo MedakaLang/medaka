@@ -296,7 +296,9 @@ clauseParams : CClause -> List String
 clauseParams (CClause pats _) = map patSexp pats
 
 orColors : String
-orColors = "data C = A | B | D\n"
+orColors = """
+data C = A | B | D
+"""
 
 test "orCandidates expands alternatives left to right, the leftmost slowest" =
   let x = PVar "x" noDeclLoc noBinderId
@@ -320,7 +322,11 @@ test "orCandidates expands alternatives left to right, the leftmost slowest" =
   ]
 
 test "an or-pattern arm lowers to candidates sharing the first one's body" =
-  let source = orColors ++ "f c = match c\n  A | B => 1\n  D => 2\n"
+  let source = orColors ++ """
+f c = match c
+  A | B => 1
+  D => 2
+"""
   let bodies = map clauseBody (orClauses "f" (orLowered source))
   expectAll [
     expectEqual [["arm", "alt0", "arm"]] (map armShapes bodies),
@@ -331,7 +337,11 @@ test "an or-pattern arm lowers to candidates sharing the first one's body" =
 
 test "a guarded arm's candidates each carry the guard, nested ones leftmost slowest" =
   let source =
-    "g p = match p\n  ((x, _) | (_, x), (y, _) | (_, y)) if x > y => x\n  _ => 0\n"
+    """
+g p = match p
+  ((x, _) | (_, x), (y, _) | (_, y)) if x > y => x
+  _ => 0
+"""
   let bodies = map clauseBody (orClauses "g" (orLowered source))
   expectAll [
     expectEqual
@@ -351,13 +361,20 @@ test "a guarded arm's candidates each carry the guard, nested ones leftmost slow
   ]
 
 test "a guard-bind through an or-pattern expands the arm over its alternatives" =
-  let source = orColors ++ "h c = match c\n  _ if (A | B) <- c => 1\n  _ => 0\n"
+  let source = orColors ++ """
+h c = match c
+  _ if (A | B) <- c => 1
+  _ => 0
+"""
   expectEqual
     [["arm?", "alt0?", "arm"]]
     (map (c => armShapes (clauseBody c)) (orClauses "h" (orLowered source)))
 
 test "an unguarded or-pattern parameter is tested by a decision over a fresh one" =
-  let source = orColors ++ "k (A | B) = 1\nk D = 2\n"
+  let source = orColors ++ """
+k (A | B) = 1
+k D = 2
+"""
   let clauses = orClauses "k" (orLowered source)
   expectAll [
     expectEqual
@@ -369,13 +386,20 @@ test "an unguarded or-pattern parameter is tested by a decision over a fresh one
   ]
 
 test "a guarded or-pattern parameter repeats its clause once per alternative" =
-  let source = orColors ++ "m (A | B) | 1 > 0 = 1\nm _ = 2\n"
+  let source = orColors ++ """
+m (A | B) | 1 > 0 = 1
+m _ = 2
+"""
   expectEqual
     [["(PCon \"A\")"], ["(PCon \"B\")"], ["PWild"]]
     (map clauseParams (orClauses "m" (orLowered source)))
 
 test "a match without or-patterns lowers to arms only" =
-  let source = orColors ++ "n c = match c\n  A => 1\n  _ => 2\n"
+  let source = orColors ++ """
+n c = match c
+  A => 1
+  _ => 2
+"""
   expectEqual
     [["arm", "arm"]]
     (map (c => armShapes (clauseBody c)) (orClauses "n" (orLowered source)))

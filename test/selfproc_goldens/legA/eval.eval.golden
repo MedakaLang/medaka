@@ -262,7 +262,6 @@ markFunSite : Value a -> <a> Unit
 markTrapSite : Expr -> Unit
 matchAs : String -> Pat -> Value a -> Option (List (String, Value a))
 matchCons : Pat -> Pat -> Value a -> List (Value a) -> Option (List (String, Value a))
-matchFirstAlt : List Pat -> Value a -> Option (List (String, Value a))
 matchPat : Pat -> Value a -> Option (List (String, Value a))
 matchPats : List Pat -> List (Value a) -> Option (List (String, Value a))
 matchRecField : String -> Option Pat -> Value a -> List RecPatField -> List (String, Value a) -> Option (List (String, Value a))

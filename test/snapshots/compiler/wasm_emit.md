@@ -1,5 +1,5 @@
 # META
-source_lines=11571
+source_lines=11567
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -344,6 +344,7 @@ import backend.emit_support.{
   implEntryDeclaredArity,
   forEachU,
   bindingOrigin,
+  guardVars,
 }
 import backend.wasm_symbols.{
   SymbolDefect,
@@ -743,8 +744,7 @@ data FnCtx = FnCtx {
   localSlots : Ref (OrdMap LocalSlot),
   localTypes : Ref (List WasmRepr),
   nextLocal : Ref Int,
-  -- the decision tree being emitted: each arm some or-pattern candidate shares
-  -- the body of, keyed by its index
+  -- arms whose body an or-pattern candidate shares, by index
   orBlocks : OrdMap OrArm,
 }
 
@@ -9946,10 +9946,6 @@ orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
     a :: orArmsFrom prefix owners (i + 1) rest
 orArmsFrom prefix owners i (_ :: rest) = orArmsFrom prefix owners (i + 1) rest
 
-guardVars : CGuard -> List String
-guardVars (CGBind p _) = patVars p
-guardVars (CGBool _) = []
-
 orBlockOpen : OrArm -> List String
 orBlockOpen a = match a.oaVars
   [] => ["block " ++ a.oaLabel]
@@ -11599,7 +11595,7 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
@@ -13262,9 +13258,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "orArmsFrom" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "orArmsFrom" ((PVar "prefix") (PVar "owners") (PVar "i") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "owners")) (EBlock (DoLet false false (PVar "a") (ERecordCreate "OrArm" ((fa "oaIndex" (EVar "i")) (fa "oaLabel" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "")))) (fa "oaVars" (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EApp (EApp (EVar "flatMap") (EVar "guardVars")) (EVar "guards")))) (fa "oaPat" (EVar "pat")) (fa "oaGuards" (EVar "guards")) (fa "oaBody" (EVar "body"))))) (DoExpr (EBinOp "::" (EVar "a") (EApp (EApp (EApp (EApp (EVar "orArmsFrom") (EVar "prefix")) (EVar "owners")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "orArmsFrom" ((PVar "prefix") (PVar "owners") (PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "orArmsFrom") (EVar "prefix")) (EVar "owners")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))
-(DTypeSig false "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
-(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig false "orBlockOpen" (TyFun (TyCon "OrArm") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "orBlockOpen" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "oaVars") (arm (PList) () (EListLit (EBinOp "++" (ELit (LString "block ")) (EFieldAccess (EVar "a") "oaLabel")))) (arm (PVar "vars") () (EBlock (DoLet false false (PVar "results") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam (PWild) (ELit (LString "(ref eq)")))) (EVar "vars")))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "block ")) (EApp (EVar "display") (EFieldAccess (EVar "a") "oaLabel"))) (ELit (LString " (result "))) (EApp (EVar "display") (EVar "results"))) (ELit (LString ")")))))))))
 (DTypeSig false "orBlockClose" (TyFun (TyCon "OrArm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -13740,7 +13733,7 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
@@ -15403,9 +15396,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "orArmsFrom" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "orArmsFrom" ((PVar "prefix") (PVar "owners") (PVar "i") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "owners")) (EBlock (DoLet false false (PVar "a") (ERecordCreate "OrArm" ((fa "oaIndex" (EVar "i")) (fa "oaLabel" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "")))) (fa "oaVars" (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EApp (EApp (EDictApp "flatMap") (EVar "guardVars")) (EVar "guards")))) (fa "oaPat" (EVar "pat")) (fa "oaGuards" (EVar "guards")) (fa "oaBody" (EVar "body"))))) (DoExpr (EBinOp "::" (EVar "a") (EApp (EApp (EApp (EApp (EVar "orArmsFrom") (EVar "prefix")) (EVar "owners")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "orArmsFrom" ((PVar "prefix") (PVar "owners") (PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "orArmsFrom") (EVar "prefix")) (EVar "owners")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))
-(DTypeSig false "guardVars" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "guardVars" ((PCon "CGBind" (PVar "p") PWild)) (EApp (EVar "patVars") (EVar "p")))
-(DFunDef false "guardVars" ((PCon "CGBool" PWild)) (EListLit))
 (DTypeSig false "orBlockOpen" (TyFun (TyCon "OrArm") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "orBlockOpen" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "oaVars") (arm (PList) () (EListLit (EBinOp "++" (ELit (LString "block ")) (EFieldAccess (EVar "a") "oaLabel")))) (arm (PVar "vars") () (EBlock (DoLet false false (PVar "results") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam (PWild) (ELit (LString "(ref eq)")))) (EVar "vars")))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "block ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "a") "oaLabel"))) (ELit (LString " (result "))) (EApp (EMethodRef "display") (EVar "results"))) (ELit (LString ")")))))))))
 (DTypeSig false "orBlockClose" (TyFun (TyCon "OrArm") (TyApp (TyCon "List") (TyCon "String"))))

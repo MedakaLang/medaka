@@ -97,7 +97,7 @@ import support.util.{
 import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup
 }
-import list.{drop}
+import list.{drop, findMap}
 import eval.u64_halves as H
 import u64 as U64
 import support.opcount.{opBump}
@@ -1061,14 +1061,8 @@ matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
 -- the first alternative that matches, its bindings in the order the or-pattern
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
-  map (orderBinds (patBindings (POr alts))) (matchFirstAlt alts v)
+  map (orderBinds (patBindings (POr alts))) (findMap (a => matchPat a v) alts)
 matchPat _ _ = None
-
-matchFirstAlt : List Pat -> Value e -> Option (List (String, Value e))
-matchFirstAlt [] _ = None
-matchFirstAlt (p :: rest) v = match matchPat p v
-  Some binds => Some binds
-  None => matchFirstAlt rest v
 
 orderBinds : List String -> List (String, Value e) -> List (String, Value e)
 orderBinds names binds =

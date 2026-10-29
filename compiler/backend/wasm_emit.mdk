@@ -340,6 +340,7 @@ import backend.emit_support.{
   implEntryDeclaredArity,
   forEachU,
   bindingOrigin,
+  guardVars,
 }
 import backend.wasm_symbols.{
   SymbolDefect,
@@ -739,8 +740,7 @@ data FnCtx = FnCtx {
   localSlots : Ref (OrdMap LocalSlot),
   localTypes : Ref (List WasmRepr),
   nextLocal : Ref Int,
-  -- the decision tree being emitted: each arm some or-pattern candidate shares
-  -- the body of, keyed by its index
+  -- arms whose body an or-pattern candidate shares, by index
   orBlocks : OrdMap OrArm,
 }
 
@@ -9941,10 +9941,6 @@ orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
     }
     a :: orArmsFrom prefix owners (i + 1) rest
 orArmsFrom prefix owners i (_ :: rest) = orArmsFrom prefix owners (i + 1) rest
-
-guardVars : CGuard -> List String
-guardVars (CGBind p _) = patVars p
-guardVars (CGBool _) = []
 
 orBlockOpen : OrArm -> List String
 orBlockOpen a = match a.oaVars

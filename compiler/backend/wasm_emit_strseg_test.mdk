@@ -1,6 +1,3 @@
-import types.capability_manifest.{ManifestRequirement(..)}
-import backend.emit_plan.{prepareWasmPlan}
-import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- Sibling test for `compiler/backend/wasm_emit.mdk`'s string-literal segments ([P-TEST-SIBLING]).
 --
 -- Each program is prelude-free, lowered without typechecking, and emitted through
@@ -11,40 +8,12 @@ import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- the literals spell (`a` is 0x61, `b` 0x62, `c` 0x63, `d` 0x64, `x` 0x78), not from
 -- a capture of the emitter.
 
--- lint-disable-file rule-duplicate-body
--- `watOf` is the sibling trapmsg test's helper, kept local so each test file reads alone.
-
-import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.wasm_emit_test_support_test.{watOf}
 import backend.emit_target.{Backend(..)}
 import test.{Expectation, expectAll, expectEqual, labelFail}
-import string.{split, stripSuffix, unlines}
-import frontend.parser.{parse}
-import frontend.desugar.{desugar}
-import types.annotate.{annotateProgram}
-import types.tc_elab.{grantWholeDomain}
-import types.program_facts.{emptyFacts}
-import ir.core_ir_lower.{
-  ctorFieldTypeNames,
-  declaredRecordFieldOrders,
-  lowerProgramEmitWith,
-}
-import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
-import backend.wasm_symbols.{defectMessage}
+import string.{split, stripSuffix}
+import ir.core_ir_lower.{declaredRecordFieldOrders}
 import backend.emit_plan.{buildEmitPlan}
-
--- the emitted WAT of `src`, as the modules entry would print it for that program
-watOf : String -> String
-watOf src =
-  let decls = grantWholeDomain (desugar (parse src))
-  let input =
-    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
-  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (plan, prepared) =
-    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
-  match emitProgramRecord input plan prepared
-    Ok (text, _) => text
-    Err defects =>
-      panic ("emit refused: " ++ unlines (map defectMessage defects))
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line
 segmentOf : String -> Option (String, String)

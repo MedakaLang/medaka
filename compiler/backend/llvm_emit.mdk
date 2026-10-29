@@ -337,9 +337,11 @@ import backend.emit_plan.{
   planEntryMainIsUnit,
   planEntryMainIsFloat,
 }
+import list.{zip}
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
+  guardVars,
   ftPrefix,
   ftLabelOf,
   labelFallthrough,
@@ -10886,18 +10888,12 @@ emitTreeShared e env roots arms occs slot endL ftL rty tree =
   let owners = altOwners arms omEmpty
   let scope = OrScope { osOwners = owners, osJoins = [] }
   e.orScope := if omSize owners == 0 then None else Some scope
-  let _ = emitTree e env roots arms occs slot endL ftL rty tree
+  emitTree e env roots arms occs slot endL ftL rty tree
   let joins = match !e.orScope
     Some sc => sc.osJoins
     None => []
   e.orScope := saved
-  emitOrJoins e slot endL rty joins
-
-emitOrJoins : Emit -> String -> String -> Ref LTy -> List OrJoin -> Unit
-emitOrJoins _ _ _ _ [] = ()
-emitOrJoins e slot endL rty (j :: rest) =
-  let _ = emitOrJoin e slot endL rty j
-  emitOrJoins e slot endL rty rest
+  each (emitOrJoin e slot endL rty) joins
 
 altOwners : List CArm -> OrdMap Unit -> OrdMap Unit
 altOwners [] acc = acc
@@ -10922,8 +10918,8 @@ orJoinEdge e env env2 arms owner body = match !e.orScope
     let names = orOwnerVars arms owner
     let bound = map (orBound e env2) names
     let edge = "oredge" ++ intToString (freshLocal e)
-    let _ = emit e ("  br label %" ++ edge)
-    let _ = emit e (edge ++ ":")
+    emit e ("  br label %" ++ edge)
+    emit e (edge ++ ":")
     let (joins, label) =
       addOrEdge e sc.osJoins owner names bound env body (edge, map fst bound)
     let sc2 = { sc | osJoins = joins }
@@ -10935,18 +10931,14 @@ orBound : Emit -> OrdMap (String, LTy) -> String -> (String, LTy)
 orBound e env x = match omLookup x env
   Some b => b
   None =>
-    let _ = gapU e "or-pattern candidate leaves `\{x}` unbound"
+    gapU e "or-pattern candidate leaves `\{x}` unbound"
     ("0", LTUnknown)
 
 -- The variables arm [owner]'s pattern and guards bind, in binding order.
 orOwnerVars : List CArm -> Int -> List String
 orOwnerVars arms owner = match nthArm arms owner
-  Some (CArm pat guards _) => patVars pat ++ flatMap guardBindVars guards
+  Some (CArm pat guards _) => patVars pat ++ flatMap guardVars guards
   _ => []
-
-guardBindVars : CGuard -> List String
-guardBindVars (CGBind p _) = patVars p
-guardBindVars (CGBool _) = []
 
 -- [joins] with the edge added to [owner]'s block, opening the block on its first
 -- edge, and the block's label.
@@ -10981,14 +10973,10 @@ addOrEdge e (j :: rest) owner names bound env body edge
 -- A join block: one `phi` per variable over the block's edges, then the body.
 emitOrJoin : Emit -> String -> String -> Ref LTy -> OrJoin -> Unit
 emitOrJoin e slot endL rty j =
-  let _ = emit e (j.ojLabel ++ ":")
+  emit e (j.ojLabel ++ ":")
   let edges = reverseL j.ojEdges
-  let env = orPhis e edges 0 (zipNamesTys j.ojNames j.ojTys) j.ojEnv
+  let env = orPhis e edges 0 (zip j.ojNames j.ojTys) j.ojEnv
   emitLeafBody e env j.ojBody slot endL rty
-
-zipNamesTys : List String -> List LTy -> List (String, LTy)
-zipNamesTys (n :: ns) (t :: ts) = (n, t) :: zipNamesTys ns ts
-zipNamesTys _ _ = []
 
 orPhis : Emit ->
   List (String, List String) ->
@@ -11000,14 +10988,20 @@ orPhis _ _ _ [] env = env
 orPhis e edges k ((name, ty) :: rest) env =
   let r = freshReg e
   let incoming =
-    joinWith ", " (map (ed => "[ \{nthWord k (snd ed)}, %\{fst ed} ]") edges)
-  let _ = emit e "  \{r} = phi i64 \{incoming}"
+    joinWith
+      ", "
+      (map (ed => "[ \{orOperand e k (snd ed)}, %\{fst ed} ]") edges)
+  emit e "  \{r} = phi i64 \{incoming}"
   orPhis e edges (k + 1) rest (omInsert name (r, ty) env)
 
-nthWord : Int -> List String -> String
-nthWord 0 (w :: _) = w
-nthWord k (_ :: ws) = nthWord (k - 1) ws
-nthWord _ [] = "0"
+-- Edge operands are built one per owner variable, so k is always in range; an
+-- out-of-range k reports a gap rather than emitting a bogus phi operand.
+orOperand : Emit -> Int -> List String -> String
+orOperand _ 0 (w :: _) = w
+orOperand e k (_ :: ws) = orOperand e (k - 1) ws
+orOperand e _ [] =
+  gapU e "or-pattern join edge has fewer operands than variables"
+  "0"
 
 -- A matched arm's body.  It normally computes its value into the match's result
 -- `slot` and joins at `endL`.  When the match is in the tail position of the

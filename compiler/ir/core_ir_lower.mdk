@@ -178,11 +178,9 @@ lower (EVar x) = CVar x AGlobal
 lower (EVarId x _) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
 lower (EApp f x) = mkApp (lower f) [lower x]
-lower (ELam pats body)
-  | any patHasOr pats =
-    let (params, scrut, pat) = orParams pats
-    CLam params (orDecision (NoArm noDeclLoc) scrut pat (lower body) [])
-  | otherwise = CLam pats (lower body)
+lower (ELam pats body) =
+  let (params, lowered) = orDefaultParams pats body
+  CLam params lowered
 lower (ELet site False pat e1 e2)
   | patMayFail pat = letDecision site pat (lower e1) (lower e2)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
@@ -363,10 +361,9 @@ lowerOrClause pats body
     if cFallsThrough lowered then
       map (ps => (ps, lowered)) (paramCandidates pats)
     else
-      let (params, scrut, pat) = orParams pats
       let miss =
         CArm PWild [] (mkApp (CVar fallthroughName AGlobal) [CLit LUnit])
-      [(params, orDecision (NoArm noDeclLoc) scrut pat lowered [miss])]
+      [orTested pats lowered [miss]]
   | otherwise = [(pats, lower body)]
 
 -- Whether [e] can reach the `__fallthrough__` sentinel of its own clause: a
@@ -883,7 +880,10 @@ lowerBind (LetBind name clauses site bid) =
   CBind name (flatMap lowerClause clauses) site bid
 
 lowerClause : FunClause -> List CClause
-lowerClause (FunClause pats body) =
+lowerClause (FunClause pats body) = lowerClauses pats body
+
+lowerClauses : List Pat -> Expr -> List CClause
+lowerClauses pats body =
   map (c => CClause (fst c) (snd c)) (lowerOrClause pats body)
 
 lowerStmt : DoStmt -> CStmt
@@ -3338,10 +3338,15 @@ lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _
 -- miss is a non-exhaustive match.
 orDefaultParams : List Pat -> Expr -> (List Pat, CExpr)
 orDefaultParams pats body
-  | any patHasOr pats =
-    let (params, scrut, pat) = orParams pats
-    (params, orDecision (NoArm noDeclLoc) scrut pat (lower body) [])
+  | any patHasOr pats = orTested pats (lower body) []
   | otherwise = (pats, lower body)
+
+-- Fresh parameters for [pats] and a decision over their candidates sharing
+-- [body], then [tail]'s arms.
+orTested : List Pat -> CExpr -> List CArm -> (List Pat, CExpr)
+orTested pats body tail =
+  let (params, scrut, pat) = orParams pats
+  (params, orDecision (NoArm noDeclLoc) scrut pat body tail)
 
 -- One inheriting instance's entry for a default is the default's body lowered once
 -- and specialized to that instance.  The entry takes the default's method-level
@@ -4022,7 +4027,7 @@ letGroupClausesOf ((LetBind n clauses _ _) :: rest) =
 
 lowerLetBind : String -> FunClause -> List (String, CClause)
 lowerLetBind n (FunClause pats body) =
-  map (c => (n, CClause (fst c) (snd c))) (lowerOrClause pats body)
+  map (c => (n, c)) (lowerClauses pats body)
 
 ctorArities : List Decl -> List (String, Int)
 ctorArities [] = []

@@ -1,0 +1,7 @@
+data C = A | B
+
+f c = match c
+  (A | B => 1
+  _ => 2
+
+main = f A

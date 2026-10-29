@@ -1,5 +1,5 @@
 # META
-source_lines=1399
+source_lines=1396
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -68,6 +68,7 @@ import support.util.{
   filterList,
   anyList,
   reverseL,
+  lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
@@ -1375,10 +1376,6 @@ sharedBinderId mint shared x = match lookupAssoc x shared
   Some b => b
   None => mint x
 
-lookupAssoc : String -> List (String, BinderId) -> Option BinderId
-lookupAssoc _ [] = None
-lookupAssoc x ((y, b) :: rest) = if x == y then Some b else lookupAssoc x rest
-
 -- The (name, id) pairs a stamped pattern binds; an or-pattern reads its first
 -- alternative.
 patBinderIds : Pat -> List (String, BinderId)
@@ -1404,7 +1401,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
@@ -1894,9 +1891,6 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampPatBy" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "sharedBinderId" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyFun (TyCon "String") (TyCon "BinderId")))))
 (DFunDef false "sharedBinderId" ((PVar "mint") (PVar "shared") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "shared")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "mint") (EVar "x")))))
-(DTypeSig false "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyApp (TyCon "Option") (TyCon "BinderId")))))
-(DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupAssoc" ((PVar "x") (PCons (PTuple (PVar "y") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "rest"))))
 (DTypeSig false "patBinderIds" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
 (DFunDef false "patBinderIds" ((PCon "PVar" (PVar "x") PWild (PVar "b"))) (EListLit (ETuple (EVar "x") (EVar "b"))))
 (DFunDef false "patBinderIds" ((PCon "PAs" (PVar "x") PWild (PVar "b") (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "b")) (EApp (EVar "patBinderIds") (EVar "p"))))
@@ -1916,7 +1910,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
@@ -2406,9 +2400,6 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampPatBy" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "sharedBinderId" (TyFun (TyFun (TyCon "String") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyFun (TyCon "String") (TyCon "BinderId")))))
 (DFunDef false "sharedBinderId" ((PVar "mint") (PVar "shared") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "shared")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "mint") (EVar "x")))))
-(DTypeSig false "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId"))) (TyApp (TyCon "Option") (TyCon "BinderId")))))
-(DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupAssoc" ((PVar "x") (PCons (PTuple (PVar "y") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "rest"))))
 (DTypeSig false "patBinderIds" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderId")))))
 (DFunDef false "patBinderIds" ((PCon "PVar" (PVar "x") PWild (PVar "b"))) (EListLit (ETuple (EVar "x") (EVar "b"))))
 (DFunDef false "patBinderIds" ((PCon "PAs" (PVar "x") PWild (PVar "b") (PVar "p"))) (EBinOp "::" (ETuple (EVar "x") (EVar "b")) (EApp (EVar "patBinderIds") (EVar "p"))))

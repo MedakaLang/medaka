@@ -6,7 +6,7 @@
 
 import frontend.ast.{
   Expr(..), Decl(..), Attr(..), Loc(..), Section(..), Pat(..), Arm(..), Lit(..),
-  Guard(..), DoStmt(..), FunClause(..), stripLocE
+  stripLocE
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parse_engine.{
