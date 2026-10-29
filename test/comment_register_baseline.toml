@@ -117,7 +117,7 @@ count = 1
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
 class = "emoji"
-count = 11
+count = 9
 
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
@@ -410,21 +410,6 @@ class = "shout"
 count = 2
 
 [[entry]]
-file = "compiler/tools/lint.mdk"
-class = "history"
-count = 2
-
-[[entry]]
-file = "compiler/tools/lint.mdk"
-class = "emoji"
-count = 12
-
-[[entry]]
-file = "compiler/tools/lint.mdk"
-class = "shout"
-count = 9
-
-[[entry]]
 file = "compiler/tools/lint_baseline.mdk"
 class = "shout"
 count = 1
@@ -448,6 +433,41 @@ count = 3
 file = "compiler/tools/lint_cmd.mdk"
 class = "shout"
 count = 3
+
+[[entry]]
+file = "compiler/tools/lint_core.mdk"
+class = "emoji"
+count = 2
+
+[[entry]]
+file = "compiler/tools/lint_core.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "compiler/tools/lint_rules_staging.mdk"
+class = "history"
+count = 2
+
+[[entry]]
+file = "compiler/tools/lint_rules_staging.mdk"
+class = "emoji"
+count = 9
+
+[[entry]]
+file = "compiler/tools/lint_rules_staging.mdk"
+class = "shout"
+count = 5
+
+[[entry]]
+file = "compiler/tools/lint_walk.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "compiler/tools/lint_walk.mdk"
+class = "shout"
+count = 2
 
 [[entry]]
 file = "compiler/tools/lsp.mdk"
