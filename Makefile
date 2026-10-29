@@ -273,6 +273,11 @@ inlang-backend-wasm-emit-paramname-test:
 inlang-backend-wasm-emit-orarm-test:
 	./medaka test compiler/backend/wasm_emit_orarm_test.mdk
 
+## Or-pattern arms of llvm_emit.mdk: a shared arm body is emitted once in its
+## join block, against a control walker whose ten separate arms emit it ten times.
+inlang-backend-llvm-emit-orarm-test:
+	./medaka test compiler/backend/llvm_emit_orarm_test.mdk
+
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:

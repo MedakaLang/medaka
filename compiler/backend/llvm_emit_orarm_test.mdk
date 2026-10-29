@@ -1,0 +1,156 @@
+-- Sibling test for `compiler/backend/llvm_emit.mdk`'s or-pattern arms ([P-TEST-SIBLING]).
+--
+-- An or-pattern arm reaches the emitter as one candidate arm per alternative, all
+-- sharing one body.  The emitter branches every candidate leaf to the arm's one
+-- join block, which emits that body once.  The control is the same walker with
+-- the alternatives written as separate arms, which emits the body once per arm.
+-- Each program is emitted through `emitProgram` as
+-- `compiler/entries/llvm_emit_main.mdk` does for its lowered program.  Runtime
+-- behaviour is pinned by `test/engine_fixtures/or_pattern_*.mdk` on all three engines.
+
+-- lint-disable-file rule-duplicate-body
+-- `funcBlock` is kept local so each sibling test file reads alone.
+
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import backend.emit_plan.{buildEmitPlan}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
+import test.{expectAll, labelFail, expectEqual}
+import string.{contains, lines, startsWith}
+import list.{reverse, filter}
+import types.capability_manifest.{ManifestRequirement(..)}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{ctorFieldTypeNames, lowerProgramEmitWith}
+
+-- the emitted LLVM IR of `src`, as the prelude-free entry would print it
+llOf : String -> String
+llOf src =
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  let input =
+    makeEmitInput
+      RawUnchecked
+      PreludeFreeRuntime
+      []
+      (ctorFieldTypeNames decls)
+      0
+      []
+      []
+      ""
+  match emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+    Ok text => text
+    Err defects => panic "emit refused: \{length defects} symbol defects"
+
+-- the lines of the `define` of top-level `<name>` (`@mdk_<name>(`), through its
+-- closing `}`
+funcBlock : String -> String -> List String
+funcBlock name ll = blockFrom ("@mdk_" ++ name ++ "(") (lines ll)
+
+blockFrom : String -> List String -> List String
+blockFrom _ [] = []
+blockFrom name (l :: rest) =
+  if startsWith "define " l && contains name l then
+    takeBlock rest [l]
+  else
+    blockFrom name rest
+
+takeBlock : List String -> List String -> List String
+takeBlock [] acc = reverse acc
+takeBlock (l :: rest) acc =
+  if l == "}" then reverse (l :: acc) else takeBlock rest (l :: acc)
+
+-- how many lines of `block` contain `needle`
+linesWith : String -> List String -> Int
+linesWith needle block = length (filter (l => contains needle l) block)
+
+-- the shared body's distinctive constant 7777777, as the tagged word the
+-- emitter writes
+bodyConst : String
+bodyConst = "15555555"
+
+-- `walk` matches in tail position; `walkV` matches in value position.  Ten
+-- alternatives share the body `n + 7777777`.
+orSrc : String
+orSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+-- the same walkers with the ten alternatives written as ten arms
+splitSrc : String
+splitSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n => n + 7777777
+  C3 n => n + 7777777
+  C4 n => n + 7777777
+  C5 n => n + 7777777
+  C6 n => n + 7777777
+  C7 n => n + 7777777
+  C8 n => n + 7777777
+  C9 n => n + 7777777
+  C10 n => n + 7777777
+  C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n => n + 7777777
+    C3 n => n + 7777777
+    C4 n => n + 7777777
+    C5 n => n + 7777777
+    C6 n => n + 7777777
+    C7 n => n + 7777777
+    C8 n => n + 7777777
+    C9 n => n + 7777777
+    C10 n => n + 7777777
+    C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+test "an or-pattern arm's body is emitted once in tail and value position" =
+  let ll = llOf orSrc
+  expectAll [
+    labelFail
+      "tail position (walk)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walk" ll))),
+    labelFail
+      "value position (walkV)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walkV" ll))),
+  ]
+
+test "control: ten separate arms emit the body ten times" =
+  let ll = llOf splitSrc
+  expectAll [
+    labelFail
+      "tail position (walk)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walk" ll))),
+    labelFail
+      "value position (walkV)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walkV" ll))),
+  ]
