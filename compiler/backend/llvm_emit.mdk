@@ -10759,7 +10759,7 @@ emitLeaf e env roots arms i slot endL rty = match leafArm e arms i
   Some (pat, guards, body, share) =>
     let env2 = bindArm e env pat roots body
     match share
-      Some owner => orJoinEdge e env env2 owner pat guards body
+      Some owner => orJoinEdge e env env2 arms owner body
       None => emitLeafBody e env2 body slot endL rty
   None => gapU e "decision arm index out of range"
 
@@ -10817,7 +10817,7 @@ emitGuardedArm e env roots arms occs pat guards body share fail slot endL ftL rt
   -- where the interpreter and WasmGC returned the right list; wasm's tail engine
   -- always handled guards).  Fixture: test/stack_fixtures/guard_arm_trmc.mdk.
   let _ = match share
-    Some owner => orJoinEdge e env env3 owner pat guards body
+    Some owner => orJoinEdge e env env3 arms owner body
     None => emitLeafBody e env3 body slot endL rty
   let _ = emit e (failL ++ ":")
   emitTree e env roots arms occs slot endL ftL rty fail
@@ -10907,17 +10907,19 @@ altOwners (_ :: rest) acc = altOwners rest acc
 
 -- A shared arm's leaf: [env2] is the tree's [env] with the candidate's
 -- variables bound.  Branch to the owner's join block through a fresh edge block.
+-- The edge's operands follow the owner's variable order, looked up by name: an
+-- alternative may bind the same names in another order (`L x y | R y x`), and
+-- the join's phis take operand k as the owner's k-th variable.
 orJoinEdge : Emit ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy) ->
+  List CArm ->
   Int ->
-  Pat ->
-  List CGuard ->
   CExpr ->
   Unit
-orJoinEdge e env env2 owner pat guards body = match !e.orScope
+orJoinEdge e env env2 arms owner body = match !e.orScope
   Some sc =>
-    let names = patVars pat ++ flatMap guardBindVars guards
+    let names = orOwnerVars arms owner
     let bound = map (orBound e env2) names
     let edge = "oredge" ++ intToString (freshLocal e)
     let _ = emit e ("  br label %" ++ edge)
@@ -10935,6 +10937,12 @@ orBound e env x = match omLookup x env
   None =>
     let _ = gapU e "or-pattern candidate leaves `\{x}` unbound"
     ("0", LTUnknown)
+
+-- The variables arm [owner]'s pattern and guards bind, in binding order.
+orOwnerVars : List CArm -> Int -> List String
+orOwnerVars arms owner = match nthArm arms owner
+  Some (CArm pat guards _) => patVars pat ++ flatMap guardBindVars guards
+  _ => []
 
 guardBindVars : CGuard -> List String
 guardBindVars (CGBind p _) = patVars p
