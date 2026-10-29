@@ -28,6 +28,12 @@ test "edits preserve source and validate the whole batch" =
       "-- é\r\nmain = 34!\r\n"
       (value (applySourceEdits snapshot [insert, one])),
     expectEqual "-- é\r\nmain = 12\r\n" (value (applySourceEdits snapshot [])),
+    expectEqual
+      "-- é\r\nmain = 12\r\n"
+      (value
+        (applySourceEdits snapshot [
+          SourceEdit id (SourceSpan 13 15) "12" "12",
+        ])),
     expectEqual "stale" (errorName (applySourceEdits snapshot [one, stale])),
     expectEqual "expected" (errorName (applySourceEdits snapshot [one, wrong])),
     expectEqual "range" (errorName (applySourceEdits snapshot [invalid])),

@@ -1,12 +1,13 @@
 import tools.source_snapshot.{SourceRevision(..), SnapshotId(..)}
 import tools.snapshot_syntax.{
   ParseOptions(..), PreparedSyntax, defaultParseOptions, prepareSnapshotSyntax,
-  snapshotSyntaxId
+  snapshotSyntaxId, snapshotSyntaxSource, snapshotSyntaxVersion
 }
 import tools.syntax_cache.{
   SyntaxCacheLimits(..), emptySyntaxCache, insertSyntax, lookupSyntax,
   invalidateSyntax, clearSyntax, syntaxCacheSize, syntaxCacheWeight
 }
+import frontend.syntax_source.{syntaxSourceText}
 import frontend.parse_recovery.{RecoveryLimits(..)}
 import test.{expectAll, expectEqual, expectTrue}
 
@@ -35,8 +36,21 @@ test "identity options replacement and FIFO budgets" =
     ParseOptions (RecoveryLimits 8388608 500000 4096 1),
   ]
   expectAll [
-    expectTrue
-      (isSome (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions cache)),
+    expectEqual (Some "main = 1\n") (do
+      hit <- lookupSyntax (SnapshotId "a" 1) None defaultParseOptions cache
+      syntax <- snapshotSyntaxSource hit
+      Some (syntaxSourceText syntax)),
+    expectEqual
+      (Some (Some 1))
+      (map
+        snapshotSyntaxVersion
+        (lookupSyntax (SnapshotId "b" 2) (Some 1) defaultParseOptions cache)),
+    expectEqual
+      (Some ("a", 1))
+      (map
+        (hit => match snapshotSyntaxId hit
+          SnapshotId uri generation => (uri, generation))
+        (lookupSyntax (SnapshotId "a" 1) None defaultParseOptions cache)),
     expectTrue
       (isNone (lookupSyntax (SnapshotId "a" 2) None defaultParseOptions cache)),
     expectTrue

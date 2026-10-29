@@ -1704,15 +1704,16 @@ midsOf ((mid, _) :: rest) = mid :: midsOf rest
 
 topoVisitAll : Ctx ->
   (String -> Option String) ->
+  (String -> String -> Option (List Decl, Positions)) ->
   HashMap String String ->
   HashMap String Unit ->
   Ref (List (String, String, List Decl, Positions)) ->
   List String ->
   <IO> Unit
-topoVisitAll _ _ _ _ _ [] = ()
-topoVisitAll ctx read byMid visited acc (mid :: rest) =
-  let _ = topoVisit ctx read byMid visited acc mid
-  topoVisitAll ctx read byMid visited acc rest
+topoVisitAll _ _ _ _ _ _ [] = ()
+topoVisitAll ctx read parse byMid visited acc (mid :: rest) =
+  let _ = topoVisit ctx read parse byMid visited acc mid
+  topoVisitAll ctx read parse byMid visited acc rest
 
 -- Visit one module: mark it visited FIRST (breaks a cycle without looping),
 -- then recurse into its OWN direct imports (dependency-first) before
@@ -1721,12 +1722,13 @@ topoVisitAll ctx read byMid visited acc (mid :: rest) =
 -- miss) or a file that fails to parse both no-op (F2: best-effort).
 topoVisit : Ctx ->
   (String -> Option String) ->
+  (String -> String -> Option (List Decl, Positions)) ->
   HashMap String String ->
   HashMap String Unit ->
   Ref (List (String, String, List Decl, Positions)) ->
   String ->
   <IO> Unit
-topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
+topoVisit ctx read parse byMid visited acc mid = match hmGetC ctx visited mid
   Some _ => ()
   None => match hmGetC ctx byMid mid
     None => ()
@@ -1734,11 +1736,18 @@ topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
       let _ = hmSetC ctx visited mid ()
       match getSrc read path
         None => ()
-        Some src => match parseWithPositionsOpt src
+        Some src => match parse path src
           None => ()
           Some (decls, positions) =>
             let _ =
-              topoVisitAll ctx read byMid visited acc (directImportIds decls)
+              topoVisitAll
+                ctx
+                read
+                parse
+                byMid
+                visited
+                acc
+                (directImportIds decls)
             acc := (mid, path, decls, positions) :: !acc
 
 -- Order the whole-project file set dependency-first (see block comment
@@ -1747,14 +1756,15 @@ topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
 -- result carries each module's parse, so indexing needs no second read.
 topoOrderModules : Ctx ->
   (String -> Option String) ->
+  (String -> String -> Option (List Decl, Positions)) ->
   List (String, String) ->
   <IO> List (String, String, List Decl, Positions)
-topoOrderModules ctx read midPaths =
+topoOrderModules ctx read parse midPaths =
   let byMid = hmNew ()
   let _ = registerMidPaths ctx byMid midPaths
   let visited = hmNew ()
   let acc = Ref []
-  let _ = topoVisitAll ctx read byMid visited acc (midsOf midPaths)
+  let _ = topoVisitAll ctx read parse byMid visited acc (midsOf midPaths)
   reverseList !acc
 
 -- Build the reference index over EVERY `.mdk` file under `projectRoot` — true
@@ -1767,9 +1777,24 @@ buildRefIndexProject : (String -> Option String) ->
   String ->
   String ->
   <IO> RefIndex
+buildRefIndexProject read projectRoot runtimeSrc coreSrc =
+  buildRefIndexProjectWithParsed
+    read
+    (_path src => parseWithPositionsOpt src)
+    projectRoot
+    runtimeSrc
+    coreSrc
+
+export
+buildRefIndexProjectWithParsed : (String -> Option String) ->
+  (String -> String -> Option (List Decl, Positions)) ->
+  String ->
+  String ->
+  String ->
+  <IO> RefIndex
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-buildRefIndexProject read projectRoot runtimeSrc coreSrc =
+buildRefIndexProjectWithParsed read parse projectRoot runtimeSrc coreSrc =
   let ctx = newCtx ()
   let _ = seedPrelude ctx "runtime" runtimeSrc
   let _ = seedPrelude ctx "core" coreSrc
@@ -1777,7 +1802,7 @@ buildRefIndexProject read projectRoot runtimeSrc coreSrc =
   -- must measure only the project-indexing work the scaling gate grades.
   let _ = ctx.opCnt := 0
   let midPaths = midPathsOf projectRoot
-  let mods = topoOrderModules ctx read midPaths
+  let mods = topoOrderModules ctx read parse midPaths
   let _ = processParsed ctx mods
   RefIndex { defs = ctx.defs, refs = ctx.refs, occ = ctx.occ, ops = !ctx.opCnt }
 
