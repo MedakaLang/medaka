@@ -86,6 +86,25 @@ This is a component measurement, not a claim about total end-to-end cost.
 
 The source snapshot remains responsible for source identity, text and its UTF-16 index. `tools/snapshot_syntax.mdk` binds recovery to a lightweight source revision (URI, generation and version). It admits source before constructing an index; over-budget revisions retain explicit partial metadata without an index. Admitted recovery shares the snapshot index, and projection verifies revision identity for both states. The shared structural projection lives in `tools/syntax_queries.mdk`. Frontend code does not depend on tools. Other LSP diagnostic paths continue to create indexed snapshots.
 
+## Source-fidelity decision
+
+The source-fidelity sprint selects a source-backed lexical value alongside the
+existing immutable strict parse and recovery results. The value preserves the
+original text, scanner-proven comments, token ranges and opaque gaps. Gaps are
+not necessarily whitespace: interpolation prefixes and suffixes and malformed
+tails can also occur there. Recovery completeness does not replace the strict
+parse verdict. `parse_engine.mdk` owns transient parser state; published values
+must not retain it. The existing snapshot owner supplies revision identity and
+may reuse this value within a bounded session cache.
+
+This is not a lossless grammar tree. Expression locations do not generally
+cover a whole expression, and an interpolated literal's location need not start
+at its opening quote. Source edits require an independently authoritative span
+and an expected old text. F1/F2 and the increment-4 decision remain in force:
+the measured carrier does not justify a wholesale declaration-field migration.
+A future concrete syntax tree could provide complete node ownership and
+cross-edit identity, but requires grammar instrumentation and verified lowering.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;
