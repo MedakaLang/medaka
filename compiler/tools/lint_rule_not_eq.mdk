@@ -1,0 +1,81 @@
+-- lint rule rule-not-eq: a negated equality `not (a == b)` / `not (a /= b)`; prefer the operator.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  detApply,
+  exprRuleFindings,
+  exprRuleFix,
+  noExcl,
+  notArgOf,
+  ruleNameNotEq,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameNotEq,
+      summary =
+        "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
+      doc =
+        "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleNotEq
+    (Some notEqFix)
+
+-- ── rule: not-eq ──────────────────────────────────────────────────────────────
+-- `not (a == b)` → `a /= b`; `not (a /= b)` → `a == b` (also the unary-`!` forms).
+-- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
+-- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
+-- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
+-- site id (the parser's `unminted`; lint output is never typechecked).
+notEqOf : Expr -> Option Expr
+notEqOf e = match notArgOf e
+  Some inner => match unwrapLoc inner
+    EBinOp "==" a b r => Some (EBinOp "/=" a b r)
+    EBinOp "/=" a b r => Some (EBinOp "==" a b r)
+    _ => None
+  None => None
+
+ruleNotEq : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleNotEq _ _ _ pos prog = exprRuleFindings noExcl notEqOf notEqFinding pos prog
+
+notEqFinding : Option Loc -> Expr -> Finding
+notEqFinding loc rewritten = Finding {
+  rule = ruleNameNotEq,
+  message = "negated equality. Rewrite as '" ++ exprToString rewritten ++ "'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+notEqFix : Oracle -> Decl -> Option (List Decl)
+notEqFix _ d = exprRuleFix noExcl (detApply notEqOf) d
