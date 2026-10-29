@@ -672,15 +672,15 @@ subChars : Array Char -> Int -> Int -> String
 subChars a lo hi =
   stringFromChars (arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) a))
 
-{- | The lines of `s`, split on `\\n`.
+{- | The lines of `s`, split on `\n`.
 
-   A `\\r` before the `\\n` is removed, so Windows line endings work too.
+   A `\r` before the `\n` is removed, so Windows line endings work too.
    Unlike `io.readLines`, this keeps the final empty line when `s` ends in
    a newline.
 
-   > lines "a\\nb\\nc"
+   > lines "a\nb\nc"
    ["a", "b", "c"]
-   > lines "a\\n"
+   > lines "a\n"
    ["a", ""]
    > lines ""
    [""] -}
