@@ -1,5 +1,5 @@
 # META
-source_lines=500
+source_lines=502
 stages=DESUGAR,MARK
 # SOURCE
 -- Indentation-sensitive layout over raw tokens.
@@ -51,6 +51,7 @@ canEndExpr (TWideInt _ _ _) = True
 canEndExpr (TFloat _) = True
 canEndExpr (TString _) = True
 canEndExpr (TChar _) = True
+canEndExpr (TByte _) = True
 canEndExpr (TBool _) = True
 canEndExpr (TInterpEnd _) = True
 canEndExpr TRParen = True
@@ -104,6 +105,7 @@ canStartAtom (TWideInt _ _ _) = True
 canStartAtom (TFloat _) = True
 canStartAtom (TString _) = True
 canStartAtom (TChar _) = True
+canStartAtom (TByte _) = True
 canStartAtom (TBool _) = True
 canStartAtom (TIdent _) = True
 canStartAtom (TUpper _) = True
@@ -533,6 +535,7 @@ applyLayoutRanges raw =
 (DFunDef false "canEndExpr" ((PCon "TFloat" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TString" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TChar" PWild)) (EVar "True"))
+(DFunDef false "canEndExpr" ((PCon "TByte" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TBool" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TInterpEnd" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TRParen")) (EVar "True"))
@@ -569,6 +572,7 @@ applyLayoutRanges raw =
 (DFunDef false "canStartAtom" ((PCon "TFloat" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TString" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TChar" PWild)) (EVar "True"))
+(DFunDef false "canStartAtom" ((PCon "TByte" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TBool" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TIdent" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TUpper" PWild)) (EVar "True"))
@@ -695,6 +699,7 @@ applyLayoutRanges raw =
 (DFunDef false "canEndExpr" ((PCon "TFloat" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TString" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TChar" PWild)) (EVar "True"))
+(DFunDef false "canEndExpr" ((PCon "TByte" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TBool" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TInterpEnd" PWild)) (EVar "True"))
 (DFunDef false "canEndExpr" ((PCon "TRParen")) (EVar "True"))
@@ -731,6 +736,7 @@ applyLayoutRanges raw =
 (DFunDef false "canStartAtom" ((PCon "TFloat" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TString" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TChar" PWild)) (EVar "True"))
+(DFunDef false "canStartAtom" ((PCon "TByte" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TBool" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TIdent" PWild)) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TUpper" PWild)) (EVar "True"))
