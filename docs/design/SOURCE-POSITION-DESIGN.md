@@ -97,6 +97,14 @@ parse verdict. `parse_engine.mdk` owns transient parser state; published values
 must not retain it. The existing snapshot owner supplies revision identity and
 may reuse this value within a bounded session cache.
 
+Existing definition queries use whole-file located syntax parsing, which can
+succeed when strict prescans reject a removed form. Preserve that structural
+result separately from the checked verdict and fenced recovery. A checked
+success can share its parsed value with located syntax; a checked failure may
+require one additional located-syntax attempt over the same tokens. A cached
+structural failure is a result, not a request to reparse. Structural success
+does not authorize compilation, diagnostics or formatting.
+
 This is not a lossless grammar tree. Expression locations do not generally
 cover a whole expression, and an interpolated literal's location need not start
 at its opening quote. Source edits require an independently authoritative span
