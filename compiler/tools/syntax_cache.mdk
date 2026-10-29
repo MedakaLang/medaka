@@ -1,9 +1,8 @@
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omDelete, omSize}
-import frontend.parse_recovery.{RecoveryLimits(..)}
 import frontend.syntax_source.{syntaxSourceText, syntaxTokens}
 import tools.source_snapshot.{SnapshotId(..)}
 import tools.snapshot_syntax.{
-  ParseOptions(..), PreparedSyntax, snapshotSyntaxId, snapshotSyntaxVersion,
+  ParseOptions, PreparedSyntax, snapshotSyntaxId, snapshotSyntaxVersion,
   snapshotSyntaxSource
 }
 
@@ -20,10 +19,6 @@ export
 emptySyntaxCache : SyntaxCacheLimits -> SyntaxCache
 emptySyntaxCache limits = SyntaxCache limits omEmpty [] 0 0
 
-sameOptions : ParseOptions -> ParseOptions -> Bool
-sameOptions (ParseOptions (RecoveryLimits a b c d)) (ParseOptions (RecoveryLimits w x y z)) =
-  a == w && b == x && c == y && d == z
-
 export
 lookupSyntax : SnapshotId ->
   Option Int ->
@@ -31,16 +26,15 @@ lookupSyntax : SnapshotId ->
   SyntaxCache ->
   Option PreparedSyntax
 lookupSyntax (SnapshotId uri generation) version options (SyntaxCache _ entries _ _ _) =
-  match omLookup uri entries
-    None => None
-    Some (CacheEntry stored prepared _ _) =>
-      let (SnapshotId _ current) = snapshotSyntaxId prepared
-      if generation == current
-        && version == snapshotSyntaxVersion prepared
-        && sameOptions options stored then
-        Some prepared
-      else
-        None
+  do
+    (CacheEntry stored prepared _ _) <- omLookup uri entries
+    let (SnapshotId _ current) = snapshotSyntaxId prepared
+    if generation == current
+      && version == snapshotSyntaxVersion prepared
+      && options == stored then
+      Some prepared
+    else
+      None
 
 export
 invalidateSyntax : String -> SyntaxCache -> SyntaxCache
@@ -58,6 +52,11 @@ invalidateSyntax uri (cache@(SyntaxCache limits entries order source tokens)) =
 export
 clearSyntax : SyntaxCache -> SyntaxCache
 clearSyntax (SyntaxCache limits _ _ _ _) = emptySyntaxCache limits
+
+export
+syntaxCacheEntryLimit : SyntaxCache -> Int
+syntaxCacheEntryLimit (SyntaxCache (SyntaxCacheLimits count _ _ _) _ _ _ _) =
+  count
 
 export
 syntaxCacheSize : SyntaxCache -> Int

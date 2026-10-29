@@ -2344,15 +2344,21 @@ test "definition reuses open strict-rejected sibling syntax" = withScratchDir
   (dir => match layOut dir [
     ("medaka.toml", "[project]\nname = \"syntaxcache\"\n"),
     ("lib.mdk", "export value = 1\n"),
-    ("main.mdk", "import lib.{value}\nmain = value\n"),
+    ("main.mdk", """import lib.{value}
+main = value
+"""),
   ]
     Err e => fail e
     Ok _ =>
       let lib = stringConcat ["file://", dir, "/lib.mdk"]
       let main = stringConcat ["file://", dir, "/main.mdk"]
       let (errors, out) = drive [
-        didOpenMsg main "import lib.{value}\nmain = value\n",
-        didOpenMsg lib "record P : Int\nexport value = 9\n",
+        didOpenMsg main """import lib.{value}
+main = value
+""",
+        didOpenMsg lib """record P : Int
+export value = 9
+""",
         rpc 10 "textDocument/definition" (posParams main 1 8),
         rpc 11 "textDocument/definition" (posParams main 1 8),
         bye,
@@ -2366,3 +2372,84 @@ test "definition reuses open strict-rejected sibling syntax" = withScratchDir
             ("first definition", expectEqual expected (resultTo 10 objs)),
             ("second definition", expectEqual expected (resultTo 11 objs)),
           ])
+
+test "project definition retains requested root across cache eviction" = withScratchDir
+  (dir => match layOut dir [
+    ("medaka.toml", "[project]\nname = \"capacity\"\n"),
+    ("a.mdk", "export value = 1\n"),
+    ("b.mdk", "export b = 1\n"),
+    ("c.mdk", "export c = 1\n"),
+    ("d.mdk", "export d = 1\n"),
+    ("e.mdk", "export e = 1\n"),
+    ("main.mdk", "import a.{value}\nmain = value\n"),
+  ]
+    Err e => fail e
+    Ok _ =>
+      let uri name = stringConcat ["file://", dir, "/", name, ".mdk"]
+      let main = uri "main"
+      let (errors, out) = drive [
+        didOpenMsg (uri "a") "export value = 9\n",
+        didOpenMsg (uri "b") "export b = 2\n",
+        didOpenMsg (uri "c") "export c = 2\n",
+        didOpenMsg (uri "d") "export d = 2\n",
+        didOpenMsg (uri "e") "export e = 2\n",
+        didOpenMsg main "import a.{value}\nmain = value\n",
+        rpc 10 "textDocument/definition" (posParams main 1 8),
+        rpc 11 "textDocument/definition" (posParams main 1 8),
+        bye,
+      ]
+      match decodeFrames out
+        Err e => fail e
+        Ok objs =>
+          let expected = Some (jArray [coordLocation (uri "a") 0 7 12])
+          expectEach [
+            ("process", expectEqual [] errors),
+            ("first", expectEqual expected (resultTo 10 objs)),
+            ("second", expectEqual expected (resultTo 11 objs)),
+          ])
+
+test "closing another project keeps an open broken dependency last good source" = withScratchDir
+  (dir =>
+    let a = dir ++ "/a"
+    let b = dir ++ "/b"
+    let files = [
+      ("medaka.toml", "[project]\nname = \"lifetime\"\n"),
+      ("dep.mdk", "export\nvalue = \"disk\"\n"),
+      ("main.mdk", "import dep.{value}\nmain = value + 1\n"),
+    ]
+    match (layOut a files, layOut b files)
+      (Ok _, Ok _) =>
+        let uri path name = stringConcat ["file://", path, "/", name, ".mdk"]
+        let ad = uri a "dep"
+        let am = uri a "main"
+        let bd = uri b "dep"
+        let bm = uri b "main"
+        let root = "import dep.{value}\nmain = value + 1\n"
+        let good = "export\nvalue = 11\n"
+        let (errors, out) = drive [
+          didOpenMsg ad good,
+          didOpenMsg am root,
+          didOpenMsg bd good,
+          didOpenMsg bm root,
+          didChangeMsg bd "export\nvalue = )\n",
+          rpc 101 "textDocument/hover" (posParams bm 1 8),
+          notify "textDocument/didClose" (docParams ad),
+          notify "textDocument/didClose" (docParams am),
+          rpc 102 "textDocument/hover" (posParams bm 1 8),
+          bye,
+        ]
+        match decodeFrames out
+          Err e => fail e
+          Ok objs =>
+            let expected =
+              Some
+                (jObject [
+                  ("kind", JString "markdown"),
+                  ("value", JString "```medaka\nvalue : Int\n```"),
+                ])
+            expectEach [
+              ("process", expectEqual [] errors),
+              ("before", expectEqual expected (hoverContents 101 objs)),
+              ("after", expectEqual expected (hoverContents 102 objs)),
+            ]
+      _ => fail "could not create project fixtures")

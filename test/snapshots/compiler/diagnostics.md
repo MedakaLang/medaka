@@ -1,5 +1,5 @@
 # META
-source_lines=3450
+source_lines=3454
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -2400,6 +2400,10 @@ retainPassEntries mids =
     pcFold = omRestrict mids c.pcFold,
   }
 
+export
+clearProjectPassEntries : Unit -> Unit
+clearProjectPassEntries () = retainPassEntries []
+
 keepPassEntry : PassKind -> String -> PassEntry -> Unit
 keepPassEntry kind mid entry =
   let c = passCacheRef.value
@@ -3776,6 +3780,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "passEntries" ((PCon "FoldKind") (PVar "c")) (EFieldAccess (EVar "c") "pcFold"))
 (DTypeSig false "retainPassEntries" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "retainPassEntries" ((PVar "mids")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "c") "pcResolve"))) (fa "pcFold" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "c") "pcFold")))))))))
+(DTypeSig true "clearProjectPassEntries" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "clearProjectPassEntries" ((PLit LUnit)) (EApp (EVar "retainPassEntries") (EListLit)))
 (DTypeSig false "keepPassEntry" (TyFun (TyCon "PassKind") (TyFun (TyCon "String") (TyFun (TyCon "PassEntry") (TyCon "Unit")))))
 (DFunDef false "keepPassEntry" ((PVar "kind") (PVar "mid") (PVar "entry")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (EMatch (EVar "kind") (arm (PCon "ResolveKind") () (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcResolve")))))) (arm (PCon "FoldKind") () (ERecordUpdate (EVar "c") ((fa "pcFold" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcFold")))))))))))
 (DTypeSig false "freshPassIdentity" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -4293,6 +4299,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "passEntries" ((PCon "FoldKind") (PVar "c")) (EFieldAccess (EVar "c") "pcFold"))
 (DTypeSig false "retainPassEntries" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "retainPassEntries" ((PVar "mids")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "c") "pcResolve"))) (fa "pcFold" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "c") "pcFold")))))))))
+(DTypeSig true "clearProjectPassEntries" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "clearProjectPassEntries" ((PLit LUnit)) (EApp (EVar "retainPassEntries") (EListLit)))
 (DTypeSig false "keepPassEntry" (TyFun (TyCon "PassKind") (TyFun (TyCon "String") (TyFun (TyCon "PassEntry") (TyCon "Unit")))))
 (DFunDef false "keepPassEntry" ((PVar "kind") (PVar "mid") (PVar "entry")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (EMatch (EVar "kind") (arm (PCon "ResolveKind") () (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcResolve")))))) (arm (PCon "FoldKind") () (ERecordUpdate (EVar "c") ((fa "pcFold" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcFold")))))))))))
 (DTypeSig false "freshPassIdentity" (TyFun (TyCon "Unit") (TyCon "Int")))

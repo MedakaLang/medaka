@@ -1,5 +1,5 @@
 # META
-source_lines=1597
+source_lines=1601
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -669,6 +669,10 @@ parsedModule parseFn owningRoot path src =
 -- evicts a module mid-load.
 loadedSourcesRef : Ref (OrdMap String)
 loadedSourcesRef = Ref omEmpty
+
+export
+clearLoadedSourceRecords : Unit -> Unit
+clearLoadedSourceRecords () = loadedSourcesRef := omEmpty
 
 noteLoadedSource : String -> String -> Unit
 noteLoadedSource path src =
@@ -1729,6 +1733,8 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "parsedModule" ((PVar "parseFn") (PVar "owningRoot") (PVar "path") (PVar "src")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteLoadedSource") (EVar "path")) (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EVar "parseFn") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadParseFailed") (EVar "path")) (EVar "src")) (EVar "e")))) (arm (PCon "Ok" (PVar "prog")) () (EApp (EVar "Ok") (ETuple (EVar "owningRoot") (EVar "path") (EVar "prog"))))))))
 (DTypeSig false "loadedSourcesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "loadedSourcesRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig true "clearLoadedSourceRecords" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "clearLoadedSourceRecords" ((PLit LUnit)) (EApp (EApp (EVar "setRef") (EVar "loadedSourcesRef")) (EVar "omEmpty")))
 (DTypeSig false "noteLoadedSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "noteLoadedSource" ((PVar "path") (PVar "src")) (EApp (EApp (EVar "setRef") (EVar "loadedSourcesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "loadedSourcesRef")))))
 (DTypeSig true "loadedSourceOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1972,6 +1978,8 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "parsedModule" ((PVar "parseFn") (PVar "owningRoot") (PVar "path") (PVar "src")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteLoadedSource") (EVar "path")) (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EVar "parseFn") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadParseFailed") (EVar "path")) (EVar "src")) (EVar "e")))) (arm (PCon "Ok" (PVar "prog")) () (EApp (EVar "Ok") (ETuple (EVar "owningRoot") (EVar "path") (EVar "prog"))))))))
 (DTypeSig false "loadedSourcesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "loadedSourcesRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig true "clearLoadedSourceRecords" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "clearLoadedSourceRecords" ((PLit LUnit)) (EApp (EApp (EVar "setRef") (EVar "loadedSourcesRef")) (EVar "omEmpty")))
 (DTypeSig false "noteLoadedSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "noteLoadedSource" ((PVar "path") (PVar "src")) (EApp (EApp (EVar "setRef") (EVar "loadedSourcesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "loadedSourcesRef")))))
 (DTypeSig true "loadedSourceOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

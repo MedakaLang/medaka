@@ -151,7 +151,7 @@ import tools.test_pins_report.{
   knownRedCountProps,
 }
 import support.util.{joinWith}
-import list.{zipWith, take}
+import list.{zipWith, take, lookup}
 import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
@@ -454,11 +454,6 @@ emptyMcpSyntaxState : McpSyntaxState
 emptyMcpSyntaxState =
   McpSyntaxState (emptySyntaxCache defaultSyntaxCacheLimits) [] 0
 
-mcpGeneration : String -> List (String, Int) -> Option Int
-mcpGeneration _ [] = None
-mcpGeneration uri ((key, generation) :: rest) =
-  if uri == key then Some generation else mcpGeneration uri rest
-
 mcpPrepared : Ref McpSyntaxState ->
   String ->
   String ->
@@ -467,7 +462,7 @@ mcpPrepared state path src =
   let uri = uriOfPath path
   let (McpSyntaxState cache entries next) = !state
   let found = do
-    generation <- mcpGeneration uri entries
+    generation <- lookup uri entries
     prepared <- lookupSyntax
       (SnapshotId uri generation)
       None

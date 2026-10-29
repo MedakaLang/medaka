@@ -1,17 +1,19 @@
 # META
-source_lines=151
+source_lines=187
 stages=DESUGAR,MARK
 # SOURCE
-import list.{reverse}
+import support.stage_count.{stageBump}
 import frontend.lex_token.{Token, RawTok(..)}
 import frontend.lex_scan.{scanRawChars}
 import frontend.lex_layout.{applyLayoutRanges}
 import frontend.parser.{parseSourcePairsWithIndex, parseSourceSyntaxPairs}
-import frontend.parse_result.{ParsedSource}
+import frontend.parse_result.{
+  ParsedSource, makeParsedSource, parsedPositions, parsedMetadata
+}
 import frontend.parse_diagnostic.{ParseDiagnostic}
 import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
 import frontend.recovery_result.{RecoveredSource}
-import frontend.ast.{Loc(..)}
+import frontend.ast.{Loc(..), Decl}
 import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
 
 public export data SourceSpan = SourceSpan Int Int
@@ -61,11 +63,27 @@ comments src (_ :: rest) = comments src rest
 
 export
 publishSyntax : RecoveryLimits -> String -> Result SyntaxAdmission SyntaxSource
-publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
+publishSyntax = publishSyntaxPrepared None
+
+export
+publishSyntaxWithCheckedDecls : RecoveryLimits ->
+  String ->
+  List Decl ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxWithCheckedDecls limits src decls =
+  publishSyntaxPrepared (Some decls) limits src
+
+publishSyntaxPrepared : Option (List Decl) ->
+  RecoveryLimits ->
+  String ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
+  let _ = stageBump "syntax.publish"
   if min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0
     || stringLength src > maxSource then
     Err (SourceLimit (stringLength src))
   else
+    let _ = stageBump "syntax.scan_raw"
     let raw = scanRawChars (stringToChars src)
     let ranges = applyLayoutRanges raw
     let tokens = map ((t, _, _) => t) ranges
@@ -75,10 +93,28 @@ publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnos
       Err (TokenLimit count)
     else
       let index = indexSource src
-      let strict = parseSourcePairsWithIndex src tokens offsets (() => index)
+      let positioned = match known
+        Some _ =>
+          let _ = stageBump "syntax.parse_only"
+          parseSourceSyntaxPairs src tokens offsets
+        None => None
+      let strict = match (known, positioned)
+        (Some decls, Some parsed) =>
+          Ok
+            (makeParsedSource
+              decls
+              (parsedPositions parsed)
+              (parsedMetadata parsed))
+        _ =>
+          let _ = stageBump "syntax.parse_checked"
+          parseSourcePairsWithIndex src tokens offsets (() => index)
       let structural = match strict
         Ok parsed => Some parsed
-        Err _ => parseSourceSyntaxPairs src tokens offsets
+        Err _ => match known
+          Some _ => positioned
+          None =>
+            let _ = stageBump "syntax.parse_only"
+            parseSourceSyntaxPairs src tokens offsets
       let recovered =
         recoverSourcePairsWithIndex limits index src tokens offsets strict
       Ok
@@ -154,16 +190,16 @@ export
 syntaxStructural : SyntaxSource -> Option ParsedSource
 syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 # DESUGAR
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" false) (mem "RawTok" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
 (DUse false (UseGroup ("frontend" "lex_layout") ((mem "applyLayoutRanges" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseSourcePairsWithIndex" false) (mem "parseSourceSyntaxPairs" false))))
-(DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false))))
+(DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "parsedPositions" false) (mem "parsedMetadata" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" true) (mem "recoverSourcePairsWithIndex" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
@@ -189,7 +225,11 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "kind") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
 (DFunDef false "comments" ((PVar "src") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest")))
 (DTypeSig true "publishSyntax" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource")))))
-(DFunDef false "publishSyntax" ((PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "min") (EApp (EApp (EVar "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EVar "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource"))) (EApp (EVar "Err") (EApp (EVar "SourceLimit") (EApp (EVar "stringLength") (EVar "src")))) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "src")))) (DoLet false false (PVar "ranges") (EApp (EVar "applyLayoutRanges") (EVar "raw"))) (DoLet false false (PVar "tokens") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "t") PWild PWild)) (EVar "t"))) (EVar "ranges"))) (DoLet false false (PVar "offsets") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "s") (PVar "e"))) (ETuple (EVar "s") (EVar "e")))) (EVar "ranges"))) (DoLet false false (PVar "count") (EApp (EVar "length") (EVar "tokens"))) (DoExpr (EIf (EBinOp ">" (EVar "count") (EVar "maxTokens")) (EApp (EVar "Err") (EApp (EVar "TokenLimit") (EVar "count"))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "strict") (EApp (EApp (EApp (EApp (EVar "parseSourcePairsWithIndex") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (ELam ((PLit LUnit)) (EVar "index")))) (DoLet false false (PVar "structural") (EMatch (EVar "strict") (arm (PCon "Ok" (PVar "parsed")) () (EApp (EVar "Some") (EVar "parsed"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))) (DoLet false false (PVar "recovered") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverSourcePairsWithIndex") (EVar "limits")) (EVar "index")) (EVar "src")) (EVar "tokens")) (EVar "offsets")) (EVar "strict"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxSource") (EVar "src")) (EVar "index")) (EApp (EVar "arrayFromList") (EVar "tokens"))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "s") (PVar "e"))) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e")))) (EVar "offsets")))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "comments") (EVar "src")) (EVar "raw")))) (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "pieces") (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 0))) (EVar "raw")))) (EVar "strict")) (EVar "structural")) (EVar "recovered"))))))))))
+(DFunDef false "publishSyntax" () (EApp (EVar "publishSyntaxPrepared") (EVar "None")))
+(DTypeSig true "publishSyntaxWithCheckedDecls" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource"))))))
+(DFunDef false "publishSyntaxWithCheckedDecls" ((PVar "limits") (PVar "src") (PVar "decls")) (EApp (EApp (EApp (EVar "publishSyntaxPrepared") (EApp (EVar "Some") (EVar "decls"))) (EVar "limits")) (EVar "src")))
+(DTypeSig false "publishSyntaxPrepared" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource"))))))
+(DFunDef false "publishSyntaxPrepared" ((PVar "known") (PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.publish")))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "min") (EApp (EApp (EVar "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EVar "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource"))) (EApp (EVar "Err") (EApp (EVar "SourceLimit") (EApp (EVar "stringLength") (EVar "src")))) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.scan_raw")))) (DoLet false false (PVar "raw") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "src")))) (DoLet false false (PVar "ranges") (EApp (EVar "applyLayoutRanges") (EVar "raw"))) (DoLet false false (PVar "tokens") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "t") PWild PWild)) (EVar "t"))) (EVar "ranges"))) (DoLet false false (PVar "offsets") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "s") (PVar "e"))) (ETuple (EVar "s") (EVar "e")))) (EVar "ranges"))) (DoLet false false (PVar "count") (EApp (EVar "length") (EVar "tokens"))) (DoExpr (EIf (EBinOp ">" (EVar "count") (EVar "maxTokens")) (EApp (EVar "Err") (EApp (EVar "TokenLimit") (EVar "count"))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "positioned") (EMatch (EVar "known") (arm (PCon "Some" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_only")))) (DoExpr (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))) (arm (PCon "None") () (EVar "None")))) (DoLet false false (PVar "strict") (EMatch (ETuple (EVar "known") (EVar "positioned")) (arm (PTuple (PCon "Some" (PVar "decls")) (PCon "Some" (PVar "parsed"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "makeParsedSource") (EVar "decls")) (EApp (EVar "parsedPositions") (EVar "parsed"))) (EApp (EVar "parsedMetadata") (EVar "parsed"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_checked")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseSourcePairsWithIndex") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (ELam ((PLit LUnit)) (EVar "index")))))))) (DoLet false false (PVar "structural") (EMatch (EVar "strict") (arm (PCon "Ok" (PVar "parsed")) () (EApp (EVar "Some") (EVar "parsed"))) (arm (PCon "Err" PWild) () (EMatch (EVar "known") (arm (PCon "Some" PWild) () (EVar "positioned")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_only")))) (DoExpr (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))) (DoLet false false (PVar "recovered") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverSourcePairsWithIndex") (EVar "limits")) (EVar "index")) (EVar "src")) (EVar "tokens")) (EVar "offsets")) (EVar "strict"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxSource") (EVar "src")) (EVar "index")) (EApp (EVar "arrayFromList") (EVar "tokens"))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "s") (PVar "e"))) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e")))) (EVar "offsets")))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "comments") (EVar "src")) (EVar "raw")))) (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "pieces") (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 0))) (EVar "raw")))) (EVar "strict")) (EVar "structural")) (EVar "recovered"))))))))))))
 (DTypeSig true "syntaxSourceText" (TyFun (TyCon "SyntaxSource") (TyCon "String")))
 (DFunDef false "syntaxSourceText" ((PCon "SyntaxSource" (PVar "src") PWild PWild PWild PWild PWild PWild PWild PWild)) (EVar "src"))
 (DTypeSig true "renderOriginal" (TyFun (TyCon "SyntaxSource") (TyCon "String")))
@@ -215,16 +255,16 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DTypeSig true "syntaxStructural" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Option") (TyCon "ParsedSource"))))
 (DFunDef false "syntaxStructural" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild (PVar "structural") PWild)) (EVar "structural"))
 # MARK
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" false) (mem "RawTok" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
 (DUse false (UseGroup ("frontend" "lex_layout") ((mem "applyLayoutRanges" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseSourcePairsWithIndex" false) (mem "parseSourceSyntaxPairs" false))))
-(DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false))))
+(DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "makeParsedSource" false) (mem "parsedPositions" false) (mem "parsedMetadata" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" true) (mem "recoverSourcePairsWithIndex" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
@@ -250,7 +290,11 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "kind") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
 (DFunDef false "comments" ((PVar "src") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest")))
 (DTypeSig true "publishSyntax" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource")))))
-(DFunDef false "publishSyntax" ((PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EMethodRef "min") (EApp (EApp (EMethodRef "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EMethodRef "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource"))) (EApp (EVar "Err") (EApp (EVar "SourceLimit") (EApp (EVar "stringLength") (EVar "src")))) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "src")))) (DoLet false false (PVar "ranges") (EApp (EVar "applyLayoutRanges") (EVar "raw"))) (DoLet false false (PVar "tokens") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "t") PWild PWild)) (EVar "t"))) (EVar "ranges"))) (DoLet false false (PVar "offsets") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "s") (PVar "e"))) (ETuple (EVar "s") (EVar "e")))) (EVar "ranges"))) (DoLet false false (PVar "count") (EApp (EMethodRef "length") (EVar "tokens"))) (DoExpr (EIf (EBinOp ">" (EDictApp "count") (EVar "maxTokens")) (EApp (EVar "Err") (EApp (EVar "TokenLimit") (EDictApp "count"))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "strict") (EApp (EApp (EApp (EApp (EVar "parseSourcePairsWithIndex") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (ELam ((PLit LUnit)) (EMethodRef "index")))) (DoLet false false (PVar "structural") (EMatch (EVar "strict") (arm (PCon "Ok" (PVar "parsed")) () (EApp (EVar "Some") (EVar "parsed"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))) (DoLet false false (PVar "recovered") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverSourcePairsWithIndex") (EVar "limits")) (EMethodRef "index")) (EVar "src")) (EVar "tokens")) (EVar "offsets")) (EVar "strict"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxSource") (EVar "src")) (EMethodRef "index")) (EApp (EVar "arrayFromList") (EVar "tokens"))) (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "s") (PVar "e"))) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e")))) (EVar "offsets")))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "comments") (EVar "src")) (EVar "raw")))) (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "pieces") (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 0))) (EVar "raw")))) (EVar "strict")) (EVar "structural")) (EVar "recovered"))))))))))
+(DFunDef false "publishSyntax" () (EApp (EVar "publishSyntaxPrepared") (EVar "None")))
+(DTypeSig true "publishSyntaxWithCheckedDecls" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource"))))))
+(DFunDef false "publishSyntaxWithCheckedDecls" ((PVar "limits") (PVar "src") (PVar "decls")) (EApp (EApp (EApp (EVar "publishSyntaxPrepared") (EApp (EVar "Some") (EVar "decls"))) (EVar "limits")) (EVar "src")))
+(DTypeSig false "publishSyntaxPrepared" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource"))))))
+(DFunDef false "publishSyntaxPrepared" ((PVar "known") (PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.publish")))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EMethodRef "min") (EApp (EApp (EMethodRef "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EMethodRef "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource"))) (EApp (EVar "Err") (EApp (EVar "SourceLimit") (EApp (EVar "stringLength") (EVar "src")))) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.scan_raw")))) (DoLet false false (PVar "raw") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "src")))) (DoLet false false (PVar "ranges") (EApp (EVar "applyLayoutRanges") (EVar "raw"))) (DoLet false false (PVar "tokens") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "t") PWild PWild)) (EVar "t"))) (EVar "ranges"))) (DoLet false false (PVar "offsets") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "s") (PVar "e"))) (ETuple (EVar "s") (EVar "e")))) (EVar "ranges"))) (DoLet false false (PVar "count") (EApp (EMethodRef "length") (EVar "tokens"))) (DoExpr (EIf (EBinOp ">" (EDictApp "count") (EVar "maxTokens")) (EApp (EVar "Err") (EApp (EVar "TokenLimit") (EDictApp "count"))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "positioned") (EMatch (EVar "known") (arm (PCon "Some" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_only")))) (DoExpr (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))) (arm (PCon "None") () (EVar "None")))) (DoLet false false (PVar "strict") (EMatch (ETuple (EVar "known") (EVar "positioned")) (arm (PTuple (PCon "Some" (PVar "decls")) (PCon "Some" (PVar "parsed"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "makeParsedSource") (EVar "decls")) (EApp (EVar "parsedPositions") (EVar "parsed"))) (EApp (EVar "parsedMetadata") (EVar "parsed"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_checked")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseSourcePairsWithIndex") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (ELam ((PLit LUnit)) (EMethodRef "index")))))))) (DoLet false false (PVar "structural") (EMatch (EVar "strict") (arm (PCon "Ok" (PVar "parsed")) () (EApp (EVar "Some") (EVar "parsed"))) (arm (PCon "Err" PWild) () (EMatch (EVar "known") (arm (PCon "Some" PWild) () (EVar "positioned")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "syntax.parse_only")))) (DoExpr (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))) (DoLet false false (PVar "recovered") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverSourcePairsWithIndex") (EVar "limits")) (EMethodRef "index")) (EVar "src")) (EVar "tokens")) (EVar "offsets")) (EVar "strict"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxSource") (EVar "src")) (EMethodRef "index")) (EApp (EVar "arrayFromList") (EVar "tokens"))) (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "s") (PVar "e"))) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e")))) (EVar "offsets")))) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "comments") (EVar "src")) (EVar "raw")))) (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "pieces") (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 0))) (EVar "raw")))) (EVar "strict")) (EVar "structural")) (EVar "recovered"))))))))))))
 (DTypeSig true "syntaxSourceText" (TyFun (TyCon "SyntaxSource") (TyCon "String")))
 (DFunDef false "syntaxSourceText" ((PCon "SyntaxSource" (PVar "src") PWild PWild PWild PWild PWild PWild PWild PWild)) (EVar "src"))
 (DTypeSig true "renderOriginal" (TyFun (TyCon "SyntaxSource") (TyCon "String")))

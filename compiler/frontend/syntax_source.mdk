@@ -1,13 +1,15 @@
-import list.{reverse}
+import support.stage_count.{stageBump}
 import frontend.lex_token.{Token, RawTok(..)}
 import frontend.lex_scan.{scanRawChars}
 import frontend.lex_layout.{applyLayoutRanges}
 import frontend.parser.{parseSourcePairsWithIndex, parseSourceSyntaxPairs}
-import frontend.parse_result.{ParsedSource}
+import frontend.parse_result.{
+  ParsedSource, makeParsedSource, parsedPositions, parsedMetadata
+}
 import frontend.parse_diagnostic.{ParseDiagnostic}
 import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
 import frontend.recovery_result.{RecoveredSource}
-import frontend.ast.{Loc(..)}
+import frontend.ast.{Loc(..), Decl}
 import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
 
 public export data SourceSpan = SourceSpan Int Int
@@ -57,11 +59,27 @@ comments src (_ :: rest) = comments src rest
 
 export
 publishSyntax : RecoveryLimits -> String -> Result SyntaxAdmission SyntaxSource
-publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
+publishSyntax = publishSyntaxPrepared None
+
+export
+publishSyntaxWithCheckedDecls : RecoveryLimits ->
+  String ->
+  List Decl ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxWithCheckedDecls limits src decls =
+  publishSyntaxPrepared (Some decls) limits src
+
+publishSyntaxPrepared : Option (List Decl) ->
+  RecoveryLimits ->
+  String ->
+  Result SyntaxAdmission SyntaxSource
+publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
+  let _ = stageBump "syntax.publish"
   if min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0
     || stringLength src > maxSource then
     Err (SourceLimit (stringLength src))
   else
+    let _ = stageBump "syntax.scan_raw"
     let raw = scanRawChars (stringToChars src)
     let ranges = applyLayoutRanges raw
     let tokens = map ((t, _, _) => t) ranges
@@ -71,10 +89,28 @@ publishSyntax (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnos
       Err (TokenLimit count)
     else
       let index = indexSource src
-      let strict = parseSourcePairsWithIndex src tokens offsets (() => index)
+      let positioned = match known
+        Some _ =>
+          let _ = stageBump "syntax.parse_only"
+          parseSourceSyntaxPairs src tokens offsets
+        None => None
+      let strict = match (known, positioned)
+        (Some decls, Some parsed) =>
+          Ok
+            (makeParsedSource
+              decls
+              (parsedPositions parsed)
+              (parsedMetadata parsed))
+        _ =>
+          let _ = stageBump "syntax.parse_checked"
+          parseSourcePairsWithIndex src tokens offsets (() => index)
       let structural = match strict
         Ok parsed => Some parsed
-        Err _ => parseSourceSyntaxPairs src tokens offsets
+        Err _ => match known
+          Some _ => positioned
+          None =>
+            let _ = stageBump "syntax.parse_only"
+            parseSourceSyntaxPairs src tokens offsets
       let recovered =
         recoverSourcePairsWithIndex limits index src tokens offsets strict
       Ok

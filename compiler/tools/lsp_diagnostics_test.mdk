@@ -67,7 +67,66 @@ test "parse actions require expected text and machine applicability" =
           diag (ParseEdit loc "!=" "/=" HumanOnly),
         ]),
     ),
+    (
+      "reversed",
+      expectEqual
+        []
+        (parseDiagnosticActions snapshot [
+          diag (ParseEdit (Loc "" 1 4 1 2) "" "/=" MachineApplicable),
+        ]),
+    ),
+    (
+      "out of range",
+      expectEqual
+        []
+        (parseDiagnosticActions snapshot [
+          diag (ParseEdit (Loc "" 1 0 1 99) "" "/=" MachineApplicable),
+        ]),
+    ),
   ]
+
+test "parse edit keeps version and UTF-16 range after comment and CRLF" =
+  let snapshot = makeSnapshot "file:///a.mdk" (Some 7) 3 "-- 😀\r\nx != y\r\n"
+  let loc = Loc "" 2 2 2 4
+  let diag =
+    ParseDiagnostic BadNeq loc [ParseEdit loc "!=" "/=" MachineApplicable]
+  let range = jObject [
+    ("start", jObject [("line", JInt 1), ("character", JInt 2)]),
+    ("end", jObject [("line", JInt 1), ("character", JInt 4)]),
+  ]
+  expectEqual
+    [
+      jObject [
+        ("title", JString "Replace with /="),
+        ("kind", JString "quickfix"),
+        (
+          "edit",
+          jObject [
+            (
+              "documentChanges",
+              jArray [
+                jObject [
+                  (
+                    "textDocument",
+                    jObject [
+                      ("uri", JString "file:///a.mdk"),
+                      ("version", JInt 7),
+                    ],
+                  ),
+                  (
+                    "edits",
+                    jArray [
+                      jObject [("range", range), ("newText", JString "/=")],
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ],
+    ]
+    (parseDiagnosticActions snapshot [diag])
 
 test "adapter selects the first machine edit" =
   let loc = Loc "" 1 2 1 4
