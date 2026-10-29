@@ -95,7 +95,6 @@ import support.util.{
   splitNl,
   splitOnChar,
   joinWith,
-  sortUniqS,
   startsWith,
   endsWith,
   stringTrim,
@@ -114,7 +113,7 @@ import hash_map.{
   size,
   findWithDefault,
 }
-import list.{take, drop, last}
+import list.{take, drop, last, sortBy}
 import string.{drop as strDrop, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, stripMdk}
@@ -897,7 +896,7 @@ stdlibModuleGo (seg :: rest) found =
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below — the same native field-scanner reason `Rule` documents.
 public export data StdlibIndex =
-  StdlibIndex (HashMap String (List (String, Ty)))
+  StdlibIndex (HashMap String (List (String, Ty))) (List String)
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
 -- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s
@@ -908,21 +907,21 @@ public export data StdlibIndex =
 -- choices, so it must never be populated from a degraded index.
 export
 emptyStdlibIndex : StdlibIndex
-emptyStdlibIndex = StdlibIndex (new ())
+emptyStdlibIndex = StdlibIndex (new ()) []
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
 -- it is the number an entry point prints to say what it actually got.
 export
 stdlibIndexSize : StdlibIndex -> Int
-stdlibIndexSize (StdlibIndex m) = size m
+stdlibIndexSize (StdlibIndex m _) = size m
 
 -- Every stdlib module declaring `name`, with the type each one declares, in
 -- stdlib-file order.  `[]` = not a stdlib export (or the index is degraded);
 -- more than one element = the name is ambiguous and the CALLER must decide.
 export
 stdlibEntriesOf : StdlibIndex -> String -> List (String, Ty)
-stdlibEntriesOf (StdlibIndex m) name = findWithDefault [] name m
+stdlibEntriesOf (StdlibIndex m _) name = findWithDefault [] name m
 
 -- The type `<module>.<name>` declares, e.g. `stdlibSigIn idx "list" "reverse"`
 -- = `List a -> List a`.  The unambiguous accessor: it names the module, so it
@@ -937,13 +936,23 @@ export
 stdlibSigTextIn : StdlibIndex -> String -> String -> Option String
 stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
 
+-- Sorted, duplicate-free `String` list.  Local to lint: `support.util.sortUniqS`
+-- is an insertion sort and these call sites run once per file or per def.
+sortUniqS : List String -> List String
+sortUniqS xs = dedupSortedS (sortBy stringCompare xs)
+
+dedupSortedS : List String -> List String
+dedupSortedS (a :: b :: rest) =
+  if a == b then dedupSortedS (b :: rest) else a :: dedupSortedS (b :: rest)
+dedupSortedS xs = xs
+
 -- Every name the index knows, sorted.  `rule-stdlib-reimpl` generates its
 -- candidate names from THIS rather than from a curated 15-name list, so the
 -- rule cannot drift from the
 -- stdlib the way a hand-written list does (#2248 Miss 2).
 export
 stdlibIndexNames : StdlibIndex -> List String
-stdlibIndexNames (StdlibIndex m) = sortUniqS (keys m)
+stdlibIndexNames (StdlibIndex _ names) = names
 
 -- The names declared by MORE THAN ONE stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
@@ -980,8 +989,12 @@ export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
   map
-    (triples => StdlibIndex (groupStdlibSigs triples))
+    (triples => mkStdlibIndex (groupStdlibSigs triples))
     (stdlibSigTriplesResult lintStdlibDir)
+
+-- The sorted name list is computed here, once, not per linted file.
+mkStdlibIndex : HashMap String (List (String, Ty)) -> StdlibIndex
+mkStdlibIndex m = StdlibIndex m (sortUniqS (keys m))
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -1655,13 +1668,29 @@ applySuppressionsMultiDirs : List (String, List Directive) ->
   List Finding ->
   List Finding
 applySuppressionsMultiDirs dirTable findings =
-  filterList (f => not (findingSuppressedMulti dirTable f)) findings
+  let table = dirTableMap dirTable
+  filterList (f => not (findingSuppressedMulti table f)) findings
+
+-- First row per path wins, as the list scan it replaces did.
+dirTableMap : List (String, List Directive) -> HashMap String (List Directive)
+dirTableMap rows =
+  let m = new ()
+  let _ = dirTableFill m rows
+  m
+
+dirTableFill : HashMap String (List Directive) ->
+  List (String, List Directive) ->
+  Unit
+dirTableFill _ [] = ()
+dirTableFill m ((p, ds) :: rest) =
+  let _ = if has p m then () else setInPlace p ds m
+  dirTableFill m rest
 
 fileDirectivesOf : (String, String) -> (String, List Directive)
 fileDirectivesOf (path, src) = (path, directivesOfSource src)
 
-findingSuppressedMulti : List (String, List Directive) -> Finding -> Bool
-findingSuppressedMulti dirTable f = match lookupDirs (findingFileOf f) dirTable
+findingSuppressedMulti : HashMap String (List Directive) -> Finding -> Bool
+findingSuppressedMulti dirTable f = match get (findingFileOf f) dirTable
   None => False
   Some dirs => isSuppressed dirs f
 
@@ -1669,11 +1698,6 @@ findingFileOf : Finding -> String
 findingFileOf f = match f.loc
   Some (Loc file _ _ _ _) => file
   None => ""
-
-lookupDirs : String -> List (String, List Directive) -> Option (List Directive)
-lookupDirs _ [] = None
-lookupDirs path ((p, ds) :: rest) =
-  if p == path then Some ds else lookupDirs path rest
 
 directivesOfSource : String -> List Directive
 directivesOfSource src = collectDirectives (collectComments src)
@@ -1715,7 +1739,13 @@ keywordRe : String -> Regex
 keywordRe kw = mustCompile ("^" ++ escape kw ++ "($|[ \\t].*)$")
 
 parseDirectiveBody : Int -> String -> Option Directive
-parseDirectiveBody line s = match matchKeyword lintDisableNextLineRe s
+parseDirectiveBody line s =
+  if startsWith "lint-" s then parseDirectiveKeyword line s else None
+
+-- Every directive keyword begins `lint-`, so `parseDirectiveBody` only reaches
+-- the regexes for text that can match one.
+parseDirectiveKeyword : Int -> String -> Option Directive
+parseDirectiveKeyword line s = match matchKeyword lintDisableNextLineRe s
   Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
   None => match matchKeyword lintDisableLineRe s
     Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
@@ -5586,20 +5616,32 @@ promissoryClaims blocks = flatMap promissoryClaimOf blocks
 
 promissoryClaimOf : CommentBlock -> List (Int, String, CommentBlock)
 promissoryClaimOf (b@(CommentBlock first _ _ text)) =
-  match promissoryLine (splitNl text) 0
-    Some (i, l) => [(first + i, l, b)]
-    None =>
-      -- a claim wrapped across lines: test the block as one line
-      let joined = joinWith " " (splitNl text)
-      if isPromissoryText (stringToLower (stripQuoted joined)) then
-        [(first, joined, b)]
-      else
-        []
+  if not (mayBePromissory (stringToLower text)) then
+    []
+  else
+    let lines = splitNl text
+    match promissoryLine lines 0
+      Some (i, l) => [(first + i, l, b)]
+      None =>
+        -- a claim wrapped across lines: test the block as one line
+        let joined = joinWith " " lines
+        if isPromissoryText (stringToLower (stripQuoted joined)) then
+          [(first, joined, b)]
+        else
+          []
+
+-- Necessary condition of `isPromissoryText` on lowercased RAW text: every
+-- phrase contains `yet` or `reader`.  Both are space-free, so a quoted span
+-- replaced by a space in `stripQuoted` cannot create one.
+mayBePromissory : String -> Bool
+mayBePromissory low =
+  isSome (stringIndexOf "yet" low) || isSome (stringIndexOf "reader" low)
 
 promissoryLine : List String -> Int -> Option (Int, String)
 promissoryLine [] _ = None
 promissoryLine (l :: rest) i
-  | isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
+  | mayBePromissory (stringToLower l)
+    && isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
   | otherwise = promissoryLine rest (i + 1)
 
 nothingReadsRe : Regex
