@@ -3,4 +3,4 @@
 import test.{expectTrue}
 import test.{expectEqual}
 
-eqCase a = expectEqual a 1
+eqCase a = expectTrue (a == 1)

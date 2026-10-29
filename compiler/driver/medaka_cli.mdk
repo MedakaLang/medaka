@@ -331,7 +331,13 @@ import tools.codemod.{
   CodeMode(..),
 }
 import tools.lint_cmd.{
+  explainRule,
   lintCacheCtx,
+  lintHelpText,
+  renderRuleRowsJson,
+  renderRuleRowsText,
+  rulesPageMarkdown,
+  selectRuleRows,
   runLintJsonCmd,
   lintFilesToDiagTriples,
   baselineFileCodes,
@@ -3847,27 +3853,6 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 --   no file arg             → find medaka.toml project root, lint top-level .mdk files
 --     (note: top-level only — subdirectory .mdk files are not walked recursively)
 -- Exit 0 unless a SevError finding exists (only via --deny in v1 report mode).
-lintHelpText : String
-lintHelpText = stringConcat [
-  "medaka lint — Lint files/dirs against style rules\n", "\n", "Usage:\n",
-  "  medaka lint [paths...] [flags]\n", "\n",
-  "  --fix                 rewrite fixable findings in-place\n",
-  "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
-  "                       envelope instead of human text (--fix is ignored)\n",
-  "  --cache                reuse per-file results for files whose content is\n",
-  "                       unchanged (opt-in, like ESLint's --cache)\n",
-  "  --disable=r1,r2,...    suppress findings from the named rules\n",
-  "  --only=r1,...          keep only findings from the named rules\n",
-  "  --deny=r1,...          promote findings from the named rules to error\n",
-  "  --baseline=<file>      error only where a file's per-rule finding count\n",
-  "                       exceeds its row in <file> (counts may fall freely)\n",
-  "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n",
-  "\n", "Target resolution: explicit file args are linted in order; a single\n",
-  "directory arg lints its top-level .mdk files (not recursive); no args\n",
-  "finds the medaka.toml project root and lints its top-level .mdk files.\n",
-  "Exit 0 unless a SevError finding exists.\n"
-]
-
 -- Declaration order is the roster order, reproducing the old
 -- `lintBoolFlags ++ lintValueFlags` rendering.
 -- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
@@ -3893,10 +3878,68 @@ lintArgSpec =
         ["--write-baseline"]
         "<file>"
         "regenerate <file> from this run instead of reporting",
+      switch ["--list-rules"] "list every rule with its metadata",
+      switch ["--markdown"] "with --list-rules: render docs/ops/LINT-RULES.md",
+      value
+        ["--scope"]
+        "universal|internal"
+        "with --list-rules: keep one scope",
+      value
+        ["--ratchet"]
+        "gated|baselined"
+        "with --list-rules: keep one ratchet",
+      value ["--tier"] "file|cross" "with --list-rules: keep one rule tier",
+      value ["--explain"] "<rule>" "print a rule's summary and documentation",
     ])
 
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
+  let a = requireArgs lintArgSpec argv0
+  if flag "--list-rules" a then
+    runLintListRules a
+  else if isSome (flagValue "--explain" a) then
+    runLintExplain a
+  else
+    let _ = assertNoListOnlyFlags a
+    runLintTargets a
+
+-- `--list-rules` and `--explain` print the registry and read no files; a
+-- list-only filter given without `--list-rules` would otherwise be accepted
+-- and ignored.
+assertNoListOnlyFlags : Args -> <IO> Unit
+assertNoListOnlyFlags a =
+  if flag "--markdown" a
+    || isSome (flagValue "--scope" a)
+    || isSome (flagValue "--ratchet" a)
+    || isSome (flagValue "--tier" a) then
+    dieMsg
+      "medaka lint: --markdown/--scope/--ratchet/--tier require --list-rules"
+
+runLintListRules : Args -> <IO> Unit
+runLintListRules a =
+  if flag "--markdown" a then
+    putStr rulesPageMarkdown
+  else
+    let picked =
+      selectRuleRows
+        (flagValue "--scope" a)
+        (flagValue "--ratchet" a)
+        (flagValue "--tier" a)
+    match picked
+      Err msg => dieMsg "medaka lint: \{msg}"
+      Ok rows =>
+        if flag "--json" a then
+          putStr (renderRuleRowsJson rows)
+        else
+          putStr (renderRuleRowsText rows)
+
+runLintExplain : Args -> <IO> Unit
+runLintExplain a = match explainRule (optDefault (flagValue "--explain" a) "")
+  Err msg => dieMsg "medaka lint: \{msg}"
+  Ok text => putStrLn text
+
+runLintTargets : Args -> <IO> Unit
+runLintTargets a =
   -- C1: `parseLintFlagList` keys on the `--flag=` prefix (the spelling the
   -- pre-commit hook uses).  Rewriting the space form INTO that prefix instead
   -- leaves `--deny rule-x`'s `rule-x` behind as an ordinary
@@ -3910,7 +3953,6 @@ runLintCmd argv0 =
   -- C2: `lint`'s SILENT-ACCEPT cell — `lintTargets` skipped every `--`-shaped
   -- token, so `medaka lint --zzz ok.mdk` printed nothing and exited 0,
   -- indistinguishable from a clean run.
-  let a = requireArgs lintArgSpec argv0
   let disableNames = lintNamesOf "--disable" a
   let onlyNames = lintNamesOf "--only" a
   let denyNames = lintNamesOf "--deny" a

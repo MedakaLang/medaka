@@ -137,12 +137,6 @@ export
 ruleNameTestPreludeShadow : String
 ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
 
--- The rule whose `check` reads the `StdlibIndex`; the runner builds the index
--- only when this rule is active.
-export
-stdlibIndexRule : String
-stdlibIndexRule = ruleNameStdlibReimpl
-
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
 -- but `test/lint_fixtures/foo.mdk` does not).

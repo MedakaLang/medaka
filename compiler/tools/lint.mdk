@@ -4,17 +4,26 @@
 -- this module re-exports the surface the CLI, MCP server and tests consume.
 
 export import tools.lint_core.{
+  Category(..),
+  CrossFileRule(..),
   DirScope(..),
   Directive(..),
   Finding(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
   Rule(..),
+  RuleMeta(..),
+  Scope(..),
   StdlibIndex(..),
   StdlibIndexError(..),
   emptyStdlibIndex,
+  ruleMetaName,
 }
 export import tools.lint_shared.{collectDirectives}
 export import tools.lint_rules_staging.{fileDupOccs}
 export import tools.lint_registry.{
+  allCrossFileRules,
   allRuleNames,
   allRules,
   crossFileSelected,

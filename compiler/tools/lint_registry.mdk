@@ -8,7 +8,18 @@ import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
 import support.util.{contains, anyList, filterList, isEmptyL, isSome}
 import hash_map.{has}
 import regex.{RegexError(..), compile, mustCompile}
-import tools.lint_core.{CrossFileRule(..), Rule(..)}
+import tools.lint_core.{
+  Category(..),
+  CrossFileRule(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule(..),
+  RuleMeta(..),
+  Scope(..),
+  mkCrossFileRule,
+  mkRule,
+}
 import tools.lint_shared.{
   ruleNameAndThenPureMap,
   ruleNameBindChainToDo,
@@ -101,332 +112,573 @@ import tools.lint_rules_staging.{
 -- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
 -- + append it to `allRules`.
 matchParamRule : Rule
-matchParamRule = Rule {
-  name = ruleNameMatchParam,
-  descr =
-    "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleMatchOnParam,
-  fix = Some matchParamFix,
-}
+matchParamRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameMatchParam,
+      summary =
+        "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
+      doc =
+        "A function whose whole body is a `match` on one of its own parameters is clearer as several clauses: the patterns move into the parameter position and the extra indentation level goes away. This enforces STYLE section 8, a repository taste ruling.\n\nBefore:\n  len xs = match xs\n    [] => 0\n    _ :: t => 1 + len t\nAfter:\n  len [] = 0\n  len (_ :: t) = 1 + len t",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleMatchOnParam
+    (Some matchParamFix)
 
 derivableRule : Rule
-derivableRule = Rule {
-  name = ruleNameDerivable,
-  descr = "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDerivable,
-  fix = None,
-}
+derivableRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDerivable,
+      summary =
+        "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)",
+      doc =
+        "A hand-written `Eq`, `Ord` or `Debug` impl that does exactly what `deriving` would generate is code that can drift from the type. Derive it instead.\n\nBefore:\n  impl Eq Color\n    Red == Red = True\n    ...\nAfter:\n  data Color = Red | Green deriving (Eq)",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDerivable
+    None
 
 stdlibReimplRule : Rule
-stdlibReimplRule = Rule {
-  name = ruleNameStdlibReimpl,
-  descr =
-    "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleStdlibReimpl,
-  fix = None,
-}
+stdlibReimplRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameStdlibReimpl,
+      summary =
+        "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
+      doc =
+        "A top-level function whose declared signature equals that of an exported stdlib function, and whose body does the same work, reimplements the stdlib under another name. The rule compares against the stdlib signature index. Call the stdlib function.\n\nBefore:\n  sumAll : List Int -> Int\n  sumAll xs = foldl (+) 0 xs\nAfter:\n  use `sum` from the stdlib",
+      category = Style,
+      scope = Universal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [NeedsStdlibIndex],
+    }
+    ruleStdlibReimpl
+    None
 
 bindThenDestructureRule : Rule
-bindThenDestructureRule = Rule {
-  name = ruleNameBindThenDestructure,
-  descr =
-    "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleBindThenDestructure,
-  fix = Some bindThenDestructureFix,
-}
+bindThenDestructureRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameBindThenDestructure,
+      summary =
+        "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
+      doc =
+        "A `do` bind that immediately destructures the bound variable with an irrefutable single-arm `match` can put the pattern in the bind itself.\n\nBefore:\n  p <- getPair\n  match p\n    (a, b) => use a b\nAfter:\n  (a, b) <- getPair\n  use a b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleBindThenDestructure
+    (Some bindThenDestructureFix)
 
 lambdaSectionRule : Rule
-lambdaSectionRule = Rule {
-  name = ruleNameLambdaSection,
-  descr =
-    "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleLambdaSection,
-  fix = Some lambdaSectionFix,
-}
+lambdaSectionRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameLambdaSection,
+      summary =
+        "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
+      doc =
+        "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleLambdaSection
+    (Some lambdaSectionFix)
 
 ifMaxMinRule : Rule
-ifMaxMinRule = Rule {
-  name = ruleNameIfMaxMin,
-  descr =
-    "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleIfMaxMin,
-  fix = Some ifMaxMinFix,
-}
+ifMaxMinRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameIfMaxMin,
+      summary =
+        "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
+      doc =
+        "An `if` that picks the larger or smaller of two operands is `max` or `min`.\n\nBefore:\n  if a > b then a else b\nAfter:\n  max a b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleIfMaxMin
+    (Some ifMaxMinFix)
 
 andThenPureMapRule : Rule
-andThenPureMapRule = Rule {
-  name = ruleNameAndThenPureMap,
-  descr =
-    "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleAndThenPureMap,
-  fix = Some andThenPureMapFix,
-}
+andThenPureMapRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameAndThenPureMap,
+      summary =
+        "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
+      doc =
+        "A monadic bind whose continuation only wraps a pure transformation in `pure` is `map`, by the functor law `m >>= (pure . f) == fmap f m`.\n\nBefore:\n  andThen m (x => pure (f x))\nAfter:\n  map f m",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleAndThenPureMap
+    (Some andThenPureMapFix)
 
 destructureInParamRule : Rule
-destructureInParamRule = Rule {
-  name = ruleNameDestructureInParam,
-  descr =
-    "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDestructureInParam,
-  fix = Some destructureInParamFix,
-}
+destructureInParamRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDestructureInParam,
+      summary =
+        "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
+      doc =
+        "A function body that is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple, record, single-constructor) can destructure in the parameter position.\n\nBefore:\n  f p = match p\n    (a, b) => a + b\nAfter:\n  f (a, b) = a + b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleDestructureInParam
+    (Some destructureInParamFix)
 
 missingSignatureRule : Rule
-missingSignatureRule = Rule {
-  name = ruleNameMissingSignature,
-  descr =
-    "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleMissingSignature,
-  fix = None,
-}
+missingSignatureRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameMissingSignature,
+      summary =
+        "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
+      doc =
+        "A top-level binding without a sibling type signature has an inferred type that changes silently when its body does. Write the signature (Haskell -Wmissing-signatures).\n\nBefore:\n  double x = x * 2\nAfter:\n  double : Int -> Int\n  double x = x * 2",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleMissingSignature
+    None
 
 notEqRule : Rule
-notEqRule = Rule {
-  name = ruleNameNotEq,
-  descr =
-    "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleNotEq,
-  fix = Some notEqFix,
-}
+notEqRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameNotEq,
+      summary =
+        "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
+      doc =
+        "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleNotEq
+    (Some notEqFix)
 
 boolSimplifyRule : Rule
-boolSimplifyRule = Rule {
-  name = ruleNameBoolSimplify,
-  descr =
-    "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleBoolSimplify,
-  fix = Some boolSimplifyFix,
-}
+boolSimplifyRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameBoolSimplify,
+      summary =
+        "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
+      doc =
+        "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleBoolSimplify
+    (Some boolSimplifyFix)
 
 remParityRule : Rule
-remParityRule = Rule {
-  name = ruleNameRemParity,
-  descr =
-    "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleRemParity,
-  fix = Some remParityFix,
-}
+remParityRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameRemParity,
+      summary =
+        "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
+      doc =
+        "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleRemParity
+    (Some remParityFix)
 
 doubleReverseRule : Rule
-doubleReverseRule = Rule {
-  name = ruleNameDoubleReverse,
-  descr = "`reverse (reverse x)` is `x`. Drop the double reversal",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDoubleReverse,
-  fix = Some doubleReverseFix,
-}
+doubleReverseRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDoubleReverse,
+      summary = "`reverse (reverse x)` is `x`. Drop the double reversal",
+      doc =
+        "Reversing a list twice returns the original list after two traversals.\n\nBefore:\n  reverse (reverse xs)\nAfter:\n  xs",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleDoubleReverse
+    (Some doubleReverseFix)
 
 whenUnlessRule : Rule
-whenUnlessRule = Rule {
-  name = ruleNameWhenUnless,
-  descr =
-    "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleWhenUnless,
-  fix = Some whenUnlessFix,
-}
+whenUnlessRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameWhenUnless,
+      summary =
+        "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
+      doc =
+        "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleWhenUnless
+    (Some whenUnlessFix)
 
 complementPredicateRule : Rule
-complementPredicateRule = Rule {
-  name = ruleNameComplementPredicate,
-  descr =
-    "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleComplementPredicate,
-  fix = Some complementPredicateFix,
-}
+complementPredicateRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameComplementPredicate,
+      summary =
+        "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
+      doc =
+        "Negating a predicate that has a defined complement (`isEmptyL`/`isSome`/`isOk` and their inverses) is clearer as a call to the complement.\n\nBefore:\n  not (isSome x)\nAfter:\n  isNone x",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleComplementPredicate
+    (Some complementPredicateFix)
 
 matchToMapRule : Rule
-matchToMapRule = Rule {
-  name = ruleNameMatchToMap,
-  descr =
-    "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleMatchToMap,
-  fix = Some matchToMapFix,
-}
+matchToMapRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameMatchToMap,
+      summary =
+        "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
+      doc =
+        "A two-arm `match` on an `Option` or `Result` that passes the failure constructor through and re-wraps the success value is `map` (hlint \"use fmap\").\n\nBefore:\n  match r\n    Ok v => Ok (f v)\n    Err e => Err e\nAfter:\n  map f r",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleMatchToMap
+    (Some matchToMapFix)
 
 bindChainToDoRule : Rule
-bindChainToDoRule = Rule {
-  name = ruleNameBindChainToDo,
-  descr =
-    "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleBindChainToDo,
-  fix = None,
-}
+bindChainToDoRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameBindChainToDo,
+      summary =
+        "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
+      doc =
+        "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleBindChainToDo
+    None
 
 deadCodeRule : Rule
-deadCodeRule = Rule {
-  name = ruleNameDeadCode,
-  descr =
-    "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDeadCode,
-  fix = None,
-}
+deadCodeRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDeadCode,
+      summary =
+        "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
+      doc =
+        "A private top-level binding that nothing reachable from the file's exports, `main` or doctests uses is dead code (Haskell -Wunused-top-binds). Delete it or export it.\n\nBefore:\n  helper x = x + 1   -- never called\nAfter:\n  (binding removed)",
+      category = Suspicious,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDeadCode
+    None
 
 concatToInterpRule : Rule
-concatToInterpRule = Rule {
-  name = ruleNameConcatToInterp,
-  descr =
-    "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleConcatToInterp,
-  fix = Some concatToInterpFix,
-}
+concatToInterpRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameConcatToInterp,
+      summary =
+        "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
+      doc =
+        "A `++` chain mixing string literals with expressions reads better as string interpolation.\n\nBefore:\n  \"n = \" ++ show n ++ \"!\"\nAfter:\n  \"n = \\{show n}!\"",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleConcatToInterp
+    (Some concatToInterpFix)
 
 selfShadowExternRule : Rule
-selfShadowExternRule = Rule {
-  name = ruleNameSelfShadowExtern,
-  descr =
-    "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleSelfShadowExtern,
-  fix = None,
-}
+selfShadowExternRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameSelfShadowExtern,
+      summary =
+        "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
+      doc =
+        "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name",
+      category = Correctness,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleSelfShadowExtern
+    None
 
 preferAssignOpRule : Rule
-preferAssignOpRule = Rule {
-  name = ruleNamePreferAssignOp,
-  descr =
-    "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleForPreferAssign,
-  fix = Some preferAssignFix,
-}
+preferAssignOpRule =
+  mkRule
+    RuleMeta {
+      name = ruleNamePreferAssignOp,
+      summary =
+        "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
+      doc =
+        "`setRef r v` predates the `:=` write operator, and a `:=` write bound to a wildcard `let _ =` is a statement in disguise.\n\nBefore:\n  setRef counter 1\nAfter:\n  counter := 1",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleForPreferAssign
+    (Some preferAssignFix)
 
 promissoryReaderRule : Rule
-promissoryReaderRule = Rule {
-  name = ruleNamePromissoryReader,
-  descr =
-    "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)",
-  severity = SevWarning,
-  enabled = True,
-  check = rulePromissoryReader,
-  fix = None,
-}
+promissoryReaderRule =
+  mkRule
+    RuleMeta {
+      name = ruleNamePromissoryReader,
+      summary =
+        "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)",
+      doc =
+        "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    rulePromissoryReader
+    None
 
 orElseStaircaseRule : Rule
-orElseStaircaseRule = Rule {
-  name = ruleNameOrElseStaircase,
-  descr =
-    "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleOrElseStaircase,
-  fix = None,
-}
+orElseStaircaseRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameOrElseStaircase,
+      summary =
+        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
+      doc =
+        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleOrElseStaircase
+    None
 
 cloneTypeRule : Rule
-cloneTypeRule = Rule {
-  name = ruleNameCloneType,
-  descr =
-    "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleCloneType,
-  fix = None,
-}
+cloneTypeRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameCloneType,
+      summary =
+        "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
+      doc =
+        "A two-constructor `data` with the arities of `Option` or `Result` and no `impl` in its file duplicates the stdlib type and loses its instances. Suggest-only.\n\nBefore:\n  data Maybe2 a = Nope | Yep a\nAfter:\n  use `Option a`",
+      category = Style,
+      scope = Universal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleCloneType
+    None
 
 clauseMapRule : Rule
-clauseMapRule = Rule {
-  name = ruleNameClauseMap,
-  descr =
-    "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleClauseMap,
-  fix = None,
-}
+clauseMapRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameClauseMap,
+      summary =
+        "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)",
+      doc =
+        "A two-clause `[]` / `(x :: xs)` recursion that conses a per-element transform onto the recursive call is a hand-written `map`. Suggest-only.\n\nBefore:\n  go [] = []\n  go (x :: xs) = f x :: go xs\nAfter:\n  map f",
+      category = Style,
+      scope = Universal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleClauseMap
+    None
 
 directiveReasonRule : Rule
-directiveReasonRule = Rule {
-  name = ruleNameDirectiveReason,
-  descr =
-    "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDirectiveReason,
-  fix = None,
-}
+directiveReasonRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDirectiveReason,
+      summary =
+        "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
+      doc =
+        "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDirectiveReason
+    None
 
 regexLiteralRule : Rule
-regexLiteralRule = Rule {
-  name = ruleNameRegexLiteral,
-  descr =
-    "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleRegexLiteral,
-  fix = None,
-}
+regexLiteralRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameRegexLiteral,
+      summary =
+        "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
+      doc =
+        "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\"",
+      category = Correctness,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleRegexLiteral
+    None
 
 testBoolLiteralEqualRule : Rule
-testBoolLiteralEqualRule = Rule {
-  name = ruleNameTestBoolLiteralEqual,
-  descr =
-    "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleTestBoolLiteralEqual,
-  fix = Some testBoolLiteralEqualFix,
-}
+testBoolLiteralEqualRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameTestBoolLiteralEqual,
+      summary =
+        "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
+      doc =
+        "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleTestBoolLiteralEqual
+    (Some testBoolLiteralEqualFix)
 
 testEqualInTrueRule : Rule
-testEqualInTrueRule = Rule {
-  name = ruleNameTestEqualInTrue,
-  descr =
-    "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleTestEqualInTrue,
-  fix = Some testEqualInTrueFix,
-}
+testEqualInTrueRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameTestEqualInTrue,
+      summary =
+        "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
+      doc =
+        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleTestEqualInTrue
+    (Some testEqualInTrueFix)
 
 testPreludeShadowRule : Rule
-testPreludeShadowRule = Rule {
-  name = ruleNameTestPreludeShadow,
-  descr =
-    "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleTestPreludeShadow,
-  fix = None,
-}
+testPreludeShadowRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameTestPreludeShadow,
+      summary =
+        "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
+      doc =
+        "A `*_test.mdk` file that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file. Suggest-only; this guards the repository test-helper convention.\n\nBefore:\n  isOk r = ...   -- in foo_test.mdk\nAfter:\n  rename the helper",
+      category = Suspicious,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleTestPreludeShadow
+    None
 
 export
 allRules : List Rule
@@ -468,14 +720,22 @@ allRules = [
 -- Each CrossFileRule is its own top-level binding.  Adding a cross-file rule =
 -- write its `check` fn + one binding here + append it to `allCrossFileRules`.
 duplicateBodyRule : CrossFileRule
-duplicateBodyRule = CrossFileRule {
-  name = ruleNameDuplicateBody,
-  descr =
-    "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDuplicateBody,
-}
+duplicateBodyRule =
+  mkCrossFileRule
+    RuleMeta {
+      name = ruleNameDuplicateBody,
+      summary =
+        "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
+      doc =
+        "A top-level function whose body is structurally identical to one in another file (location-stripped, above a complexity floor) is copy-paste across modules. Consolidate into one module and import it. The same-file arm of the rule covers duplicates inside one file.\n\nBefore:\n  a.mdk: f x = big x\n  b.mdk: g y = big y   -- same body shape\nAfter:\n  one definition, imported where needed",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDuplicateBody
 
 export
 allCrossFileRules : List CrossFileRule

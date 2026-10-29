@@ -87,13 +87,19 @@ import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{Comment, commentLine, commentCol, commentText}
 import tools.lint_core.{
+  Category(..),
   DirScope(..),
   Directive(..),
   DupClause(..),
   FileFacts(..),
   Finding(..),
-  Rule(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
   StdlibIndex(..),
+  mkRule,
   factComments,
   factDupClauses,
   factOracle,
@@ -5007,15 +5013,23 @@ sameFileInsert x (y :: ys)
 
 export
 duplicateBodySameFileRule : Rule
-duplicateBodySameFileRule = Rule {
-  name = ruleNameDuplicateBody,
-  descr =
-    "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
-  severity = SevWarning,
-  enabled = True,
-  check = ruleDuplicateBodySameFile,
-  fix = None,
-}
+duplicateBodySameFileRule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDuplicateBody,
+      summary =
+        "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
+      doc =
+        "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDuplicateBodySameFile
+    None
 
 -- ── rule: directive-reason (#2862) ────────────────────────────────────────────
 -- A `-- lint-disable-*` directive with no comment stating the constraint that

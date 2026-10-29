@@ -1,0 +1,7 @@
+-- #3837 (d): `expectFalse as expectTrue` makes the rewritten `expectTrue`
+-- mean `expectFalse`, silently negating the assertion.  The finding is
+-- reported; `--fix` leaves the file unchanged.
+
+import test.{expectEqual, expectFalse as expectTrue}
+
+f a = expectEqual True (a == 1)
