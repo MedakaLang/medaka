@@ -21,14 +21,10 @@ import tools.lint_core.{
   mkRule,
 }
 import tools.lint_shared.{
-  ruleNameBindChainToDo,
-  ruleNameBindThenDestructure,
   ruleNameBoolSimplify,
   ruleNameComplementPredicate,
   ruleNameDeadCode,
-  ruleNameDerivable,
   ruleNameDirectiveReason,
-  ruleNameDuplicateBody,
   ruleNameIfMaxMin,
   ruleNameLambdaSection,
   ruleNamePreferAssignOp,
@@ -53,23 +49,22 @@ import tools.lint_rule_when_unless as WhenUnless
 import tools.lint_rule_concat_to_interp as ConcatToInterp
 import tools.lint_rule_internal_promissory_reader as PromissoryReader
 import tools.lint_rule_clone_type as CloneType
+import tools.lint_rule_hand_rolled_derivable as HandRolledDerivable
+import tools.lint_rule_bind_then_destructure as BindThenDestructure
+import tools.lint_rule_bind_chain_to_do as BindChainToDo
+import tools.lint_rule_duplicate_body as DuplicateBody
+import tools.lint_rule_duplicate_body_same_file as DuplicateBodySameFile
 import tools.lint_rules_staging.{
-  bindThenDestructureFix,
   boolSimplifyFix,
   complementPredicateFix,
-  duplicateBodySameFileRule,
   ifMaxMinFix,
   lambdaSectionFix,
   preferAssignFix,
   remParityFix,
-  ruleBindChainToDo,
-  ruleBindThenDestructure,
   ruleBoolSimplify,
   ruleComplementPredicate,
   ruleDeadCode,
-  ruleDerivable,
   ruleDirectiveReason,
-  ruleDuplicateBody,
   ruleForPreferAssign,
   ruleIfMaxMin,
   ruleLambdaSection,
@@ -85,44 +80,6 @@ import tools.lint_rules_staging.{
 -- traverses binding bodies but not into list-literal elements — registers the
 -- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
 -- + append it to `allRules`.
-derivableRule : Rule
-derivableRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameDerivable,
-      summary =
-        "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)",
-      doc =
-        "A hand-written `Eq`, `Ord` or `Debug` impl that does exactly what `deriving` would generate is code that can drift from the type. Derive it instead.\n\nBefore:\n  impl Eq Color\n    Red == Red = True\n    ...\nAfter:\n  data Color = Red | Green deriving (Eq)",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleDerivable
-    None
-
-bindThenDestructureRule : Rule
-bindThenDestructureRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameBindThenDestructure,
-      summary =
-        "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
-      doc =
-        "A `do` bind that immediately destructures the bound variable with an irrefutable single-arm `match` can put the pattern in the bind itself.\n\nBefore:\n  p <- getPair\n  match p\n    (a, b) => use a b\nAfter:\n  (a, b) <- getPair\n  use a b",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleBindThenDestructure
-    (Some bindThenDestructureFix)
-
 lambdaSectionRule : Rule
 lambdaSectionRule =
   mkRule
@@ -217,25 +174,6 @@ complementPredicateRule =
     }
     ruleComplementPredicate
     (Some complementPredicateFix)
-
-bindChainToDoRule : Rule
-bindChainToDoRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameBindChainToDo,
-      summary =
-        "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
-      doc =
-        "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y",
-      category = Complexity,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleBindChainToDo
-    None
 
 deadCodeRule : Rule
 deadCodeRule =
@@ -336,9 +274,9 @@ export
 allRules : List Rule
 allRules = [
   MatchOnParam.rule,
-  derivableRule,
+  HandRolledDerivable.rule,
   StdlibReimpl.rule,
-  bindThenDestructureRule,
+  BindThenDestructure.rule,
   lambdaSectionRule,
   ifMaxMinRule,
   AndThenPureMap.rule,
@@ -351,7 +289,7 @@ allRules = [
   WhenUnless.rule,
   complementPredicateRule,
   MatchToMap.rule,
-  bindChainToDoRule,
+  BindChainToDo.rule,
   deadCodeRule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
@@ -360,7 +298,7 @@ allRules = [
   OrElseStaircase.rule,
   CloneType.rule,
   ClauseMap.rule,
-  duplicateBodySameFileRule,
+  DuplicateBodySameFile.rule,
   directiveReasonRule,
   regexLiteralRule,
   TestBoolLiteralEqual.rule,
@@ -371,27 +309,9 @@ allRules = [
 -- ── the cross-file registry ───────────────────────────────────────────────────
 -- Each CrossFileRule is its own top-level binding.  Adding a cross-file rule =
 -- write its `check` fn + one binding here + append it to `allCrossFileRules`.
-duplicateBodyRule : CrossFileRule
-duplicateBodyRule =
-  mkCrossFileRule
-    RuleMeta {
-      name = ruleNameDuplicateBody,
-      summary =
-        "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
-      doc =
-        "A top-level function whose body is structurally identical to one in another file (location-stripped, above a complexity floor) is copy-paste across modules. Consolidate into one module and import it. The same-file arm of the rule covers duplicates inside one file.\n\nBefore:\n  a.mdk: f x = big x\n  b.mdk: g y = big y   -- same body shape\nAfter:\n  one definition, imported where needed",
-      category = Complexity,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleDuplicateBody
-
 export
 allCrossFileRules : List CrossFileRule
-allCrossFileRules = [duplicateBodyRule]
+allCrossFileRules = [DuplicateBody.rule]
 
 -- Every registered rule name, per-file and cross-file, as plain Strings.
 -- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be

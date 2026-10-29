@@ -1,0 +1,118 @@
+-- lint rule hand-rolled-derivable: hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6).
+
+import frontend.ast.{Ns(..), TabKey(..), Loc(..), Ty(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{contains}
+import frontend.exhaust.{Oracle, oGetCtors}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex(..),
+  mkRule,
+  factOracle,
+}
+import tools.lint_shared.{
+  declLocList,
+  isStdlibPath,
+  ruleNameDerivable,
+  tyHeadName,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDerivable,
+      summary =
+        "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)",
+      doc =
+        "A hand-written `Eq`, `Ord` or `Debug` impl that does exactly what `deriving` would generate is code that can drift from the type. Derive it instead.\n\nBefore:\n  impl Eq Color\n    Red == Red = True\n    ...\nAfter:\n  data Color = Red | Green deriving (Eq)",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDerivable
+    None
+
+-- ── rule: hand-rolled-derivable (STYLE §6) ────────────────────────────────────
+-- A `DImpl` for Eq/Ord/Debug over a single named (TyCon-headed) type.  DImpl
+-- carries no loc, so loc = None.
+derivableIfaces : List String
+derivableIfaces = ["Eq", "Ord", "Debug"]
+
+-- Skip stdlib-owned files entirely: every hand-written `impl Eq/Ord/Debug` in
+-- the stdlib is legitimate (a primitive with no `data` decl to derive from, the
+-- `Ordering` Eq-ctor/Eq-class clash, a non-structural container instance whose
+-- `deriving` would be semantically WRONG, or a bootstrap-prelude type).  For
+-- USER code we additionally require the type to have a `data`/`record`
+-- declaration whose constructors are visible in the linted file (`oGetCtors`
+-- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
+ruleDerivable : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleDerivable _ path facts pos prog
+  | isStdlibPath path = []
+  | otherwise =
+    let orc = factOracle facts
+    flatMap (derivableDeclL orc) (declLocList pos prog)
+
+derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
+derivableDeclL orc (d, loc) = derivableDecl orc loc d
+
+derivableDecl : Oracle -> Option Loc -> Decl -> List Finding
+derivableDecl orc loc (DImpl { iface, tys, ... }) =
+  derivableHit orc loc iface tys
+derivableDecl orc loc (DAttrib _ d) = derivableDecl orc loc d
+derivableDecl _ _ _ = []
+
+derivableHit : Oracle -> Option Loc -> String -> List Ty -> List Finding
+derivableHit orc loc iface tys
+  | contains iface derivableIfaces = match singleNamedType tys
+    Some tyName =>
+      if hasUserDataDecl orc tyName then
+        [
+          Finding {
+            rule = ruleNameDerivable,
+            message =
+              "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
+            severity = SevWarning,
+            loc = loc,
+          },
+        ]
+      else
+        []
+    None => []
+  | otherwise = []
+
+-- the type has a `data`/`record` declaration (with constructors) visible in the
+-- linted file — so `deriving` is actually available for it.  Primitive types
+-- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
+-- ⚠️ This oracle is built from ONE file's raw decls with no identity-stamping
+-- pass in the loop, so the key is bare BY CONSTRUCTION on both the write and
+-- read side — `TkBare NsType tyName` directly, rather than routed through
+-- `tabKeyOf`'s origin dance (which would land in the same place, since
+-- `mkIdent _ OriginUnresolved _ = None`, but naming it directly keeps this
+-- module out of the #1110 OriginUnresolved ratchet).
+hasUserDataDecl : Oracle -> String -> Bool
+hasUserDataDecl orc tyName = match oGetCtors orc (TkBare NsType tyName)
+  Some _ => True
+  None => False
+
+-- the head type name iff `tys` is exactly one TyCon-headed type
+singleNamedType : List Ty -> Option String
+singleNamedType [t] = tyHeadName t
+singleNamedType _ = None
