@@ -1,0 +1,147 @@
+-- Sibling test for `compiler/backend/wasm_emit.mdk`'s or-pattern arms ([P-TEST-SIBLING]).
+--
+-- An or-pattern arm reaches the emitter as one candidate arm per alternative, all
+-- sharing one body.  Both tree engines emit that body once, after the arm's shared
+-- block, however many candidate leaves branch to it.  The control is the same walker
+-- with the alternatives written as separate arms, which emits the body once per arm.
+-- Each program is emitted through `emitProgramRecord` as
+-- `compiler/entries/wasm_emit_modules_main.mdk` does for its lowered program.  Runtime
+-- behaviour is pinned by `test/engine_fixtures/or_pattern_*.mdk` on all three engines.
+
+-- lint-disable-file rule-duplicate-body
+-- `watOf` is kept local so each sibling test file reads alone.
+
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import test.{expectAll, labelFail, expectEqual}
+import string.{contains, lines, startsWith, unlines}
+import list.{reverse, filter}
+import types.capability_manifest.{ManifestRequirement(..)}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{ctorFieldTypeNames, lowerProgramEmitWith}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
+import backend.wasm_symbols.{defectMessage}
+
+-- the emitted WAT of `src`, as the modules entry would print it for that program
+watOf : String -> String
+watOf src =
+  let decls = grantWholeDomain (desugar (parse src))
+  let input =
+    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let (plan, prepared) =
+    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  match emitProgramRecord input plan prepared
+    Ok (text, _) => text
+    Err defects =>
+      panic ("emit refused: " ++ unlines (map defectMessage defects))
+
+-- the lines of the top-level `(func $<name> ` definition, from its header through `  )`
+funcBlock : String -> String -> List String
+funcBlock name wat = blockFrom ("  (func $" ++ name ++ " ") (lines wat)
+
+blockFrom : String -> List String -> List String
+blockFrom _ [] = []
+blockFrom head (l :: rest) =
+  if startsWith head l then takeBlock rest [l] else blockFrom head rest
+
+takeBlock : List String -> List String -> List String
+takeBlock [] acc = reverse acc
+takeBlock (l :: rest) acc =
+  if l == "  )" then reverse (l :: acc) else takeBlock rest (l :: acc)
+
+-- how many lines of `block` contain `needle`
+linesWith : String -> List String -> Int
+linesWith needle block = length (filter (l => contains needle l) block)
+
+-- the shared body's distinctive constant, as the emitter writes it
+bodyConst : String
+bodyConst = "i32.const 7777777"
+
+-- `walk` matches in tail position (the tail engine); `walkV` matches in value
+-- position (the value engine).  Ten alternatives share the body `n + 7777777`.
+orSrc : String
+orSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n | C3 n | C4 n | C5 n | C6 n | C7 n | C8 n | C9 n | C10 n | C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+-- the same walkers with the ten alternatives written as ten arms
+splitSrc : String
+splitSrc =
+  """
+data E = C1 Int | C2 Int | C3 Int | C4 Int | C5 Int | C6 Int | C7 Int | C8 Int | C9 Int | C10 Int | C11 Int | C12 Int
+
+walk e = match e
+  C1 n => n + 1
+  C2 n => n + 7777777
+  C3 n => n + 7777777
+  C4 n => n + 7777777
+  C5 n => n + 7777777
+  C6 n => n + 7777777
+  C7 n => n + 7777777
+  C8 n => n + 7777777
+  C9 n => n + 7777777
+  C10 n => n + 7777777
+  C11 n => n + 7777777
+  C12 n => n * 3
+
+walkV e =
+  let r = match e
+    C1 n => n + 1
+    C2 n => n + 7777777
+    C3 n => n + 7777777
+    C4 n => n + 7777777
+    C5 n => n + 7777777
+    C6 n => n + 7777777
+    C7 n => n + 7777777
+    C8 n => n + 7777777
+    C9 n => n + 7777777
+    C10 n => n + 7777777
+    C11 n => n + 7777777
+    C12 n => n * 3
+  r + 1
+
+main = walk (C5 2) + walkV (C9 3)
+"""
+
+test "an or-pattern arm's body is emitted once on both tree engines" =
+  let wat = watOf orSrc
+  expectAll [
+    labelFail
+      "tail engine (walk)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walk" wat))),
+    labelFail
+      "value engine (walkV)"
+      (expectEqual 1 (linesWith bodyConst (funcBlock "walkV" wat))),
+  ]
+
+test "control: ten separate arms emit the body ten times" =
+  let wat = watOf splitSrc
+  expectAll [
+    labelFail
+      "tail engine (walk)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walk" wat))),
+    labelFail
+      "value engine (walkV)"
+      (expectEqual 10 (linesWith bodyConst (funcBlock "walkV" wat))),
+  ]
