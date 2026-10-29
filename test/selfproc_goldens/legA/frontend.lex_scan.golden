@@ -1,4 +1,5 @@
 afterBinderKeyword : Array Char -> Int -> Bool
+afterIdentChar : Array Char -> Int -> Bool
 afterNl : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Int -> Int -> RawTok
 at : Array Char -> Int -> Char
 atLineStart : Array Char -> Int -> Bool
@@ -8,6 +9,7 @@ btClose : Array Char -> Int -> Int -> Int
 byteLiteralIsName : Array Char -> Int -> Int -> Int -> Bool
 byteRename : Array Char -> Int -> String
 closeBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+closesAfterMarks : Array Char -> Int -> Int -> Bool
 collectNoUs : Array Char -> Int -> Int -> List Char
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
 digitVal : Char -> Int
@@ -27,6 +29,7 @@ inHole : LexFrame -> Bool
 intLitOverflows : Array Char -> Int -> Int -> Bool
 is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
 is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
+isCombiningMark : Char -> Bool
 isContinued : LiteralPart -> Bool
 isExpMarker : Char -> Bool
 isExprEnd : Char -> Bool
@@ -54,6 +57,7 @@ minusTok : Array Char -> Int -> Int -> Token
 nextIsComment : Array Char -> Int -> Int -> Bool
 numFinish : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
 openBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
+opensByteLiteral : Array Char -> Int -> Int -> Bool
 parseIntFrom : Array Char -> Int -> Int -> Int -> Int
 parseIntNeg : Array Char -> Int -> Int -> Int -> Int
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
@@ -89,12 +93,12 @@ scanRawUndedentedChars : Array Char -> List RawTok
 scanTwoOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> Char -> Token -> Int -> RawTok
 scanUpper : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 sigRadixDigits : Array Char -> Int -> Int -> List Char
+singleCharBody : Array Char -> Int -> Int -> Bool
 singleDedent : String -> String
 singleOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> RawTok
 skipBlanksBack : Array Char -> Int -> Int
 skipBlockComment : Array Char -> Int -> Int -> Int -> Int
 skipLineComment : Array Char -> Int -> Int -> Int
-spansWhitespace : Array Char -> Int -> Int -> Bool
 stripLeadingUs : Array Char -> Int -> Int -> String
 substrNoUs : Array Char -> Int -> Int -> String
 wideBase : Array Char -> Int -> Int

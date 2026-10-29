@@ -336,7 +336,33 @@ test "identifier spelled as a byte literal is an error" = expectAll [
   expectEqual "ident:b'a':b_a" (lexErrorKind "b'a' = 3"),
   expectEqual "ident:b'a':b_a" (lexErrorKind "x = b'a'z"),
   expectEqual "non-ascii" (lexErrorKind "x = b'é'"),
-  expectEqual "bad" (lexErrorKind "x = b''"),
+  expectEqual "none" (lexErrorKind "x = b''"),
   expectEqual "bad" (lexErrorKind "x = b'\\x100'"),
   expectEqual "none" (lexErrorKind "x = b'a'"),
+]
+
+-- Boundary table: what a `b'` token start becomes.
+test "primed b names stay identifiers unless a literal is closed" = expectAll [
+  expectEqual
+    ["IDENT \"b'\"", "COMMA", "IDENT \"b'\""]
+    (take 3 (tokensOf "b',b'")),
+  expectEqual
+    ["IDENT \"b'\"", "PLUS", "IDENT \"b'\""]
+    (take 3 (tokensOf "b'+b'")),
+  expectEqual ["IDENT \"b''\""] (take 1 (tokensOf "b''")),
+  expectEqual ["IDENT \"b'ab'\""] (take 1 (tokensOf "b'ab'")),
+  expectEqual ["IDENT \"b'\""] (take 1 (tokensOf "b'")),
+  expectEqual ["IDENT \"b'\"", "IDENT \"x\""] (take 2 (tokensOf "b' x")),
+  expectEqual ["BYTE 97"] (take 1 (drop 2 (tokensOf "x = b'a'"))),
+  expectEqual ["BYTE 32"] (take 1 (drop 2 (tokensOf "x = b' '"))),
+  expectEqual "none" (lexErrorKind "swap (a',b') = (b',a')"),
+  expectEqual "none" (lexErrorKind "x = [b',b']"),
+  expectEqual "none" (lexErrorKind "x = \"\\{b'}x\\{b'}\""),
+  expectEqual "none" (lexErrorKind "let b'' = 5"),
+  expectEqual "none" (lexErrorKind "f b' = b'*b'"),
+  expectEqual "bad" (lexErrorKind "x = b'\\"),
+  expectEqual "bad" (lexErrorKind "x = b'\\x41"),
+  expectEqual "bad" (lexErrorKind "x = b'\\q'"),
+  expectEqual "bad" (lexErrorKind "x = b'é'"),
+  expectEqual "non-ascii" (lexErrorKind "x = b'\\u{E9}'"),
 ]

@@ -70,6 +70,16 @@ COMMA
 IDENT "toUtf8"
 RBRACE
 NEWLINE
+IMPORT
+IDENT "hex"
+AS
+UPPER "Hex"
+NEWLINE
+IMPORT
+IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
 PUBLIC
 EXPORT
 DATA
@@ -3928,6 +3938,7 @@ IDENT "next"
 RPAREN
 FAT_ARROW
 IDENT "asciiByte"
+IDENT "src"
 IDENT "pos"
 IDENT "next"
 IDENT "s"
@@ -3961,7 +3972,30 @@ INDENT
 UPPER "BadByteLiteral"
 INTERP_OPEN "byte literal `b'"
 IDENT "text"
-INTERP_END "'` has more than one character; a byte literal is exactly one ASCII character"
+INTERP_MID "'` has more than one character; a byte literal is exactly one ASCII character, so write the UTF-8 bytes of its body as "
+IDENT "utf8FixIt"
+IDENT "text"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "byteKind"
+UPPER "UnterminatedChar"
+EQUAL
+IDENT "unterminatedByte"
+NEWLINE
+IDENT "byteKind"
+LPAREN
+UPPER "InvalidEscape"
+IDENT "spelling"
+UNDERSCORE
+RPAREN
+EQUAL
+INDENT
+UPPER "BadByteLiteral"
+INTERP_OPEN "invalid escape sequence `"
+IDENT "spelling"
+INTERP_END "` in byte literal; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\\" \\xNN \\u{...}"
 NEWLINE
 DEDENT
 NEWLINE
@@ -3969,6 +4003,18 @@ IDENT "byteKind"
 IDENT "kind"
 EQUAL
 IDENT "kind"
+NEWLINE
+IDENT "unterminatedByte"
+COLON
+UPPER "ParseDiagnosticKind"
+NEWLINE
+IDENT "unterminatedByte"
+EQUAL
+INDENT
+UPPER "BadByteLiteral"
+STRING "unterminated byte literal; expected a closing `'`"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "hexByteEscape"
 COLON
@@ -4052,7 +4098,7 @@ INDENT
 IDENT "lexFailure"
 IDENT "pos"
 IDENT "len"
-UPPER "UnterminatedChar"
+IDENT "unterminatedByte"
 NEWLINE
 DEDENT
 ELSE
@@ -4071,6 +4117,9 @@ DEDENT
 NEWLINE
 IDENT "asciiByte"
 COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -4086,6 +4135,7 @@ UPPER "Int"
 RPAREN
 NEWLINE
 IDENT "asciiByte"
+IDENT "src"
 IDENT "pos"
 IDENT "next"
 IDENT "s"
@@ -4127,17 +4177,33 @@ DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
+INDENT
 IDENT "lexFailure"
 IDENT "pos"
 IDENT "next"
 LPAREN
 UPPER "NonAsciiByte"
-IDENT "s"
+LPAREN
+IDENT "copyCharRange"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 2
+RPAREN
+LPAREN
+IDENT "next"
+MINUS
+INT 1
+RPAREN
+RPAREN
 LPAREN
 IDENT "utf8FixIt"
 IDENT "s"
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -4175,54 +4241,20 @@ NEWLINE
 IDENT "byteLiteralText"
 IDENT "n"
 EQUAL
+INDENT
 INTERP_OPEN "`b'\\x"
-IDENT "hexDigit"
+UPPER "Hex"
+DOT
+IDENT "encodeUpper"
 LPAREN
+UPPER "B"
+DOT
+IDENT "fromArrayAssumeByteDomain"
+LARRAY
 IDENT "n"
-SLASH
-INT 16
-RPAREN
-INTERP_MID ""
-IDENT "hexDigit"
-LPAREN
-IDENT "n"
-MOD
-INT 16
+RARRAY
 RPAREN
 INTERP_END "'`"
-NEWLINE
-IDENT "hexDigit"
-COLON
-UPPER "Int"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "hexDigit"
-IDENT "d"
-EQUAL
-INDENT
-IDENT "charToStr"
-LPAREN
-IDENT "optionOr"
-CHAR "0"
-LPAREN
-IDENT "charFromCode"
-LPAREN
-IDENT "d"
-PLUS
-LPAREN
-IF
-IDENT "d"
-LT
-INT 10
-THEN
-INT 48
-ELSE
-INT 55
-RPAREN
-RPAREN
-RPAREN
-RPAREN
 NEWLINE
 DEDENT
 NEWLINE

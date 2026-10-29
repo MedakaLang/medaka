@@ -220,8 +220,7 @@ scanAt ctx src len pos depth id c
   | isQuote c =
     scanLiteral ctx src (pos + 1) pos depth id PlainLiteral InitialLiteral
   | isApos c = scanChar ctx src pos depth id
-  | c == 'b' && pos + 1 < len && isApos (at src (pos + 1)) =
-    scanByte ctx src len pos depth id
+  | c == 'b' && opensByteLiteral src len pos = scanByte ctx src len pos depth id
   | isLower c || c == '_' = scanLower ctx src len pos depth id
   | isUpper c = scanUpper ctx src len pos depth id
   | isBacktick c = scanBacktick ctx src len pos depth id
@@ -706,8 +705,36 @@ scanChar ctx src pos depth frame = match readCharacter src pos
   Err (LexError kind start end) => lexErrorTok ctx start end kind
   Ok (s, next) => emitOne ctx (RTok (TChar s) (pos + 1) next) next depth frame
 
--- `b'x'` is a byte literal wherever a token starts with `b'`; a `b'` that does
--- not open a complete literal (`b'`, `b'x`, `b'x y'`) stays an identifier.
+-- A `b'` at a token start commits to a byte literal only when a backslash
+-- follows (an escape) or one character, optionally with combining marks,
+-- closes with `'`.  Anything else (`b''`, `b'ab'`, `b',b'`, `b'+b'`) is a
+-- primed name and lexes as an identifier.
+opensByteLiteral : Array Char -> Int -> Int -> Bool
+opensByteLiteral src len pos =
+  pos + 2 < len
+    && isApos (at src (pos + 1))
+    && not (afterIdentChar src pos)
+    && (isBackslash (at src (pos + 2)) || singleCharBody src len (pos + 2))
+
+afterIdentChar : Array Char -> Int -> Bool
+afterIdentChar src pos = pos > 0 && isAlnum (at src (pos - 1))
+
+singleCharBody : Array Char -> Int -> Int -> Bool
+singleCharBody src len p =
+  p + 1 < len && not (isApos (at src p)) && closesAfterMarks src len (p + 1)
+
+closesAfterMarks : Array Char -> Int -> Int -> Bool
+closesAfterMarks src len p
+  | p >= len = False
+  | isApos (at src p) = True
+  | isCombiningMark (at src p) = closesAfterMarks src len (p + 1)
+  | otherwise = False
+
+isCombiningMark : Char -> Bool
+isCombiningMark c = charCode c >= 768 && charCode c <= 879
+
+-- `b'x'` is a byte literal wherever `opensByteLiteral` commits to one; a
+-- malformed committed literal is an error, never an identifier.
 scanByte : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanByte ctx src len pos depth id = match readByteLiteral src pos
   Ok (value, next) =>
@@ -716,12 +743,6 @@ scanByte ctx src len pos depth id = match readByteLiteral src pos
       lexErrorTok ctx pos next (ByteLikeIdent old (byteRename src pos))
     else
       emitOne ctx (RTok (TByte value) pos next) next depth id
-  Err (LexError UnterminatedChar _ _) => scanLower ctx src len pos depth id
-  Err (LexError (BadByteLiteral msg) start end) =>
-    if spansWhitespace src (pos + 2) (end - 1) then
-      scanLower ctx src len pos depth id
-    else
-      lexErrorTok ctx start end (BadByteLiteral msg)
   Err (LexError kind start end) => lexErrorTok ctx start end kind
 
 -- A name spelled like a byte literal: glued to more identifier characters, right
@@ -754,12 +775,6 @@ wordEndsAt : Array Char -> Int -> String -> Bool
 wordEndsAt src e word =
   copyCharRange src (e - 2) (e + 1) == word
     && (e < 3 || not (isAlnum (at src (e - 3))))
-
-spansWhitespace : Array Char -> Int -> Int -> Bool
-spansWhitespace src p endp
-  | p >= endp = False
-  | isSpace (at src p) || isNL (at src p) || isCR (at src p) = True
-  | otherwise = spansWhitespace src (p + 1) endp
 
 byteRename : Array Char -> Int -> String
 byteRename src pos =

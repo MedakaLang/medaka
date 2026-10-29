@@ -1,4 +1,4 @@
-asciiByte : Int -> Int -> String -> Result LexError (Int, Int)
+asciiByte : Array Char -> Int -> Int -> String -> Result LexError (Int, Int)
 at : Array Char -> Int -> Char
 bareUnicodeEscMsgStr : Array Char -> Int -> Int -> ParseDiagnosticKind
 bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
@@ -24,7 +24,6 @@ finish : List String -> String
 firstFragNl : Bool -> List String -> Bool
 hasTripleInterpOpen : List RawTok -> Bool
 hexByteEscape : Array Char -> Int -> Int -> Int -> Result LexError (Int, Int)
-hexDigit : Int -> String
 indentOf : String -> Int
 indentOfGo : Array Char -> Int -> Int -> Int
 indentSentinel : Int
@@ -67,4 +66,5 @@ uniHexSigLen : Array Char -> Int -> Int -> Int
 uniIsSurrogate : Int -> Bool
 unicodeErrorEnd : Array Char -> Int -> Int -> Int
 unicodeErrorEndGo : Array Char -> Int -> Int -> Int
+unterminatedByte : ParseDiagnosticKind
 utf8FixIt : String -> String

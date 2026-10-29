@@ -264,7 +264,8 @@ problemHelp PositiveIntOverflow =
     "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
 problemHelp (NonAsciiByte _ fixIt) =
   Some "write the character as its UTF-8 bytes, \{fixIt}"
-problemHelp (ByteLikeIdent _ new) = Some "rename the identifier to `\{new}`"
+problemHelp (ByteLikeIdent _ new) =
+  Some "rename every occurrence of the identifier, for example to `\{new}`"
 problemHelp (BareUnicodeEscape _ _) =
   Some "write the unicode escape braced, `\\u{XXXX}`"
 problemHelp (MalformedRadix _ _ _) =
@@ -308,7 +309,6 @@ problemEdits : ParseDiagnosticKind -> Loc -> List ParseEdit
 problemEdits BadNeq loc = replacementEdit loc "!=" "/="
 problemEdits HsSignature loc = replacementEdit loc "::" ":"
 problemEdits (BareUnicodeEscape old new) loc = replacementEdit loc old new
-problemEdits (ByteLikeIdent old new) loc = replacementEdit loc old new
 problemEdits (MalformedRadix bad prefix digits) loc =
   if digits == "" then [] else replacementEdit loc bad (prefix ++ digits)
 problemEdits (MalformedFloat bad good _) loc = replacementEdit loc bad good

@@ -3,7 +3,9 @@ import frontend.lex_literal.{
   LiteralStop(..), LexError(..), readLiteral, readCharacter, readByteLiteral,
   utf8FixIt
 }
-import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
+import frontend.parse_diagnostic.{
+  ParseDiagnosticKind(..), UnicodeProblem(..), renderParseProblem
+}
 import test.{expectEqual, expectAll}
 
 literalResult : String -> Bool -> String
@@ -40,8 +42,6 @@ byteResult source = match readByteLiteral (stringToChars source) 0
   Err (LexError (NonAsciiByte _ fixIt) _ _) => "non-ascii:\{fixIt}"
   Err (LexError (BadByteLiteral _) s e) =>
     "bad:\{intToString s}:\{intToString e}"
-  Err (LexError UnterminatedChar _ _) => "unterminated"
-  Err (LexError (InvalidEscape spelling _) _ _) => "escape:\{spelling}"
   Err _ => "other error"
 
 test "byte literal decodes the char escapes and xNN" = expectAll [
@@ -66,9 +66,33 @@ test "byte literal refuses malformed bodies" = expectAll [
   expectEqual "bad:0:4" (byteResult "b'\\xZZ'"),
   expectEqual "bad:0:3" (byteResult "b''"),
   expectEqual "bad:0:5" (byteResult "b'ab'"),
-  expectEqual "escape:\\v" (byteResult "b'\\v'"),
-  expectEqual "unterminated" (byteResult "b'a"),
-  expectEqual "unterminated" (byteResult "b'\\"),
+  expectEqual "bad:0:4" (byteResult "b'\\v'"),
+  expectEqual "bad:0:3" (byteResult "b'a"),
+  expectEqual "bad:0:3" (byteResult "b'\\"),
+  expectEqual "bad:0:6" (byteResult "b'\\x41"),
+]
+
+byteMessage : String -> String
+byteMessage source = match readByteLiteral (stringToChars source) 0
+  Ok _ => "ok"
+  Err (LexError kind _ _) => renderParseProblem kind
+
+test "byte literal errors say what is wrong" = expectAll [
+  expectEqual
+    "unterminated byte literal; expected a closing `'`"
+    (byteMessage "b'\\"),
+  expectEqual
+    "unterminated byte literal; expected a closing `'`"
+    (byteMessage "b'\\x41"),
+  expectEqual
+    "invalid escape sequence `\\q` in byte literal; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\\" \\xNN \\u{...}"
+    (byteMessage "b'\\q'"),
+  expectEqual
+    "byte literal `b'\\u{E9}'` is not ASCII; a byte literal holds one byte, so write its UTF-8 bytes as `b'\\xC3'`, `b'\\xA9'`"
+    (byteMessage "b'\\u{E9}'"),
+  expectEqual
+    "byte literal `b'é'` has more than one character; a byte literal is exactly one ASCII character, so write the UTF-8 bytes of its body as `b'\\x65'`, `b'\\xCC'`, `b'\\x81'`"
+    (byteMessage "b'é'"),
 ]
 
 test "non-ASCII byte literal fix-it lists the UTF-8 bytes" = expectAll [
