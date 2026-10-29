@@ -2,88 +2,11 @@
 # diff_compiler_llvm_symbol_collision.sh — the emitted-symbol INJECTIVITY gate
 # (X-L.H / #348 / #748; the regression home of the drained #1677 and #1950 pins).
 #
-# WHAT IT ASSERTS. `compiler/types/private_mangle.mangledName` is
-# `"<sanitizeId mid>__<name>"`, and `sanitizeId` maps `.`, `/` and `-` all to `_`.
-# That encoding is MANY-TO-ONE: a flat module `lib_plain.mdk` (id `lib_plain`) and
-# a nested `lib/plain.mdk` (dotted id `lib.plain`) both sanitize to `lib_plain`, so
-# an exported `g` in either mangles to the identical symbol `mdk_lib_plain__g`.
+# The function and constructor witnesses exercise distinct module origins whose
+# former sanitized names collided. Both must build and print 101 then 1000.
+# The rest of this gate checks independent impl and dictionary symbol protections.
 #
-# Before `mangleUnits`' injectivity guard, that was SILENT: `core_ir_lower.lgGroup`'s
-# bare-name merge folded the two definitions into ONE `define` with an unreachable
-# second clause, the binary linked, ran the wrong one, and exited 0 with no
-# diagnostic anywhere. `check` was clean and `run` (the tree-walker, which has no
-# mangling pass) was CORRECT — the built binary alone was wrong. That is the S0
-# shape this gate exists to keep dead: `run != build`, at exit 0.
-#
-# This corpus WAS test/must_fail_fixtures/1677-mangle-scheme-non-injective/, pinning
-# the broken behaviour (`build-run main.mdk` -> exit 0, stdout `101`/`101`). The
-# guard drained that pin, and per G-PIN-DRAIN the coverage is RE-POINTED here rather
-# than deleted — same fixture bytes, inverted polarity: it now asserts the FIXED
-# behaviour.
-#
-# ── WHY THE ASSERTION IS SHAPED THIS WAY ─────────────────────────────────────
-# The drained behaviour is a REFUSAL, not a computed answer, so there is no value to
-# golden (the disanalogy with the #1216 pin repoint, which had one). A refusal is
-# only meaningfully pinned by all three of:
-#   1. NON-ZERO EXIT.
-#   2. THE DIAGNOSTIC NAMES BOTH SOURCES. `mangleUnits` refuses with both colliding
-#      `(module, name)` pre-images AND the symbol they collapse onto. Asserting only
-#      "it failed" would let ANY unrelated emitter crash pass this gate — the #463
-#      BUILD_CRASH bug class, which launders a regression as evidence of a fix. So
-#      the message text is asserted, not just the exit code.
-#   3. NO BINARY IS PRODUCED. The property is "refuses BEFORE any binary is
-#      produced". A refusal that still leaves an output file on disk is a weaker
-#      property, and a harness doing `medaka build x -o b && ./b` would happily run
-#      a stale `b`.
-#
-# ── AND THE CONTROL, WHICH MUST STAY GREEN ───────────────────────────────────
-# control.mdk is main.mdk with exactly ONE spelling changed: the flat module is
-# `libplain.mdk` (id `libplain`, no underscore) instead of `lib_plain.mdk`, so it
-# does NOT collide with `lib.plain`'s sanitized id. Everything else is identical —
-# same nested `lib/plain.mdk`, same two aliased imports, same bodies. It must build
-# AND run, printing the hand-derived `101` then `1000`.
-#
-# Without it, a guard that refused EVERY multi-module program would pass the
-# negative case and this gate would be the "green that proves nothing" it exists to
-# prevent. With it, "you broke ordinary cross-module codegen" can never be read as
-# "the collision guard works".
-#
-# SCOPE, so this gate is never cited as more than it is. Sections 1–3 grade the
-# MODULE-MANGLED symbol domain (`mangleUnits`' own domain — top-level functions and
-# local constructors). Within it, the guard makes the `(module, name) -> symbol`
-# map injective for DISTINCT MODULE IDS ONLY — two distinct source units sharing
-# ONE module id collapse invisibly (the `prev == pre` skip in
-# `checkSymbolsInjective`). Uncovered.
-#
-# Section 4 grades part — not all — of the emitter-MINTED domain `mangleUnits`
-# never sees: the C7 impl symbols `mdk_impl_<symTag>_<method>` and the per-instance
-# `$memo_<selector>_<method>` CAFs, both spelled through
-# `private_mangle.injectiveIdent` (#1950). It is silent about the REST of that
-# domain — gensym'd lambdas/etas, `llvm_emit.ensureDefaultEmitted`'s dedup-on-mint,
-# and `mdk_default_*` — and about the WasmGC peers of the two families it does
-# cover (this is an LLVM gate; `test/wasm/` owns that backend).
-#
-# Section 5 covers a DIFFERENT space from 1–4: the DICT-WITNESS TAG domain
-# (`core_validate.validateDictTags`, #348/#377), a djb2 hash rather than an
-# emitted-symbol identifier. FR-1 scoped that guard's population by method name
-# (the same grouping key the emitted dispatcher itself uses) so it only fires when
-# two impls a real dispatch chain could actually compare collide; see the
-# fixtures' own comments for the mechanism.
-#
-# Section 6 is the one WasmGC section: the wasm emitter runs the dict-tag arm itself
-# (`wasm_emit.refuseUnprovidedExternsW`), at its own 30-bit width, so a native build
-# cannot see its wiring. It runs the `wasm_emit_modules_main` oracle, the emitter
-# `medaka build --target wasm` shells out to, directly: the refusal fires before any
-# WAT is written, so no wasm-tools or Node is needed.
-#
-# ⚠️ `medaka build`'s exit code does NOT survive a pipe (AGENTS.md [D-BUILD-PIPE]).
-# Every invocation below redirects to a file and reads `$?` from the redirect.
-#
-# Usage:  sh test/diff_compiler_llvm_symbol_collision.sh
-# Exit:   0 all assertions hold and the control is green;
-#         1 any assertion fails;
-#         2 ./medaka or the native emitter is missing (opt-in skip, same discipline
-#           as the other llvm gates).
+# Usage: sh test/diff_compiler_llvm_symbol_collision.sh
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -109,44 +32,26 @@ checked=0
 fail() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 ok() { printf 'ok    %s\n' "$1"; }
 
-# ── 1. the colliding program must REFUSE ──────────────────────────────────────
+# ── 1. function collision witness ────────────────────────────────────────────
 checked=$((checked + 1))
 BIN="$WORK/collide.bin"
 LOG="$WORK/collide.log"
 "$MEDAKA" build "$FIX/main.mdk" -o "$BIN" > "$LOG" 2>&1
 st=$?
-
-if [ "$st" -eq 0 ]; then
-  fail "colliding program built at exit 0 — the injectivity guard did NOT fire"
-  printf '      this is the #1677 S0 back: two distinct (module, name) pairs sharing\n'
-  printf '      one emitted symbol, silently folded. Build output:\n'
+if [ "$st" -ne 0 ]; then
+  fail "function collision witness failed to build (exit $st)"
   sed 's/^/        /' "$LOG"
 else
-  ok "colliding program refused (exit $st)"
-fi
-
-# The message must name BOTH pre-images and the symbol — not merely "it failed".
-checked=$((checked + 1))
-missing=""
-for want in 'emitted-symbol collision' 'lib_plain.g' 'lib.plain.g' 'lib_plain__g'; do
-  grep -q -- "$want" "$LOG" || missing="$missing '$want'"
-done
-if [ -n "$missing" ]; then
-  fail "refusal diagnostic does not name both colliding sources; missing:$missing"
-  printf '      a refusal that does not name BOTH (module, name) pre-images is not\n'
-  printf '      distinguishable from an unrelated emitter failure (cf. #463). Got:\n'
-  sed 's/^/        /' "$LOG"
-else
-  ok "refusal names both sources and the collided symbol"
-fi
-
-# It must refuse BEFORE producing anything.
-checked=$((checked + 1))
-if [ -e "$BIN" ]; then
-  fail "a binary was produced at $BIN despite the refusal"
-  printf '      the property is "refuses before any binary is produced".\n'
-else
-  ok "no binary produced"
+  ok "function collision witness builds"
+  checked=$((checked + 1))
+  "$BIN" > "$WORK/collide.out" 2>&1
+  rst=$?
+  printf '101\n1000\n' > "$WORK/collide.expected"
+  if [ "$rst" -ne 0 ] || ! diff -u "$WORK/collide.expected" "$WORK/collide.out"; then
+    fail "function collision witness must print 101 then 1000 (exit $rst)"
+  else
+    ok "function collision witness prints 101 then 1000"
+  fi
 fi
 
 # ── 2. the CONTROL must stay green, build AND run ─────────────────────────────
@@ -157,10 +62,7 @@ CLOG="$WORK/control.log"
 cst=$?
 
 if [ "$cst" -ne 0 ]; then
-  fail "CONTROL FAILED TO BUILD (exit $cst) — this is NOT a guard success"
-  printf '      control.mdk has NO colliding module ids. If it refuses, the guard is\n'
-  printf '      too broad (or ordinary cross-module codegen broke) — either way the\n'
-  printf '      negative case above proves nothing. Build output:\n'
+  fail "function control failed to build (exit $cst)"
   sed 's/^/        /' "$CLOG"
 else
   ok "control builds (exit 0)"
@@ -182,61 +84,26 @@ else
   fi
 fi
 
-# ── 3. the CONSTRUCTOR domain — a SEPARATE pass, separate emitted namespace ──
-# `symbolInjectivityGuard` checks functions and constructors as two independent
-# passes (private_mangle.mdk `symbolInjectivityGuard`) because they emit into
-# separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`). Sections 1
-# and 2 above exercise the FUNCTION pass only — `main.mdk`/`control.mdk` collide
-# (or don't) on an exported top-level FUNCTION `g`. This section is the ctor-pass
-# equivalent, so a future edit that disables or weakens the ctor arm of the guard
-# cannot stay green here the way it could before this section existed.
-#
-# `ctor/main.mdk` collides on a PRIVATE constructor `Kk`, declared in both
-# `ctor/lib_plain.mdk` (id `lib_plain`) and `ctor/lib/plain.mdk` (id `lib.plain`)
-# — same `sanitizeId` collapse as section 1, on the ctor pre-image instead of the
-# function one. Private, deliberately: the guard reads `unitLocalCtorNames`, which
-# is NOT `VisPublic`-gated, so a private-only collision must still refuse.
-# `ctor/control.mdk` swaps the flat module for `ctor/libplain.mdk` (id `libplain`,
-# no underscore) so the two module ids no longer collide — same shape as
-# section 2's control.
-
+# ── 3. constructor collision witness ─────────────────────────────────────────
 checked=$((checked + 1))
 CTBIN="$WORK/ctor_collide.bin"
 CTLOG="$WORK/ctor_collide.log"
 "$MEDAKA" build "$FIX/ctor/main.mdk" -o "$CTBIN" > "$CTLOG" 2>&1
 ctst=$?
-
-if [ "$ctst" -eq 0 ]; then
-  fail "colliding ctor program built at exit 0 — the ctor-domain guard did NOT fire"
-  printf '      two distinct (module, name) pairs sharing one emitted constructor\n'
-  printf '      symbol, silently folded. Build output:\n'
+if [ "$ctst" -ne 0 ]; then
+  fail "constructor collision witness failed to build (exit $ctst)"
   sed 's/^/        /' "$CTLOG"
 else
-  ok "colliding ctor program refused (exit $ctst)"
-fi
-
-# The message must name BOTH pre-images and the symbol, and say "constructors" —
-# not merely "it failed", and not the function-pass diagnostic by accident.
-checked=$((checked + 1))
-ctmissing=""
-for want in 'emitted-symbol collision' 'constructors' 'lib_plain.Kk' 'lib.plain.Kk' 'lib_plain__Kk'; do
-  grep -q -- "$want" "$CTLOG" || ctmissing="$ctmissing '$want'"
-done
-if [ -n "$ctmissing" ]; then
-  fail "ctor refusal diagnostic does not name both colliding sources; missing:$ctmissing"
-  printf '      Got:\n'
-  sed 's/^/        /' "$CTLOG"
-else
-  ok "ctor refusal names both sources, the collided symbol, and the ctor domain"
-fi
-
-# It must refuse BEFORE producing anything.
-checked=$((checked + 1))
-if [ -e "$CTBIN" ]; then
-  fail "a binary was produced at $CTBIN despite the ctor refusal"
-  printf '      the property is "refuses before any binary is produced".\n'
-else
-  ok "no binary produced (ctor domain)"
+  ok "constructor collision witness builds"
+  checked=$((checked + 1))
+  "$CTBIN" > "$WORK/ctor_collide.out" 2>&1
+  ctrst=$?
+  printf '101\n1000\n' > "$WORK/ctor_collide.expected"
+  if [ "$ctrst" -ne 0 ] || ! diff -u "$WORK/ctor_collide.expected" "$WORK/ctor_collide.out"; then
+    fail "constructor collision witness must print 101 then 1000 (exit $ctrst)"
+  else
+    ok "constructor collision witness prints 101 then 1000"
+  fi
 fi
 
 # ── the ctor CONTROL must stay green, build AND run ───────────────────────────
@@ -247,9 +114,7 @@ CTCLOG="$WORK/ctor_control.log"
 ctcst=$?
 
 if [ "$ctcst" -ne 0 ]; then
-  fail "CTOR CONTROL FAILED TO BUILD (exit $ctcst) — this is NOT a guard success"
-  printf '      ctor/control.mdk has NO colliding module ids. If it refuses, the ctor\n'
-  printf '      arm of the guard is too broad. Build output:\n'
+  fail "constructor control failed to build (exit $ctcst)"
   sed 's/^/        /' "$CTCLOG"
 else
   ok "ctor control builds (exit 0)"
@@ -271,28 +136,7 @@ else
 fi
 
 # ── 4. the emitter-MINTED impl-symbol domain (#1950), POSITIVE polarity ──────
-# Sections 1–3 grade the MODULE-MANGLED domain, which the header's SCOPE note says
-# is all `mangleUnits` ever sees. This section grades the OTHER half of the
-# emitted-symbol space: the symbols the backends MINT — `mdk_impl_<symTag>_<method>`
-# (TYPECHECK-AUDIT C7) and the per-instance `$memo_<selector>_<method>` CAFs.
-#
-# It is test/must_fail_fixtures/1950-impl-key-sanitize-collision/, DRAINED and
-# repointed here per [G-PIN-DRAIN] — the same move #1677's pin made into sections
-# 1–2, and for the same reason: the coverage outlives the bug. Polarity is
-# INVERTED relative to sections 1–3. Those grade a REFUSAL, because the
-# module-mangled encoding is still many-to-one and a collision there can only be
-# refused. Here the encoding itself was fixed: `private_mangle.injectiveIdent`
-# replaced the lossy `[^A-Za-z0-9_] -> _` collapse, so the colliding program is
-# now simply CORRECT and there is nothing left to refuse. The assertion is
-# therefore "builds, and the two impls get DIFFERENT symbols" — asserting only
-# "it built" would go green again the moment a future encoder re-collapsed the two
-# keys onto one symbol AND something else masked the redefinition.
-#
-# memo.mdk is the second symbol family. It was never reachable while the pin
-# existed: the `mdk_impl_*` collision of the same program masked it (S-2's guard
-# fired first). It has NO guard of its own — `validateImplSymbolInjectivity`'s SCOPE is
-# `mdk_impl_*` — so the encoder is the only thing keeping its two CAFs apart, and
-# its two effect lines double as the memo-SHARING assertion.
+# This section checks the emitter-minted impl and memo symbol families.
 
 checked=$((checked + 1))
 IKBIN="$WORK/impl_key.bin"

@@ -290,7 +290,6 @@ mangleUnitsEv : EvTable ->
 mangleUnitsEv table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
-  symbolInjectivityGuard entryMid allUnits
   let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
     withPreludeDefs
@@ -544,106 +543,6 @@ mangleCtorUnitU collided ctorExportsPerUnit (mid, decls) =
 renameKeyCollides : OrdMap Unit -> (String, String) -> Bool
 renameKeyCollides collided (n, _) = omHasKey n collided
 
--- ── emitted-symbol injectivity guard (X-L.H / #348 / #748; drains #1677) ──────
--- `mangledName` is `"\{sanitizeId mid}__\{name}"`, and `sanitizeId` is MANY-TO-ONE
--- (`lib_plain.mdk` and `lib/plain.mdk` both sanitize to `lib_plain`).  Two distinct
--- `(module, name)` pre-images could therefore land on ONE emitted symbol, and
--- nothing downstream noticed: `core_ir_lower.lgGroup`'s bare-name merge folds them
--- into one `define` with an unreachable second clause, the binary links, runs the
--- wrong one, and exits 0 with no diagnostic anywhere (#1677's pinned repro).
---
--- This turns that fold into a build refusal, at the ONE site every emit driver
--- already funnels through, so all eight callers inherit it (VAL-EMIT-001) instead
--- of six per-driver copies desyncing.  The mangling SCHEME is unchanged: this only
--- observes the map `mangleUnitU` is about to build.
---
--- SCOPE — deliberately stated, because a partial check cited as a total one is how
--- this bug class survives:
---   * covers the MODULE-MANGLED domain only — the definition sites `mangleUnitU`
---     renames: top-level functions (`unitDefNames`, the entry unit's `main`
---     excluded exactly as `buildUnitRenameMap` excludes it) and local
---     constructors (`unitLocalCtorNames`, reserved fixed-tag ctors already
---     filtered out).  Ctors travel the identical
---     `mangledName`/`sanitizeId` collapse, so leaving them out would leave half the
---     map unchecked while claiming the map is injective for distinct module ids.
---   * does NOT cover emitter-MINTED symbols (gensym'd lambdas/etas/impls, and
---     `llvm_emit.ensureDefaultEmitted`'s `fname`-keyed dedup-on-mint, which silently
---     suppresses a second definition of an already-minted name).  Those pre-images
---     do not exist here.  This guard does not make that domain safe.
---   * the `(module, name) -> symbol` map is made injective ONLY for DISTINCT module
---     ids.  `checkSymbolsInjective`'s `prev == pre` skip (below) treats two entries
---     with the SAME pre-image label as one pre-image seen twice, so two distinct
---     source units that happen to share ONE canonical module id collapse invisibly
---     — this guard cannot see them.  Whether THAT literal blind spot is reachable
---     (two DISTINCT modules BOTH loaded, BOTH reaching `checkSymbolsInjective`,
---     colliding on module id) remains UNPROVEN either way — neither confirmed nor
---     derived unreachable.
---   * The loader resolves the ENTRY by the path it was given
---     (`driver/loader.mdk` `findModuleOrEntryFile`), so a flat entry with a literal
---     `.` in its name (`<root>/a.b.mdk`) and a nested module (`<root>/a/b.mdk`),
---     which share canonical module id "a.b", no longer substitute for each other
---     at load time.  An entry whose id equals an IMPORTED nested module's id is a
---     loud cycle error, not a silent substitution.
--- Functions and constructors are checked as SEPARATE domains: they are emitted into
--- separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`), so merging
--- them could only manufacture a false positive, never catch a real collision.
---
--- INTENTIONALLY OVER-INCLUSIVE (RUN-EMIT-018): it refuses on the NAME MAP, never on
--- reachability.  `dce.dceFilter` runs AFTER this site in every driver, and
--- non-uniformly across them (`llvm_emit_modules_main` half 0 only,
--- `wasm_emit_gaps_main` not at all), so a DCE-aware check would refuse different
--- programs per driver.  A collision masked only because one side is currently dead
--- is a latent silent mis-link waiting for the edit that makes it live.
-symbolInjectivityGuard : String -> List (String, List Decl) -> Unit
-symbolInjectivityGuard entryMid allUnits =
-  checkSymbolsInjective
-    "function"
-    (flatMap (unitFnSymbolPairs entryMid) allUnits)
-    omEmpty
-  checkSymbolsInjective
-    "constructor"
-    (flatMap unitCtorSymbolPairs allUnits)
-    omEmpty
-  ()
-
--- (emitted symbol, pre-image label) for the top-level FUNCTIONS this unit defines
--- and `mangleUnitU` will rename.  Mirrors `buildUnitRenameMap`'s local half
--- (`dedup (unitDefNames …)` minus `isEntryMainKey`) so the domain is the same set
--- of definition sites, not a re-derived approximation.
-unitFnSymbolPairs : String -> (String, List Decl) -> List (String, String)
-unitFnSymbolPairs entryMid (mid, decls) =
-  map
-    (symbolPreImagePair mid)
-    (filterList
-      (n => not (isEntryMainKey entryMid mid n))
-      (dedup (unitDefNames (mid, decls))))
-
--- (emitted symbol, pre-image label) for the CONSTRUCTORS this unit declares.
--- Mirrors `buildUnitCtorRenameMap`'s local half.
-unitCtorSymbolPairs : (String, List Decl) -> List (String, String)
-unitCtorSymbolPairs (mid, decls) =
-  map (symbolPreImagePair mid) (dedup (unitLocalCtorNames decls))
-
--- the pre-image label is the `(module, name)` pair itself, spelled `<mid>.<name>` --
--- the diagnostic has to name the SOURCES, not just the collided symbol string.
-symbolPreImagePair : String -> String -> (String, String)
-symbolPreImagePair mid n = (mangledName mid n, "\{mid}.\{n}")
-
--- Injectivity, one pass, O(n log n) via the same weight-balanced tree the rename
--- map uses (the compiler's own emission is ~9.6k module-mangled symbols; a
--- `List`-as-a-map here would be the fourteenth quadratic).  Two entries agreeing on
--- BOTH symbol and pre-image are the SAME pre-image seen twice (a duplicate unit id
--- in `allUnits`), not a collision.  Anything else refuses, naming BOTH sources.
-checkSymbolsInjective : String -> List (String, String) -> OrdMap String -> Unit
-checkSymbolsInjective _ [] _ = ()
-checkSymbolsInjective what ((sym, pre) :: rest) seen = match omLookup sym seen
-  None => checkSymbolsInjective what rest (omInsert sym pre seen)
-  Some prev =>
-    if prev == pre then
-      checkSymbolsInjective what rest seen
-    else
-      panic
-        "emitted-symbol collision: \{what}s `\{prev}` and `\{pre}` both mangle to `\{sym}` -- two distinct (module, name) pairs cannot share one emitted symbol, so the emitter would silently keep one and drop the other. Rename one of the two modules so their ids differ after `sanitizeId` (which maps `.`, `/` and `-` all to `_`), or rename one of the two definitions."
 -- ── the export surfaces the three export maps read ───────────────────────────
 -- Every unit's `ModuleExports`, built by the same `frontend.visibility` producer
 -- resolve uses, in unit order.  Units arrive dependency-first (the loader's order),
@@ -1483,8 +1382,7 @@ lookupExports k ((m, ns) :: rest) =
 unitDefNames : (String, List Decl) -> List String
 unitDefNames (_, decls) = flatMap declBinderNames decls
 
--- `<mid>__<name>` with the mid sanitized to a valid identifier (`/`, `.`, `-` →
--- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.
+-- Encode the module component injectively while retaining the raw name tail.
 export
 mangledName : String -> String -> String
 mangledName mid name = encodePair mid name
@@ -1521,8 +1419,6 @@ safeChar c =
 -- `main::Sz|(Q A B_C)|` both sanitize to `main__Sz__Q_A_B_C__`, so two DISTINCT
 -- impls of one method were minted under one symbol (`run` answered correctly,
 -- `build` died at clang with a raw `invalid redefinition of function`).
--- `sanitizeId` keeps its lossy mapping because it also spells the module-mangled
--- compiler symbols, whose names are fixpoint-load-bearing.
 --
 -- The encoding is two branches with DISJOINT IMAGES, which is what makes it
 -- injective on all of `String` and not merely on the keys we happen to mint today:
