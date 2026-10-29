@@ -1,0 +1,273 @@
+-- lint rule rule-directive-reason: a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it. An issue number alone is not a reason.
+
+import frontend.ast.{Loc(..), Decl(..)}
+import frontend.parser.{
+  Positions(..),
+  DeclPos,
+  positionsDecls,
+  declPosLine,
+  declPosEndLine,
+}
+import driver.diagnostics.{Severity(..)}
+import support.util.{contains, anyList, filterList, splitNl, isSome}
+import string.{toLower, words}
+import regex.{Regex, mustCompile, isMatch}
+import frontend.lexer.{Comment, commentLine, commentText}
+import tools.lint_core.{
+  Category(..),
+  DirScope(..),
+  Directive(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factComments,
+  mkRule,
+}
+import tools.lint_shared.{
+  CommentBlock(..),
+  codePortions,
+  commentBlocks,
+  parseDirective,
+  ruleNameDirectiveReason,
+  zipDeclPos,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDirectiveReason,
+      summary =
+        "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
+      doc =
+        "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDirectiveReason
+    None
+
+-- A `-- lint-disable-*` directive with no comment stating the constraint that
+-- forced it is itself a finding: the same failure mode the-baseline-goes-down
+-- sprint found only by hand.
+--
+-- The reason must live in the SAME contiguous comment block as the directive
+-- (`commentBlocks`/`codePortions`, rule-promissory-reader's helpers, reused
+-- unmodified above) — above it, below it, or beside another directive in the
+-- same block. Several existing file-scope directives sit on line 1, where
+-- nothing can precede them, and state their reason in the lines that follow
+-- instead (`compiler/tools/lsp.mdk`, `compiler/backend/wasm_emit.mdk`); the
+-- same-block rule (rather than "immediately above only") is what keeps this
+-- rule silent on those.
+--
+-- A `lint-disable-line`/`lint-disable-next-line` directive whose own block
+-- has no reason gets ONE fallback: `export\n<name> : <type>` (or a bare
+-- signature line alone) can sit between a leading doc comment and the
+-- directive, breaking block contiguity even though a reader plainly reads
+-- that comment as the declaration's reason (`compiler/tools/lint.mdk`'s own
+-- `trimWs`, `compiler/entries/entry_support.mdk`'s `failWith`). The parsed
+-- AST already threads `Positions` into every rule, so instead of guessing
+-- what a "signature-only" line looks like, find the `DeclPos` the directive's
+-- target line falls inside and check the comment block ending immediately
+-- before THAT declaration starts.
+--
+-- A block counts as reasoned when some OTHER comment in it (not a directive
+-- line itself) has a "substantive word": a run of at least 4 alphabetic
+-- characters. Digits and `#` never contribute, so a bare issue reference
+-- (`#1234`) is never one; short connector words ("see", "cf", "ref") aren't
+-- either, so `-- see #1234` does not count as a reason.
+ruleDirectiveReason : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleDirectiveReason _ _ facts pos prog =
+  let comments = factComments facts
+  let ls = splitNl facts.ffSrc
+  let codeLines = arrayFromList (codePortions ls comments 1)
+  let blocks = commentBlocks comments codeLines
+  let declZips = zipDeclPos prog (positionsDecls pos)
+  let dirCmts = filterList (c => isSome (parseDirective c)) comments
+  flatMap (directiveReasonCheck comments blocks declZips) dirCmts
+
+directiveReasonCheck : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Comment ->
+  List Finding
+directiveReasonCheck comments blocks declZips c =
+  if directiveReasoned comments blocks declZips c then
+    []
+  else
+    [directiveReasonFinding c]
+
+directiveReasoned : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Comment ->
+  Bool
+directiveReasoned comments blocks declZips c =
+  let ownReasoned = match find (commentBlockContainsLine (commentLine c)) blocks
+    Some b => blockHasReason comments b
+    None => False
+  if ownReasoned then
+    True
+  else match parseDirective c
+    Some (Directive (DScopeLine target) _) =>
+      declGapReasoned
+        comments
+        blocks
+        declZips
+        (declZipNameAt declZips target)
+        (commentLine c)
+    Some (Directive DScopeFile _) => False
+    None => False
+
+-- Walk backward from `line` through a CHAIN of declarations that abut it
+-- exactly (no blank line between): a signature-only `DTypeSig` (alone or
+-- `export`-prefixed) between a leading doc comment and the directive it
+-- explains — `compiler/tools/lint.mdk`'s own `trimWs` a few hundred lines
+-- above this rule, `compiler/entries/entry_support.mdk`'s `failWith` — or a
+-- one-line-per-clause function whose OWN signature sits one hop further back
+-- (`compiler/types/route_key.mdk`'s `rkEffAtom`: directive between its two
+-- clauses, reason above the signature two hops up). Each hop requires the
+-- PRECEDING declaration to end on the exact line before AND to be the SAME
+-- declaration the directive suppresses — a `DTypeSig`/`DFunDef` sharing the
+-- target's own name — so a real blank line still stops the walk, and so does
+-- an adjacent but UNRELATED top-level declaration (a different function's
+-- doc comment must never be credited to this directive).
+declGapReasoned : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Option String ->
+  Int ->
+  Bool
+declGapReasoned comments blocks declZips targetName line =
+  match find (commentBlockEndsAt (line - 1)) blocks
+    Some b => blockHasReason comments b
+    None => match find (declZipEndsAt (line - 1)) declZips
+      Some (d, dp) =>
+        if declGapNameMatches targetName d then
+          declGapReasoned comments blocks declZips targetName (declPosLine dp)
+        else
+          False
+      None => False
+
+-- The name of the declaration the directive's target `line` falls inside —
+-- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
+-- different decl kind, or the directive is the last thing in the file), in
+-- which case `declGapNameMatches` below never credits a gap hop.
+declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
+declZipNameAt declZips line = match find (declZipContainsLine line) declZips
+  Some (d, _) => declBridgeName d
+  None => None
+
+declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
+declZipContainsLine line (_, dp) =
+  declPosLine dp <= line && declPosEndLine dp >= line
+
+declBridgeName : Decl -> Option String
+declBridgeName (DTypeSig _ n _ _) = Some n
+declBridgeName (DFunDef _ n _ _ _ _) = Some n
+declBridgeName _ = None
+
+declGapNameMatches : Option String -> Decl -> Bool
+declGapNameMatches (Some target) d = match declBridgeName d
+  Some n => n == target
+  None => False
+declGapNameMatches None _ = False
+
+commentBlockContainsLine : Int -> CommentBlock -> Bool
+commentBlockContainsLine line (CommentBlock first last _ _) =
+  line >= first && line <= last
+
+commentBlockEndsAt : Int -> CommentBlock -> Bool
+commentBlockEndsAt line (CommentBlock _ last _ _) = last == line
+
+declZipEndsAt : Int -> (Decl, DeclPos) -> Bool
+declZipEndsAt line (_, dp) = declPosEndLine dp == line
+
+blockHasReason : List Comment -> CommentBlock -> Bool
+blockHasReason comments (CommentBlock first last _ _) =
+  let inBlock =
+    filterList (c => commentLine c >= first && commentLine c <= last) comments
+  let reasonCmts = filterList (c => isNone (parseDirective c)) inBlock
+  anyList directiveReasonHasProse reasonCmts
+
+-- A comment line counts as a reason only when it contains a REASON WORD: a
+-- whitespace-delimited token with a substantive (>=4 alphabetic char) run
+-- that is not one of the shapes `rule-directive-reason` exists to reject —
+-- `todo`/`fixme`/`xxx`, an issue-reference token (`#1234`) or its connector
+-- word (`see`/`issue`/`cf`/`ref`), or a bare rule name (`rule-clone-type`) —
+-- each of which has >=4 alphabetic characters on its own but states no
+-- constraint. A comment mixing one of these with real prose still counts,
+-- since the prose word alone satisfies the check.
+directiveReasonHasProse : Comment -> Bool
+directiveReasonHasProse c = anyList isReasonWord (words (commentText c))
+
+isReasonWord : String -> Bool
+isReasonWord raw =
+  if isNonReasonToken raw then False else hasSubstantiveWord raw
+
+isNonReasonToken : String -> Bool
+isNonReasonToken raw =
+  let low = toLower (stripTrailingPunct raw)
+  contains low ["todo", "fixme", "xxx", "see", "issue", "cf", "ref"]
+    || isIssueRefToken low
+    || isRuleNameToken low
+
+-- A single hyphenated token naming a rule (`rule-clone-type`) rather than a
+-- reason -- checked char-by-char rather than against a quoted "rule-..."
+-- literal, which would falsely register this heuristic as an unenrolled
+-- rule name under `diff_compiler_lint_baseline.sh`'s assertion 1b.
+ruleNameTokenRe : Regex
+ruleNameTokenRe = mustCompile "^rule-"
+
+isRuleNameToken : String -> Bool
+isRuleNameToken low = isMatch ruleNameTokenRe low
+
+issueRefTokenRe : Regex
+issueRefTokenRe = mustCompile "^#[0-9]+$"
+
+isIssueRefToken : String -> Bool
+isIssueRefToken low = isMatch issueRefTokenRe low
+
+stripTrailingPunct : String -> String
+stripTrailingPunct s =
+  let n = stringLength s
+  if n == 0 then
+    s
+  else if isTrailingPunctChar (arrayGetUnsafe (n - 1) (stringToChars s)) then
+    stripTrailingPunct (stringSlice 0 (n - 1) s)
+  else
+    s
+
+isTrailingPunctChar : Char -> Bool
+isTrailingPunctChar ch =
+  ch == ':' || ch == '.' || ch == ',' || ch == ';' || ch == '!' || ch == '?'
+
+substantiveWordRe : Regex
+substantiveWordRe = mustCompile "[A-Za-z]{4}"
+
+hasSubstantiveWord : String -> Bool
+hasSubstantiveWord s = isMatch substantiveWordRe s
+
+directiveReasonFinding : Comment -> Finding
+directiveReasonFinding c = Finding {
+  rule = ruleNameDirectiveReason,
+  message =
+    "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
+  severity = SevWarning,
+  loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
+}

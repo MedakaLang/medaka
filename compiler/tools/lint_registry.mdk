@@ -22,14 +22,9 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   ruleNameBoolSimplify,
-  ruleNameComplementPredicate,
-  ruleNameDeadCode,
-  ruleNameDirectiveReason,
   ruleNameIfMaxMin,
   ruleNameLambdaSection,
-  ruleNamePreferAssignOp,
   ruleNameRegexLiteral,
-  ruleNameRemParity,
   ruleNameTestEqualInTrue,
 }
 import tools.lint_rule_internal_match_on_param as MatchOnParam
@@ -54,22 +49,19 @@ import tools.lint_rule_bind_then_destructure as BindThenDestructure
 import tools.lint_rule_bind_chain_to_do as BindChainToDo
 import tools.lint_rule_duplicate_body as DuplicateBody
 import tools.lint_rule_duplicate_body_same_file as DuplicateBodySameFile
+import tools.lint_rule_internal_directive_reason as DirectiveReason
+import tools.lint_rule_dead_code as DeadCode
+import tools.lint_rule_prefer_assign_op as PreferAssignOp
+import tools.lint_rule_complement_predicate as ComplementPredicate
+import tools.lint_rule_rem_parity as RemParity
 import tools.lint_rules_staging.{
   boolSimplifyFix,
-  complementPredicateFix,
   ifMaxMinFix,
   lambdaSectionFix,
-  preferAssignFix,
-  remParityFix,
   ruleBoolSimplify,
-  ruleComplementPredicate,
-  ruleDeadCode,
-  ruleDirectiveReason,
-  ruleForPreferAssign,
   ruleIfMaxMin,
   ruleLambdaSection,
   ruleRegexLiteral,
-  ruleRemParity,
   ruleTestEqualInTrue,
   testEqualInTrueFix,
 }
@@ -137,101 +129,6 @@ boolSimplifyRule =
     ruleBoolSimplify
     (Some boolSimplifyFix)
 
-remParityRule : Rule
-remParityRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameRemParity,
-      summary =
-        "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
-      doc =
-        "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleRemParity
-    (Some remParityFix)
-
-complementPredicateRule : Rule
-complementPredicateRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameComplementPredicate,
-      summary =
-        "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
-      doc =
-        "Negating a predicate that has a defined complement (`isEmptyL`/`isSome`/`isOk` and their inverses) is clearer as a call to the complement.\n\nBefore:\n  not (isSome x)\nAfter:\n  isNone x",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleComplementPredicate
-    (Some complementPredicateFix)
-
-deadCodeRule : Rule
-deadCodeRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameDeadCode,
-      summary =
-        "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
-      doc =
-        "A private top-level binding that nothing reachable from the file's exports, `main` or doctests uses is dead code (Haskell -Wunused-top-binds). Delete it or export it.\n\nBefore:\n  helper x = x + 1   -- never called\nAfter:\n  (binding removed)",
-      category = Suspicious,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleDeadCode
-    None
-
-preferAssignOpRule : Rule
-preferAssignOpRule =
-  mkRule
-    RuleMeta {
-      name = ruleNamePreferAssignOp,
-      summary =
-        "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
-      doc =
-        "`setRef r v` predates the `:=` write operator, and a `:=` write bound to a wildcard `let _ =` is a statement in disguise.\n\nBefore:\n  setRef counter 1\nAfter:\n  counter := 1",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleForPreferAssign
-    (Some preferAssignFix)
-
-directiveReasonRule : Rule
-directiveReasonRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameDirectiveReason,
-      summary =
-        "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
-      doc =
-        "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x",
-      category = Style,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleDirectiveReason
-    None
-
 regexLiteralRule : Rule
 regexLiteralRule =
   mkRule
@@ -284,22 +181,22 @@ allRules = [
   MissingSignature.rule,
   NotEq.rule,
   boolSimplifyRule,
-  remParityRule,
+  RemParity.rule,
   DoubleReverse.rule,
   WhenUnless.rule,
-  complementPredicateRule,
+  ComplementPredicate.rule,
   MatchToMap.rule,
   BindChainToDo.rule,
-  deadCodeRule,
+  DeadCode.rule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
-  preferAssignOpRule,
+  PreferAssignOp.rule,
   PromissoryReader.rule,
   OrElseStaircase.rule,
   CloneType.rule,
   ClauseMap.rule,
   DuplicateBodySameFile.rule,
-  directiveReasonRule,
+  DirectiveReason.rule,
   regexLiteralRule,
   TestBoolLiteralEqual.rule,
   testEqualInTrueRule,
