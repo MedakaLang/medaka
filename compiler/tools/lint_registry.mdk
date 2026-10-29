@@ -4,28 +4,15 @@
 
 import frontend.ast.{Decl(..)}
 import frontend.parser.{Positions(..)}
-import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
+import driver.diagnostics.{Diag(..), DiagId(..)}
 import support.util.{contains, anyList, filterList, isEmptyL, isSome}
 import hash_map.{has}
 import regex.{RegexError(..), compile, mustCompile}
 import tools.lint_core.{
-  Category(..),
   CrossFileRule(..),
-  Fixability(..),
   Need(..),
-  Ratchet(..),
   Rule(..),
-  RuleMeta(..),
-  Scope(..),
   mkCrossFileRule,
-  mkRule,
-}
-import tools.lint_shared.{
-  ruleNameBoolSimplify,
-  ruleNameIfMaxMin,
-  ruleNameLambdaSection,
-  ruleNameRegexLiteral,
-  ruleNameTestEqualInTrue,
 }
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
@@ -54,17 +41,11 @@ import tools.lint_rule_dead_code as DeadCode
 import tools.lint_rule_prefer_assign_op as PreferAssignOp
 import tools.lint_rule_complement_predicate as ComplementPredicate
 import tools.lint_rule_rem_parity as RemParity
-import tools.lint_rules_staging.{
-  boolSimplifyFix,
-  ifMaxMinFix,
-  lambdaSectionFix,
-  ruleBoolSimplify,
-  ruleIfMaxMin,
-  ruleLambdaSection,
-  ruleRegexLiteral,
-  ruleTestEqualInTrue,
-  testEqualInTrueFix,
-}
+import tools.lint_rule_lambda_section as LambdaSection
+import tools.lint_rule_if_max_min as IfMaxMin
+import tools.lint_rule_bool_simplify as BoolSimplify
+import tools.lint_rule_regex_literal as RegexLiteral
+import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -72,101 +53,6 @@ import tools.lint_rules_staging.{
 -- traverses binding bodies but not into list-literal elements — registers the
 -- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
 -- + append it to `allRules`.
-lambdaSectionRule : Rule
-lambdaSectionRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameLambdaSection,
-      summary =
-        "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
-      doc =
-        "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleLambdaSection
-    (Some lambdaSectionFix)
-
-ifMaxMinRule : Rule
-ifMaxMinRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameIfMaxMin,
-      summary =
-        "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
-      doc =
-        "An `if` that picks the larger or smaller of two operands is `max` or `min`.\n\nBefore:\n  if a > b then a else b\nAfter:\n  max a b",
-      category = Style,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleIfMaxMin
-    (Some ifMaxMinFix)
-
-boolSimplifyRule : Rule
-boolSimplifyRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameBoolSimplify,
-      summary =
-        "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
-      doc =
-        "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok",
-      category = Complexity,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
-    }
-    ruleBoolSimplify
-    (Some boolSimplifyFix)
-
-regexLiteralRule : Rule
-regexLiteralRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameRegexLiteral,
-      summary =
-        "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
-      doc =
-        "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\"",
-      category = Correctness,
-      scope = Universal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleRegexLiteral
-    None
-
-testEqualInTrueRule : Rule
-testEqualInTrueRule =
-  mkRule
-    RuleMeta {
-      name = ruleNameTestEqualInTrue,
-      summary =
-        "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
-      doc =
-        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
-      category = Style,
-      scope = Internal,
-      ratchet = Gated,
-      defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
-    }
-    ruleTestEqualInTrue
-    (Some testEqualInTrueFix)
-
 export
 allRules : List Rule
 allRules = [
@@ -174,13 +60,13 @@ allRules = [
   HandRolledDerivable.rule,
   StdlibReimpl.rule,
   BindThenDestructure.rule,
-  lambdaSectionRule,
-  ifMaxMinRule,
+  LambdaSection.rule,
+  IfMaxMin.rule,
   AndThenPureMap.rule,
   DestructureInParam.rule,
   MissingSignature.rule,
   NotEq.rule,
-  boolSimplifyRule,
+  BoolSimplify.rule,
   RemParity.rule,
   DoubleReverse.rule,
   WhenUnless.rule,
@@ -197,9 +83,9 @@ allRules = [
   ClauseMap.rule,
   DuplicateBodySameFile.rule,
   DirectiveReason.rule,
-  regexLiteralRule,
+  RegexLiteral.rule,
   TestBoolLiteralEqual.rule,
-  testEqualInTrueRule,
+  TestEqualInTrue.rule,
   TestPreludeShadow.rule,
 ]
 
