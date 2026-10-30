@@ -85,6 +85,8 @@ import tools.lint_core.{
   Directive(..),
   FileFacts(..),
   Finding(..),
+  Fix(..),
+  Fixability(..),
   Rule(..),
   RuleCheck(..),
   StdlibIndex(..),
@@ -94,6 +96,9 @@ import tools.lint_core.{
   fixToDiagFix,
   factDupClauses,
   factScopes,
+  clampApplicability,
+  emptyStdlibIndex,
+  maxApplicability,
   memoNew,
   needsScopes,
   needsStdlibIndex,
@@ -209,11 +214,11 @@ ruleFindings : StdlibIndex ->
 ruleFindings _ _ _ _ _ [] _ = []
 ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
   WholeFile check =>
-    map (restampSeverity r.severity) (check idx path facts pos prog)
+    map (restampFinding r) (check idx path facts pos prog)
       ++ ruleFindings idx path facts pos prog rs walked
   Visits _ => match walked
     hits :: rest =>
-      map (restampSeverity r.severity) hits
+      map (restampFinding r) hits
         ++ ruleFindings idx path facts pos prog rs rest
     [] => ruleFindings idx path facts pos prog rs []
 
@@ -418,6 +423,26 @@ kindIn : ExprKind -> List ExprKind -> Bool
 kindIn _ [] = False
 kindIn k (x :: xs) = k == x || kindIn k xs
 
+-- A rule's finding under the rule's own severity, its fix held to the rule's
+-- applicability ceiling.
+restampFinding : Rule -> Finding -> Finding
+restampFinding r f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = r.severity,
+  loc = f.loc,
+  fix = map (clampFix r.meta.fixability) f.fix,
+}
+
+clampFix : Fixability -> Fix -> Fix
+clampFix fixability fx = match maxApplicability fixability
+  Some ceiling => Fix {
+    fixApplicability = clampApplicability ceiling fx.fixApplicability,
+    fixEdits = fx.fixEdits,
+    fixMessage = fx.fixMessage,
+  }
+  None => fx
+
 restampSeverity : Severity -> Finding -> Finding
 restampSeverity sev f = Finding {
   rule = f.rule,
@@ -449,12 +474,18 @@ export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
   map
-    (triples => mkStdlibIndex (groupStdlibSigs triples))
+    (triples => mkStdlibIndex (groupStdlibSigs triples) triples)
     (stdlibSigTriplesResult lintStdlibDir)
 
 -- The sorted name list is computed here, once, not per linted file.
-mkStdlibIndex : HashMap String (List (String, Ty)) -> StdlibIndex
-mkStdlibIndex m = StdlibIndex m (sortUniqS (keys m))
+mkStdlibIndex : HashMap String (List (String, Ty)) ->
+  List (String, String, Ty) ->
+  StdlibIndex
+mkStdlibIndex m triples =
+  StdlibIndex m (sortUniqS (keys m)) (sortUniqS (map fst3 triples))
+
+fst3 : (String, String, Ty) -> String
+fst3 (modName, _, _) = modName
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -600,6 +631,32 @@ exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, .
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
 
+-- The (rule, line) of every finding of `rules` that no inline directive
+-- suppresses.  A decl fixer runs only where its rule has one of these on the
+-- decl's lines: a directive says the shape is deliberate.
+liveFindingLines : String ->
+  FileFacts ->
+  List Rule ->
+  Positions ->
+  List Decl ->
+  List (String, Int)
+liveFindingLines src facts rules pos prog =
+  flatMap
+    findingRuleLine
+    (applySuppressions
+      src
+      (lintProgramFacts emptyStdlibIndex rules "" facts pos prog))
+
+findingRuleLine : Finding -> List (String, Int)
+findingRuleLine f = match f.loc
+  Some (Loc _ line _ _ _) => [(f.rule, line)]
+  None => []
+
+-- Whether `r` has a live finding on the lines `[s, e]`.
+ruleLiveIn : List (String, Int) -> (Int, Int) -> Rule -> Bool
+ruleLiveIn live (s, e) r =
+  anyList (p => fst p == r.name && s <= snd p && snd p <= e) live
+
 -- ── autofix driver (Task A3) ───────────────────────────────────────────────────
 -- The CLI calls this for `--fix`, passing only plain data (the
 -- `--only`/`--disable` name lists, the source text, the parsed decls +
@@ -623,12 +680,10 @@ applyFixes only disable src prog pos =
   let cmts = collectComments src
   let cmtLines = map commentLine cmts
   let declPos = zipDeclPos prog (positionsDecls pos)
-  let facts =
-    if anyList ruleNeedsScopes rules then
-      Some (mkFileFacts src prog pos)
-    else
-      None
-  let tagged = collectSplices facts cmtLines orc rules declPos
+  let allFacts = mkFileFacts src prog pos
+  let facts = if anyList ruleNeedsScopes rules then Some allFacts else None
+  let live = liveFindingLines src allFacts rules pos prog
+  let tagged = collectSplices facts live cmtLines orc rules declPos
   let (kept, widen) = reconcileTestImport cmts declPos tagged
   (applySplices src (withWiden widen kept), listLen kept)
 
@@ -848,14 +903,17 @@ ruleHasFixer r = match r.fix
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
 collectSplices : Option FileFacts ->
+  List (String, Int) ->
   List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
   List ((Int, Int, String), List String)
-collectSplices _ _ _ _ [] = []
-collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
-  match firstFix orc rules d
+collectSplices _ _ _ _ _ [] = []
+collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
+  let liveRules =
+    filterList (ruleLiveIn live (declPosLine dp, declPosEndLine dp)) rules
+  match firstFix orc liveRules d
     Some newDecls =>
       let delta = testVerbDelta d newDecls
       if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
@@ -865,14 +923,14 @@ collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
             (declPosLine dp, declPosEndLine dp)
             delta.stopped
             delta.started) then
-        collectSplices facts cmtLines orc rules rest
+        collectSplices facts live cmtLines orc rules rest
       else
         (
             (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
             delta.started,
           )
-          :: collectSplices facts cmtLines orc rules rest
-    None => collectSplices facts cmtLines orc rules rest
+          :: collectSplices facts live cmtLines orc rules rest
+    None => collectSplices facts live cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
 spanHasComment : List Int -> Int -> Int -> Bool

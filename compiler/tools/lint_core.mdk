@@ -138,6 +138,15 @@ maxApplicability FixableUnsafe = Some Unsafe
 maxApplicability SuggestOnly = Some Suggest
 maxApplicability NotFixable = None
 
+-- The lower of two trusts: a fix is applied no further than its rule's ceiling.
+export
+clampApplicability : Applicability -> Applicability -> Applicability
+clampApplicability Suggest _ = Suggest
+clampApplicability _ Suggest = Suggest
+clampApplicability Unsafe _ = Unsafe
+clampApplicability _ Unsafe = Unsafe
+clampApplicability Safe Safe = Safe
+
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
 public export data Need = NeedsStdlibIndex | NeedsScopes
@@ -346,7 +355,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below.
 public export data StdlibIndex =
-  StdlibIndex (HashMap String (List (String, Ty))) (List String)
+  StdlibIndex (HashMap String (List (String, Ty))) (List String) (List String)
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
 -- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s
@@ -357,21 +366,21 @@ public export data StdlibIndex =
 -- choices, so it must never be populated from a degraded index.
 export
 emptyStdlibIndex : StdlibIndex
-emptyStdlibIndex = StdlibIndex (new ()) []
+emptyStdlibIndex = StdlibIndex (new ()) [] []
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
 -- it is the number an entry point prints to say what it actually got.
 export
 stdlibIndexSize : StdlibIndex -> Int
-stdlibIndexSize (StdlibIndex m _) = size m
+stdlibIndexSize (StdlibIndex m _ _) = size m
 
 -- Every stdlib module declaring `name`, with the type each one declares, in
 -- stdlib-file order.  `[]` = not a stdlib export (or the index is degraded);
 -- more than one element = the name is ambiguous and the CALLER must decide.
 export
 stdlibEntriesOf : StdlibIndex -> String -> List (String, Ty)
-stdlibEntriesOf (StdlibIndex m _) name = findWithDefault [] name m
+stdlibEntriesOf (StdlibIndex m _ _) name = findWithDefault [] name m
 
 -- The type `<module>.<name>` declares, e.g. `stdlibSigIn idx "list" "reverse"`
 -- = `List a -> List a`.  The unambiguous accessor: it names the module, so it
@@ -392,7 +401,13 @@ stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
 -- stdlib the way a hand-written list does (#2248 Miss 2).
 export
 stdlibIndexNames : StdlibIndex -> List String
-stdlibIndexNames (StdlibIndex _ names) = names
+stdlibIndexNames (StdlibIndex _ names _) = names
+
+-- Whether the index read `modName` (a dotted path, `crypto.hmac`) at all.  A
+-- module it did not read exports nothing the index can vouch for.
+export
+stdlibKnowsModule : StdlibIndex -> String -> Bool
+stdlibKnowsModule (StdlibIndex _ _ mods) modName = elem modName mods
 
 -- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a

@@ -9,8 +9,21 @@ import frontend.ast_walk.{ExprKind(..)}
 import support.source_index.{indexSource, offsetToSourcePosition}
 import json.{stringify}
 import string.{indexOf}
-import tools.lint.{findingToDiag, lintParseSource}
-import tools.lint_core.{Applicability(..), Finding(..), Fix(..), FixEdit(..)}
+import tools.lint.{
+  Category(..),
+  Fixability(..),
+  Ratchet(..),
+  RuleMeta(..),
+  Scope(..),
+  applicabilityText,
+  emptyStdlibIndex,
+  findingToDiag,
+  lintParseSource,
+  lintProgram,
+}
+import tools.lint_core.{
+  Applicability(..), Finding(..), Fix(..), FixEdit(..), Rule, mkRule
+}
 import tools.lint_fix.{
   Binding(..), FixError, applyFixes, fixErrorText, parenIfNeeded
 }
@@ -197,3 +210,53 @@ test "a finding's fix renders its applicability and edits in json" =
     ),
     ("edits", expectTrue (isSome (indexOf "\"edits\":[" json))),
   ]
+
+-- A rule whose ceiling is `SuggestOnly` that builds its fix as `Safe`.
+suggestOnlyRule : Rule
+suggestOnlyRule =
+  mkRule
+    RuleMeta {
+      name = "rule-probe",
+      summary = "probe",
+      doc = "probe",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = SuggestOnly,
+      needs = [],
+    }
+    (_ path _ _ _ => [probeFinding Safe (Loc path 1 5 1 6) "2"])
+    None
+
+-- The runner holds a fix to its rule's ceiling, so plain `--fix` leaves the
+-- source of a `SuggestOnly` rule alone however the rule built the fix.
+test "a fix never exceeds its rule's applicability ceiling" =
+  let src = "x = 1\n"
+  let linter path text = match lintParseSource text
+    Err _ => Err "does not parse"
+    Ok (decls, pos) =>
+      Ok (lintProgram emptyStdlibIndex [suggestOnlyRule] path text pos decls)
+  expectEach [
+    (
+      "the reported fix is a suggestion",
+      expectEqual
+        ["suggest"]
+        (flatMap fixApplicabilities (found (linter "probe.mdk" src))),
+    ),
+    (
+      "plain --fix leaves the source",
+      expectEqual
+        (Ok (src, 0))
+        (outcome (applyFixes linter Safe "probe.mdk" src)),
+    ),
+  ]
+
+found : Result String (List Finding) -> List Finding
+found (Ok fs) = fs
+found (Err _) = []
+
+fixApplicabilities : Finding -> List String
+fixApplicabilities (Finding { fix = (Some fx), ... }) =
+  [applicabilityText fx.fixApplicability]
+fixApplicabilities _ = []

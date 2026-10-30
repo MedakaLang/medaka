@@ -5,6 +5,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -22,7 +23,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   isBoolLit,
   isFalseLit,
   isTrueLit,
@@ -48,7 +49,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleBoolSimplify
     None
@@ -99,15 +100,15 @@ ruleBoolSimplify : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleBoolSimplify _ _ facts _ _ = [OnAnyExpr (boolSimplifyAt facts)]
+ruleBoolSimplify idx _ facts _ _ = [OnAnyExpr (boolSimplifyAt idx facts)]
 
-boolSimplifyAt : FileFacts -> Ctx -> Expr -> List Finding
-boolSimplifyAt facts ctx e = match boolSimplifyOf e
+boolSimplifyAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+boolSimplifyAt idx facts ctx e = match boolSimplifyOf e
   Some rewritten => [
     boolSimplifyFinding
       ctx.ctxSpan
       rewritten
-      (boolSimplifyFix facts ctx e rewritten),
+      (boolSimplifyFix idx facts ctx e rewritten),
   ]
   None => []
 
@@ -126,12 +127,13 @@ boolSimplifyFinding loc rewritten fix = Finding {
 -- A rewrite that reads or writes a call to `not` is withheld where the file
 -- binds `not` anywhere: the call it introduces could land inside that binding's
 -- scope, and the one it removes could be the file's own.
-boolSimplifyFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-boolSimplifyFix facts ctx e rewritten =
-  if touchesNot e rewritten && bindsName facts "not" then
+boolSimplifyFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+boolSimplifyFix idx facts ctx e rewritten =
+  if touchesNot e rewritten && rebinds idx facts ctx "not" then
     None
   else
     replaceFix
+      Safe
       "simplify the boolean expression"
       (nodeSpan ctx e)
       (bindingOf rewritten)

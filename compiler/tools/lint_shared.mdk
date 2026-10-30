@@ -19,10 +19,11 @@ import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
   Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), Visitor(..), factScopes
+  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factScopes,
+  stdlibKnowsModule, stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
-import tools.lint_scope.{binderOf, bindersNamed}
+import tools.lint_scope.{binderOf, bindersNamed, wildImports}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -747,17 +748,23 @@ bindingOf e = match unwrapLoc e
   EFieldAccess _ _ _ => Closed
   _ => Open
 
--- A `Safe` fix replacing `span` with `text` bracketed for `ctx`'s parent, or
--- `None` when there is no span or the text spans lines (the printer knows
--- nothing of the indentation it lands in).
+-- A fix of the given applicability replacing `span` with `text` bracketed for
+-- `ctx`'s parent, or `None` when there is no span or the text spans lines (the
+-- printer knows nothing of the indentation it lands in).
 export
-replaceFix : String -> Option Loc -> Binding -> Ctx -> String -> Option Fix
-replaceFix message span binding ctx text
+replaceFix : Applicability ->
+  String ->
+  Option Loc ->
+  Binding ->
+  Ctx ->
+  String ->
+  Option Fix
+replaceFix applicability message span binding ctx text
   | elem '\n' (stringToChars text) = None
   | otherwise =
     map
       (loc => Fix {
-        fixApplicability = Safe,
+        fixApplicability = applicability,
         fixEdits = [FixEdit loc (parenIfNeeded binding ctx.ctxParent text)],
         fixMessage = message,
       })
@@ -772,19 +779,48 @@ varSite (ELoc l inner) = match varSite inner
     _ => None
 varSite _ = None
 
+-- Whether an `import m.*` of the file may bring `name` into scope: `m` exports
+-- it, or `m` is a module the stdlib index cannot vouch for.
+wildBinds : StdlibIndex -> FileFacts -> String -> Bool
+wildBinds idx facts name =
+  any (wildMayBind idx name) (wildImports (factScopes facts))
+
+wildMayBind : StdlibIndex -> String -> List String -> Bool
+wildMayBind idx name path =
+  let modName = joinWith "." path
+  not (stdlibKnowsModule idx modName) || isSome (stdlibSigIn idx modName name)
+
+varName : Expr -> String
+varName e = match unwrapLoc e
+  EVar n => n
+  _ => ""
+
 -- Whether the use `hd` of a prelude name means the prelude's: no binder in
--- the file resolves it.  A use whose site is unknown is not
--- provable, so it counts as rebound.
+-- the file resolves it and no wildcard import may bring the name.  A use whose
+-- site is unknown is not provable, so it counts as rebound.
 export
-usesPreludeName : FileFacts -> Expr -> Bool
-usesPreludeName facts hd = match varSite hd
-  Some l => isNone (binderOf (factScopes facts) l)
+usesPreludeName : StdlibIndex -> FileFacts -> Expr -> Bool
+usesPreludeName idx facts hd = match varSite hd
+  Some l =>
+    isNone (binderOf (factScopes facts) l)
+      && not (wildBinds idx facts (varName hd))
   None => False
 
--- Whether the file binds `name` anywhere.
+-- Whether the file binds `name` anywhere, or a wildcard import may.
 export
-bindsName : FileFacts -> String -> Bool
-bindsName facts name = not (isEmpty (bindersNamed (factScopes facts) name))
+bindsName : StdlibIndex -> FileFacts -> String -> Bool
+bindsName idx facts name =
+  not (isEmpty (bindersNamed (factScopes facts) name))
+    || wildBinds idx facts name
+
+-- Whether a call to `name` written into the body `ctx` sits in would not be
+-- the prelude's: the file or a wildcard import binds it, or it is the name of
+-- the method being defined, so the call would be the method calling itself.  A
+-- test's or prop's owner name is its description, not a binder.
+export
+rebinds : StdlibIndex -> FileFacts -> Ctx -> String -> Bool
+rebinds idx facts ctx name =
+  not ctx.ctxInTest && ctx.ctxDeclName == name || bindsName idx facts name
 
 -- The 1-based line of the source, `""` past the end.
 export

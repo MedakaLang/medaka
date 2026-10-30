@@ -1,5 +1,5 @@
 # META
-source_lines=117
+source_lines=119
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-when-unless: an `if` with a `pure ()` branch. Prefer `when` / `unless`.
@@ -9,6 +9,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -26,7 +27,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   isEVarNamed,
   nodeSpan,
@@ -50,7 +51,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleWhenUnless
     None
@@ -85,11 +86,11 @@ ruleWhenUnless : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleWhenUnless _ _ facts _ _ =
+ruleWhenUnless idx _ facts _ _ =
   exprRuleEditVisitors
     whenUnlessExcl
     whenUnlessOf
-    (whenUnlessFix facts)
+    (whenUnlessFix idx facts)
     whenUnlessFinding
 
 whenUnlessFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -106,14 +107,15 @@ whenUnlessFinding loc rewritten fix = Finding {
 
 -- The rewrite reads `pure` (the dropped `pure ()`) and calls `when` or `unless`.
 -- A binding of any of the three names in the file withholds the fix.
-whenUnlessFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-whenUnlessFix facts ctx e rewritten =
-  if bindsName facts "pure"
-    || bindsName facts "when"
-    || bindsName facts "unless" then
+whenUnlessFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+whenUnlessFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "pure"
+    || rebinds idx facts ctx "when"
+    || rebinds idx facts ctx "unless" then
     None
   else
     replaceFix
+      Safe
       "use when / unless"
       (nodeSpan ctx e)
       (bindingOf rewritten)
@@ -124,10 +126,10 @@ whenUnlessFix facts ctx e rewritten =
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "bindsName" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameWhenUnless" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameWhenUnless" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameWhenUnless")) (fa "summary" (ELit (LString "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`"))) (fa "doc" (ELit (LString "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleWhenUnless")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameWhenUnless")) (fa "summary" (ELit (LString "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`"))) (fa "doc" (ELit (LString "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleWhenUnless")) (EVar "None")))
 (DTypeSig false "whenUnlessExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "whenUnlessExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "when"))) (EBinOp "==" (EVar "name") (ELit (LString "unless")))))
 (DTypeSig false "isPureUnit" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -139,20 +141,20 @@ whenUnlessFix facts ctx e rewritten =
 (DFunDef false "whenUnlessOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EIf (EApp (EVar "isPureUnit") (EVar "el")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "when")))) (EVar "c"))) (EVar "t"))) (EIf (EApp (EVar "isPureUnit") (EVar "t")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "unless")))) (EVar "c"))) (EVar "el"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "whenUnlessOf" (PWild) (EVar "None"))
 (DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleWhenUnless" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EApp (EVar "whenUnlessFix") (EVar "facts"))) (EVar "whenUnlessFinding")))
+(DFunDef false "ruleWhenUnless" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EApp (EApp (EVar "whenUnlessFix") (EVar "idx")) (EVar "facts"))) (EVar "whenUnlessFinding")))
 (DTypeSig false "whenUnlessFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "whenUnlessFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameWhenUnless")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "conditional effect with a `pure ()` branch. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "whenUnlessFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "whenUnlessFix" ((PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "pure"))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "when")))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "unless")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (ELit (LString "use when / unless"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DTypeSig false "whenUnlessFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "whenUnlessFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "pure"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "when")))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "unless")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use when / unless"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "bindsName" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameWhenUnless" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameWhenUnless" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameWhenUnless")) (fa "summary" (ELit (LString "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`"))) (fa "doc" (ELit (LString "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleWhenUnless")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameWhenUnless")) (fa "summary" (ELit (LString "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`"))) (fa "doc" (ELit (LString "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleWhenUnless")) (EVar "None")))
 (DTypeSig false "whenUnlessExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "whenUnlessExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "when"))) (EBinOp "==" (EVar "name") (ELit (LString "unless")))))
 (DTypeSig false "isPureUnit" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -164,8 +166,8 @@ whenUnlessFix facts ctx e rewritten =
 (DFunDef false "whenUnlessOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EIf (EApp (EVar "isPureUnit") (EVar "el")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "when")))) (EVar "c"))) (EVar "t"))) (EIf (EApp (EVar "isPureUnit") (EVar "t")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "unless")))) (EVar "c"))) (EVar "el"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "whenUnlessOf" (PWild) (EVar "None"))
 (DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleWhenUnless" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EApp (EVar "whenUnlessFix") (EVar "facts"))) (EVar "whenUnlessFinding")))
+(DFunDef false "ruleWhenUnless" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EApp (EApp (EVar "whenUnlessFix") (EVar "idx")) (EVar "facts"))) (EVar "whenUnlessFinding")))
 (DTypeSig false "whenUnlessFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "whenUnlessFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameWhenUnless")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "conditional effect with a `pure ()` branch. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "whenUnlessFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "whenUnlessFix" ((PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "pure"))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "when")))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "unless")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (ELit (LString "use when / unless"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DTypeSig false "whenUnlessFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "whenUnlessFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "pure"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "when")))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "unless")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use when / unless"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))

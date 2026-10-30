@@ -2,8 +2,9 @@
 --
 --   medaka run compiler/entries/lint_fix_main.mdk <source.mdk>
 --
--- applies every fixable rule's fix to the target (or only the `--only=<rules>`
--- ones) and prints the rewritten source to stdout.  Drives `tools.lint.fixSource`,
+-- applies every fixable rule's fix, unsafe ones included, to the target (or
+-- only the `--only=<rules>` ones) and prints the rewritten source to stdout.
+-- Drives `tools.lint.fixSource`,
 -- the path `medaka lint --fix` takes — the gate (test/diff_compiler_fmt_test.mdk)
 -- compares its output to a `.fixed` golden.
 
@@ -32,7 +33,7 @@ oracleMain () = match args ()
 withTarget : List String -> String -> <IO> Unit
 withTarget only targetPath = match readFile targetPath
   Ok targetSrc => match indexFor only
-    Ok idx => match fixSource idx Safe only [] targetPath targetSrc
+    Ok idx => match fixSource idx Unsafe only [] targetPath targetSrc
       Ok (newSrc, _) => putStr newSrc
       Err msg => ePutStrLn msg
     Err msg => ePutStrLn msg

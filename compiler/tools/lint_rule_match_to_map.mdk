@@ -12,6 +12,7 @@ import driver.diagnostics.{Severity(..)}
 import support.util.{isEmptyL}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -30,7 +31,7 @@ import tools.lint_core.{
 import tools.lint_shared.{
   andThenEtaFn,
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   isEVarNamed,
   isNilPCon,
@@ -58,7 +59,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleMatchToMap
     None
@@ -115,11 +116,11 @@ ruleMatchToMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleMatchToMap _ _ facts _ _ =
+ruleMatchToMap idx _ facts _ _ =
   exprRuleEditVisitors
     noExcl
     matchToMapOf
-    (matchToMapEdit facts)
+    (matchToMapEdit idx facts)
     matchToMapFinding
 
 matchToMapFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -137,12 +138,13 @@ matchToMapFinding loc rewritten fix = Finding {
 -- The fix replaces the whole `match` with the `map` call.  The call is `map`, so the
 -- fix is withheld where the file binds `map`, which would capture it.  The arms'
 -- constructors are not rebindable and need no guard.
-matchToMapEdit : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-matchToMapEdit facts ctx e rewritten =
-  if bindsName facts "map" then
+matchToMapEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+matchToMapEdit idx facts ctx e rewritten =
+  if rebinds idx facts ctx "map" then
     None
   else
     replaceFix
+      Safe
       "use map"
       (matchSpan facts ctx e)
       (bindingOf rewritten)

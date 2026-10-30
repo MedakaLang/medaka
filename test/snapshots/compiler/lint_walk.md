@@ -1,5 +1,5 @@
 # META
-source_lines=1324
+source_lines=1382
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -89,6 +89,8 @@ import tools.lint_core.{
   Directive(..),
   FileFacts(..),
   Finding(..),
+  Fix(..),
+  Fixability(..),
   Rule(..),
   RuleCheck(..),
   StdlibIndex(..),
@@ -98,6 +100,9 @@ import tools.lint_core.{
   fixToDiagFix,
   factDupClauses,
   factScopes,
+  clampApplicability,
+  emptyStdlibIndex,
+  maxApplicability,
   memoNew,
   needsScopes,
   needsStdlibIndex,
@@ -213,11 +218,11 @@ ruleFindings : StdlibIndex ->
 ruleFindings _ _ _ _ _ [] _ = []
 ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
   WholeFile check =>
-    map (restampSeverity r.severity) (check idx path facts pos prog)
+    map (restampFinding r) (check idx path facts pos prog)
       ++ ruleFindings idx path facts pos prog rs walked
   Visits _ => match walked
     hits :: rest =>
-      map (restampSeverity r.severity) hits
+      map (restampFinding r) hits
         ++ ruleFindings idx path facts pos prog rs rest
     [] => ruleFindings idx path facts pos prog rs []
 
@@ -422,6 +427,26 @@ kindIn : ExprKind -> List ExprKind -> Bool
 kindIn _ [] = False
 kindIn k (x :: xs) = k == x || kindIn k xs
 
+-- A rule's finding under the rule's own severity, its fix held to the rule's
+-- applicability ceiling.
+restampFinding : Rule -> Finding -> Finding
+restampFinding r f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = r.severity,
+  loc = f.loc,
+  fix = map (clampFix r.meta.fixability) f.fix,
+}
+
+clampFix : Fixability -> Fix -> Fix
+clampFix fixability fx = match maxApplicability fixability
+  Some ceiling => Fix {
+    fixApplicability = clampApplicability ceiling fx.fixApplicability,
+    fixEdits = fx.fixEdits,
+    fixMessage = fx.fixMessage,
+  }
+  None => fx
+
 restampSeverity : Severity -> Finding -> Finding
 restampSeverity sev f = Finding {
   rule = f.rule,
@@ -453,12 +478,18 @@ export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
   map
-    (triples => mkStdlibIndex (groupStdlibSigs triples))
+    (triples => mkStdlibIndex (groupStdlibSigs triples) triples)
     (stdlibSigTriplesResult lintStdlibDir)
 
 -- The sorted name list is computed here, once, not per linted file.
-mkStdlibIndex : HashMap String (List (String, Ty)) -> StdlibIndex
-mkStdlibIndex m = StdlibIndex m (sortUniqS (keys m))
+mkStdlibIndex : HashMap String (List (String, Ty)) ->
+  List (String, String, Ty) ->
+  StdlibIndex
+mkStdlibIndex m triples =
+  StdlibIndex m (sortUniqS (keys m)) (sortUniqS (map fst3 triples))
+
+fst3 : (String, String, Ty) -> String
+fst3 (modName, _, _) = modName
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -604,6 +635,32 @@ exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, .
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
 
+-- The (rule, line) of every finding of `rules` that no inline directive
+-- suppresses.  A decl fixer runs only where its rule has one of these on the
+-- decl's lines: a directive says the shape is deliberate.
+liveFindingLines : String ->
+  FileFacts ->
+  List Rule ->
+  Positions ->
+  List Decl ->
+  List (String, Int)
+liveFindingLines src facts rules pos prog =
+  flatMap
+    findingRuleLine
+    (applySuppressions
+      src
+      (lintProgramFacts emptyStdlibIndex rules "" facts pos prog))
+
+findingRuleLine : Finding -> List (String, Int)
+findingRuleLine f = match f.loc
+  Some (Loc _ line _ _ _) => [(f.rule, line)]
+  None => []
+
+-- Whether `r` has a live finding on the lines `[s, e]`.
+ruleLiveIn : List (String, Int) -> (Int, Int) -> Rule -> Bool
+ruleLiveIn live (s, e) r =
+  anyList (p => fst p == r.name && s <= snd p && snd p <= e) live
+
 -- ── autofix driver (Task A3) ───────────────────────────────────────────────────
 -- The CLI calls this for `--fix`, passing only plain data (the
 -- `--only`/`--disable` name lists, the source text, the parsed decls +
@@ -627,12 +684,10 @@ applyFixes only disable src prog pos =
   let cmts = collectComments src
   let cmtLines = map commentLine cmts
   let declPos = zipDeclPos prog (positionsDecls pos)
-  let facts =
-    if anyList ruleNeedsScopes rules then
-      Some (mkFileFacts src prog pos)
-    else
-      None
-  let tagged = collectSplices facts cmtLines orc rules declPos
+  let allFacts = mkFileFacts src prog pos
+  let facts = if anyList ruleNeedsScopes rules then Some allFacts else None
+  let live = liveFindingLines src allFacts rules pos prog
+  let tagged = collectSplices facts live cmtLines orc rules declPos
   let (kept, widen) = reconcileTestImport cmts declPos tagged
   (applySplices src (withWiden widen kept), listLen kept)
 
@@ -852,14 +907,17 @@ ruleHasFixer r = match r.fix
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
 collectSplices : Option FileFacts ->
+  List (String, Int) ->
   List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
   List ((Int, Int, String), List String)
-collectSplices _ _ _ _ [] = []
-collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
-  match firstFix orc rules d
+collectSplices _ _ _ _ _ [] = []
+collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
+  let liveRules =
+    filterList (ruleLiveIn live (declPosLine dp, declPosEndLine dp)) rules
+  match firstFix orc liveRules d
     Some newDecls =>
       let delta = testVerbDelta d newDecls
       if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
@@ -869,14 +927,14 @@ collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
             (declPosLine dp, declPosEndLine dp)
             delta.stopped
             delta.started) then
-        collectSplices facts cmtLines orc rules rest
+        collectSplices facts live cmtLines orc rules rest
       else
         (
             (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
             delta.started,
           )
-          :: collectSplices facts cmtLines orc rules rest
-    None => collectSplices facts cmtLines orc rules rest
+          :: collectSplices facts live cmtLines orc rules rest
+    None => collectSplices facts live cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
 spanHasComment : List Int -> Int -> Int -> Bool
@@ -1340,7 +1398,7 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false) (mem "dupJoin" false) (mem "dupOccsOfClauses" false))))
@@ -1361,7 +1419,7 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleVisitors" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" PWild) () (EListLit)) (arm (PCon "Visits" (PVar "visits")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "visits") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "ruleFindings" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))))
 (DFunDef false "ruleFindings" (PWild PWild PWild PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
+(DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampFinding") (EVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampFinding") (EVar "r"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
 (DTypeSig true "runVisitors" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "indexed") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EVar "flatMap") (EApp (EVar "hooksOf") (EVar "exprHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EVar "flatMap") (EApp (EVar "hooksOf") (EVar "declHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
 (DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
@@ -1427,6 +1485,10 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "kindIn" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyCon "Bool"))))
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))
+(DTypeSig false "restampFinding" (TyFun (TyCon "Rule") (TyFun (TyCon "Finding") (TyCon "Finding"))))
+(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EVar "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability"))) (EFieldAccess (EVar "f") "fix"))))))
+(DTypeSig false "clampFix" (TyFun (TyCon "Fixability") (TyFun (TyCon "Fix") (TyCon "Fix"))))
+(DFunDef false "clampFix" ((PVar "fixability") (PVar "fx")) (EMatch (EApp (EVar "maxApplicability") (EVar "fixability")) (arm (PCon "Some" (PVar "ceiling")) () (ERecordCreate "Fix" ((fa "fixApplicability" (EApp (EApp (EVar "clampApplicability") (EVar "ceiling")) (EFieldAccess (EVar "fx") "fixApplicability"))) (fa "fixEdits" (EFieldAccess (EVar "fx") "fixEdits")) (fa "fixMessage" (EFieldAccess (EVar "fx") "fixMessage"))))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EFieldAccess (EVar "f") "fix")))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -1436,9 +1498,11 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleNeedsIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsStdlibIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
-(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "map") (ELam ((PVar "triples")) (EApp (EVar "mkStdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
-(DTypeSig false "mkStdlibIndex" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "StdlibIndex")))
-(DFunDef false "mkStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "StdlibIndex") (EVar "m")) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m")))))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "map") (ELam ((PVar "triples")) (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))) (EVar "triples")))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
+(DTypeSig false "mkStdlibIndex" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyCon "StdlibIndex"))))
+(DFunDef false "mkStdlibIndex" ((PVar "m") (PVar "triples")) (EApp (EApp (EApp (EVar "StdlibIndex") (EVar "m")) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m")))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "fst3")) (EVar "triples")))))
+(DTypeSig false "fst3" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")) (TyCon "String")))
+(DFunDef false "fst3" ((PTuple (PVar "modName") PWild PWild)) (EVar "modName"))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -1472,8 +1536,14 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "exportedSigPair" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
+(DTypeSig false "liveFindingLines" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))))
+(DFunDef false "liveFindingLines" ((PVar "src") (PVar "facts") (PVar "rules") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "findingRuleLine")) (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "emptyStdlibIndex")) (EVar "rules")) (ELit (LString ""))) (EVar "facts")) (EVar "pos")) (EVar "prog")))))
+(DTypeSig false "findingRuleLine" (TyFun (TyCon "Finding") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "findingRuleLine" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) () (EListLit (ETuple (EFieldAccess (EVar "f") "rule") (EVar "line")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "ruleLiveIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleLiveIn" ((PVar "live") (PTuple (PVar "s") (PVar "e")) (PVar "r")) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EFieldAccess (EVar "r") "name")) (EBinOp "<=" (EVar "s") (EApp (EVar "snd") (EVar "p")))) (EBinOp "<=" (EApp (EVar "snd") (EVar "p")) (EVar "e"))))) (EVar "live")))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EVar "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "facts") (EIf (EApp (EApp (EVar "anyList") (EVar "ruleNeedsScopes")) (EVar "rules")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (EVar "None"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
+(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EVar "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "allFacts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (DoLet false false (PVar "facts") (EIf (EApp (EApp (EVar "anyList") (EVar "ruleNeedsScopes")) (EVar "rules")) (EApp (EVar "Some") (EVar "allFacts")) (EVar "None"))) (DoLet false false (PVar "live") (EApp (EApp (EApp (EApp (EApp (EVar "liveFindingLines") (EVar "src")) (EVar "allFacts")) (EVar "rules")) (EVar "pos")) (EVar "prog"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
 (DTypeSig false "withWiden" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "withWiden" ((PCon "None") (PVar "splices")) (EVar "splices"))
 (DFunDef false "withWiden" ((PCon "Some" (PVar "sp")) (PVar "splices")) (EApp (EApp (EVar "insertSpliceAsc") (EVar "sp")) (EVar "splices")))
@@ -1526,9 +1596,9 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleActiveFixable" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))) (EApp (EVar "ruleHasFixer") (EVar "r"))))
 (DTypeSig false "ruleHasFixer" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "ruleHasFixer" ((PVar "r")) (EMatch (EFieldAccess (EVar "r") "fix") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "Option") (TyCon "FileFacts")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "collectSplices" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "collectSplices" ((PVar "facts") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "delta") (EApp (EApp (EVar "testVerbDelta") (EVar "d")) (EVar "newDecls"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "facts")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")))) (EFieldAccess (EVar "delta") "stopped")) (EFieldAccess (EVar "delta") "started")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EFieldAccess (EVar "delta") "started")) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
+(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "Option") (TyCon "FileFacts")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))))
+(DFunDef false "collectSplices" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "collectSplices" ((PVar "facts") (PVar "live") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EBlock (DoLet false false (PVar "liveRules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleLiveIn") (EVar "live")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp"))))) (EVar "rules"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "liveRules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "delta") (EApp (EApp (EVar "testVerbDelta") (EVar "d")) (EVar "newDecls"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "facts")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")))) (EFieldAccess (EVar "delta") "stopped")) (EFieldAccess (EVar "delta") "started")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EFieldAccess (EVar "delta") "started")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))))
 (DTypeSig false "spanHasComment" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "spanHasComment" ((PVar "cmtLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EVar "anyList") (ELam ((PVar "l")) (EBinOp "&&" (EBinOp "<=" (EVar "startLine") (EVar "l")) (EBinOp "<=" (EVar "l") (EVar "endLine"))))) (EVar "cmtLines")))
 (DTypeSig false "firstFix" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -1650,7 +1720,7 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false) (mem "dupJoin" false) (mem "dupOccsOfClauses" false))))
@@ -1671,7 +1741,7 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleVisitors" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" PWild) () (EListLit)) (arm (PCon "Visits" (PVar "visits")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "visits") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "ruleFindings" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))))
 (DFunDef false "ruleFindings" (PWild PWild PWild PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
+(DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampFinding") (EVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampFinding") (EVar "r"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
 (DTypeSig true "runVisitors" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "indexed") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "hooksOf") (EVar "exprHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "hooksOf") (EVar "declHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
 (DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
@@ -1737,6 +1807,10 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "kindIn" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyCon "Bool"))))
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))
+(DTypeSig false "restampFinding" (TyFun (TyCon "Rule") (TyFun (TyCon "Finding") (TyCon "Finding"))))
+(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EMethodRef "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability"))) (EFieldAccess (EVar "f") "fix"))))))
+(DTypeSig false "clampFix" (TyFun (TyCon "Fixability") (TyFun (TyCon "Fix") (TyCon "Fix"))))
+(DFunDef false "clampFix" ((PVar "fixability") (PVar "fx")) (EMatch (EApp (EVar "maxApplicability") (EVar "fixability")) (arm (PCon "Some" (PVar "ceiling")) () (ERecordCreate "Fix" ((fa "fixApplicability" (EApp (EApp (EVar "clampApplicability") (EVar "ceiling")) (EFieldAccess (EVar "fx") "fixApplicability"))) (fa "fixEdits" (EFieldAccess (EVar "fx") "fixEdits")) (fa "fixMessage" (EFieldAccess (EVar "fx") "fixMessage"))))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EFieldAccess (EVar "f") "fix")))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -1746,9 +1820,11 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleNeedsIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsStdlibIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
-(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "triples")) (EApp (EVar "mkStdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
-(DTypeSig false "mkStdlibIndex" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "StdlibIndex")))
-(DFunDef false "mkStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "StdlibIndex") (EVar "m")) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m")))))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "triples")) (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "groupStdlibSigs") (EVar "triples"))) (EVar "triples")))) (EApp (EVar "stdlibSigTriplesResult") (EVar "lintStdlibDir"))))
+(DTypeSig false "mkStdlibIndex" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyCon "StdlibIndex"))))
+(DFunDef false "mkStdlibIndex" ((PVar "m") (PVar "triples")) (EApp (EApp (EApp (EVar "StdlibIndex") (EVar "m")) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m")))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "fst3")) (EVar "triples")))))
+(DTypeSig false "fst3" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty")) (TyCon "String")))
+(DFunDef false "fst3" ((PTuple (PVar "modName") PWild PWild)) (EVar "modName"))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -1782,8 +1858,14 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "exportedSigPair" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
+(DTypeSig false "liveFindingLines" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))))
+(DFunDef false "liveFindingLines" ((PVar "src") (PVar "facts") (PVar "rules") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "findingRuleLine")) (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "emptyStdlibIndex")) (EVar "rules")) (ELit (LString ""))) (EVar "facts")) (EVar "pos")) (EVar "prog")))))
+(DTypeSig false "findingRuleLine" (TyFun (TyCon "Finding") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "findingRuleLine" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) () (EListLit (ETuple (EFieldAccess (EVar "f") "rule") (EVar "line")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "ruleLiveIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleLiveIn" ((PVar "live") (PTuple (PVar "s") (PVar "e")) (PVar "r")) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EFieldAccess (EVar "r") "name")) (EBinOp "<=" (EVar "s") (EApp (EVar "snd") (EVar "p")))) (EBinOp "<=" (EApp (EVar "snd") (EVar "p")) (EVar "e"))))) (EVar "live")))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EMethodRef "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "facts") (EIf (EApp (EApp (EVar "anyList") (EVar "ruleNeedsScopes")) (EVar "rules")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (EVar "None"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
+(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EMethodRef "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "allFacts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (DoLet false false (PVar "facts") (EIf (EApp (EApp (EVar "anyList") (EVar "ruleNeedsScopes")) (EVar "rules")) (EApp (EVar "Some") (EVar "allFacts")) (EVar "None"))) (DoLet false false (PVar "live") (EApp (EApp (EApp (EApp (EApp (EVar "liveFindingLines") (EVar "src")) (EVar "allFacts")) (EVar "rules")) (EVar "pos")) (EVar "prog"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
 (DTypeSig false "withWiden" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "withWiden" ((PCon "None") (PVar "splices")) (EVar "splices"))
 (DFunDef false "withWiden" ((PCon "Some" (PVar "sp")) (PVar "splices")) (EApp (EApp (EVar "insertSpliceAsc") (EVar "sp")) (EVar "splices")))
@@ -1836,9 +1918,9 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleActiveFixable" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))) (EApp (EVar "ruleHasFixer") (EVar "r"))))
 (DTypeSig false "ruleHasFixer" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "ruleHasFixer" ((PVar "r")) (EMatch (EFieldAccess (EVar "r") "fix") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "Option") (TyCon "FileFacts")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "collectSplices" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "collectSplices" ((PVar "facts") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "delta") (EApp (EApp (EVar "testVerbDelta") (EVar "d")) (EVar "newDecls"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "facts")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")))) (EFieldAccess (EVar "delta") "stopped")) (EFieldAccess (EVar "delta") "started")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EFieldAccess (EVar "delta") "started")) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
+(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "Option") (TyCon "FileFacts")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))))
+(DFunDef false "collectSplices" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "collectSplices" ((PVar "facts") (PVar "live") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EBlock (DoLet false false (PVar "liveRules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleLiveIn") (EVar "live")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp"))))) (EVar "rules"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "liveRules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "delta") (EApp (EApp (EVar "testVerbDelta") (EVar "d")) (EVar "newDecls"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "facts")) (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")))) (EFieldAccess (EVar "delta") "stopped")) (EFieldAccess (EVar "delta") "started")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EFieldAccess (EVar "delta") "started")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "facts")) (EVar "live")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))))
 (DTypeSig false "spanHasComment" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "spanHasComment" ((PVar "cmtLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EVar "anyList") (ELam ((PVar "l")) (EBinOp "&&" (EBinOp "<=" (EVar "startLine") (EVar "l")) (EBinOp "<=" (EVar "l") (EVar "endLine"))))) (EVar "cmtLines")))
 (DTypeSig false "firstFix" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))

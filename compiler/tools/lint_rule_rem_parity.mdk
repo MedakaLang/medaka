@@ -5,6 +5,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts,
@@ -22,7 +23,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   nodeSpan,
   replaceFix,
@@ -44,8 +45,8 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [NeedsScopes],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleRemParity
     None
@@ -92,11 +93,11 @@ ruleRemParity : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleRemParity _ _ facts _ _ =
+ruleRemParity idx _ facts _ _ =
   exprRuleEditVisitors
     remParityExcl
     remParityOf
-    (remParityFix facts)
+    (remParityFix idx facts)
     remParityFinding
 
 remParityFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -111,12 +112,13 @@ remParityFinding loc rewritten fix = Finding {
 -- The rewrite calls `isEven` or `isOdd` by name.  A binding of either name
 -- anywhere in the file would capture the call, so the fix is withheld there
 -- (the finding stays).  The prelude's pair is `core.mdk`'s `isEven`/`isOdd`.
-remParityFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-remParityFix facts ctx e rewritten =
-  if bindsName facts "isEven" || bindsName facts "isOdd" then
+remParityFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+remParityFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "isEven" || rebinds idx facts ctx "isOdd" then
     None
   else
     replaceFix
+      Unsafe
       "use the parity predicate"
       (nodeSpan ctx e)
       (bindingOf rewritten)
