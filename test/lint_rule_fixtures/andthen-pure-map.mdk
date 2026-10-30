@@ -43,3 +43,31 @@ negMultiParam m = andThen m (x y => pure (g x y))
 negGuardFn m = andThen m (x => match x
   n if n > 0 => pure (dec n)
   _ => pure zero)
+
+-- A `pure` the lambda binds is not the prelude's, so the bind is reported and the
+-- source left alone: the rewrite would call the parameter instead.
+-- expect-next-line rule-andthen-pure-map unfixed
+reboundPure m pure = andThen m (x => pure (x + 1))
+
+-- The replacement is bracketed where its parent would regroup it: an operand of an
+-- operator takes it bare, a list element takes it bare.
+-- expect-next-line rule-andthen-pure-map
+inOperand m c = c ++ andThen m (x => pure (show x))
+
+-- expect-next-line rule-andthen-pure-map
+inList m = [andThen m (x => pure (Some x)), m]
+
+-- A comment inside the bind being replaced would be lost, so the fix is only
+-- suggested.
+-- expect-next-line rule-andthen-pure-map unfixed
+commentInside m = andThen m (x => {- kept -} pure (f x))
+
+-- A comment above the body is outside the bind, so the fix keeps it.
+-- expect-next-line rule-andthen-pure-map
+commentOutside m f =
+  -- explains the choice
+  andThen m (x => pure (f x))
+
+-- A directive that silences a finding silences its fix too.
+-- lint-disable-next-line rule-andthen-pure-map
+suppressed m = andThen m (x => pure (Some x))

@@ -6,13 +6,14 @@ import frontend.parser.{Positions(..)}
 import ir.sexp.{exprSexp}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -22,9 +23,11 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleFix,
-  noExcl,
+  bindingOf,
+  bindsName,
+  declLocList,
+  nodeSpan,
+  replaceFix,
   ruleNameIfMaxMin,
   unwrapLoc,
 }
@@ -44,10 +47,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleIfMaxMin
-    (Some ifMaxMinFix)
+    None
 
 -- ── rule: if-max-min (an `if` selecting the larger/smaller of two operands) ────
 -- `if a > b then a else b` (and the >=/</<=/reversed-branch variants) select the
@@ -127,30 +130,70 @@ ruleIfMaxMin : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleIfMaxMin _ _ _ _ _ = [OnExpr [KIf] ifMaxMinAt]
+ruleIfMaxMin _ _ facts pos decls =
+  [OnExpr [KIf] (ifMaxMinAt (ordImplLocs pos decls) facts)]
 
-ifMaxMinAt : Ctx -> Expr -> List Finding
-ifMaxMinAt ctx (EIf cond t el) = match ifMaxMinOf cond t el
-  Some hit => [ifMaxMinFinding ctx.ctxDeclLoc hit]
+ifMaxMinAt : List Loc -> FileFacts -> Ctx -> Expr -> List Finding
+ifMaxMinAt ordLocs facts ctx (e@(EIf cond t el)) = match ifMaxMinOf cond t el
+  Some hit =>
+    [ifMaxMinFinding ctx.ctxDeclLoc hit (ifMaxMinFix ordLocs facts ctx e hit)]
   None => []
-ifMaxMinAt _ _ = []
+ifMaxMinAt _ _ _ _ = []
 
-ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Finding
-ifMaxMinFinding loc (fn, a, b) = Finding {
+ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Option Fix -> Finding
+ifMaxMinFinding loc (fn, a, b) fix = Finding {
   rule = ruleNameIfMaxMin,
   message =
     "if-then-else selects the \{if fn == "max" then "larger" else "smaller"} of the same two operands. Rewrite as '\{exprToString (EApp (EApp (EVar fn) a) b)}'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────
--- Bottom-up: every eligible `if` becomes a `max`/`min` application.
-ifMaxMinFix : Oracle -> Decl -> Option (List Decl)
-ifMaxMinFix _ d = exprRuleFix noExcl (detApply ifMaxMinRewrite) d
+-- The fix replaces the `if` with a `max`/`min` call.  It is withheld in two places,
+-- and the finding is reported either way:
+--   * inside an `impl Ord`: the call resolves to the `Ord` method being defined,
+--     so `min a b = if a <= b then a else b` would become `min a b = min a b`;
+--   * where the file binds the called name, since the call is then not the prelude's.
+-- A `lint-disable-next-line` over the site drops the finding, so its fix with it.
+ifMaxMinFix : List Loc ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  (String, Expr, Expr) ->
+  Option Fix
+ifMaxMinFix ordLocs facts ctx e (fn, a, b) =
+  if inOrdImpl ctx.ctxDeclLoc ordLocs || bindsName facts fn then
+    None
+  else
+    let call = EApp (EApp (EVar fn) a) b
+    replaceFix
+      ("select with " ++ fn)
+      (nodeSpan ctx e)
+      (bindingOf call)
+      ctx
+      (exprToString call)
 
-ifMaxMinRewrite : Expr -> Option Expr
-ifMaxMinRewrite (EIf cond t el) =
-  map ((fn, a, b) => EApp (EApp (EVar fn) a) b) (ifMaxMinOf cond t el)
-ifMaxMinRewrite _ = None
+-- The declaration locations of the `impl Ord` blocks.  The walk gives every body
+-- of an impl the impl's own location as its `ctxDeclLoc`.
+ordImplLocs : Positions -> List Decl -> List Loc
+ordImplLocs pos decls = flatMap ordImplLoc (declLocList pos decls)
+
+ordImplLoc : (Decl, Option Loc) -> List Loc
+ordImplLoc (d, loc) = match (isOrdImpl d, loc)
+  (True, Some l) => [l]
+  _ => []
+
+isOrdImpl : Decl -> Bool
+isOrdImpl (DImpl { iface = i }) = i == "Ord"
+isOrdImpl (DAttrib _ d) = isOrdImpl d
+isOrdImpl _ = False
+
+inOrdImpl : Option Loc -> List Loc -> Bool
+inOrdImpl (Some l) ls = any (m => sameLoc l m) ls
+inOrdImpl None _ = False
+
+sameLoc : Loc -> Loc -> Bool
+sameLoc (Loc f a b c d) (Loc g e h i j) =
+  f == g && a == e && b == h && c == i && d == j

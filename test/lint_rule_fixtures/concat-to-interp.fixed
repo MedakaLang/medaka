@@ -52,3 +52,22 @@ allLiteral = "a" ++ "b" ++ "c"
 -- interpolation syntax) — skipped even though it otherwise qualifies.
 alreadyBrace : String -> String -> String
 alreadyBrace x y = "a\\{" ++ x ++ "b" ++ y
+
+-- The interpolated string takes the place of the chain, which here is an argument.
+-- expect-next-line rule-concat-to-interp
+inArgument x y = show ("a\{x}b\{y}")
+
+-- A comment inside the chain being replaced would be lost, so the fix is only
+-- suggested.
+-- expect-next-line rule-concat-to-interp unfixed
+commentInside x y = "a" ++ x ++ {- kept -} "b" ++ y
+
+-- A comment above the body is outside the chain, so the fix keeps it.
+-- expect-next-line rule-concat-to-interp
+commentOutside x y =
+  -- explains the choice
+  "a\{x}b\{y}"
+
+-- A directive that silences a finding silences its fix too.
+-- lint-disable-next-line rule-concat-to-interp
+suppressedChain x y = "a" ++ x ++ "b" ++ y

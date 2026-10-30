@@ -36,3 +36,27 @@ negBind r = match parse r
 negDefault o = match peek o
   None => []
   Some x => Some x
+
+-- The replacement is bracketed where its parent would regroup it: an argument.
+inArgument k m = wrap (match lookup k m
+  None => None
+  Some x => Some (g x))
+
+-- A comment inside the match being replaced would be lost, so it is left alone.
+commentInside o = match o
+  -- kept
+  None => None
+  Some x => Some (g x)
+
+-- A comment above the match is outside the span, so the fix keeps it.
+commentOutside o =
+  -- explains the choice
+  match o
+    None => None
+    Some x => Some (g x)
+
+-- A directive that silences a finding silences its fix too.
+-- lint-disable-next-line rule-match-to-map
+suppressedMatch o = match o
+  None => None
+  Some x => Some (g x)

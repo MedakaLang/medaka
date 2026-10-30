@@ -5,13 +5,14 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -22,13 +23,15 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   andThenEtaFn,
+  bindingOf,
+  bindsName,
   childExprs,
-  detApply,
-  exprRuleFix,
   isEVarNamed,
-  noExcl,
+  nodeSpan,
+  replaceFix,
   ruleNameAndThenPureMap,
   unwrapLoc,
+  usesPreludeName,
 }
 
 export
@@ -46,10 +49,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleAndThenPureMap
-    (Some andThenPureMapFix)
+    None
 
 -- `andThen m (x => pure body)` re-wraps a PURE transformation of `m`'s result
 -- back into the monad — exactly the functor law `m >>= (pure . f) ≡ fmap f m`.
@@ -127,15 +130,20 @@ ruleAndThenPureMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleAndThenPureMap _ _ _ _ _ = [OnExpr [KApp] andThenPureMapAt]
+ruleAndThenPureMap _ _ facts _ _ = [OnExpr [KApp] (andThenPureMapAt facts)]
 
-andThenPureMapAt : Ctx -> Expr -> List Finding
-andThenPureMapAt ctx e = match andThenPureMapOf e
-  Some rewritten => [andThenPureMapFinding ctx.ctxDeclLoc rewritten]
+andThenPureMapAt : FileFacts -> Ctx -> Expr -> List Finding
+andThenPureMapAt facts ctx e = match andThenPureMapOf e
+  Some rewritten => [
+    andThenPureMapFinding
+      ctx.ctxDeclLoc
+      rewritten
+      (andThenPureMapFix facts ctx e rewritten),
+  ]
   None => []
 
-andThenPureMapFinding : Option Loc -> Expr -> Finding
-andThenPureMapFinding loc rewritten = Finding {
+andThenPureMapFinding : Option Loc -> Expr -> Option Fix -> Finding
+andThenPureMapFinding loc rewritten fix = Finding {
   rule = ruleNameAndThenPureMap,
   message =
     "monadic bind wraps a pure transformation of its result — rewrite as '"
@@ -143,14 +151,38 @@ andThenPureMapFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────
--- Bottom-up: every eligible bind becomes a `map` application.
-andThenPureMapFix : Oracle -> Decl -> Option (List Decl)
-andThenPureMapFix _ d = exprRuleFix noExcl (detApply andThenPureMapRewrite) d
+-- The fix replaces the bind's own span.  It is withheld where the bind's `andThen`
+-- or `pure` is a file binding (the call is then not the prelude's), and where the
+-- file binds `map`: the replacement calls `map`, which such a binding would capture.
+andThenPureMapFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+andThenPureMapFix facts ctx e rewritten =
+  if andThenPureMapUsesPrelude facts e && not (bindsName facts "map") then
+    replaceFix
+      "rewrite the bind as a map"
+      (nodeSpan ctx e)
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)
+  else
+    None
 
-andThenPureMapRewrite : Expr -> Option Expr
-andThenPureMapRewrite (e@(EApp _ _)) = andThenPureMapOf e
-andThenPureMapRewrite _ = None
+andThenPureMapUsesPrelude : FileFacts -> Expr -> Bool
+andThenPureMapUsesPrelude facts e = match andThenPureHeads e
+  Some (andHd, pureHd) =>
+    usesPreludeName facts andHd && usesPreludeName facts pureHd
+  None => False
+
+-- The `andThen` head and the `pure` head of a bind `andThen m (x => pure …)`, the
+-- two names the rewrite consumes.  The shape is the one `andThenPureMapOf` matched.
+andThenPureHeads : Expr -> Option (Expr, Expr)
+andThenPureHeads e = match unwrapLoc e
+  EApp inner cont => match (unwrapLoc inner, unwrapLoc cont)
+    (EApp andHd _, ELam [PVar _ _ _] body) => match unwrapLoc body
+      EApp pureHd _ => Some (andHd, pureHd)
+      _ => None
+    _ => None
+  _ => None

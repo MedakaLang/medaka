@@ -5,9 +5,9 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{contains}
-import list.{drop, last}
+import list.{last}
 import support.char.{isIdentChar}
-import string.{lines, stripSuffix, trimRight, unwords}
+import string.{stripSuffix, trimRight, unwords}
 import tools.printer.{exprToString}
 import tools.lint_fix.{Binding(..)}
 import tools.lint_core.{
@@ -29,6 +29,7 @@ import tools.lint_shared.{
   isEVarNamed,
   mentionsVar,
   replaceFix,
+  sourceLine,
   ruleNameLambdaSection,
   unwrapLoc,
 }
@@ -196,12 +197,6 @@ lambdaSpan facts ctx pats = match ctx.ctxOwn
 patVarName : Pat -> List String
 patVarName (PVar x _ _) = [x]
 patVarName _ = []
-
--- The 1-based line of the source.
-sourceLine : FileFacts -> Int -> String
-sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
-  l :: _ => l
-  [] => ""
 
 -- The column where `params` begins, given the text before the arrow.
 paramsStart : String -> String -> Option Int
