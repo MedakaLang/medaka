@@ -643,11 +643,6 @@ export
 exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
 exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
 
--- Fix by a whole-body rewrite, for a rule whose traversal is not bottom-up.
-export
-exprRuleFixTree : (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFixTree rw d = declBodyFix False noExcl rw d
-
 -- no decls are excluded by name (the common case)
 export
 noExcl : String -> Bool
