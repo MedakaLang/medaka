@@ -1,5 +1,5 @@
 # META
-source_lines=967
+source_lines=989
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -107,6 +107,10 @@ ruleNameComplementPredicate = "rule-complement-predicate"
 export
 ruleNameMatchToMap : String
 ruleNameMatchToMap = "rule-match-to-map"
+
+export
+ruleNameOptionEliminators : String
+ruleNameOptionEliminators = "rule-option-eliminators"
 
 export
 ruleNameBindChainToDo : String
@@ -969,6 +973,24 @@ nameSetInto [] _ = ()
 nameSetInto (n :: rest) s =
   let _ = setInPlace n () s
   nameSetInto rest s
+
+-- The span the fix replaces.  An unparenthesised `match` starts at its keyword,
+-- which its own `ELoc` gives, but that `ELoc` runs to the layout token after the
+-- block, past any comment or blank line that follows.  The end is therefore the
+-- last arm's last token.  A parenthesised match is wrapped by the parentheses'
+-- `ELoc`, which starts at `(` and ends at `)`, so it is exact as it stands.
+export
+matchSpan : FileFacts -> Ctx -> Expr -> Option Loc
+matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
+  (Some (own@(Loc f sl sc _ _)), Some (Loc _ _ _ el ec)) =>
+    if parenAt facts sl sc then Some own else Some (Loc f sl sc el ec)
+  _ => None
+matchSpan _ _ _ = None
+
+lastArmSpan : List Arm -> Option Loc
+lastArmSpan arms = match last arms
+  Some (Arm _ _ body) => tightSpan body
+  None => None
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1023,6 +1045,8 @@ nameSetInto (n :: rest) s =
 (DFunDef false "ruleNameComplementPredicate" () (ELit (LString "rule-complement-predicate")))
 (DTypeSig true "ruleNameMatchToMap" (TyCon "String"))
 (DFunDef false "ruleNameMatchToMap" () (ELit (LString "rule-match-to-map")))
+(DTypeSig true "ruleNameOptionEliminators" (TyCon "String"))
+(DFunDef false "ruleNameOptionEliminators" () (ELit (LString "rule-option-eliminators")))
 (DTypeSig true "ruleNameBindChainToDo" (TyCon "String"))
 (DFunDef false "ruleNameBindChainToDo" () (ELit (LString "rule-bind-chain-to-do")))
 (DTypeSig true "ruleNameDeadCode" (TyCon "String"))
@@ -1285,6 +1309,11 @@ nameSetInto (n :: rest) s =
 (DTypeSig false "nameSetInto" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "nameSetInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
+(DTypeSig true "matchSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1339,6 +1368,8 @@ nameSetInto (n :: rest) s =
 (DFunDef false "ruleNameComplementPredicate" () (ELit (LString "rule-complement-predicate")))
 (DTypeSig true "ruleNameMatchToMap" (TyCon "String"))
 (DFunDef false "ruleNameMatchToMap" () (ELit (LString "rule-match-to-map")))
+(DTypeSig true "ruleNameOptionEliminators" (TyCon "String"))
+(DFunDef false "ruleNameOptionEliminators" () (ELit (LString "rule-option-eliminators")))
 (DTypeSig true "ruleNameBindChainToDo" (TyCon "String"))
 (DFunDef false "ruleNameBindChainToDo" () (ELit (LString "rule-bind-chain-to-do")))
 (DTypeSig true "ruleNameDeadCode" (TyCon "String"))
@@ -1601,3 +1632,8 @@ nameSetInto (n :: rest) s =
 (DTypeSig false "nameSetInto" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "nameSetInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
+(DTypeSig true "matchSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))

@@ -1,0 +1,9 @@
+-- Fixture for rule-option-eliminators autofix.
+-- NEGATIVE: `import nosuchmod.*` may bring any name into scope, so the fix is
+-- withheld and `.fixed` is this file unchanged.
+
+import nosuchmod.*
+
+viaOptionOr o = match o
+  Some x => x
+  None => 0

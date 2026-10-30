@@ -1,0 +1,28 @@
+-- Fixture for rule-option-eliminators autofix.
+-- NEGATIVE: every match is still reported but no fix applies, so `.fixed` is this
+-- file unchanged.  A binder named `optionOr` or `isSome` anywhere in the file
+-- would capture the rewrite's call; a local `panic` is not the prelude's, so the
+-- arm does not mean what `optionOrPanic` would; a comment inside the matched span
+-- would be lost.
+
+viaOptionOr o = match o
+  Some x => x
+  None => 0
+
+viaIsSome o = match o
+  Some _ => True
+  None => False
+
+viaPanic panic o = match o
+  Some x => x
+  None => panic "no value"
+
+commentInside r = match r
+  Ok x => x
+  -- default when failed
+  Err _ => 0
+
+shadows xs = xs
+  where
+    optionOr d o = d
+    isSome o = False

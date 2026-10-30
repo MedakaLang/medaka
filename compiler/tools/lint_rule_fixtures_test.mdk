@@ -117,6 +117,7 @@ fixtureNames = [
   "match-to-map",
   "missing-signature",
   "not-eq",
+  "option-eliminators",
   "orelse-staircase",
   "prefer-assign-op",
   "promissory-reader",
@@ -384,6 +385,8 @@ test "rule-match-to-map fixture" = fixtureHolds "match-to-map"
 test "rule-missing-signature fixture" = fixtureHolds "missing-signature"
 
 test "rule-not-eq fixture" = fixtureHolds "not-eq"
+
+test "rule-option-eliminators fixture" = fixtureHolds "option-eliminators"
 
 test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
 
