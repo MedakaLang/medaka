@@ -115,7 +115,7 @@ import tools.lint.{
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
-  stdlibIndexNeeded,
+  stdlibIndexNeededFor,
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReportParts, TestReportError(..)}
@@ -1569,10 +1569,10 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
     -- at most once per REQUEST, not per path (see lintPathsToDiagQuads) — and
-    -- not at all when `rule-stdlib-reimpl`, the sole `StdlibIndex` reader, is
-    -- outside the active `disable`/`only` set (see `stdlibIndexNeeded`).
+    -- not at all when no `StdlibIndex` reader is active for these paths (see
+    -- `stdlibIndexNeededFor`).
     let indexResult =
-      if stdlibIndexNeeded only disable then
+      if stdlibIndexNeededFor only disable paths then
         buildStdlibIndexResult
       else
         Ok emptyStdlibIndex

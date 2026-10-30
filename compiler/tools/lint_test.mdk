@@ -52,7 +52,12 @@ import tools.lint.{
   mergeCrossFileIntoTriples,
   selectRules,
 }
-import tools.lint_walk.{runVisitors}
+import tools.lint_walk.{
+  runVisitors,
+  sourceHasWildImport,
+  stdlibIndexNeeded,
+  wildIndexNeeded,
+}
 import tools.lint_shared.{declLocList}
 import frontend.ast_walk.{ExprKind(..)}
 import tools.lint_core.{
@@ -122,6 +127,25 @@ diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{diagIdText code}::\{msg}"
 
 dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
+
+-- ── 0. the stdlib index is built only when a reader of it can matter ─────────
+test "the edit rules ask for the index only on a wildcard import" = expectEach [
+  (
+    "reimpl disabled",
+    expectFalse (stdlibIndexNeeded [] ["rule-stdlib-reimpl"]),
+  ),
+  ("reimpl active", expectTrue (stdlibIndexNeeded [] [])),
+  ("edit rules active", expectTrue (wildIndexNeeded [] ["rule-stdlib-reimpl"])),
+  ("only reimpl", expectFalse (wildIndexNeeded ["rule-stdlib-reimpl"] [])),
+  (
+    "no wildcard",
+    expectFalse (sourceHasWildImport "import map.{Map, get}\nmain = 1\n"),
+  ),
+  (
+    "wildcard",
+    expectTrue (sourceHasWildImport "import list.{map}\nimport map.*\n"),
+  ),
+]
 
 -- ── 1. the per-file-only gap, pinned ────────────────────────────────────────
 test "the old per-file-only triple builder never carries a duplicate-body finding" =

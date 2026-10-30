@@ -149,7 +149,7 @@ clampApplicability Safe Safe = Safe
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
-public export data Need = NeedsStdlibIndex | NeedsScopes
+public export data Need = NeedsStdlibIndex | NeedsWildIndex | NeedsScopes
 
 -- Everything the CLI, the rules page and the runner know about a rule besides
 -- its `check`.  `doc` states what the rule flags, why, and a before -> after
@@ -180,11 +180,23 @@ needsScopes m = anyList isScopesNeed m.needs
 
 isStdlibIndexNeed : Need -> Bool
 isStdlibIndexNeed NeedsStdlibIndex = True
+isStdlibIndexNeed NeedsWildIndex = False
 isStdlibIndexNeed NeedsScopes = False
+
+-- A rule whose name guards read the index only to resolve an `import m.*`.
+export
+needsWildIndex : RuleMeta -> Bool
+needsWildIndex m = anyList isWildIndexNeed m.needs
+
+isWildIndexNeed : Need -> Bool
+isWildIndexNeed NeedsWildIndex = True
+isWildIndexNeed NeedsStdlibIndex = False
+isWildIndexNeed NeedsScopes = False
 
 isScopesNeed : Need -> Bool
 isScopesNeed NeedsScopes = True
 isScopesNeed NeedsStdlibIndex = False
+isScopesNeed NeedsWildIndex = False
 
 -- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
 -- owner (a clause's function, an `impl` or interface-default method, a

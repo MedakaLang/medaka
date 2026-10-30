@@ -66,6 +66,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop, indexed}
+import string.{indexOf}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
 import frontend.marker.{declRefs}
@@ -102,6 +103,7 @@ import tools.lint_core.{
   memoNew,
   needsScopes,
   needsStdlibIndex,
+  needsWildIndex,
 }
 import tools.lint_scope.{
   Binder(..),
@@ -461,6 +463,41 @@ restampSeverity sev f = Finding {
 export
 stdlibIndexNeeded : List String -> List String -> Bool
 stdlibIndexNeeded only disable = anyList (ruleNeedsIndex only disable) allRules
+
+-- Whether the index is worth building for linting `paths`: a rule that reads
+-- it outright is active, or a rule whose guards read it only for wildcard
+-- imports is active and some path has an `import m.*`.
+export
+stdlibIndexNeededFor : List String -> List String -> List String -> <IO> Bool
+stdlibIndexNeededFor only disable paths =
+  stdlibIndexNeeded only disable
+    || wildIndexNeeded only disable && anyPathWild paths
+
+anyPathWild : List String -> <IO> Bool
+anyPathWild [] = False
+anyPathWild (p :: rest) =
+  sourceHasWildImport (readFileSafe p) || anyPathWild rest
+
+-- Whether a rule whose guards read the index for wildcard imports is active.
+export
+wildIndexNeeded : List String -> List String -> Bool
+wildIndexNeeded only disable =
+  anyList (ruleNeedsWildIndex only disable) allRules
+
+ruleNeedsWildIndex : List String -> List String -> Rule -> Bool
+ruleNeedsWildIndex only disable r =
+  needsWildIndex r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- Whether some line of `src` looks like an `import m.*`; a superset of the
+-- parsed wildcard imports, so a false positive costs only an index build.
+export
+sourceHasWildImport : String -> Bool
+sourceHasWildImport src = anyList isWildImportLine (splitNl src)
+
+isWildImportLine : String -> Bool
+isWildImportLine l = startsWith "import " l && isSome (indexOf ".*" l)
 
 ruleNeedsScopes : Rule -> Bool
 ruleNeedsScopes r = needsScopes r.meta

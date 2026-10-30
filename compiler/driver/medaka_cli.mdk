@@ -282,7 +282,7 @@ import tools.lint.{
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
-  stdlibIndexNeeded,
+  stdlibIndexNeededFor,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -4071,9 +4071,9 @@ runLintTargets a =
   -- `check` is pure, and rebuilding it per target file would re-parse the whole
   -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
   -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
-  -- `stdlibIndexNeeded` answers whether the only rule that reads it is even in
-  -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
-  -- skips the whole-stdlib parse for free (every other rule ignores its
+  -- `stdlibIndexNeededFor` answers whether a rule that reads it is active
+  -- (`rule-stdlib-reimpl`, or an edit rule while some target has an
+  -- `import m.*`); when it isn't, `emptyStdlibIndex` skips the whole-stdlib parse for free (every other rule ignores its
   -- `StdlibIndex` argument, and this rule's own findings get discarded by the
   -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
   -- uncached path, where that discarding happens in this same process, on this
@@ -4085,7 +4085,8 @@ runLintTargets a =
   -- silently omit that rule's findings for every later `--cache` read, even a
   -- default-rules one that never named it.
   let indexResult =
-    if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
+    if stdlibIndexNeededFor onlyNames disableNames files
+      || flag "--cache" a then
       buildStdlibIndexResult
     else
       Ok emptyStdlibIndex

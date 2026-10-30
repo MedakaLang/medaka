@@ -214,6 +214,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 
 -- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
