@@ -1,3 +1,6 @@
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), namedRuntimeCtor, runtimeCtorFact
+}
 import backend.wasm_symbol_names as WN
 import support.symbol_encoding.{encodePair}
 import frontend.ast.{
@@ -606,8 +609,15 @@ anyBind p (b :: rest) = p b || anyBind p rest
 fnMemberIndexW : OrdMap Unit -> String -> Bool
 fnMemberIndexW names n = omHasKey n names
 
+export
 isReservedCtor : String -> Bool
-isReservedCtor n = contains n ["Some", "None", "Ok", "Err", "Lt", "Eq", "Gt"]
+isReservedCtor n = match namedRuntimeCtor n
+  Some ctor => match (runtimeCtorFact ctor).owner
+    RuntimeOption => True
+    RuntimeResult => True
+    RuntimeOrdering => True
+    _ => False
+  None => False
 
 public export data WasmTypeContext = WasmTypeContext {
   rows : OrdMap BinderRow,

@@ -1,7 +1,8 @@
 # META
-source_lines=1954
+source_lines=1944
 stages=DESUGAR,MARK
 # SOURCE
+import frontend.runtime_constructors.{namedRuntimeCtor}
 import support.symbol_encoding.{encodePair}
 import types.symbol_origins.{
   SymbolOrigins, emptyOrigins, unitOrigins, mergeOrigins
@@ -814,18 +815,7 @@ nonReservedCtor n = not (isReservedCtor n)
 
 export
 isReservedCtor : String -> Bool
-isReservedCtor n =
-  n == "Cons"
-    || n == "Nil"
-    || n == "Some"
-    || n == "None"
-    || n == "Ok"
-    || n == "Err"
-    || n == "Lt"
-    || n == "Eq"
-    || n == "Gt"
-    || n == "True"
-    || n == "False"
+isReservedCtor n = isSome (namedRuntimeCtor n)
 
 -- ── the unit's CONSTRUCTOR rename map ─────────────────────────────────────────
 -- local ctors → `<mid>__<ctor>` (local shadows imports), then imported ctors →
@@ -1957,6 +1947,7 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 # DESUGAR
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "namedRuntimeCtor" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
@@ -2084,7 +2075,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "nonReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonReservedCtor" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isReservedCtor") (EVar "n"))))
 (DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Cons"))) (EBinOp "==" (EVar "n") (ELit (LString "Nil")))) (EBinOp "==" (EVar "n") (ELit (LString "Some")))) (EBinOp "==" (EVar "n") (ELit (LString "None")))) (EBinOp "==" (EVar "n") (ELit (LString "Ok")))) (EBinOp "==" (EVar "n") (ELit (LString "Err")))) (EBinOp "==" (EVar "n") (ELit (LString "Lt")))) (EBinOp "==" (EVar "n") (ELit (LString "Eq")))) (EBinOp "==" (EVar "n") (ELit (LString "Gt")))) (EBinOp "==" (EVar "n") (ELit (LString "True")))) (EBinOp "==" (EVar "n") (ELit (LString "False")))))
+(DFunDef false "isReservedCtor" ((PVar "n")) (EApp (EVar "isSome") (EApp (EVar "namedRuntimeCtor") (EVar "n"))))
 (DTypeSig false "buildUnitCtorRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitCtorRenameMap" ((PVar "mid") (PVar "ctorExportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localCtors") (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))) (DoLet false false (PVar "localEntries") (EApp (EApp (EVar "flatMap") (EApp (EVar "localCtorRenameEntry") (EVar "mid"))) (EVar "localCtors"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "ctorImportEntries") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))
 (DTypeSig false "unitLocalCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -2380,6 +2371,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "namedRuntimeCtor" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
@@ -2507,7 +2499,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "nonReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonReservedCtor" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isReservedCtor") (EVar "n"))))
 (DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Cons"))) (EBinOp "==" (EVar "n") (ELit (LString "Nil")))) (EBinOp "==" (EVar "n") (ELit (LString "Some")))) (EBinOp "==" (EVar "n") (ELit (LString "None")))) (EBinOp "==" (EVar "n") (ELit (LString "Ok")))) (EBinOp "==" (EVar "n") (ELit (LString "Err")))) (EBinOp "==" (EVar "n") (ELit (LString "Lt")))) (EBinOp "==" (EVar "n") (ELit (LString "Eq")))) (EBinOp "==" (EVar "n") (ELit (LString "Gt")))) (EBinOp "==" (EVar "n") (ELit (LString "True")))) (EBinOp "==" (EVar "n") (ELit (LString "False")))))
+(DFunDef false "isReservedCtor" ((PVar "n")) (EApp (EVar "isSome") (EApp (EVar "namedRuntimeCtor") (EVar "n"))))
 (DTypeSig false "buildUnitCtorRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitCtorRenameMap" ((PVar "mid") (PVar "ctorExportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localCtors") (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))) (DoLet false false (PVar "localEntries") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "localCtorRenameEntry") (EVar "mid"))) (EVar "localCtors"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "ctorImportEntries") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))
 (DTypeSig false "unitLocalCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
