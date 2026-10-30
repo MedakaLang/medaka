@@ -156,7 +156,7 @@ rows = [
     goldenSuffix = ".fmt.golden",
     sorted = False,
     stripUnit = True,
-    fixtures = 106,
+    fixtures = 107,
   },
   Row {
     gate = "diff_compiler_lex_files",
