@@ -503,3 +503,19 @@ f x = g x where
           left: (ident)
           right: (literal
             (int_lit)))))))
+
+==================
+Shebang line — first line only
+==================
+
+#!/usr/bin/env -S medaka run
+answer = 42
+
+---
+
+(source_file
+  (shebang)
+  (fun_def
+    name: (ident)
+    body: (literal
+      (int_lit))))

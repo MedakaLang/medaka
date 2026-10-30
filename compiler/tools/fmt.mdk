@@ -725,7 +725,7 @@ formatParsed src parsed =
   let metadata = parsedMetadata parsed
   let commas = metadataTrailingCommas metadata
   let arms = metadataUnitStarts metadata
-  restoreTripleQuotedStrings
+  restoreVerbatimLiterals
     src
     (formatProgram
       decls
@@ -757,13 +757,14 @@ formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
         (_ => formatSourcePairs src toks pairs)
         (parseResultPairs src toks pairs)
 
--- ── Triple-quoted string preservation ─────────────
+-- ── Verbatim-spelled literal preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical
 -- double-quoted spelling (`printLit`, tools/printer.mdk) — the AST's `Lit`
 -- type has no room to remember that a literal was written `"""..."""`.  This
 -- restores the original spelling as a pure TEXT patch applied AFTER
--- formatting: a literal's span starts at its opening quote, so a literal whose
--- source starts `"""` is triple-quoted.  Formatting never adds, removes, or
+-- formatting: a literal's span starts at its opening quote (at the `r` for a raw
+-- literal), so a literal whose source starts `"""` or `r"` is spelled
+-- verbatim.  Formatting never adds, removes, or
 -- reorders string literals, so the Nth literal in the original source is the
 -- Nth in the formatted output; the correlation is by ORDER alone.  Interpolated
 -- literals are restored too (see stringLitSpans).
@@ -771,11 +772,16 @@ formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
 isTripleStringAt : String -> Int -> Bool
 isTripleStringAt src pos = stringSlice pos (pos + 3) src == "\"\"\""
 
+-- A raw literal's span starts at its `r`; no other literal does.
+isRawStringAt : String -> Int -> Bool
+isRawStringAt src pos = stringSlice pos (pos + 2) src == "r\""
+
 -- Each string literal in source order as (start, end).  A plain literal is one
 -- `TString` token.  An interpolated literal is the run from its opening quote
--- to the `TInterpEnd` that closes it, nested interpolations included.  Its
--- `TInterpOpen` span starts at the `\{`, not the quote, so the quote is found
--- from the end of the token before it.
+-- to the `TInterpEnd` that closes it, nested interpolations included, and is
+-- followed by the literals inside its holes (outer before inner, so spans can
+-- nest).  Its `TInterpOpen` span starts at the `\{`, not the quote, so the
+-- quote is found from the end of the token before it.
 stringLitSpans : String -> List Token -> List (Int, Int) -> List (Int, Int)
 stringLitSpans src toks spans = stringLitGo src 0 toks spans
 
@@ -785,25 +791,40 @@ stringLitGo _ _ _ [] = []
 stringLitGo src _ ((TString _) :: ts) ((s, e) :: ps) =
   (s, e) :: stringLitGo src e ts ps
 stringLitGo src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
-  match interpLitEnd 1 ts ps
+  match interpLitBody src prevEnd ts ps
     None => []
-    Some (end, ts2, ps2) =>
-      (openingQuoteAfter src prevEnd, end) :: stringLitGo src end ts2 ps2
+    Some (end, inner, ts2, ps2) =>
+      (openingQuoteAfter src prevEnd, end)
+        :: inner ++ stringLitGo src end ts2 ps2
 stringLitGo src _ (_ :: ts) ((_, e) :: ps) = stringLitGo src e ts ps
 
--- The end of the interpolated literal whose opening was just consumed, and the
--- tokens after it.  `depth` counts the literals still open (the outer one is 1).
-interpLitEnd : Int ->
+-- The end of the interpolated literal whose opening was just consumed, the
+-- literals inside its holes, and the tokens after it.
+interpLitBody : String ->
+  Int ->
   List Token ->
   List (Int, Int) ->
-  Option (Int, List Token, List (Int, Int))
-interpLitEnd _ [] _ = None
-interpLitEnd _ _ [] = None
-interpLitEnd depth ((TInterpEnd _) :: ts) ((_, e) :: ps) =
-  if depth == 1 then Some (e, ts, ps) else interpLitEnd (depth - 1) ts ps
-interpLitEnd depth ((TInterpOpen _) :: ts) (_ :: ps) =
-  interpLitEnd (depth + 1) ts ps
-interpLitEnd depth (_ :: ts) (_ :: ps) = interpLitEnd depth ts ps
+  Option (Int, List (Int, Int), List Token, List (Int, Int))
+interpLitBody _ _ [] _ = None
+interpLitBody _ _ _ [] = None
+interpLitBody _ _ ((TInterpEnd _) :: ts) ((_, e) :: ps) = Some (e, [], ts, ps)
+interpLitBody src _ ((TString _) :: ts) ((s, e) :: ps) =
+  map
+    ((end, inner, ts2, ps2) => (end, (s, e) :: inner, ts2, ps2))
+    (interpLitBody src e ts ps)
+interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
+  match interpLitBody src prevEnd ts ps
+    None => None
+    Some (nend, nested, ts2, ps2) =>
+      map
+        ((end, inner, ts3, ps3) => (
+          end,
+          (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
+          ts3,
+          ps3,
+        ))
+        (interpLitBody src nend ts2 ps2)
+interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's
 -- opening quote is the first `"` after `pos` that is not inside a comment.
@@ -841,13 +862,13 @@ blockCommentEnd src pos depth =
   else
     blockCommentEnd src (pos + 1) depth
 
--- Whether each literal is triple-quoted, paired with its source text (empty
--- for a plain literal, which is never restored).
-tripleLitInfo : String -> List (Int, Int) -> List (Bool, String)
-tripleLitInfo _ [] = []
-tripleLitInfo src ((s, e) :: ls) =
-  let triple = isTripleStringAt src s
-  (triple, if triple then stringSlice s e src else "") :: tripleLitInfo src ls
+-- Whether each literal is triple-quoted or raw, paired with its source text
+-- (empty for any other literal, which is never restored).
+verbatimLitInfo : String -> List (Int, Int) -> List (Bool, String)
+verbatimLitInfo _ [] = []
+verbatimLitInfo src ((s, e) :: ls) =
+  let triple = isTripleStringAt src s || isRawStringAt src s
+  (triple, if triple then stringSlice s e src else "") :: verbatimLitInfo src ls
 
 -- Zip the original literal order against the formatted output's literal
 -- spans, keeping only the ones that need restoring.  A token-count mismatch
@@ -861,8 +882,8 @@ tripleStringSubs ((False, _) :: is) (_ :: ss) = tripleStringSubs is ss
 tripleStringSubs _ _ = []
 
 -- Apply substitutions to `out` in one pass.  `subs` is in ASCENDING offset
--- order and its spans never overlap (they are the formatted output's own
--- token spans), so each chunk is the untouched text between two spans.
+-- order.  A span inside an already-restored outer literal is skipped, so each
+-- chunk is the untouched text between two spans.
 applyTripleSubs : List (Int, Int, String) -> String -> String
 applyTripleSubs subs out = stringConcat (applyTripleGo subs out 0 [])
 
@@ -875,16 +896,24 @@ applyTripleGo : List (Int, Int, String) ->
 applyTripleGo [] out cursor acc =
   reverseL (stringSlice cursor (stringLength out) out :: acc)
 applyTripleGo ((s, e, raw) :: rest) out cursor acc =
-  applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
+  if s < cursor then
+    applyTripleGo rest out cursor acc
+  else
+    applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
 
--- A source with no `"""` substring has no triple-quoted token, so there is
--- nothing to restore and both tokenizations are skipped.
-restoreTripleQuotedStrings : String -> String -> String
-restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
-  None => formatted
-  Some _ => match tokenizeWithOffsetPairs src
+mayHaveRestorable : String -> Bool
+mayHaveRestorable src =
+  isSome (stringIndexOf "\"\"\"" src) || isSome (stringIndexOf "r\"" src)
+
+-- A source with no `"""` or `r"` substring has no triple-quoted or raw token,
+-- so there is nothing to restore and both tokenizations are skipped.
+restoreVerbatimLiterals : String -> String -> String
+restoreVerbatimLiterals src formatted = match mayHaveRestorable src
+  False => formatted
+  True => match tokenizeWithOffsetPairs src
     (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
       (fmtToks, fmtSpans) =>
-        let origInfo = tripleLitInfo src (stringLitSpans src origToks origSpans)
+        let origInfo =
+          verbatimLitInfo src (stringLitSpans src origToks origSpans)
         let fmtStrSpans = stringLitSpans formatted fmtToks fmtSpans
         applyTripleSubs (tripleStringSubs origInfo fmtStrSpans) formatted

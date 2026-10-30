@@ -324,6 +324,7 @@ errOf : Token -> Option String
 errOf (TLexError (ByteLikeIdent old new)) = Some "ident:\{old}:\{new}"
 errOf (TLexError (NonAsciiByte _ _)) = Some "non-ascii"
 errOf (TLexError (BadByteLiteral _)) = Some "bad"
+errOf (TLexError (UnexpectedCharacter c)) = Some "unexpected:\{c}"
 errOf _ = None
 
 lexErrorKind : String -> String
@@ -365,4 +366,93 @@ test "primed b names stay identifiers unless a literal is closed" = expectAll [
   expectEqual "bad" (lexErrorKind "x = b'\\q'"),
   expectEqual "bad" (lexErrorKind "x = b'é'"),
   expectEqual "non-ascii" (lexErrorKind "x = b'\\u{E9}'"),
+]
+
+test "shebang first line is skipped and later offsets keep their real positions" =
+  let shebang = "#!/usr/bin/env -S medaka run\n"
+  let body = "main = 1\n"
+  expectAll [
+    expectEqual
+      (map tokenToString (tokenize body))
+      (drop 1 (map tokenToString (tokenize (shebang ++ body)))),
+    expectEqual
+      [29, 34, 36]
+      (take 3 (drop 1 (snd (tokenizeWithOffsets (shebang ++ body))))),
+  ]
+
+test "shebang elsewhere than offset 0 stays a lex error" = expectAll [
+  expectEqual "unexpected:#" (lexErrorKind "main = 1\n#!/bin/x\n"),
+  expectEqual "unexpected:#" (lexErrorKind "\n#!/bin/x\nmain = 1\n"),
+  expectEqual "unexpected:#" (lexErrorKind " #!/bin/x\nmain = 1\n"),
+  expectEqual "none" (lexErrorKind "#!/bin/x\nmain = 1\n"),
+]
+
+-- Raw literals: the TString bodies of a source, and the first literal's span.
+rawBodies : String -> List String
+rawBodies src =
+  filterMap
+    (t => match t
+      TString s => Some s
+      _ => None)
+    (tokenize src)
+
+-- The span of the first token the predicate selects.
+firstSpanWhere : (Token -> Bool) -> String -> Option (Int, Int)
+firstSpanWhere pick src =
+  let (tokens, spans) = tokenizeWithOffsetPairs src
+  let found =
+    filterMap ((t, sp) => if pick t then Some sp else None) (zip tokens spans)
+  match found
+    sp :: _ => Some sp
+    [] => None
+
+rawSpan : String -> Option (Int, Int)
+rawSpan src =
+  firstSpanWhere
+    (t => match t
+      TString _ => True
+      _ => False)
+    src
+
+unterminatedAt : String -> Option (Int, Int)
+unterminatedAt src =
+  firstSpanWhere
+    (t => match t
+      TLexError UnterminatedString => True
+      _ => False)
+    src
+
+test "raw literals keep every character" = expectAll [
+  expectEqual ["\\d+"] (rawBodies "r\"\\d+\""),
+  expectEqual ["a\\nb"] (rawBodies "r\"a\\nb\""),
+  expectEqual ["\\{x}"] (rawBodies "r\"\\{x}\""),
+  expectEqual ["\\"] (rawBodies "r\"\\\""),
+  expectEqual [""] (rawBodies "r\"\""),
+  expectEqual ["a\"b"] (rawBodies "r\"\"\"a\"b\"\"\""),
+  expectEqual
+    ["\n  line1\\nline2\n  s = \"\\{x}\"\n"]
+    (rawBodies "r\"\"\"\n  line1\\nline2\n  s = \"\\{x}\"\n\"\"\""),
+]
+
+test "raw literal span starts at the r" = expectAll [
+  expectEqual (Some (4, 9)) (rawSpan "x = r\"ab\""),
+  expectEqual (Some (0, 9)) (rawSpan "r\"\"\"ab\"\"\""),
+]
+
+test "raw prefix needs a token start and an adjacent quote" = expectAll [
+  expectEqual ["IDENT \"r\"", "STRING \"x\""] (take 2 (tokensOf "r \"x\"")),
+  expectEqual ["IDENT \"xr\""] (take 1 (tokensOf "xr\"a\"")),
+  expectEqual ["IDENT \"bar\""] (take 1 (tokensOf "bar\"x\"")),
+  expectEqual ["a"] (rawBodies "xr\"a\""),
+  expectEqual ["x"] (rawBodies "bar\"x\""),
+  expectEqual ["x"] (rawBodies "r \"x\""),
+]
+
+test "unterminated raw literals are located at the r" = expectAll [
+  expectEqual (Some (4, 11)) (unterminatedAt "x = r\"\"\"abc"),
+  expectEqual (Some (4, 9)) (unterminatedAt "x = r\"abc"),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"ab\nc\""),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"ab\ny = 1\nz = 2\n"),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"\"\""),
+  expectEqual None (unterminatedAt "x = r"),
 ]

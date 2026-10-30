@@ -1484,8 +1484,8 @@ classify tok (SemCtx depth ls mode) =
 
 {- Build the absolute SemTok list, threading the context.  Filters tokens with no
    role, empty/synthetic spans (start == end), and any token straddling a line
-   boundary (LSP forbids multi-line tokens; only a triple-quoted string could, and
-   those stay with TextMate). -}
+   boundary (LSP forbids multi-line tokens; a triple-quoted or raw triple string
+   can straddle lines, and those stay with TextMate). -}
 semToksOf : SourceIndex ->
   List Token ->
   List (Int, Int) ->

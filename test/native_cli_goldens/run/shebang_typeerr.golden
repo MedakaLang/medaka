@@ -1,0 +1,4 @@
+error: test/native_cli_fixtures/run/shebang_typeerr.mdk:3:16: no impl of Num for String
+  |
+3 | main = println (1 + "a")
+  |                 ^

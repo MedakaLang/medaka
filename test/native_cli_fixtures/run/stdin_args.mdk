@@ -1,0 +1,3 @@
+main =
+  println (debug (args ()))
+  println (debug (readAll ()))
