@@ -1,0 +1,16 @@
+-- Fixture for rule-eager-default autofix.
+-- NEGATIVE: every default is still reported but no fix applies, so `.fixed` is this
+-- file unchanged.  A binder named `optionOrElse` or `resultOrElse` anywhere in the
+-- file would capture the rewrite's call, and a `whenL False` argument has no lazy
+-- form to rewrite to.
+
+viaOption k xs = optionOr (fresh k) (lookup k xs)
+
+viaResult r = resultOr (fresh 1) r
+
+guarded xs = whenL False (expensive xs)
+
+shadows xs = xs
+  where
+    optionOrElse d o = d
+    resultOrElse d r = d

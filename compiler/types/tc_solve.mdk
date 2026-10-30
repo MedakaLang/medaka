@@ -771,7 +771,7 @@ localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
 localSlotLead mctx subst slot = match slot.psArgs
   PSArgsKnown (a :: _) => substMono mctx.mcGraph subst [] [] a
   _ => match slot.psBoundIds
-    id :: _ => optionOr (freshVar mctx ()) (lookupAssocI id subst)
+    id :: _ => optionOrElse (_ => freshVar mctx ()) (lookupAssocI id subst)
     [] => freshVar mctx ()
 
 -- #1539 / DICT §8 I7 qualification 4: THE GATE.  True iff the declaration list this

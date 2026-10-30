@@ -74,3 +74,6 @@ bool_simplify_deep_chain rule-bool-simplify
 option_eliminators_impl_method rule-option-eliminators
 option_eliminators_wild_import rule-option-eliminators
 option_eliminators_withheld rule-option-eliminators
+eager_default_impl_method rule-eager-default
+eager_default_interior_comment rule-eager-default
+eager_default_withheld rule-eager-default

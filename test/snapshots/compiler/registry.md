@@ -1106,8 +1106,8 @@ identIn : Ns -> String -> String -> Ident
 -- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 identIn ns mid name =
-  optionOr
-    (identBuiltinFixture ns "__fixture_fallback__")
+  optionOrElse
+    (_ => identBuiltinFixture ns "__fixture_fallback__")
     (mkIdent ns (OriginModule mid) name)
 
 identTypeFooM : Ident
@@ -1891,7 +1891,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
-(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__"))))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
 (DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))
@@ -2178,7 +2178,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
-(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__"))))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
 (DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))

@@ -1,5 +1,5 @@
 # META
-source_lines=195
+source_lines=193
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-option-eliminators: an Option/Result eliminator written as a 2-arm `match` that a prelude function names. Prefer `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`.
@@ -34,6 +34,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
+  calledName,
   exprRuleEditVisitors,
   isEVarNamed,
   isNilPCon,
@@ -87,8 +88,7 @@ call1 fn arg scrut = EApp (EApp (EVar fn) arg) scrut
 
 -- `Some x => x` / `Ok x => x`: the success arm hands its payload back.
 isIdentityArm : String -> Pat -> Expr -> Bool
-isIdentityArm ctor (PCon c [PVar x _ _]) body =
-  c == ctor && isEVarNamed x body
+isIdentityArm ctor (PCon c [PVar x _ _]) body = c == ctor && isEVarNamed x body
 isIdentityArm _ _ _ = False
 
 -- `panic m` with an atomic message.
@@ -108,9 +108,13 @@ elimPair scrut (Arm ps gs bs) (Arm pf gf bf)
       map (m => call1 "optionOrPanic" m scrut) (panicMessage bf)
   | isIdentityArm "Ok" ps bs && isErrWild pf && atomic bf =
     Some (call1 "resultOr" bf scrut)
-  | isSomeWild ps && isNilPCon "None" pf && isBoolLit True bs
+  | isSomeWild ps
+    && isNilPCon "None" pf
+    && isBoolLit True bs
     && isBoolLit False bf = Some (EApp (EVar "isSome") scrut)
-  | isSomeWild ps && isNilPCon "None" pf && isBoolLit False bs
+  | isSomeWild ps
+    && isNilPCon "None" pf
+    && isBoolLit False bs
     && isBoolLit True bf = Some (EApp (EVar "isNone") scrut)
   | otherwise = None
 
@@ -154,13 +158,6 @@ optionElimFinding loc rewritten fix = Finding {
   fix = fix,
 }
 
--- The name the rewrite calls.
-calledName : Expr -> String
-calledName e = match unwrapLoc e
-  EApp f _ => calledName f
-  EVar n => n
-  _ => ""
-
 -- The `panic` the `optionOrPanic` shape reads, when the arm is one.
 panicHead : Expr -> Option Expr
 panicHead (EMatch _ arms) = firstJust panicArmHead arms
@@ -182,7 +179,8 @@ firstJust f (x :: rest) = orElse (f x) (firstJust f rest)
 -- what the text means.
 optionElimEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 optionElimEdit idx facts ctx e rewritten =
-  if rebinds idx facts ctx (calledName rewritten) || panicRebound idx facts e then
+  if rebinds idx facts ctx (calledName rewritten)
+    || panicRebound idx facts e then
     None
   else
     replaceFix
@@ -204,7 +202,7 @@ panicRebound idx facts e = match panicHead e
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchSpan" false) (mem "noExcl" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameOptionEliminators" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchSpan" false) (mem "noExcl" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameOptionEliminators" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOptionEliminators")) (fa "summary" (ELit (LString "2-arm `match` on an Option/Result that unwraps with an atomic default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`"))) (fa "doc" (ELit (LString "A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a variable or a nullary constructor is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call is left alone: the function form evaluates it eagerly.\n\nBefore:\n  match o\n    Some x => x\n    None => 0\nAfter:\n  optionOr 0 o"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleOptionEliminators")) (EVar "None")))
 (DTypeSig false "atomic" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -233,8 +231,6 @@ panicRebound idx facts e = match panicHead e
 (DFunDef false "ruleOptionEliminators" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EVar "optionElimOf")) (EApp (EApp (EVar "optionElimEdit") (EVar "idx")) (EVar "facts"))) (EVar "optionElimFinding")))
 (DTypeSig false "optionElimFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "optionElimFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOptionEliminators")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "this match is a prelude eliminator — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
-(DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "panicHead" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "panicHead" ((PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "firstJust") (EVar "panicArmHead")) (EVar "arms")))
 (DFunDef false "panicHead" (PWild) (EVar "None"))
@@ -254,7 +250,7 @@ panicRebound idx facts e = match panicHead e
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchSpan" false) (mem "noExcl" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameOptionEliminators" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchSpan" false) (mem "noExcl" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameOptionEliminators" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOptionEliminators")) (fa "summary" (ELit (LString "2-arm `match` on an Option/Result that unwraps with an atomic default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`"))) (fa "doc" (ELit (LString "A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a variable or a nullary constructor is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call is left alone: the function form evaluates it eagerly.\n\nBefore:\n  match o\n    Some x => x\n    None => 0\nAfter:\n  optionOr 0 o"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleOptionEliminators")) (EVar "None")))
 (DTypeSig false "atomic" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -283,8 +279,6 @@ panicRebound idx facts e = match panicHead e
 (DFunDef false "ruleOptionEliminators" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EVar "optionElimOf")) (EApp (EApp (EVar "optionElimEdit") (EVar "idx")) (EVar "facts"))) (EVar "optionElimFinding")))
 (DTypeSig false "optionElimFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "optionElimFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOptionEliminators")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "this match is a prelude eliminator — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
-(DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "panicHead" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "panicHead" ((PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "firstJust") (EVar "panicArmHead")) (EVar "arms")))
 (DFunDef false "panicHead" (PWild) (EVar "None"))

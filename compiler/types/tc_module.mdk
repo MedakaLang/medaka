@@ -2516,15 +2516,16 @@ processSCC outer sigs grouped0 members =
 scopedMemberBinding : ScopedMember -> (String, EnvBinding)
 scopedMemberBinding member =
   let binding =
-    optionOr
-      (ordinaryEnvBinding
-        (Forall
-          []
-          []
-          []
-          []
-          (memberForce member)
-          member.smOwned.bsRecursiveValue))
+    optionOrElse
+      (_ =>
+        ordinaryEnvBinding
+          (Forall
+            []
+            []
+            []
+            []
+            (memberForce member)
+            member.smOwned.bsRecursiveValue))
       member.smRecursive.value
   (
     member.smName,

@@ -109,6 +109,7 @@ fixtureNames = [
   "directive-reason",
   "double-reverse",
   "duplicate-body",
+  "eager-default",
   "fuse-list-pipeline",
   "hand-rolled-derivable",
   "if-max-min",
@@ -368,6 +369,7 @@ test "rule-directive-reason fixture" = fixtureHolds "directive-reason"
 
 test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
 
+test "rule-eager-default fixture" = fixtureHolds "eager-default"
 test "rule-duplicate-body fixture" = fixtureHolds "duplicate-body"
 
 test "rule-fuse-list-pipeline fixture" = fixtureHolds "fuse-list-pipeline"
@@ -461,6 +463,16 @@ unsafeCases = [
     "nil xs = xs == []\n",
     "nil xs = isEmpty xs\n",
   ),
+  (
+    "rule-eager-default",
+    "pick k xs = optionOr (fresh k) (lookup k xs)\n",
+    "pick k xs = optionOrElse (_ => fresh k) (lookup k xs)\n",
+  ),
+  (
+    "rule-eager-default",
+    "settle r = resultOr (fresh 1) r\n",
+    "settle r = resultOrElse (_ => fresh 1) r\n",
+  ),
 ]
 
 test "an unsafe rule is left alone by --fix and applied by --unsafe-fixes" =
@@ -481,3 +493,41 @@ unsafeCase (rule, src, fixed) = labelFail rule (match indexForRules [rule]
         (Ok (Settled fixed 1))
         (fixSource idx Unsafe [rule] [] "ev.mdk" src)),
   ])
+
+-- The point of the rule-eager-default rewrite, run rather than read: the
+-- default of `optionOr` is evaluated although the option holds a value, and the
+-- default of `optionOrElse` is evaluated only on a miss.
+bump : Ref Int -> Int
+bump counter =
+  counter := !counter + 1
+  42
+
+-- The eager form is the subject of the contrast, so the rule's finding is wanted here.
+-- lint-disable-next-line rule-eager-default
+test "rule-eager-default: the lazy form runs its default on a miss only" =
+  let eagerHit = Ref 0
+  let lazyHit = Ref 0
+  let lazyMiss = Ref 0
+  let eager = optionOr (bump eagerHit) (Some 7)
+  let lazyOnHit = optionOrElse (_ => bump lazyHit) (Some 7)
+  let lazyOnMiss = optionOrElse (_ => bump lazyMiss) None
+  expectAll [
+    labelFail "eager form, hit: value" (expectEqual 7 eager),
+    labelFail "eager form, hit: default ran" (expectEqual 1 !eagerHit),
+    labelFail "lazy form, hit: value" (expectEqual 7 lazyOnHit),
+    labelFail "lazy form, hit: default did not run" (expectEqual 0 !lazyHit),
+    labelFail "lazy form, miss: value" (expectEqual 42 lazyOnMiss),
+    labelFail "lazy form, miss: default ran once" (expectEqual 1 !lazyMiss),
+  ]
+
+test "rule-eager-default: resultOrElse runs its default on an Err only" =
+  let onOk = Ref 0
+  let onErr = Ref 0
+  let ok = resultOrElse (_ => bump onOk) (Ok 7 : Result String Int)
+  let bad = resultOrElse (_ => bump onErr) (Err "no" : Result String Int)
+  expectAll [
+    labelFail "Ok: value" (expectEqual 7 ok),
+    labelFail "Ok: default did not run" (expectEqual 0 !onOk),
+    labelFail "Err: value" (expectEqual 42 bad),
+    labelFail "Err: default ran once" (expectEqual 1 !onErr),
+  ]

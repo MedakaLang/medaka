@@ -1107,8 +1107,8 @@ shadowStandaloneDictSlotsAt dyn None _ _ _ = emptyShadowDicts
 shadowStandaloneDictSlotsAt dyn (Some value) name key xt =
   let inst = instantiateMethodTracked dyn.dcModule value.vsScheme
   let dc =
-    optionOr
-      (shadowDeclaredFor dyn.dcModule name key)
+    optionOrElse
+      (_ => shadowDeclaredFor dyn.dcModule name key)
       (declaredEffectsAt dyn.dcModule.mcGraph inst value.vsDeclared)
   if isEmptyL dc.cdSlots then
     emptyShadowDicts

@@ -13952,7 +13952,7 @@ typeOf _ _ (CList _) = LTCon
 typeOf _ _ (CRangeList _ _ _) = LTCon
 typeOf e env (CVar x _) = match omLookup x env
   Some (_, t) => valueLTy t
-  None => optionOr (runtimeLTy RTValue) (omLookup x e.globalTys)
+  None => optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
 typeOf e env (CBinPrim op l _ tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
@@ -18060,7 +18060,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "typeOf" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litTy") (EVar "l")))
 (DFunDef false "typeOf" (PWild PWild (PCon "CList" PWild)) (EVar "LTCon"))
 (DFunDef false "typeOf" (PWild PWild (PCon "CRangeList" PWild PWild PWild)) (EVar "LTCon"))
-(DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PVar "t"))) () (EApp (EVar "valueLTy") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EApp (EVar "runtimeLTy") (EVar "RTValue"))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "e") "globalTys"))))))
+(DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PVar "t"))) () (EApp (EVar "valueLTy") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "runtimeLTy") (EVar "RTValue")))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "e") "globalTys"))))))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EVar "LTBool") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "LTCon") (EIf (EApp (EVar "isU64Head") (EVar "tag")) (EVar "LTU64") (EIf (EApp (EVar "isI64Head") (EVar "tag")) (EVar "LTI64") (EIf (EApp (EVar "scalarTagIsFloat") (EVar "tag")) (EVar "LTFloat") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CUnOp" (PLit (LString "-")) (PVar "x"))) (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "x")))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "t")))
@@ -20864,7 +20864,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "typeOf" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litTy") (EVar "l")))
 (DFunDef false "typeOf" (PWild PWild (PCon "CList" PWild)) (EVar "LTCon"))
 (DFunDef false "typeOf" (PWild PWild (PCon "CRangeList" PWild PWild PWild)) (EVar "LTCon"))
-(DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PVar "t"))) () (EApp (EVar "valueLTy") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EApp (EVar "runtimeLTy") (EVar "RTValue"))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "e") "globalTys"))))))
+(DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PVar "t"))) () (EApp (EVar "valueLTy") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "runtimeLTy") (EVar "RTValue")))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "e") "globalTys"))))))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EVar "LTBool") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "LTCon") (EIf (EApp (EVar "isU64Head") (EVar "tag")) (EVar "LTU64") (EIf (EApp (EVar "isI64Head") (EVar "tag")) (EVar "LTI64") (EIf (EApp (EVar "scalarTagIsFloat") (EVar "tag")) (EVar "LTFloat") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CUnOp" (PLit (LString "-")) (PVar "x"))) (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "x")))
 (DFunDef false "typeOf" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "typeOf") (EVar "e")) (EVar "env")) (EVar "t")))

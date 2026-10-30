@@ -55,7 +55,7 @@ varsFor m t = map (k => (k, freshVar m ())) (nub (varsOf t))
 
 build : List (Int, Mono) -> MTy -> Mono
 build _ (MCon n) = tconFrom (OriginModule "gen") n
-build vs (MVar k) = optionOr (tconUnresolved "no-var") (lookup k vs)
+build vs (MVar k) = optionOrElse (_ => tconUnresolved "no-var") (lookup k vs)
 build vs (MApp a b) = TApp (build vs a) (build vs b)
 build vs (MFun a b) = TFun (build vs a) pureRow (build vs b)
 
