@@ -22,11 +22,9 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   exprRuleEditVisitors,
-  nodeSpan,
-  replaceFix,
+  replaceNodeFix,
   ruleNameRemParity,
   unwrapLoc,
 }
@@ -117,10 +115,4 @@ remParityFix idx facts ctx e rewritten =
   if rebinds idx facts ctx "isEven" || rebinds idx facts ctx "isOdd" then
     None
   else
-    replaceFix
-      Unsafe
-      "use the parity predicate"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Unsafe "use the parity predicate" ctx e rewritten

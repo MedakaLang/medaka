@@ -32,11 +32,34 @@ fixErrorText (FixedOutputDoesNotParse pass msg) =
 fixErrorText (EditsRejected _) = "the chosen edits were rejected"
 
 -- Most passes one run makes.  Each pass applies a non-overlapping subset of the
--- file's fixes, so a chain of nested rewrites settles one layer per pass; eight
--- layers is deeper than any rewrite in the tree nests, and the bound is what
--- keeps two fixes that undo each other from looping.
+-- file's fixes, so a chain of nested rewrites settles one layer per pass.  The
+-- longest operator chain a rule rewrites in the tree is 28 operands, so 32
+-- passes settle every real file, and the bound is what keeps two fixes that undo
+-- each other from looping.
 maxPasses : Int
-maxPasses = 8
+maxPasses = 32
+
+-- What a fix run left: a source no fix applies to any more, or one still
+-- carrying fixes after `maxPasses` passes.
+public export data FixRun =
+  | Settled String Int
+  | Capped String Int
+  deriving (Eq, Debug)
+
+export
+fixPassLimit : Int
+fixPassLimit = maxPasses
+
+-- The source and fix count of a run, and the run with both replaced.
+export
+runParts : FixRun -> (String, Int)
+runParts (Settled src n) = (src, n)
+runParts (Capped src n) = (src, n)
+
+export
+sameCap : FixRun -> String -> Int -> FixRun
+sameCap (Settled _ _) src n = Settled src n
+sameCap (Capped _ _) src n = Capped src n
 
 -- A fix whose locations are resolved to offsets: its edits against the pass's
 -- snapshot, and the offsets spanning all of them.
@@ -86,32 +109,35 @@ editHi (SourceEdit _ (SourceSpan _ hi) _ _) = hi
 -- `None` for a fix with an unplaceable edit or overlapping edits of its own.
 resolveFix : SourceSnapshot -> Fix -> Option Resolved
 resolveFix snap fx = match resolveEdits snap fx.fixEdits
-  Some (edits@(_ :: _)) => match validateSourceEdits snap edits
+  Some (edits@(first :: _)) => match validateSourceEdits snap edits
     Ok _ => Some Resolved {
       rsApplicability = fx.fixApplicability,
       rsEdits = edits,
-      rsLo = fold min 1000000000 (map editLo edits),
-      rsHi = fold max 0 (map editHi edits),
+      rsLo = fold min (editLo first) (map editLo edits),
+      rsHi = fold max (editHi first) (map editHi edits),
     }
     Err _ => None
   _ => None
 
--- The `(start, end)` offsets of every comment in `src`.
-commentSpans : String -> List (Int, Int)
+-- The span of every comment in `src`.
+commentSpans : String -> List SourceSpan
 commentSpans src = flatMap commentSpan (scanRawChars (stringToChars src))
 
-commentSpan : RawTok -> List (Int, Int)
-commentSpan (RComment s e) = [(s, e)]
+commentSpan : RawTok -> List SourceSpan
+commentSpan (RComment s e) = [SourceSpan s e]
 commentSpan _ = []
 
 -- A comment overlapping an edit's span would be deleted by the replacement.
 -- One that ends where the span starts, or starts where it ends, is untouched.
-editTouchesComment : List (Int, Int) -> SourceEdit -> Bool
+editTouchesComment : List SourceSpan -> SourceEdit -> Bool
 editTouchesComment comments e =
-  any (c => fst c < editHi e && editLo e < snd c) comments
+  any (spanOverlaps (editLo e) (editHi e)) comments
+
+spanOverlaps : Int -> Int -> SourceSpan -> Bool
+spanOverlaps lo hi (SourceSpan s t) = s < hi && lo < t
 
 -- A fix that would drop a comment is only suggested.
-demote : List (Int, Int) -> Resolved -> Resolved
+demote : List SourceSpan -> Resolved -> Resolved
 demote comments r =
   if any (editTouchesComment comments) r.rsEdits then
     Resolved {
@@ -122,6 +148,33 @@ demote comments r =
     }
   else
     r
+
+-- The findings of `src` with each fix carrying the applicability `--fix` would
+-- act on: one whose edits overlap a comment is `Suggest`, as in `chooseFixes`.
+-- `--json` reports through this, so a consumer never applies what `--fix`
+-- withholds.
+export
+demoteOverComments : String -> String -> List Finding -> List Finding
+demoteOverComments path src findings =
+  let comments = commentSpans src
+  if isEmpty comments then
+    findings
+  else
+    let snap = makeSnapshot path None 0 src
+    map (demoteFinding snap comments) findings
+
+demoteFinding : SourceSnapshot -> List SourceSpan -> Finding -> Finding
+demoteFinding snap comments f =
+  { f | fix = map (demoteFix snap comments) f.fix }
+
+demoteFix : SourceSnapshot -> List SourceSpan -> Fix -> Fix
+demoteFix snap comments fx = match resolveFix snap fx
+  Some r =>
+    if any (editTouchesComment comments) r.rsEdits then
+      { fx | fixApplicability = Suggest }
+    else
+      fx
+  None => fx
 
 compareResolved : Resolved -> Resolved -> Ordering
 compareResolved a b =
@@ -152,14 +205,14 @@ chooseFixes limit (snap@(SourceSnapshot _ _ _ text _)) fixes =
 -- Fix `src` (read from `path`, which names the snapshot) until no fix at the
 -- `limit` remains.  `lint` is the caller's linter: it returns the findings of a
 -- source, or the reason it does not parse.  Returns the fixed source and the
--- number of fixes applied.  Every pass re-parses its input, so an output that
+-- number of fixes applied, `Capped` when fixes remain after `maxPasses`.  Every pass re-parses its input, so an output that
 -- does not parse is reported and never returned.
 export
 applyFixes : (String -> String -> Result String (List Finding)) ->
   Applicability ->
   String ->
   String ->
-  Result FixError (String, Int)
+  Result FixError FixRun
 applyFixes lint limit path src = fixPass lint limit path 0 0 src
 
 fixPass : (String -> String -> Result String (List Finding)) ->
@@ -168,7 +221,7 @@ fixPass : (String -> String -> Result String (List Finding)) ->
   Int ->
   Int ->
   String ->
-  Result FixError (String, Int)
+  Result FixError FixRun
 fixPass lint limit path n total src = match lint path src
   Err msg =>
     if n == 0 then
@@ -177,10 +230,11 @@ fixPass lint limit path n total src = match lint path src
       Err (FixedOutputDoesNotParse n msg)
   Ok findings =>
     let snap = makeSnapshot path None n src
-    let chosen =
-      if n >= maxPasses then [] else chooseFixes limit snap (fixesOf findings)
+    let chosen = chooseFixes limit snap (fixesOf findings)
     if isEmpty chosen then
-      Ok (src, total)
+      Ok (Settled src total)
+    else if n >= maxPasses then
+      Ok (Capped src total)
     else match applySourceEdits snap (flatMap (r => r.rsEdits) chosen)
       Err e => Err (EditsRejected e)
       Ok out => fixPass lint limit path (n + 1) (total + length chosen) out

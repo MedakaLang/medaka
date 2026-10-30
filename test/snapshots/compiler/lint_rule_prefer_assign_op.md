@@ -1,5 +1,5 @@
 # META
-source_lines=225
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-prefer-assign-op: `setRef r v`, or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement.
@@ -36,12 +36,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   exprRuleEditVisitors,
   isEVarNamed,
-  nodeSpan,
   noExcl,
-  replaceFix,
+  replaceNodeFix,
   ruleNamePreferAssignOp,
   tightSpan,
   unwrapLoc,
@@ -188,13 +186,7 @@ setRefFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 setRefFix idx facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
   EApp hd _ =>
     if usesPreludeName idx facts hd then
-      replaceFix
-        Safe
-        "use the `:=` write operator"
-        (nodeSpan ctx e)
-        (bindingOf rewritten)
-        ctx
-        (exprToString rewritten)
+      replaceNodeFix Safe "use the `:=` write operator" ctx e rewritten
     else
       None
   _ => None
@@ -234,7 +226,7 @@ rhsStart e = tightSpan (unwrapLoc e)
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNamePreferAssignOp" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "noExcl" false) (mem "replaceNodeFix" false) (mem "ruleNamePreferAssignOp" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePreferAssignOp")) (fa "summary" (ELit (LString "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement"))) (fa "doc" (ELit (LString "`setRef r v` predates the `:=` write operator, and a `:=` write bound to a wildcard `let _ =` is a statement in disguise.\n\nBefore:\n  setRef counter 1\nAfter:\n  counter := 1"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleForPreferAssign")) (EVar "None")))
 (DTypeSig false "preferAssignOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -263,7 +255,7 @@ rhsStart e = tightSpan (unwrapLoc e)
 (DFunDef false "preferAssignFix" (PWild PWild PWild (PCon "EBlock" (PVar "stmts")) PWild) (EApp (EVar "collapseFix") (EVar "stmts")))
 (DFunDef false "preferAssignFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "setRefFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")))
 (DTypeSig false "setRefFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "setRefFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EApp" (PVar "fn") PWild)) (PVar "rewritten")) (EMatch (EApp (EVar "unwrapLoc") (EVar "fn")) (arm (PCon "EApp" (PVar "hd") PWild) () (EIf (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the `:=` write operator"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DFunDef false "setRefFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EApp" (PVar "fn") PWild)) (PVar "rewritten")) (EMatch (EApp (EVar "unwrapLoc") (EVar "fn")) (arm (PCon "EApp" (PVar "hd") PWild) () (EIf (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "use the `:=` write operator"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "setRefFix" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "collapseFix" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Fix"))))
 (DFunDef false "collapseFix" ((PVar "stmts")) (EBlock (DoLet false false (PVar "edits") (EApp (EApp (EVar "flatMap") (EVar "collapseEdit")) (EVar "stmts"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "edits")) (EVar "None") (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "drop the `let _ =`"))))))))))
@@ -279,7 +271,7 @@ rhsStart e = tightSpan (unwrapLoc e)
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "nodeSpan" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNamePreferAssignOp" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "noExcl" false) (mem "replaceNodeFix" false) (mem "ruleNamePreferAssignOp" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePreferAssignOp")) (fa "summary" (ELit (LString "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement"))) (fa "doc" (ELit (LString "`setRef r v` predates the `:=` write operator, and a `:=` write bound to a wildcard `let _ =` is a statement in disguise.\n\nBefore:\n  setRef counter 1\nAfter:\n  counter := 1"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleForPreferAssign")) (EVar "None")))
 (DTypeSig false "preferAssignOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -308,7 +300,7 @@ rhsStart e = tightSpan (unwrapLoc e)
 (DFunDef false "preferAssignFix" (PWild PWild PWild (PCon "EBlock" (PVar "stmts")) PWild) (EApp (EVar "collapseFix") (EVar "stmts")))
 (DFunDef false "preferAssignFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "setRefFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")))
 (DTypeSig false "setRefFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "setRefFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EApp" (PVar "fn") PWild)) (PVar "rewritten")) (EMatch (EApp (EVar "unwrapLoc") (EVar "fn")) (arm (PCon "EApp" (PVar "hd") PWild) () (EIf (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the `:=` write operator"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DFunDef false "setRefFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EApp" (PVar "fn") PWild)) (PVar "rewritten")) (EMatch (EApp (EVar "unwrapLoc") (EVar "fn")) (arm (PCon "EApp" (PVar "hd") PWild) () (EIf (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "use the `:=` write operator"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "setRefFix" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "collapseFix" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Fix"))))
 (DFunDef false "collapseFix" ((PVar "stmts")) (EBlock (DoLet false false (PVar "edits") (EApp (EApp (EDictApp "flatMap") (EVar "collapseEdit")) (EVar "stmts"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "edits")) (EVar "None") (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "drop the `let _ =`"))))))))))

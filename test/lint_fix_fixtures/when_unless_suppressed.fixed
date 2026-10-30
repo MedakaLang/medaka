@@ -1,0 +1,5 @@
+-- NEGATIVE: a directive above the clause keeps rule-when-unless from rewriting it.
+-- lint-disable-next-line rule-when-unless
+whenShape b act = if b then act else pure ()
+
+main = whenShape True (println "hi")

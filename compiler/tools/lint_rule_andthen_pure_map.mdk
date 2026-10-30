@@ -24,12 +24,10 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   andThenEtaFn,
-  bindingOf,
   rebinds,
   childExprs,
   isEVarNamed,
-  nodeSpan,
-  replaceFix,
+  replaceNodeFix,
   ruleNameAndThenPureMap,
   unwrapLoc,
   usesPreludeName,
@@ -169,13 +167,7 @@ andThenPureMapFix : StdlibIndex ->
 andThenPureMapFix idx facts ctx e rewritten =
   if andThenPureMapUsesPrelude idx facts e
     && not (rebinds idx facts ctx "map") then
-    replaceFix
-      Safe
-      "rewrite the bind as a map"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "rewrite the bind as a map" ctx e rewritten
   else
     None
 

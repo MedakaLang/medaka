@@ -9,6 +9,7 @@ import frontend.ast.{
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
+import list.{last}
 import support.util.{isEmptyL}
 import tools.printer.{exprToString}
 import tools.lint_core.{
@@ -40,7 +41,7 @@ import tools.lint_shared.{
   noExcl,
   replaceFix,
   ruleNameMatchToMap,
-  sourceLine,
+  parenAt,
   tightSpan,
 }
 
@@ -159,14 +160,11 @@ matchToMapEdit idx facts ctx e rewritten =
 matchSpan : FileFacts -> Ctx -> Expr -> Option Loc
 matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
   (Some (own@(Loc f sl sc _ _)), Some (Loc _ _ _ el ec)) =>
-    if stringSlice sc (sc + 1) (sourceLine facts sl) == "(" then
-      Some own
-    else
-      Some (Loc f sl sc el ec)
+    if parenAt facts sl sc then Some own else Some (Loc f sl sc el ec)
   _ => None
 matchSpan _ _ _ = None
 
 lastArmSpan : List Arm -> Option Loc
-lastArmSpan [] = None
-lastArmSpan [Arm _ _ body] = tightSpan body
-lastArmSpan (_ :: rest) = lastArmSpan rest
+lastArmSpan arms = match last arms
+  Some (Arm _ _ body) => tightSpan body
+  None => None

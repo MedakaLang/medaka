@@ -30,6 +30,7 @@ import tools.lint_shared.{
   isEVarNamed,
   mentionsVar,
   replaceFix,
+  parenAt,
   sourceLine,
   ruleNameLambdaSection,
   unwrapLoc,
@@ -187,13 +188,16 @@ lambdaSectionFix facts ctx pats sec =
 lambdaSpan : FileFacts -> Ctx -> List Pat -> Option Loc
 lambdaSpan facts ctx pats = match ctx.ctxOwn
   Some (own@(Loc f sl sc el ec)) =>
-    let before = stringSlice 0 sc (sourceLine facts sl)
-    if stringSlice sc (sc + 1) (sourceLine facts sl) == "(" then
+    if parenAt facts sl sc then
       Some own
-    else
-      map
-        (start => Loc f sl start el ec)
-        (paramsStart before (unwords (flatMap patVarName pats)))
+    else match sourceLine facts sl
+      Some line =>
+        map
+          (start => Loc f sl start el ec)
+          (paramsStart
+            (stringSlice 0 sc line)
+            (unwords (flatMap patVarName pats)))
+      None => None
   None => None
 
 patVarName : Pat -> List String

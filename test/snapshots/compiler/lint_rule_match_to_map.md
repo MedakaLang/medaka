@@ -1,5 +1,5 @@
 # META
-source_lines=172
+source_lines=170
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-match-to-map: a 2-arm `match` on Option/Result that re-wraps the success constructor and passes the failure through. Prefer `map`.
@@ -13,6 +13,7 @@ import frontend.ast.{
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
+import list.{last}
 import support.util.{isEmptyL}
 import tools.printer.{exprToString}
 import tools.lint_core.{
@@ -44,7 +45,7 @@ import tools.lint_shared.{
   noExcl,
   replaceFix,
   ruleNameMatchToMap,
-  sourceLine,
+  parenAt,
   tightSpan,
 }
 
@@ -163,25 +164,23 @@ matchToMapEdit idx facts ctx e rewritten =
 matchSpan : FileFacts -> Ctx -> Expr -> Option Loc
 matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
   (Some (own@(Loc f sl sc _ _)), Some (Loc _ _ _ el ec)) =>
-    if stringSlice sc (sc + 1) (sourceLine facts sl) == "(" then
-      Some own
-    else
-      Some (Loc f sl sc el ec)
+    if parenAt facts sl sc then Some own else Some (Loc f sl sc el ec)
   _ => None
 matchSpan _ _ _ = None
 
 lastArmSpan : List Arm -> Option Loc
-lastArmSpan [] = None
-lastArmSpan [Arm _ _ body] = tightSpan body
-lastArmSpan (_ :: rest) = lastArmSpan rest
+lastArmSpan arms = match last arms
+  Some (Arm _ _ body) => tightSpan body
+  None => None
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNameMatchToMap" false) (mem "sourceLine" false) (mem "tightSpan" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNameMatchToMap" false) (mem "parenAt" false) (mem "tightSpan" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameMatchToMap")) (fa "summary" (ELit (LString "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')"))) (fa "doc" (ELit (LString "A two-arm `match` on an `Option` or `Result` that passes the failure constructor through and re-wraps the success value is `map` (hlint \"use fmap\").\n\nBefore:\n  match r\n    Ok v => Ok (f v)\n    Err e => Err e\nAfter:\n  map f r"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleMatchToMap")) (EVar "None")))
 (DTypeSig false "matchToMapFn" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -205,20 +204,19 @@ lastArmSpan (_ :: rest) = lastArmSpan rest
 (DTypeSig false "matchToMapEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "matchToMapEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "map"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use map"))) (EApp (EApp (EApp (EVar "matchSpan") (EVar "facts")) (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DTypeSig false "matchSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl"))) (ELit (LString "("))) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "lastArmSpan" ((PList)) (EVar "None"))
-(DFunDef false "lastArmSpan" ((PList (PCon "Arm" PWild PWild (PVar "body")))) (EApp (EVar "tightSpan") (EVar "body")))
-(DFunDef false "lastArmSpan" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastArmSpan") (EVar "rest")))
+(DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNameMatchToMap" false) (mem "sourceLine" false) (mem "tightSpan" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "noExcl" false) (mem "replaceFix" false) (mem "ruleNameMatchToMap" false) (mem "parenAt" false) (mem "tightSpan" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameMatchToMap")) (fa "summary" (ELit (LString "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')"))) (fa "doc" (ELit (LString "A two-arm `match` on an `Option` or `Result` that passes the failure constructor through and re-wraps the success value is `map` (hlint \"use fmap\").\n\nBefore:\n  match r\n    Ok v => Ok (f v)\n    Err e => Err e\nAfter:\n  map f r"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleMatchToMap")) (EVar "None")))
 (DTypeSig false "matchToMapFn" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -242,9 +240,7 @@ lastArmSpan (_ :: rest) = lastArmSpan rest
 (DTypeSig false "matchToMapEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "matchToMapEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "map"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use map"))) (EApp (EApp (EApp (EVar "matchSpan") (EVar "facts")) (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DTypeSig false "matchSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl"))) (ELit (LString "("))) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "matchSpan" ((PVar "facts") (PVar "ctx") (PCon "EMatch" PWild (PVar "arms"))) (EMatch (ETuple (EFieldAccess (EVar "ctx") "ctxOwn") (EApp (EVar "lastArmSpan") (EVar "arms"))) (arm (PTuple (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "lastArmSpan" ((PList)) (EVar "None"))
-(DFunDef false "lastArmSpan" ((PList (PCon "Arm" PWild PWild (PVar "body")))) (EApp (EVar "tightSpan") (EVar "body")))
-(DFunDef false "lastArmSpan" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastArmSpan") (EVar "rest")))
+(DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))

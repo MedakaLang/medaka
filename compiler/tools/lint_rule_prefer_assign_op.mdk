@@ -32,12 +32,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   exprRuleEditVisitors,
   isEVarNamed,
-  nodeSpan,
   noExcl,
-  replaceFix,
+  replaceNodeFix,
   ruleNamePreferAssignOp,
   tightSpan,
   unwrapLoc,
@@ -184,13 +182,7 @@ setRefFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 setRefFix idx facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
   EApp hd _ =>
     if usesPreludeName idx facts hd then
-      replaceFix
-        Safe
-        "use the `:=` write operator"
-        (nodeSpan ctx e)
-        (bindingOf rewritten)
-        ctx
-        (exprToString rewritten)
+      replaceNodeFix Safe "use the `:=` write operator" ctx e rewritten
     else
       None
   _ => None

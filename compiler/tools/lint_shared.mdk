@@ -555,19 +555,7 @@ exprRuleVisitors : (String -> Bool) ->
   (Option Loc -> Expr -> Finding) ->
   List Visitor
 exprRuleVisitors excl det mkFinding =
-  [OnAnyExpr (exprRuleHit excl det mkFinding)]
-
-exprRuleHit : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
-  Ctx ->
-  Expr ->
-  List Finding
-exprRuleHit excl det mkFinding ctx e
-  | not ctx.ctxInTest && excl ctx.ctxDeclName = []
-  | otherwise = match det e
-    Some hit => [mkFinding ctx.ctxSpan hit]
-    None => []
+  exprRuleEditVisitors excl det (_ _ _ => None) (loc hit _ => mkFinding loc hit)
 
 -- `exprRuleVisitors` whose findings carry a span fix: the same detector and the
 -- same gate, with `fixOf ctx e rewritten` as each finding's fix.  The fix is
@@ -770,6 +758,19 @@ replaceFix applicability message span binding ctx text
       })
       span
 
+-- `replaceFix` for the rewrite of the expression `e` itself: `rewritten` replaces
+-- `e`'s node and is bracketed by its own binding strength.
+export
+replaceNodeFix : Applicability -> String -> Ctx -> Expr -> Expr -> Option Fix
+replaceNodeFix applicability message ctx e rewritten =
+  replaceFix
+    applicability
+    message
+    (nodeSpan ctx e)
+    (bindingOf rewritten)
+    ctx
+    (exprToString rewritten)
+
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
 varSite : Expr -> Option Loc
 varSite (ELoc l inner) = match varSite inner
@@ -822,12 +823,19 @@ rebinds : StdlibIndex -> FileFacts -> Ctx -> String -> Bool
 rebinds idx facts ctx name =
   not ctx.ctxInTest && ctx.ctxDeclName == name || bindsName idx facts name
 
--- The 1-based line of the source, `""` past the end.
+-- The 1-based line of the source, `None` past the end.
 export
-sourceLine : FileFacts -> Int -> String
+sourceLine : FileFacts -> Int -> Option String
 sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
-  l :: _ => l
-  [] => ""
+  l :: _ => Some l
+  [] => None
+
+-- Whether the character at line `sl`, column `sc` of the source is `(`.
+export
+parenAt : FileFacts -> Int -> Int -> Bool
+parenAt facts sl sc = match sourceLine facts sl
+  Some l => stringSlice sc (sc + 1) l == "("
+  None => False
 
 -- ── rule: match-to-map ────────────────────────────────────────────────────────
 -- A 2-arm `match` on an Option or Result that structurally IS a functor `map`

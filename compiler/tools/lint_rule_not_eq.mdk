@@ -3,7 +3,6 @@
 import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
-import tools.lint_fix.{Binding(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
@@ -24,9 +23,8 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  nodeSpan,
   notArgOf,
-  replaceFix,
+  replaceNodeFix,
   ruleNameNotEq,
   unwrapLoc,
   usesPreludeName,
@@ -101,12 +99,6 @@ notEqFinding loc rewritten fix = Finding {
 notEqFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
 notEqFix idx facts ctx e hd rewritten =
   if usesPreludeName idx facts hd && not (definesEquality ctx) then
-    replaceFix
-      Safe
-      "use the operator"
-      (nodeSpan ctx e)
-      Open
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "use the operator" ctx e rewritten
   else
     None

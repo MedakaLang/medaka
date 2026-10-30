@@ -1,5 +1,5 @@
 # META
-source_lines=2269
+source_lines=2268
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -1967,8 +1967,7 @@ spineHeadMono t = match peelQual t
 
 export
 locEq : Loc -> Loc -> Bool
-locEq (Loc f1 a1 b1 c1 d1) (Loc f2 a2 b2 c2 d2) =
-  f1 == f2 && a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2
+locEq a b = a == b
 
 -- strip leading `=>` constraints / effect rows so the walk aligns the method's
 -- value type with the occurrence mono.
@@ -2807,7 +2806,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "spineHeadMono" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "spineHeadMono" ((PVar "t")) (EMatch (EApp (EVar "peelQual") (EVar "t")) (arm (PCon "TApp" (PVar "f") PWild) () (EApp (EVar "spineHeadMono") (EVar "f"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "locEq" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
-(DFunDef false "locEq" ((PCon "Loc" (PVar "f1") (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PCon "Loc" (PVar "f2") (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "f1") (EVar "f2")) (EBinOp "==" (EVar "a1") (EVar "a2"))) (EBinOp "==" (EVar "b1") (EVar "b2"))) (EBinOp "==" (EVar "c1") (EVar "c2"))) (EBinOp "==" (EVar "d1") (EVar "d2"))))
+(DFunDef false "locEq" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig true "stripTyConstraints" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "stripTyConstraints" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "stripTyConstraints") (EVar "t")))
 (DFunDef false "stripTyConstraints" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "stripTyConstraints") (EVar "t")))
@@ -3407,7 +3406,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "spineHeadMono" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "spineHeadMono" ((PVar "t")) (EMatch (EApp (EVar "peelQual") (EVar "t")) (arm (PCon "TApp" (PVar "f") PWild) () (EApp (EVar "spineHeadMono") (EVar "f"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "locEq" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
-(DFunDef false "locEq" ((PCon "Loc" (PVar "f1") (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PCon "Loc" (PVar "f2") (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "f1") (EVar "f2")) (EBinOp "==" (EVar "a1") (EVar "a2"))) (EBinOp "==" (EVar "b1") (EVar "b2"))) (EBinOp "==" (EVar "c1") (EVar "c2"))) (EBinOp "==" (EVar "d1") (EVar "d2"))))
+(DFunDef false "locEq" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig true "stripTyConstraints" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "stripTyConstraints" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "stripTyConstraints") (EVar "t")))
 (DFunDef false "stripTyConstraints" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "stripTyConstraints") (EVar "t")))

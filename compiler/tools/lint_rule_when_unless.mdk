@@ -22,12 +22,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   exprRuleEditVisitors,
   isEVarNamed,
-  nodeSpan,
-  replaceFix,
+  replaceNodeFix,
   ruleNameWhenUnless,
   unwrapLoc,
 }
@@ -110,10 +108,4 @@ whenUnlessFix idx facts ctx e rewritten =
     || rebinds idx facts ctx "unless" then
     None
   else
-    replaceFix
-      Safe
-      "use when / unless"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "use when / unless" ctx e rewritten

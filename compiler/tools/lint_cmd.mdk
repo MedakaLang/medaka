@@ -72,7 +72,10 @@ import tools.lint.{
   factDirectives,
   factDupOccs,
   findingToDiag,
+  fixPassLimit,
   fixSource,
+  FixRun(..),
+  runParts,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
@@ -1116,10 +1119,23 @@ lintOneFileFix idx unsafeMode onlyNames disableNames target =
         Err msg =>
           let _ = ePutStrLn msg
           True
-        Ok (newSrc, n) => writeFixed target src newSrc n
+        Ok run => writeFixed target src run
 
-writeFixed : String -> String -> String -> Int -> <IO> Bool
-writeFixed target src newSrc n =
+-- A run that stopped at the pass limit still writes what it fixed; it exits
+-- non-zero (C3: everything but clean) so a script sees the file is not done.
+writeFixed : String -> String -> FixRun -> <IO> Bool
+writeFixed target src run =
+  let (newSrc, n) = runParts run
+  let failed = writeFixedSource target src newSrc n
+  match run
+    Capped _ _ =>
+      ePutStrLn
+        "\{target}: stopped after \{intToString fixPassLimit} passes; run again"
+      True
+    Settled _ _ => failed
+
+writeFixedSource : String -> String -> String -> Int -> <IO> Bool
+writeFixedSource target src newSrc n =
   if n == 0 && newSrc == src then
     let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
     False

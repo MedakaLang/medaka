@@ -23,12 +23,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   exprRuleEditVisitors,
-  nodeSpan,
   notArgOf,
-  replaceFix,
+  replaceNodeFix,
   ruleNameComplementPredicate,
   unwrapLoc,
 }
@@ -134,13 +132,7 @@ complementPredicateFix idx facts ctx e rewritten =
   if anyList (rebinds idx facts ctx) (complementNames e rewritten) then
     None
   else
-    replaceFix
-      Unsafe
-      "call the complement"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Unsafe "call the complement" ctx e rewritten
 
 -- the names the rewrite of `not (p args…)` to `q args…` reads or writes
 complementNames : Expr -> Expr -> List String

@@ -25,7 +25,8 @@ import tools.lint_core.{
   Applicability(..), Finding(..), Fix(..), FixEdit(..), Rule, mkRule
 }
 import tools.lint_fix.{
-  Binding(..), FixError, applyFixes, fixErrorText, parenIfNeeded
+  Binding(..), FixError, FixRun(..), applyFixes, demoteOverComments,
+  fixErrorText, fixPassLimit, parenIfNeeded, runParts
 }
 import driver.diagnostics.{Severity(..), cjDiagnostic}
 
@@ -81,9 +82,8 @@ probeLinter probes _ src = match lintParseSource src
   Err _ => Err "does not parse"
   Ok _ => Ok (probeFindings probes src)
 
-outcome : Result FixError (String, Int) -> Result String (String, Int)
-outcome (Ok r) = Ok r
-outcome (Err e) = Err (fixErrorText e)
+outcome : Result FixError FixRun -> Result String (String, Int)
+outcome r = map runParts (mapErr fixErrorText r)
 
 runProbes : List Probe -> Applicability -> String -> Result String (String, Int)
 runProbes probes limit src =
@@ -119,6 +119,43 @@ test "a comment inside the edit span demotes the fix" =
   expectEqual
     (Ok (src, 0))
     (runProbes [safe "f (g\n  -- keep me\n  x)" "f g x"] Safe src)
+
+-- The finding the JSON reports is the one the driver acts on: an edit over a
+-- comment is a suggestion in both, so a consumer never applies what `--fix`
+-- withholds.
+test "a reported fix over a comment is a suggestion" =
+  let src = "main = f (g\n  -- keep me\n  x)\n"
+  let over = probeFinding Safe (Loc "probe.mdk" 1 7 3 4) "f g x"
+  let clear = probeFinding Safe (Loc "probe.mdk" 1 0 1 4) "name"
+  let reported = demoteOverComments "probe.mdk" src [over, clear]
+  expectEach [
+    (
+      "applicability",
+      expectEqual ["suggest", "safe"] (flatMap fixApplicabilities reported),
+    ),
+    (
+      "the json text",
+      expectTrue
+        (any
+          (f =>
+            isSome
+              (indexOf
+                "\"applicability\":\"suggest\""
+                (stringify (cjDiagnostic "probe.mdk" src (findingToDiag f)))))
+          reported),
+    ),
+  ]
+
+test "a run that still has fixes after the pass limit is reported capped" =
+  expectEqual
+    (Ok (Capped "main = X\n" fixPassLimit))
+    (mapErr
+      fixErrorText
+      (applyFixes
+        (probeLinter [safe "X" "Y", safe "Y" "X"])
+        Safe
+        "probe.mdk"
+        "main = X\n"))
 
 test "a comment outside the edit span does not block it" =
   expectEqual

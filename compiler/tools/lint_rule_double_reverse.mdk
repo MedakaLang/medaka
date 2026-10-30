@@ -22,12 +22,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   exprRuleEditVisitors,
   isEVarNamed,
-  nodeSpan,
   noExcl,
-  replaceFix,
+  replaceNodeFix,
   ruleNameDoubleReverse,
   unwrapLoc,
   usesPreludeName,
@@ -92,13 +90,7 @@ doubleReverseFinding loc rewritten fix = Finding {
 doubleReverseFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 doubleReverseFix idx facts ctx e rewritten =
   if reversesArePrelude idx facts e then
-    replaceFix
-      Safe
-      "drop the double reversal"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "drop the double reversal" ctx e rewritten
   else
     None
 

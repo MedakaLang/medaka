@@ -6,7 +6,7 @@
 import tools.lint_fix as LF
 import driver.diagnostics.{ppDiagCliSrc, parseErrDiag}
 import frontend.ast.{Decl}
-import frontend.parser.{Positions}
+import frontend.parser.{ParseError, Positions}
 import tools.lint_walk.{lintParseSource, lintProgramFacts, mkFileFacts}
 import tools.lint_registry.{selectRules}
 
@@ -33,6 +33,7 @@ export import tools.lint_core.{
   ruleMetaName,
 }
 export import tools.lint_shared.{collectDirectives}
+export import tools.lint_fix.{FixRun(..), fixPassLimit, runParts}
 export import tools.lint_dup.{fileDupOccs}
 export import tools.lint_registry.{
   allCrossFileRules,
@@ -83,33 +84,49 @@ fixSource : StdlibIndex ->
   List String ->
   String ->
   String ->
-  Result String (String, Int)
+  Result String LF.FixRun
 fixSource idx limit only disable path src = match lintParseSource src
-  Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
+  Err e => Err (parseFailure src path e)
   Ok parsed =>
     let editRules = filter emitsEdits (selectRules only disable)
     if isEmpty editRules then
-      wholeDeclFix only disable src 0 parsed
+      wholeDeclFix only disable (LF.Settled src 0) parsed
     else match (LF.applyFixes
       (editLinter idx editRules src parsed)
       limit
       path
       src)
       Err e => Err "\{path}: \{LF.fixErrorText e}"
-      Ok (edited, 0) => wholeDeclFix only disable edited 0 parsed
-      Ok (edited, n) => match lintParseSource edited
-        Err e => Err (ppDiagCliSrc edited path (parseErrDiag path e))
-        Ok reparsed => wholeDeclFix only disable edited n reparsed
+      Ok run => match LF.runParts run
+        (_, 0) => wholeDeclFix only disable run parsed
+        (edited, _) => match lintParseSource edited
+          Err e => Err (parseFailure edited path e)
+          Ok reparsed => wholeDeclFix only disable run reparsed
 
+-- The whole-declaration fixers over the source `run` left, keeping its cap.
 wholeDeclFix : List String ->
   List String ->
-  String ->
-  Int ->
+  LF.FixRun ->
   (List Decl, Positions) ->
-  Result String (String, Int)
-wholeDeclFix only disable src edited (decls, pos) =
-  let (out, adapted) = applyFixes only disable src decls pos
-  Ok (out, edited + adapted)
+  Result String LF.FixRun
+wholeDeclFix only disable run (decls, pos) =
+  let (edited, n) = LF.runParts run
+  let (out, adapted) = applyFixes only disable edited decls pos
+  Ok (LF.sameCap run out (n + adapted))
+
+parseFailure : String -> String -> ParseError -> String
+parseFailure src path e = ppDiagCliSrc src path (parseErrDiag path e)
+
+-- The index the rules named by `only` are linted with: the CLI's when one of
+-- them reads it, else the empty one.
+export
+indexForRules : List String -> <IO> Result String StdlibIndex
+indexForRules only =
+  if stdlibIndexNeeded only [] then match buildStdlibIndexResult
+    Ok idx => Ok idx
+    Err _ => Err "cannot build the stdlib index"
+  else
+    Ok emptyStdlibIndex
 
 -- A rule whose fixes are span edits rather than a whole-declaration rewrite:
 -- fixable, yet carrying no declaration fixer.
@@ -134,7 +151,7 @@ editLinter idx rules first parsed path src =
   if src == first then
     Ok (editFindings idx rules path src parsed)
   else match lintParseSource src
-    Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
+    Err e => Err (parseFailure src path e)
     Ok reparsed => Ok (editFindings idx rules path src reparsed)
 
 editFindings : StdlibIndex ->

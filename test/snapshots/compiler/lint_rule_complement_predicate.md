@@ -1,5 +1,5 @@
 # META
-source_lines=154
+source_lines=146
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-complement-predicate: `not (p x)` where `p` has a defined complement predicate. Call the complement directly.
@@ -27,12 +27,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   exprRuleEditVisitors,
-  nodeSpan,
   notArgOf,
-  replaceFix,
+  replaceNodeFix,
   ruleNameComplementPredicate,
   unwrapLoc,
 }
@@ -138,13 +136,7 @@ complementPredicateFix idx facts ctx e rewritten =
   if anyList (rebinds idx facts ctx) (complementNames e rewritten) then
     None
   else
-    replaceFix
-      Unsafe
-      "call the complement"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Unsafe "call the complement" ctx e rewritten
 
 -- the names the rewrite of `not (p args…)` to `q args…` reads or writes
 complementNames : Expr -> Expr -> List String
@@ -163,7 +155,7 @@ spineName e = match appSpineHead e
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "notArgOf" false) (mem "replaceFix" false) (mem "ruleNameComplementPredicate" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "notArgOf" false) (mem "replaceNodeFix" false) (mem "ruleNameComplementPredicate" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameComplementPredicate")) (fa "summary" (ELit (LString "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly"))) (fa "doc" (ELit (LString "Negating a predicate that has a defined complement (`isEmptyL`/`isSome`/`isOk` and their inverses) is clearer as a call to the complement.\n\nBefore:\n  not (isSome x)\nAfter:\n  isNone x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleComplementPredicate")) (EVar "None")))
 (DTypeSig false "complementExcl" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -189,7 +181,7 @@ spineName e = match appSpineHead e
 (DTypeSig false "complementPredicateFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "complementPredicateFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameComplementPredicate")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated predicate. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "complementPredicateFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "complementPredicateFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "complementNames") (EVar "e")) (EVar "rewritten"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "call the complement"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DFunDef false "complementPredicateFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "complementNames") (EVar "e")) (EVar "rewritten"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Unsafe")) (ELit (LString "call the complement"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))
 (DTypeSig false "complementNames" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "complementNames" ((PVar "e") (PVar "rewritten")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EBinOp "::" (ELit (LString "not")) (EBinOp "++" (EApp (EVar "spineName") (EApp (EVar "unwrapLoc") (EVar "inner"))) (EApp (EVar "spineName") (EVar "rewritten"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "spineName" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
@@ -201,7 +193,7 @@ spineName e = match appSpineHead e
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "notArgOf" false) (mem "replaceFix" false) (mem "ruleNameComplementPredicate" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "notArgOf" false) (mem "replaceNodeFix" false) (mem "ruleNameComplementPredicate" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameComplementPredicate")) (fa "summary" (ELit (LString "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly"))) (fa "doc" (ELit (LString "Negating a predicate that has a defined complement (`isEmptyL`/`isSome`/`isOk` and their inverses) is clearer as a call to the complement.\n\nBefore:\n  not (isSome x)\nAfter:\n  isNone x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleComplementPredicate")) (EVar "None")))
 (DTypeSig false "complementExcl" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -227,7 +219,7 @@ spineName e = match appSpineHead e
 (DTypeSig false "complementPredicateFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "complementPredicateFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameComplementPredicate")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated predicate. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "complementPredicateFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "complementPredicateFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "complementNames") (EVar "e")) (EVar "rewritten"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "call the complement"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DFunDef false "complementPredicateFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "complementNames") (EVar "e")) (EVar "rewritten"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Unsafe")) (ELit (LString "call the complement"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))
 (DTypeSig false "complementNames" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "complementNames" ((PVar "e") (PVar "rewritten")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EBinOp "::" (ELit (LString "not")) (EBinOp "++" (EApp (EVar "spineName") (EApp (EVar "unwrapLoc") (EVar "inner"))) (EApp (EVar "spineName") (EVar "rewritten"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "spineName" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
