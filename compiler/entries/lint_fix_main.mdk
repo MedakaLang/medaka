@@ -3,25 +3,30 @@
 --   medaka run compiler/entries/lint_fix_main.mdk <source.mdk>
 --
 -- parses the target WITH positions (no desugar), applies every fixable rule's
--- fixer over the program (no --only/--disable filters), and prints the rewritten
+-- fixer over the program (or only the `--only=<rules>` ones), and prints the rewritten
 -- source to stdout.  Drives `tools.lint.applyFixes` — the gate
 -- (test/diff_compiler_fmt_test.mdk) compares its output to a `.fixed` golden.
 
 import frontend.parser.{parseWithPositions}
-import tools.lint.{applyFixes}
+import string.{stripPrefix}
+import tools.lint.{applyFixes, splitLintNames}
 
 export
 oracleMain : Unit -> <IO> Unit
 oracleMain () = match args ()
-  [targetPath] => withTarget targetPath
+  [targetPath] => withTarget [] targetPath
+  [flag, targetPath] => match stripPrefix "--only=" flag
+    Some names => withTarget (splitLintNames names) targetPath
+    None => ePutStrLn "unknown flag \{flag}"
   _ =>
-    ePutStrLn "usage: medaka run compiler/entries/lint_fix_main.mdk <file.mdk>"
+    ePutStrLn
+      "usage: medaka run compiler/entries/lint_fix_main.mdk [--only=<rules>] <file.mdk>"
 
-withTarget : String -> <IO> Unit
-withTarget targetPath = match readFile targetPath
+withTarget : List String -> String -> <IO> Unit
+withTarget only targetPath = match readFile targetPath
   Ok targetSrc =>
     let (decls, pos) = parseWithPositions targetSrc
-    let (newSrc, _) = applyFixes [] [] targetSrc decls pos
+    let (newSrc, _) = applyFixes only [] targetSrc decls pos
     putStr newSrc
   Err msg => ePutStrLn msg
 

@@ -339,7 +339,7 @@ prop "a variable is refused any type that strictly contains it, and accepted a c
       codesOf m == []
     (k, v) :: _ =>
       unify m v (TApp (tconBuiltin "List") (build cells t))
-      codesOf m /= [] && all (c => c == "T-INFINITE-TYPE") (codesOf m)
+      codesOf m /= [] && all (== "T-INFINITE-TYPE") (codesOf m)
 
 -- ── levels ────────────────────────────────────────────────────────────────
 

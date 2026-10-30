@@ -15,11 +15,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   ruleNameRemParity,
   unwrapLoc,
@@ -28,7 +29,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameRemParity,
       summary =
@@ -86,9 +87,9 @@ ruleRemParity : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleRemParity _ _ _ pos prog =
-  exprRuleFindings remParityExcl remParityOf remParityFinding pos prog
+  List Visitor
+ruleRemParity _ _ _ _ _ =
+  exprRuleVisitors remParityExcl remParityOf remParityFinding
 
 remParityFinding : Option Loc -> Expr -> Finding
 remParityFinding loc rewritten = Finding {

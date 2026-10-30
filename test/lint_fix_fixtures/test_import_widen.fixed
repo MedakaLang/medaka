@@ -2,8 +2,8 @@
 -- A rewrite that introduces a `test` verb the selective `import test.{…}` list
 -- does not name must add that verb to the list, once, in list order.
 
-import test.{expectTrue, expectFalse}
+import test.{expectTrue, expectFalse, expectEqual, expectNotEqual}
 
-eqCase a = expectTrue (a == 1)
-neCase a = expectFalse (a == 1)
-neCase2 a = expectTrue (a /= 2)
+eqCase a = expectEqual a 1
+neCase a = expectNotEqual a 1
+neCase2 a = expectNotEqual a 2

@@ -246,7 +246,7 @@ duplicateReached others dup goal =
 prop "a twice-declared head that is minimal at the goal is rejected and not as missing" (heads : List Head) (dup : Head) (goal : Goal) =
   let others = filter (/= dup) (nub heads)
   if duplicateReached others dup goal then
-    let twice = tagImpl (v => v ++ "2") dup
+    let twice = tagImpl (++ "2") dup
     let codes = codesFlat (c1Program plain (others ++ [dup]) goal ++ twice)
     codes /= [] && not (hasCode noImplCode codes)
   else

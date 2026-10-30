@@ -6783,12 +6783,7 @@ IDENT "m"
 FAT_ARROW
 IDENT "insertWith"
 LPAREN
-IDENT "a"
-IDENT "b"
-FAT_ARROW
-IDENT "a"
 PLUS
-IDENT "b"
 RPAREN
 IDENT "k"
 IDENT "v"
@@ -6808,12 +6803,7 @@ IDENT "m"
 FAT_ARROW
 IDENT "insertWithOld"
 LPAREN
-IDENT "a"
-IDENT "b"
-FAT_ARROW
-IDENT "a"
 PLUS
-IDENT "b"
 RPAREN
 IDENT "k"
 IDENT "v"
@@ -8312,12 +8302,7 @@ IDENT "n"
 LPAREN
 IDENT "unionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "small"
 IDENT "big"
@@ -8334,12 +8319,7 @@ IDENT "n"
 LPAREN
 IDENT "unionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "big"
 IDENT "small"
@@ -8370,12 +8350,7 @@ IDENT "n"
 LPAREN
 IDENT "unionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "sameSize"
 IDENT "big"
@@ -8470,12 +8445,7 @@ IDENT "got"
 EQUAL
 IDENT "unionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "a"
 IDENT "b"
@@ -8490,12 +8460,7 @@ IDENT "entries"
 LPAREN
 IDENT "naiveUnionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "a"
 IDENT "b"
@@ -8610,12 +8575,7 @@ IDENT "got"
 EQUAL
 IDENT "intersectionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "a"
 IDENT "b"
@@ -8630,12 +8590,7 @@ IDENT "entries"
 LPAREN
 IDENT "naiveIntersectionWith"
 LPAREN
-IDENT "x"
-IDENT "y"
-FAT_ARROW
-IDENT "x"
 PLUS
-IDENT "y"
 RPAREN
 IDENT "a"
 IDENT "b"
@@ -8786,14 +8741,11 @@ IDENT "all"
 LPAREN
 IDENT "k"
 FAT_ARROW
-IDENT "not"
-LPAREN
-IDENT "isSome"
+IDENT "isNone"
 LPAREN
 IDENT "get"
 IDENT "k"
 IDENT "b"
-RPAREN
 RPAREN
 OR
 IDENT "isSome"
@@ -8882,9 +8834,6 @@ IDENT "got"
 EQUAL
 IDENT "filter"
 LPAREN
-IDENT "v"
-FAT_ARROW
-IDENT "v"
 GT
 INT 0
 RPAREN

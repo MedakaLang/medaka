@@ -154,7 +154,7 @@ test "an overlong encoding is U+FFFD, never the ASCII it spells" =
 -- 64 of them alternating with commas split into 65 parts, 64 U+FFFD and the
 -- empty part after the last comma.
 test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
-  let raw = arrayMakeWith 128 (i => if i % 2 == 0 then 255 else 44)
+  let raw = arrayMakeWith 128 (i => if isEven i then 255 else 44)
   expectEqual (replicate 64 "�" ++ [""]) (split "," (fromUtf8 raw))
 # DESUGAR
 (DUse false (UseGroup ("bytes") ((mem "decodeUtf8Lossy" false) (mem "fromArrayAssumeByteDomain" false))))
@@ -191,7 +191,7 @@ test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
 (DProp false "fromUtf8 and decodeUtf8Lossy agree with the reference reading" ((pp "raw" (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EVar "lossyAgrees") (EVar "raw")))
 (DTest false "fromUtf8 of stray continuation bytes gives one U+FFFD each" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LInt 128)))))))
 (DTest false "an overlong encoding is U+FFFD, never the ASCII it spells" (EApp (EApp (EVar "expectEqual") (EArrayLit (ELit (LChar "�")) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EArrayLit (ELit (LInt 192)) (ELit (LInt 174)))))))
-(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EBinOp "==" (EBinOp "%" (EVar "i") (ELit (LInt 2))) (ELit (LInt 0))) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))
+(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EApp (EVar "isEven") (EVar "i")) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))
 # MARK
 (DUse false (UseGroup ("bytes") ((mem "decodeUtf8Lossy" false) (mem "fromArrayAssumeByteDomain" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
@@ -227,4 +227,4 @@ test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
 (DProp false "fromUtf8 and decodeUtf8Lossy agree with the reference reading" ((pp "raw" (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EVar "lossyAgrees") (EVar "raw")))
 (DTest false "fromUtf8 of stray continuation bytes gives one U+FFFD each" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LInt 128)))))))
 (DTest false "an overlong encoding is U+FFFD, never the ASCII it spells" (EApp (EApp (EVar "expectEqual") (EArrayLit (ELit (LChar "�")) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EArrayLit (ELit (LInt 192)) (ELit (LInt 174)))))))
-(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EBinOp "==" (EBinOp "%" (EVar "i") (ELit (LInt 2))) (ELit (LInt 0))) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))
+(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EApp (EVar "isEven") (EVar "i")) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))

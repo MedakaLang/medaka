@@ -2279,13 +2279,12 @@ prop "clamp keeps values inside the interval" (x : Int) =
   c >= 0 && c <= 100
 
 prop "filter . filter p == filter p" (xs : List Int) =
-  eq (filter (x => x > 0) (filter (x => x > 0) xs)) (filter (x => x > 0) xs)
+  eq (filter (> 0) (filter (> 0) xs)) (filter (> 0) xs)
 
 prop "length matches a counting fold" (xs : List Int) =
   length xs == fold (acc _ => acc + 1) 0 xs
 
-prop "any/all duality" (xs : List Int) =
-  any (x => x > 0) xs == not (all (x => x <= 0) xs)
+prop "any/all duality" (xs : List Int) = any (> 0) xs == not (all (<= 0) xs)
 
 prop "optionOr d (Some x) == x" (x : Int) (d : Int) = optionOr d (Some x) == x
 
@@ -2293,16 +2292,16 @@ prop "toResult/fromResult round-trip on Some" (x : Int) =
   eq (fromResult (toResult "missing" (Some x))) (Some x)
 
 prop "option dflt f (Some x) == f x" (x : Int) (d : Int) =
-  option d (n => n * 2) (Some x) == x * 2
+  option d (* 2) (Some x) == x * 2
 
 prop "option dflt f None == dflt" (d : Int) =
-  option d (n => n * 2) (None : Option Int) == d
+  option d (* 2) (None : Option Int) == d
 
 prop "result onErr onOk (Ok x) == onOk x" (x : Int) =
-  result (e => 0) (n => n * 2) (Ok x) == x * 2
+  result (e => 0) (* 2) (Ok x) == x * 2
 
 prop "result onErr onOk (Err e) == onErr e" (e : Int) =
-  result (n => n * 2) (n => 0) (Err e : Result Int Int) == e * 2
+  result (* 2) (n => 0) (Err e : Result Int Int) == e * 2
 
 prop "Ord (List a) is reflexive" (xs : List Int) = match compare xs xs
   Eq => True
@@ -2312,23 +2311,19 @@ prop "discard replaces the payload with Unit" (x : Int) =
   eq (discard (Some x)) (Some ())
 
 prop "on agrees with its hand expansion" (a : Int) (b : Int) =
-  on (x y => x + y) (n => n * 2) a b == a * 2 + b * 2
+  on (+) (* 2) a b == a * 2 + b * 2
 
 prop "map2 on Some matches direct application" (a : Int) (b : Int) =
-  eq (map2 (x y => x + y) (Some a) (Some b)) (Some (a + b))
+  eq (map2 (+) (Some a) (Some b)) (Some (a + b))
 
 prop "map3 on Some matches direct application" (a : Int) (b : Int) (c : Int) =
   eq (map3 (x y z => x + y + z) (Some a) (Some b) (Some c)) (Some (a + b + c))
 
 prop "mapFirst on Result generalizes mapErr" (n : Int) =
-  eq
-    (mapFirst (x => x + 1) (Err n : Result Int Int))
-    (mapErr (x => x + 1) (Err n))
+  eq (mapFirst (+ 1) (Err n : Result Int Int)) (mapErr (+ 1) (Err n))
 
 prop "foldThen with Some agrees with a pure fold" (xs : List Int) =
-  eq
-    (foldThen (acc x => Some (acc + x)) 0 xs)
-    (Some (fold (acc x => acc + x) 0 xs))
+  eq (foldThen (acc x => Some (acc + x)) 0 xs) (Some (fold (+) 0 xs))
 
 -- ─── Instance laws ───────────────────────────────────────────────────────
 {- Two things constrain how these are written.
@@ -2375,7 +2370,7 @@ prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : I
 -- and its `Some` payload must come from the element instance.
 prop "Arbitrary (Option a) draws both constructors and delegates" (n : Int) =
   let draws : List (Option Int) = drawN 50
-  all optInRange draws && any isSome draws && any (o => not (isSome o)) draws
+  all optInRange draws && any isSome draws && any isNone draws
 
 -- LAW: `shrink` must return strictly smaller values.  `None` is the only
 -- `Option` smaller than a `Some`, and nothing is smaller than `None`.
@@ -2446,12 +2441,12 @@ prop "Array Foldable agrees with List Foldable" (xs : List Int) =
     && eq
       (fold (acc x => acc * 31 + x) 7 arr)
       (fold (acc x => acc * 31 + x) 7 xs)
-    && eq (foldRight (x acc => x :: acc) [] arr) xs
+    && eq (foldRight (::) [] arr) xs
 
 prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List Int) =
   eq
-    (toList (append (map (x => x + 1) (arrayFromList xs)) (arrayFromList ys)))
-    (map (x => x + 1) xs ++ ys)
+    (toList (append (map (+ 1) (arrayFromList xs)) (arrayFromList ys)))
+    (map (+ 1) xs ++ ys)
 
 -- LAW: `append` agrees with list append and always returns a fresh array:
 -- writing into the result leaves both inputs unchanged. The left input is
@@ -2475,8 +2470,8 @@ prop "Array append with an empty left side copies the right input" (ys : List In
 -- window, including empty windows.
 prop "Array slice agrees with List slice" (xs : List Int) (lo : Int) (hi : Int) =
   let n = length xs
-  let l = if lo < 0 then 0 else if lo > n then n else lo
-  let h = if hi < l then l else if hi > n then n else hi
+  let l = if lo < 0 then 0 else min lo n
+  let h = if hi < l then l else min hi n
   eq (toList (slice (arrayFromList xs) l h)) (slice xs l h)
 
 -- LAW: `Ord (Array a)` on equal prefixes orders by length.

@@ -1074,16 +1074,15 @@ test "mutation control: the pds/shell call site this control mutates is still th
       else
         Ok ["\{serverPath}: no `\{realCallSite}` call site"])
 
-test "mutation control: a secret at a real pds/shell call site is caught" = expectFindings
-  "a secret at a real pds/shell access-log call site"
-  (match serverContent
-    Err e => Err e
-    Ok content =>
-      Ok
-        (accessLogHits (
-          serverPath,
-          replaceAll realCallSite "logAccessBytes trace sessionSecret" content,
-        )))
+test "mutation control: a secret at a real pds/shell call site is caught" =
+  expectFindings
+    "a secret at a real pds/shell access-log call site"
+    (map
+      (content => accessLogHits (
+        serverPath,
+        replaceAll realCallSite "logAccessBytes trace sessionSecret" content,
+      ))
+      serverContent)
 
 {- | The forging probe from the sprint review, in the import position of a
    real `pds/shell` module: with `scFromBytes` and `ecdsaSignDigest` in

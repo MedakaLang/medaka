@@ -829,7 +829,7 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 -- sibling `foldWithIndex` on the same callback.
 prop "mapWithIndex with an index-ignoring callback is map" (xs : List Int) =
   let arr = fromList xs
-  eq (mapWithIndex (_ x => x + 1) arr) (map (x => x + 1) arr)
+  eq (mapWithIndex (_ x => x + 1) arr) (map (+ 1) arr)
 
 prop "mapWithIndex hands the callback 0..n-1 in order" (xs : List Int) =
   let arr = fromList xs

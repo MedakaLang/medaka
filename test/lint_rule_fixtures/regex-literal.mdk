@@ -1,0 +1,39 @@
+-- Fixture for rule-regex-literal (#2924): a string literal passed directly to
+-- `compile`/`mustCompile` is run through `regex.compile` at lint time, so a
+-- bad pattern is a located finding instead of a `mustCompile` panic the first
+-- time the line runs.
+
+import regex.{mustCompile}
+
+-- POSITIVE: an unclosed group never compiles.
+-- expect-next-line rule-regex-literal
+badRe = mustCompile "(unclosed"
+
+-- Fixture for rule-regex-literal (#2929): the roster resolves a call head
+-- through the file's own `import` decls, so an aliased or renamed
+-- `regex.mustCompile` call is flagged exactly like the bare form is.
+
+import regex.{mustCompile}
+import regex as Re
+import regex.{mustCompile as mc}
+
+-- POSITIVE: all three call forms carry the same unclosed group.
+-- expect-next-line rule-regex-literal
+badBare = mustCompile "(unclosed"
+-- expect-next-line rule-regex-literal
+badAlias = Re.mustCompile "(unclosed"
+-- expect-next-line rule-regex-literal
+badRenamed = mc "(unclosed"
+
+-- NEGATIVE: dotted access on a plain, non-aliased `import regex` is not a
+-- legal call form at all ([P-IMPORT-BINDS]) -- never a fourth roster entry.
+badDotted = regex.mustCompile "(unclosed"
+
+-- Fixture for rule-regex-literal (#2924): the negative case — a string
+-- literal passed directly to `compile`/`mustCompile` that DOES compile as a
+-- regex pattern must never fire.
+
+import regex.{mustCompile}
+
+-- NEGATIVE: a valid pattern.
+goodRe = mustCompile "[a-z]+"

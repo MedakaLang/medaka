@@ -43,18 +43,28 @@ import tools.lint.{
   StdlibIndex,
   allCrossFileRules,
   allRuleNames,
+  applyFixes,
   buildStdlibIndexResult,
   crossFileMetaProblems,
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
   mergeCrossFileIntoTriples,
+  selectRules,
 }
+import tools.lint_walk.{runVisitors}
+import tools.lint_shared.{declLocList}
+import frontend.ast_walk.{ExprKind(..)}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   CrossFileRule,
   Finding(..),
   Fixability(..),
   Ratchet(..),
   RuleMeta(..),
   Scope(..),
+  Visitor(..),
   mkCrossFileRule,
 }
 import tools.lint_cmd.{
@@ -232,13 +242,58 @@ test "--explain names a known rule and rejects an unknown one" = expectEach [
   ("unknown", expectFalse (isOk (explainRule "nope"))),
 ]
 
--- ── 5. #3837 stopgap: reported, never auto-fixed ────────────────────────────
--- The two test-verb rules still report, and `--fix` leaves the source alone.
-test "the test-verb rules report but do not fix" = match buildStdlibIndexResult
-  Err _ => fail "could not build stdlib index"
-  Ok idx =>
-    let triples = lintFilesToDiagTriples idx True [] [] [] None verbFixtures
-    expectEach (map (reportsTestVerbRule triples) verbFixtures)
+-- ── 5. a test-verb fix applies only to `test`'s own verb ────────────────────
+-- The two test-verb rules report in every fixture below; `--fix` rewrites the
+-- one whose verb resolves to the `test` import and leaves the four whose verb is
+-- captured by another binding untouched.
+test "the test-verb rules report in every fixture" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let triples = lintFilesToDiagTriples idx True [] [] [] None verbFixtures
+      expectEach (map (reportsTestVerbRule triples) verbFixtures)
+
+test "--fix leaves a verb that does not resolve to the test import alone" =
+  expectEach (map fixLeavesAlone verbFixtures)
+
+test "--fix rewrites a verb that resolves to the test import" =
+  fixResult
+    "test/lint_fix_fixtures/test_verb_resolves_to_import.mdk"
+    "test/lint_fix_fixtures/test_verb_resolves_to_import.fixed"
+
+test "a test whose label is isEven is still checked for parity tests" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let path = "test/lint_fix_fixtures/rem_parity_excl_kinds.mdk"
+      let triples = lintFilesToDiagTriples idx True [] [] [] None [path]
+      expectTrue
+        (anyList
+          (d => diagCode d == "rule-rem-parity")
+          (flatMap (diagsOfFile path) triples))
+
+test "--fix leaves an impl method named isEven alone" =
+  expectEach
+    (map fixLeavesAlone ["test/lint_fix_fixtures/rem_parity_excl_kinds.mdk"])
+
+-- `--fix` run over a fixture file: the rewritten source, `None` when the file
+-- cannot be read or parsed.
+fixedSource : String -> <FileRead> Option String
+fixedSource path = match readFile path
+  Err _ => None
+  Ok src => match lintParseSource src
+    Err _ => None
+    Ok (decls, pos) => Some (fst (applyFixes [] [] src decls pos))
+
+fixResult : String -> String -> <FileRead> Expectation
+fixResult path fixedPath = match readFile fixedPath
+  Err _ => fail "cannot read \{fixedPath}"
+  Ok expected => expectEqual (Some expected) (fixedSource path)
+
+fixLeavesAlone : String -> <FileRead> (String, Expectation)
+fixLeavesAlone path = match readFile path
+  Err _ => (path, fail "cannot read it")
+  Ok src => (path, expectEqual (Some src) (fixedSource path))
 
 verbFixtures : List String
 verbFixtures = [
@@ -246,6 +301,11 @@ verbFixtures = [
   "test/lint_fix_fixtures/test_verb_where_bound_swapped.mdk",
   "test/lint_fix_fixtures/test_verb_param_shadow.mdk",
   "test/lint_fix_fixtures/test_verb_alias_inverts.mdk",
+  "test/lint_fix_fixtures/test_verb_guard_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_guard_bind_equal.mdk",
+  "test/lint_fix_fixtures/test_verb_do_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_lambda_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_foreign_wildcard.mdk",
 ]
 
 reportsTestVerbRule : List (String, String, List Diag) ->
@@ -514,3 +574,68 @@ test "naming an internal rule where internal is off is reported" = expectEach [
       (inactiveInternalRuleUse False ["rule-not-eq"] ["stdlib/list.mdk"]),
   ),
 ]
+
+-- ── the visitor walk ──────────────────────────────────────────────────────────
+-- A visitor that reports, at every application, the `Ctx` it was handed.
+ctxProbe : List Visitor
+ctxProbe = [OnExpr [KApp] (ctx _ => [ctxFinding ctx])]
+
+ctxFinding : Ctx -> Finding
+ctxFinding ctx = Finding {
+  rule = "probe",
+  message =
+    "\{ctx.ctxDeclName} params=\{intToString (listLen ctx.ctxParams)} test=\{debug ctx.ctxInTest} parent=\{debug ctx.ctxParent}",
+  severity = SevWarning,
+  loc = ctx.ctxSpan,
+}
+
+walkSrc : String
+walkSrc = "f x = g (h x)\ntest \"t\" = k 1\n"
+
+findingMessage : Finding -> String
+findingMessage f = f.message
+
+test "the visitor walk hands each callback its owner, test flag and parent kind" =
+  match lintParseSource walkSrc
+    Err _ => fail "the fixture did not parse"
+    Ok (decls, pos) =>
+      expectEqual
+        [
+          [
+            "f params=1 test=False parent=None",
+            "f params=1 test=False parent=Some KApp",
+            "t params=0 test=True parent=None",
+          ],
+        ]
+        (map
+          (map findingMessage)
+          (runVisitors [ctxProbe] (declLocList pos decls)))
+
+notEqSrc : String
+notEqSrc =
+  """interface Same a where
+  same : a -> a -> Bool
+  same x y = not (x == y)
+let rec loop n = not (n == 0)
+test "t" = expectTrue (not (1 == 2))
+"""
+
+test "rule-not-eq reaches interface-default, let-group and test bodies" =
+  match lintParseSource notEqSrc
+    Err _ => fail "the fixture did not parse"
+    Ok (decls, pos) =>
+      expectEqual
+        [
+          "negated equality. Rewrite as 'x /= y'",
+          "negated equality. Rewrite as 'n /= 0'",
+          "negated equality. Rewrite as '1 /= 2'",
+        ]
+        (map
+          findingMessage
+          (lintProgram
+            emptyStdlibIndex
+            (selectRules ["rule-not-eq"] [])
+            "t.mdk"
+            notEqSrc
+            pos
+            decls))

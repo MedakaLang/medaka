@@ -1,0 +1,59 @@
+-- Combined fixture: triggers all three lint rules.
+data Shape = Circle | Square
+
+-- expect-next-line rule-hand-rolled-derivable
+impl Eq Shape where
+  eq Circle Circle = True
+  eq Square Square = True
+  eq _ _ = False
+
+reverse : List a -> List a
+reverse [] = []
+reverse (x::xs) = reverse xs ++ [x]
+
+classify : Int -> String
+classify n = match n
+  0 => "zero"
+  1 => "one"
+  _ => "other"
+
+-- rule-hand-rolled-derivable now requires the impl's type to have a
+-- `data`/`record` declaration (with constructors) VISIBLE in the linted file —
+-- otherwise `deriving` isn't even available for it.
+--
+-- The negative cases implement `Ord` for primitives the prelude has no `Ord` impl
+-- for: an `impl Eq Int` here would be α-equal to the prelude's and rejected by
+-- coherence (DICT-SEMANTICS §6.1), and this file should stay a program
+-- `medaka check` accepts.
+
+-- NEGATIVE: `Bool` is a primitive with no `data` decl here → deriving is
+-- impossible → does NOT fire (this used to be a false positive).
+impl Ord Bool where
+  compare a b = Eq
+
+-- NEGATIVE: `Unit` likewise a primitive → no data decl → does NOT fire.
+impl Ord Unit where
+  compare a b = Eq
+
+-- POSITIVE: `Suit` has a `data` decl right here, so `deriving (Eq)` is available
+-- → the hand-written impl DOES fire.
+data Suit = Hearts | Spades
+
+-- expect-next-line rule-hand-rolled-derivable
+impl Eq Suit where
+  eq Hearts Hearts = True
+  eq Spades Spades = True
+  eq _ _ = False
+
+main = 1
+
+-- Positive fixture for rule-hand-rolled-derivable (STYLE §6):
+-- hand-written impl Eq that could use deriving.
+data Color = Red | Green | Blue
+
+-- expect-next-line rule-hand-rolled-derivable
+impl Eq Color where
+  eq Red Red = True
+  eq Green Green = True
+  eq Blue Blue = True
+  eq _ _ = False

@@ -1,5 +1,5 @@
 # META
-source_lines=958
+source_lines=803
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -20,8 +20,11 @@ import list.{sortBy, last}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
-import tools.lint_core.{DirScope(..), Directive(..), Finding(..)}
-import frontend.desugar.{mapChildren}
+import tools.lint_core.{
+  Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
+}
+export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
+import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
 import tools.printer.{exprToString}
 import ir.sexp.{exprSexp}
@@ -481,83 +484,6 @@ lastSegOf [] = ""
 lastSegOf [x] = x
 lastSegOf (_ :: rest) = lastSegOf rest
 
--- immediate sub-expressions of an expr (order irrelevant; used to recurse).
-export
-childExprs : Expr -> List Expr
-childExprs (ELoc _ e) = [e]
-childExprs (EDoOrigin _ e) = [e]
-childExprs (EApp f x) = [f, x]
-childExprs (ELam _ b) = [b]
-childExprs (ELet _ _ _ e1 e2) = [e1, e2]
-childExprs (EMatch s arms) = s :: flatMap armExprs arms
-childExprs (EIf c t el) = [c, t, el]
-childExprs (EBinOp _ a b _) = [a, b]
-childExprs (EUnOp _ a _) = [a]
-childExprs (EInfix _ a b) = [a, b]
-childExprs (EFieldAccess e _ _) = [e]
-childExprs (ETuple es) = es
-childExprs (EListLit es) = es
-childExprs (EArrayLit es) = es
-childExprs (ERangeList lo hi _) = [lo, hi]
-childExprs (ERangeArray lo hi _) = [lo, hi]
-childExprs (ESlice e lo hi _) = [e, lo, hi]
-childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
-childExprs (ESection s) = sectionExprs s
-childExprs (EIndex a i) = [a, i]
-childExprs (EAnnot e _) = [e]
-childExprs (EHeadAnnot e _) = [e]
-childExprs (EBlock stmts) = flatMap stmtExprs stmts
-childExprs (EDo _ stmts) = flatMap stmtExprs stmts
-childExprs (EStringInterp parts) = flatMap interpPartExprs parts
-childExprs (EGuards arms) = flatMap guardArmExprs arms
-childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
-childExprs (ERecordUpdate e fs _) = e :: map fieldAssignExpr fs
-childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
-childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
-childExprs (ESetLit _ es) = es
-childExprs (EAsPat _ e) = [e]
-childExprs (EOrPat es) = es
-childExprs _ = []
-
-armExprs : Arm -> List Expr
-armExprs (Arm _ gs body) = flatMap guardExprs gs ++ [body]
-
-guardExprs : Guard -> List Expr
-guardExprs (GBool e) = [e]
-guardExprs (GBind _ e) = [e]
-
-export
-stmtExprs : DoStmt -> List Expr
-stmtExprs (DoExpr e) = [e]
-stmtExprs (DoBind _ e) = [e]
-stmtExprs (DoLet _ _ _ e _) = [e]
-stmtExprs (DoAssign _ e) = [e]
-stmtExprs (DoFieldAssign _ _ e) = [e]
-
-letBindExprs : LetBind -> List Expr
-letBindExprs (LetBind _ clauses _ _) = flatMap funClauseExprs clauses
-
-funClauseExprs : FunClause -> List Expr
-funClauseExprs (FunClause _ body) = [body]
-
-sectionExprs : Section -> List Expr
-sectionExprs (SecBare _) = []
-sectionExprs (SecRight _ e) = [e]
-sectionExprs (SecLeft e _) = [e]
-
-interpPartExprs : InterpPart -> List Expr
-interpPartExprs (InterpStr _) = []
-interpPartExprs (InterpExpr e) = [e]
-
-guardArmExprs : GuardArm -> List Expr
-guardArmExprs (GuardArm gs body) = flatMap guardExprs gs ++ [body]
-
-fieldAssignExpr : FieldAssign -> Expr
-fieldAssignExpr (FieldAssign _ e) = e
-
-kvExprs : (Expr, Expr) -> List Expr
-kvExprs (k, v) = [k, v]
-
 -- an `EVar x` leaf (under any ELoc wrapper)
 export
 isEVarNamed : String -> Expr -> Bool
@@ -573,7 +499,6 @@ mentionsVar x e = match unwrapLoc e
   EVar w => w == x
   e2 => anyList (mentionsVar x) (childExprs e2)
 
-export
 implMethodsBodyKey : List ImplMethod -> String
 implMethodsBodyKey ms = joinNl (map implMethodBodySexp ms)
 
@@ -588,33 +513,19 @@ andThenEtaFn x arg = match unwrapLoc arg
   EApp f lastArg if isEVarNamed x lastArg && not (mentionsVar x f) => Some f
   _ => None
 
--- ══ batch of local-expression simplification rules (shared generic walk) ═══════
--- The five rules below (`rule-not-eq`, `rule-bool-simplify`, `rule-rem-parity`,
--- `rule-double-reverse`, `rule-when-unless`) are all pure LOCAL-NODE rewrites: a
--- single AST node is recognised and replaced by an equivalent one, anywhere in a
--- decl body.  Rather than each hand-rolling the ~90-line whole-tree walk the
--- earlier rules use (`rewriteLamExpr` &c.), they share ONE generic bottom-up
--- rewriter (`mapChildExprs`/`rewriteExprBU`) plus generic check/fix drivers.  A
--- rule supplies only:
+-- ══ local-expression rewrite rules (shared generic walk) ═══════════════════════
+-- A rule whose finding is one AST node replaced by an equivalent one supplies
+-- only:
 --   * a detector `Expr -> Option Expr` matching the RAW node (NOT under its outer
 --     `ELoc` — `childExprs` descends through `ELoc`, so matching the wrapper too
---     would double-count; mirrors `andThenPureMapHitOf`).  It returns the
---     rewritten node.
+--     would double-count).  It returns the rewritten node.
 --   * an excluded-decl-name predicate (a rule whose target idiom IS the body of a
 --     stdlib primitive it rewrites TO — `isEven`/`isOdd` for rule-rem-parity,
 --     `when`/`unless` for rule-when-unless — must skip that primitive's own
 --     definition, or it would rewrite the body to an infinite self-reference).
--- Every rewrite is EXACTLY equivalent (see each rule's soundness note), so the
+-- The check is a visitor; the fix is the one bottom-up rewriter below.  Every
+-- rewrite is EXACTLY equivalent (see each rule's soundness note), so the
 -- self-compile fixpoint stays byte-identical after the tree is fixed.
-
--- rebuild every immediate child expr with `g`: the shared one-level step
--- (`desugar.mapChildren`) plus the parser's as-pattern node, which the other
--- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
-export
-mapChildExprs : (Expr -> Expr) -> Expr -> Expr
-mapChildExprs g (EAsPat x e) = EAsPat x (g e)
-mapChildExprs g (EOrPat es) = EOrPat (map g es)
-mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
 -- transform `f` at this (child-rewritten) node.  Bottom-up so a rewrite exposed by
@@ -631,183 +542,117 @@ detApply det e = match det e
   None => e
 
 -- ── generic check driver ──────────────────────────────────────────────────────
--- Collect one finding per detector hit anywhere in a decl body, skipping decls
--- whose name the exclusion predicate rejects.  `mkFinding loc rewritten` builds
--- the rule's message from the rewritten node (for a helpful "prefer …" hint).
--- `loc` here is the HIT's own location (#649) — the nearest `ELoc` enclosing the
--- matched expression, tracked by `collectRewrites` as it descends — falling back
--- to the decl's location only for a hit with no enclosing `ELoc` on its path at
--- all (the decl-level `loc` threaded in as the initial "nearest so far").
+-- The visitor a detector-based rule registers: one finding per detector hit on
+-- any node of any body the dispatch walk reaches (clause, impl method, interface
+-- default, test, prop, let-group binding), skipping bodies whose owner name the
+-- exclusion predicate rejects.  `mkFinding loc rewritten` builds the rule's
+-- message from the rewritten node; `loc` is the hit's own location (#649), the
+-- nearest `ELoc` enclosing it, else the declaration's.
 export
-exprRuleFindings : (String -> Bool) ->
+exprRuleVisitors : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
-  Positions ->
-  List Decl ->
-  List Finding
-exprRuleFindings excl det mkFinding pos prog =
-  flatMap (exprRuleDeclL excl det mkFinding) (declLocList pos prog)
+  List Visitor
+exprRuleVisitors excl det mkFinding =
+  [OnAnyExpr (exprRuleHit excl det mkFinding)]
 
-exprRuleDeclL : (String -> Bool) ->
+exprRuleHit : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
-  (Decl, Option Loc) ->
-  List Finding
-exprRuleDeclL excl det mkFinding (d, loc) =
-  map ((hitLoc, hit) => mkFinding hitLoc hit) (declRewriteHits excl det loc d)
-
-declRewriteHits : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  Option Loc ->
-  Decl ->
-  List (Option Loc, Expr)
-declRewriteHits excl det loc (DFunDef _ name _ body _ _)
-  | excl name = []
-  | otherwise = collectRewrites loc det body
-declRewriteHits _ det loc (DImpl { methods, ... }) =
-  flatMap (implMethodRewriteHits loc det) methods
-declRewriteHits excl det loc (DAttrib _ d) = declRewriteHits excl det loc d
-declRewriteHits _ _ _ _ = []
-
-implMethodRewriteHits : Option Loc ->
-  (Expr -> Option Expr) ->
-  ImplMethod ->
-  List (Option Loc, Expr)
-implMethodRewriteHits loc det (ImplMethod _ _ body) =
-  collectRewrites loc det body
-
--- every detector hit anywhere in the tree, paired with ITS OWN location (#649).
--- `curLoc` tracks the nearest enclosing `ELoc` seen so far as we descend,
--- starting from the decl's location (the fallback for a hit with no `ELoc` on
--- its path).  The detector matches the RAW node — an `ELoc`-wrapped node
--- contributes nothing here, `childExprs` descends into it, and its `Loc`
--- becomes the new `curLoc` for everything beneath it — so each real node is
--- counted exactly once, now stamped with the location of the innermost `ELoc`
--- that actually wraps it (mirrors `collectLamSections`).
-export
-collectRewrites : Option Loc ->
-  (Expr -> Option Expr) ->
+  Ctx ->
   Expr ->
-  List (Option Loc, Expr)
-collectRewrites _ det (ELoc l e) = collectRewrites (Some l) det e
-collectRewrites curLoc det e =
-  optExprToLocList curLoc (det e)
-    ++ flatMap (collectRewrites curLoc det) (childExprs e)
-
-optExprToLocList : Option Loc -> Option Expr -> List (Option Loc, Expr)
-optExprToLocList _ None = []
-optExprToLocList loc (Some x) = [(loc, x)]
+  List Finding
+exprRuleHit excl det mkFinding ctx e
+  | not ctx.ctxInTest && excl ctx.ctxDeclName = []
+  | otherwise = match det e
+    Some hit => [mkFinding ctx.ctxSpan hit]
+    None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────
--- Rebuild the decl body applying `f` bottom-up; return `Some [newDecl]` only when
--- the location-stripped sexp changed (same change-detection the other fixers use).
--- Honors the excluded-decl-name predicate.
-export
-exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFix excl f (DFunDef vis name pats body site bid)
+-- Rebuild the decl's bodies with `rw` and return `Some [newDecl]` only when the
+-- location-stripped sexp changed (the change-detection every fixer uses).  `excl`
+-- skips a function by name.  `tests` also descends into a `test` or `prop` body:
+-- the other rules' findings reach test bodies but their fixers leave them alone,
+-- and a rewrite there is each rule's own decision (the test-import
+-- reconciliation in `lint_walk` is what makes it safe for the verb rules).  A
+-- fixer sees a `Decl`, not a `Ctx`, so "in a test" is the decl's own shape.
+declBodyFix : Bool ->
+  (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+declBodyFix _ excl rw (DFunDef vis name pats body site bid)
   | excl name = None
-  | otherwise =
-    let body2 = rewriteExprBU f body
-    if exprSexp body2 == exprSexp body then
-      None
-    else
-      Some [DFunDef vis name pats body2 site bid]
-exprRuleFix excl f (DAttrib a d) = match exprRuleFix excl f d
+  | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
+declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-exprRuleFix _ f (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map (fixImplMethodWith f) methods
+declBodyFix _ excl rw (d@(DImpl { implOrigin = _, methods })) =
+  let methods2 = map (fixImplMethodWith excl rw) methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
     -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
     Some [DImpl { d | methods = methods2 }]
-exprRuleFix _ _ _ = None
+declBodyFix True _ rw (DTest pub name body) = bodyFix (DTest pub name) rw body
+declBodyFix True _ rw (DProp pub name ps body) =
+  bodyFix (DProp pub name ps) rw body
+declBodyFix _ _ _ _ = None
 
-fixImplMethodWith : (Expr -> Expr) -> ImplMethod -> ImplMethod
-fixImplMethodWith f (ImplMethod nm ps body) =
-  ImplMethod nm ps (rewriteExprBU f body)
+fixImplMethodWith : (String -> Bool) ->
+  (Expr -> Expr) ->
+  ImplMethod ->
+  ImplMethod
+fixImplMethodWith excl rw (ImplMethod nm ps body)
+  | excl nm = ImplMethod nm ps body
+  | otherwise = ImplMethod nm ps (rw body)
+
+-- `rebuild` is the constructor with everything but the body already applied.
+bodyFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
+bodyFix rebuild rw body =
+  let body2 = rw body
+  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+
+-- Fix by a node-local transform `f` applied bottom-up.
+export
+exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
+exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
+
+-- Fix by a whole-body rewrite, for a rule whose traversal is not bottom-up.
+export
+exprRuleFixTree : (Expr -> Expr) -> Decl -> Option (List Decl)
+exprRuleFixTree rw d = declBodyFix False noExcl rw d
 
 -- no decls are excluded by name (the common case)
 export
 noExcl : String -> Bool
 noExcl _ = False
 
--- ── the in-tests variants of the two drivers above ───────────────────────────
--- `exprRuleFindings`/`exprRuleFix` reach a `DFunDef` body, a `DImpl` method body
--- and through a `DAttrib`, and stop there: a `test "…"` or `prop "…"` body is a
--- `DTest`/`DProp`, which lands on their final wildcard arm and is never walked.
--- Measured on this tree (#3235): the three `expectEqual True …` sites in
--- `gzip/lib/huffman.mdk` and every one of the 26 sites the two test-verb rules
--- below answer for live inside a `test "…"` body, so a rule built on the plain
--- drivers reports a clean tree over code it never read.
---
--- These two variants add exactly the `DTest`/`DProp` descent and DELEGATE every
--- other decl shape back to the plain driver, so the two walkers cannot drift.
--- They are OPT-IN, taken only by `rule-test-bool-literal-equal` and
--- `rule-test-equal-in-true`: the plain drivers are untouched, so the twelve
--- other rules built on them — `rule-not-eq` included — keep exactly the reach
--- they had. That asymmetry is deliberate and is NOT a half-finished migration:
--- widening the plain drivers surfaces 23 pre-existing findings for five other
--- gated max-ratchet rules across eight `stdlib/`+`compiler/` files, which is a
--- drain of its own and not this rule's to pay.
+-- `exprRuleFix` that also rewrites `test` and `prop` bodies.
 export
-exprRuleFindingsInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
-  Positions ->
-  List Decl ->
-  List Finding
-exprRuleFindingsInTests excl det mkFinding pos prog =
-  flatMap (exprRuleDeclLInTests excl det mkFinding) (declLocList pos prog)
-
-exprRuleDeclLInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
-  (Decl, Option Loc) ->
-  List Finding
-exprRuleDeclLInTests excl det mkFinding (d, loc) =
-  map
-    ((hitLoc, hit) => mkFinding hitLoc hit)
-    (declRewriteHitsInTests excl det loc d)
-
-declRewriteHitsInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  Option Loc ->
-  Decl ->
-  List (Option Loc, Expr)
-declRewriteHitsInTests _ det loc (DTest _ _ body) = collectRewrites loc det body
-declRewriteHitsInTests _ det loc (DProp _ _ _ body) =
-  collectRewrites loc det body
--- `parseAttrib` wraps ANY decl, a test decl included, so the attributed case has
--- to re-enter HERE rather than fall through to the plain driver's own `DAttrib`
--- arm, which would drop back to the non-test walker one level down.
-declRewriteHitsInTests excl det loc (DAttrib _ d) =
-  declRewriteHitsInTests excl det loc d
-declRewriteHitsInTests excl det loc d = declRewriteHits excl det loc d
-
-export
-exprRuleFixInTests : (String -> Bool) ->
+exprRuleFixTestDecls : (String -> Bool) ->
   (Expr -> Expr) ->
   Decl ->
   Option (List Decl)
-exprRuleFixInTests _ f (DTest pub name body) =
-  testDeclFix (DTest pub name) f body
-exprRuleFixInTests _ f (DProp pub name ps body) =
-  testDeclFix (DProp pub name ps) f body
-exprRuleFixInTests excl f (DAttrib a d) = match exprRuleFixInTests excl f d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-exprRuleFixInTests excl f d = exprRuleFix excl f d
+exprRuleFixTestDecls excl f d = declBodyFix True excl (rewriteExprBU f) d
 
--- Shared tail of the `DTest`/`DProp` fix arms: rebuild the body, and emit a
--- replacement only when the location-stripped sexp changed — the same
--- change-detection `exprRuleFix`'s own `DFunDef` arm uses. `rebuild` is the
--- constructor with everything but the body already applied.
-testDeclFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
-testDeclFix rebuild f body =
-  let body2 = rewriteExprBU f body
-  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+-- ── head collection ───────────────────────────────────────────────────────────
+-- For a rule that reports a pattern's outermost node and then CONSUMES it: `pick`
+-- returns the finding payload plus the sub-expressions to keep searching (the
+-- parts of the matched node that are not themselves the pattern); on no match
+-- the search continues into every child.  `declHeadHits` runs it over each body
+-- of a declaration.
+collectHeads : (Expr -> Option (a, List Expr)) -> Expr -> List a
+collectHeads pick e = match pick e
+  Some (hit, rest) => hit :: flatMap (collectHeads pick) rest
+  None => flatMap (collectHeads pick) (childExprs e)
+
+export
+declHeadHits : (Expr -> Option (a, List Expr)) -> Decl -> List a
+declHeadHits pick d = flatMap (declBodyHeads pick) (declBodies d)
+
+declBodyHeads : (Expr -> Option (a, List Expr)) -> DeclBody -> List a
+declBodyHeads pick (DeclBody _ body) = collectHeads pick body
 
 -- ── shared node predicates ────────────────────────────────────────────────────
 
@@ -968,8 +813,9 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DirScope" true) (mem "Directive" true) (mem "Finding" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
+(DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
@@ -1152,129 +998,49 @@ nameSetInto (n :: rest) s =
 (DFunDef false "lastSegOf" ((PList)) (ELit (LString "")))
 (DFunDef false "lastSegOf" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastSegOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastSegOf") (EVar "rest")))
-(DTypeSig true "childExprs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "childExprs" ((PCon "ELoc" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EDoOrigin" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EApp" (PVar "f") (PVar "x"))) (EListLit (EVar "f") (EVar "x")))
-(DFunDef false "childExprs" ((PCon "ELam" PWild (PVar "b"))) (EListLit (EVar "b")))
-(DFunDef false "childExprs" ((PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EListLit (EVar "e1") (EVar "e2")))
-(DFunDef false "childExprs" ((PCon "EMatch" (PVar "s") (PVar "arms"))) (EBinOp "::" (EVar "s") (EApp (EApp (EVar "flatMap") (EVar "armExprs")) (EVar "arms"))))
-(DFunDef false "childExprs" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EListLit (EVar "c") (EVar "t") (EVar "el")))
-(DFunDef false "childExprs" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EListLit (EVar "a") (EVar "b")))
-(DFunDef false "childExprs" ((PCon "EUnOp" PWild (PVar "a") PWild)) (EListLit (EVar "a")))
-(DFunDef false "childExprs" ((PCon "EInfix" PWild (PVar "a") (PVar "b"))) (EListLit (EVar "a") (EVar "b")))
-(DFunDef false "childExprs" ((PCon "EFieldAccess" (PVar "e") PWild PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "ETuple" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EListLit" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EArrayLit" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "letBindExprs")) (EVar "binds")) (EListLit (EVar "body"))))
-(DFunDef false "childExprs" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionExprs") (EVar "s")))
-(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EListLit (EVar "a") (EVar "i")))
-(DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpPartExprs")) (EVar "parts")))
-(DFunDef false "childExprs" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmExprs")) (EVar "arms")))
-(DFunDef false "childExprs" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "map") (EVar "fieldAssignExpr")) (EVar "fs")))
-(DFunDef false "childExprs" ((PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "::" (EVar "e") (EApp (EApp (EVar "map") (EVar "fieldAssignExpr")) (EVar "fs"))))
-(DFunDef false "childExprs" ((PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "::" (EVar "e") (EApp (EApp (EVar "map") (EVar "fieldAssignExpr")) (EVar "fs"))))
-(DFunDef false "childExprs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "kvExprs")) (EVar "kvs")))
-(DFunDef false "childExprs" ((PCon "ESetLit" PWild (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EAsPat" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EOrPat" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" (PWild) (EListLit))
-(DTypeSig false "armExprs" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "armExprs" ((PCon "Arm" PWild (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
-(DTypeSig false "guardExprs" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "guardExprs" ((PCon "GBool" (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "guardExprs" ((PCon "GBind" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig true "stmtExprs" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "stmtExprs" ((PCon "DoExpr" (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoBind" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoAssign" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig false "letBindExprs" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "letBindExprs" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseExprs")) (EVar "clauses")))
-(DTypeSig false "funClauseExprs" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "funClauseExprs" ((PCon "FunClause" PWild (PVar "body"))) (EListLit (EVar "body")))
-(DTypeSig false "sectionExprs" (TyFun (TyCon "Section") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "sectionExprs" ((PCon "SecBare" PWild)) (EListLit))
-(DFunDef false "sectionExprs" ((PCon "SecRight" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "sectionExprs" ((PCon "SecLeft" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DTypeSig false "interpPartExprs" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "interpPartExprs" ((PCon "InterpStr" PWild)) (EListLit))
-(DFunDef false "interpPartExprs" ((PCon "InterpExpr" (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig false "guardArmExprs" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "guardArmExprs" ((PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
-(DTypeSig false "fieldAssignExpr" (TyFun (TyCon "FieldAssign") (TyCon "Expr")))
-(DFunDef false "fieldAssignExpr" ((PCon "FieldAssign" PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "kvExprs" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "kvExprs" ((PTuple (PVar "k") (PVar "v"))) (EListLit (EVar "k") (EVar "v")))
 (DTypeSig true "isEVarNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isEVarNamed" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "mentionsVar" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "mentionsVar" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm (PVar "e2") () (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "x"))) (EApp (EVar "childExprs") (EVar "e2"))))))
-(DTypeSig true "implMethodsBodyKey" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "String")))
+(DTypeSig false "implMethodsBodyKey" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "String")))
 (DFunDef false "implMethodsBodyKey" ((PVar "ms")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "implMethodBodySexp")) (EVar "ms"))))
 (DTypeSig false "implMethodBodySexp" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodBodySexp" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "exprSexp") (EVar "body")))
 (DTypeSig true "andThenEtaFn" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "andThenEtaFn" ((PVar "x") (PVar "arg")) (EMatch (EApp (EVar "unwrapLoc") (EVar "arg")) (arm (PCon "EApp" (PVar "f") (PVar "lastArg")) ((GBool (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "lastArg")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "f")))))) (EApp (EVar "Some") (EVar "f"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig true "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
-(DTypeSig true "exprRuleFindings" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleFindings" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclL") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "exprRuleDeclL" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "exprRuleDeclL" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
-(DTypeSig false "declRewriteHits" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
-(DFunDef false "declRewriteHits" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DFunDef" PWild (PVar "name") PWild (PVar "body") PWild PWild)) (EIf (EApp (EVar "excl") (EVar "name")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "declRewriteHits" (PWild (PVar "det") (PVar "loc") (PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implMethodRewriteHits") (EVar "loc")) (EVar "det"))) (EVar "methods")))
-(DFunDef false "declRewriteHits" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DFunDef false "declRewriteHits" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "implMethodRewriteHits" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr")))))))
-(DFunDef false "implMethodRewriteHits" ((PVar "loc") (PVar "det") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DTypeSig true "collectRewrites" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr")))))))
-(DFunDef false "collectRewrites" (PWild (PVar "det") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EVar "collectRewrites") (EApp (EVar "Some") (EVar "l"))) (EVar "det")) (EVar "e")))
-(DFunDef false "collectRewrites" ((PVar "curLoc") (PVar "det") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "optExprToLocList") (EVar "curLoc")) (EApp (EVar "det") (EVar "e"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "collectRewrites") (EVar "curLoc")) (EVar "det"))) (EApp (EVar "childExprs") (EVar "e")))))
-(DTypeSig false "optExprToLocList" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))
-(DFunDef false "optExprToLocList" (PWild (PCon "None")) (EListLit))
-(DFunDef false "optExprToLocList" ((PVar "loc") (PCon "Some" (PVar "x"))) (EListLit (ETuple (EVar "loc") (EVar "x"))))
+(DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
+(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EVar "exprRuleHit") (EVar "excl")) (EVar "det")) (EVar "mkFinding")))))
+(DTypeSig false "exprRuleHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "exprRuleHit" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declBodyFix" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyFix") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "b")) (EVar "site")) (EVar "bid")))) (EVar "rw")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "declBodyFix" ((PVar "tests") (PVar "excl") (PVar "rw") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "tests")) (EVar "excl")) (EVar "rw")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PVar "methods2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "fixImplMethodWith") (EVar "excl")) (EVar "rw"))) (EVar "methods"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implMethodsBodyKey") (EVar "methods2")) (EApp (EVar "implMethodsBodyKey") (EVar "methods"))) (EVar "None") (EApp (EVar "Some") (EListLit (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EVar "methods2"))))))))))
+(DFunDef false "declBodyFix" ((PCon "True") PWild (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "bodyFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "rw")) (EVar "body")))
+(DFunDef false "declBodyFix" ((PCon "True") PWild (PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "bodyFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "rw")) (EVar "body")))
+(DFunDef false "declBodyFix" (PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig false "fixImplMethodWith" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))
+(DFunDef false "fixImplMethodWith" ((PVar "excl") (PVar "rw") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EIf (EApp (EVar "excl") (EVar "nm")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rw") (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bodyFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "bodyFix" ((PVar "rebuild") (PVar "rw") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EVar "rw") (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig true "exprRuleFix" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "body2")) (EVar "site")) (EVar "bid"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
-(DFunDef false "exprRuleFix" (PWild (PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PVar "methods2") (EApp (EApp (EVar "map") (EApp (EVar "fixImplMethodWith") (EVar "f"))) (EVar "methods"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implMethodsBodyKey") (EVar "methods2")) (EApp (EVar "implMethodsBodyKey") (EVar "methods"))) (EVar "None") (EApp (EVar "Some") (EListLit (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EVar "methods2"))))))))))
-(DFunDef false "exprRuleFix" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "fixImplMethodWith" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "fixImplMethodWith" ((PVar "f") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))))
+(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
+(DTypeSig true "exprRuleFixTree" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "exprRuleFixTree" ((PVar "rw") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "noExcl")) (EVar "rw")) (EVar "d")))
 (DTypeSig true "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
-(DTypeSig true "exprRuleFindingsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleFindingsInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclLInTests") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "exprRuleDeclLInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "exprRuleDeclLInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
-(DTypeSig false "declRewriteHitsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
-(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DTypeSig true "exprRuleFixInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "f")) (EVar "body")))
-(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "f")) (EVar "body")))
-(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
-(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")))
-(DTypeSig false "testDeclFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "testDeclFix" ((PVar "rebuild") (PVar "f") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
+(DTypeSig true "exprRuleFixTestDecls" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "exprRuleFixTestDecls" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "True")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
+(DTypeSig false "collectHeads" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "collectHeads" ((PVar "pick") (PVar "e")) (EMatch (EApp (EVar "pick") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "hit") (PVar "rest"))) () (EBinOp "::" (EVar "hit") (EApp (EApp (EVar "flatMap") (EApp (EVar "collectHeads") (EVar "pick"))) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "flatMap") (EApp (EVar "collectHeads") (EVar "pick"))) (EApp (EVar "childExprs") (EVar "e"))))))
+(DTypeSig true "declHeadHits" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "declHeadHits" ((PVar "pick") (PVar "d")) (EApp (EApp (EVar "flatMap") (EApp (EVar "declBodyHeads") (EVar "pick"))) (EApp (EVar "declBodies") (EVar "d"))))
+(DTypeSig false "declBodyHeads" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "DeclBody") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "declBodyHeads" ((PVar "pick") (PCon "DeclBody" PWild (PVar "body"))) (EApp (EApp (EVar "collectHeads") (EVar "pick")) (EVar "body")))
 (DTypeSig true "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))
@@ -1323,8 +1089,9 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DirScope" true) (mem "Directive" true) (mem "Finding" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
+(DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
@@ -1507,129 +1274,49 @@ nameSetInto (n :: rest) s =
 (DFunDef false "lastSegOf" ((PList)) (ELit (LString "")))
 (DFunDef false "lastSegOf" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastSegOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastSegOf") (EVar "rest")))
-(DTypeSig true "childExprs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "childExprs" ((PCon "ELoc" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EDoOrigin" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EApp" (PVar "f") (PVar "x"))) (EListLit (EVar "f") (EVar "x")))
-(DFunDef false "childExprs" ((PCon "ELam" PWild (PVar "b"))) (EListLit (EVar "b")))
-(DFunDef false "childExprs" ((PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EListLit (EVar "e1") (EVar "e2")))
-(DFunDef false "childExprs" ((PCon "EMatch" (PVar "s") (PVar "arms"))) (EBinOp "::" (EVar "s") (EApp (EApp (EDictApp "flatMap") (EVar "armExprs")) (EVar "arms"))))
-(DFunDef false "childExprs" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EListLit (EVar "c") (EVar "t") (EVar "el")))
-(DFunDef false "childExprs" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EListLit (EVar "a") (EVar "b")))
-(DFunDef false "childExprs" ((PCon "EUnOp" PWild (PVar "a") PWild)) (EListLit (EVar "a")))
-(DFunDef false "childExprs" ((PCon "EInfix" PWild (PVar "a") (PVar "b"))) (EListLit (EVar "a") (EVar "b")))
-(DFunDef false "childExprs" ((PCon "EFieldAccess" (PVar "e") PWild PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "ETuple" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EListLit" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EArrayLit" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "letBindExprs")) (EVar "binds")) (EListLit (EVar "body"))))
-(DFunDef false "childExprs" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionExprs") (EVar "s")))
-(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EListLit (EVar "a") (EVar "i")))
-(DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpPartExprs")) (EVar "parts")))
-(DFunDef false "childExprs" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmExprs")) (EVar "arms")))
-(DFunDef false "childExprs" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EMethodRef "map") (EVar "fieldAssignExpr")) (EVar "fs")))
-(DFunDef false "childExprs" ((PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "::" (EVar "e") (EApp (EApp (EMethodRef "map") (EVar "fieldAssignExpr")) (EVar "fs"))))
-(DFunDef false "childExprs" ((PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "::" (EVar "e") (EApp (EApp (EMethodRef "map") (EVar "fieldAssignExpr")) (EVar "fs"))))
-(DFunDef false "childExprs" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "kvExprs")) (EVar "kvs")))
-(DFunDef false "childExprs" ((PCon "ESetLit" PWild (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" ((PCon "EAsPat" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "childExprs" ((PCon "EOrPat" (PVar "es"))) (EVar "es"))
-(DFunDef false "childExprs" (PWild) (EListLit))
-(DTypeSig false "armExprs" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "armExprs" ((PCon "Arm" PWild (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
-(DTypeSig false "guardExprs" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "guardExprs" ((PCon "GBool" (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "guardExprs" ((PCon "GBind" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig true "stmtExprs" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "stmtExprs" ((PCon "DoExpr" (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoBind" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoAssign" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "stmtExprs" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig false "letBindExprs" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "letBindExprs" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseExprs")) (EVar "clauses")))
-(DTypeSig false "funClauseExprs" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "funClauseExprs" ((PCon "FunClause" PWild (PVar "body"))) (EListLit (EVar "body")))
-(DTypeSig false "sectionExprs" (TyFun (TyCon "Section") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "sectionExprs" ((PCon "SecBare" PWild)) (EListLit))
-(DFunDef false "sectionExprs" ((PCon "SecRight" PWild (PVar "e"))) (EListLit (EVar "e")))
-(DFunDef false "sectionExprs" ((PCon "SecLeft" (PVar "e") PWild)) (EListLit (EVar "e")))
-(DTypeSig false "interpPartExprs" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "interpPartExprs" ((PCon "InterpStr" PWild)) (EListLit))
-(DFunDef false "interpPartExprs" ((PCon "InterpExpr" (PVar "e"))) (EListLit (EVar "e")))
-(DTypeSig false "guardArmExprs" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "guardArmExprs" ((PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "guardExprs")) (EVar "gs")) (EListLit (EVar "body"))))
-(DTypeSig false "fieldAssignExpr" (TyFun (TyCon "FieldAssign") (TyCon "Expr")))
-(DFunDef false "fieldAssignExpr" ((PCon "FieldAssign" PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "kvExprs" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "kvExprs" ((PTuple (PVar "k") (PVar "v"))) (EListLit (EVar "k") (EVar "v")))
 (DTypeSig true "isEVarNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isEVarNamed" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "mentionsVar" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "mentionsVar" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm (PVar "e2") () (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "x"))) (EApp (EVar "childExprs") (EVar "e2"))))))
-(DTypeSig true "implMethodsBodyKey" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "String")))
+(DTypeSig false "implMethodsBodyKey" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "String")))
 (DFunDef false "implMethodsBodyKey" ((PVar "ms")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "implMethodBodySexp")) (EVar "ms"))))
 (DTypeSig false "implMethodBodySexp" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodBodySexp" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "exprSexp") (EVar "body")))
 (DTypeSig true "andThenEtaFn" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "andThenEtaFn" ((PVar "x") (PVar "arg")) (EMatch (EApp (EVar "unwrapLoc") (EVar "arg")) (arm (PCon "EApp" (PVar "f") (PVar "lastArg")) ((GBool (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "lastArg")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "f")))))) (EApp (EVar "Some") (EVar "f"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig true "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
-(DTypeSig true "exprRuleFindings" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleFindings" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclL") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "exprRuleDeclL" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "exprRuleDeclL" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
-(DTypeSig false "declRewriteHits" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
-(DFunDef false "declRewriteHits" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DFunDef" PWild (PVar "name") PWild (PVar "body") PWild PWild)) (EIf (EApp (EVar "excl") (EVar "name")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "declRewriteHits" (PWild (PVar "det") (PVar "loc") (PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implMethodRewriteHits") (EVar "loc")) (EVar "det"))) (EVar "methods")))
-(DFunDef false "declRewriteHits" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DFunDef false "declRewriteHits" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "implMethodRewriteHits" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr")))))))
-(DFunDef false "implMethodRewriteHits" ((PVar "loc") (PVar "det") (PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DTypeSig true "collectRewrites" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr")))))))
-(DFunDef false "collectRewrites" (PWild (PVar "det") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EVar "collectRewrites") (EApp (EVar "Some") (EVar "l"))) (EVar "det")) (EVar "e")))
-(DFunDef false "collectRewrites" ((PVar "curLoc") (PVar "det") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "optExprToLocList") (EVar "curLoc")) (EApp (EVar "det") (EVar "e"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "collectRewrites") (EVar "curLoc")) (EVar "det"))) (EApp (EVar "childExprs") (EVar "e")))))
-(DTypeSig false "optExprToLocList" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))
-(DFunDef false "optExprToLocList" (PWild (PCon "None")) (EListLit))
-(DFunDef false "optExprToLocList" ((PVar "loc") (PCon "Some" (PVar "x"))) (EListLit (ETuple (EVar "loc") (EVar "x"))))
+(DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
+(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EVar "exprRuleHit") (EVar "excl")) (EVar "det")) (EVar "mkFinding")))))
+(DTypeSig false "exprRuleHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "exprRuleHit" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declBodyFix" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyFix") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "b")) (EVar "site")) (EVar "bid")))) (EVar "rw")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "declBodyFix" ((PVar "tests") (PVar "excl") (PVar "rw") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "tests")) (EVar "excl")) (EVar "rw")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PVar "methods2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "fixImplMethodWith") (EVar "excl")) (EVar "rw"))) (EVar "methods"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implMethodsBodyKey") (EVar "methods2")) (EApp (EVar "implMethodsBodyKey") (EVar "methods"))) (EVar "None") (EApp (EVar "Some") (EListLit (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EVar "methods2"))))))))))
+(DFunDef false "declBodyFix" ((PCon "True") PWild (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "bodyFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "rw")) (EVar "body")))
+(DFunDef false "declBodyFix" ((PCon "True") PWild (PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "bodyFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "rw")) (EVar "body")))
+(DFunDef false "declBodyFix" (PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig false "fixImplMethodWith" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))
+(DFunDef false "fixImplMethodWith" ((PVar "excl") (PVar "rw") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EIf (EApp (EVar "excl") (EVar "nm")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rw") (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bodyFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "bodyFix" ((PVar "rebuild") (PVar "rw") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EVar "rw") (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig true "exprRuleFix" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "body2")) (EVar "site")) (EVar "bid"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
-(DFunDef false "exprRuleFix" (PWild (PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PVar "methods2") (EApp (EApp (EMethodRef "map") (EApp (EVar "fixImplMethodWith") (EVar "f"))) (EVar "methods"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implMethodsBodyKey") (EVar "methods2")) (EApp (EVar "implMethodsBodyKey") (EVar "methods"))) (EVar "None") (EApp (EVar "Some") (EListLit (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EVar "methods2"))))))))))
-(DFunDef false "exprRuleFix" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "fixImplMethodWith" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "fixImplMethodWith" ((PVar "f") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))))
+(DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
+(DTypeSig true "exprRuleFixTree" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "exprRuleFixTree" ((PVar "rw") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "noExcl")) (EVar "rw")) (EVar "d")))
 (DTypeSig true "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
-(DTypeSig true "exprRuleFindingsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleFindingsInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclLInTests") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "exprRuleDeclLInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "exprRuleDeclLInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
-(DTypeSig false "declRewriteHitsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
-(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
-(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
-(DTypeSig true "exprRuleFixInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "f")) (EVar "body")))
-(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "f")) (EVar "body")))
-(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
-(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")))
-(DTypeSig false "testDeclFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "testDeclFix" ((PVar "rebuild") (PVar "f") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
+(DTypeSig true "exprRuleFixTestDecls" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "exprRuleFixTestDecls" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "True")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
+(DTypeSig false "collectHeads" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "collectHeads" ((PVar "pick") (PVar "e")) (EMatch (EApp (EVar "pick") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "hit") (PVar "rest"))) () (EBinOp "::" (EVar "hit") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectHeads") (EVar "pick"))) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectHeads") (EVar "pick"))) (EApp (EVar "childExprs") (EVar "e"))))))
+(DTypeSig true "declHeadHits" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "declHeadHits" ((PVar "pick") (PVar "d")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declBodyHeads") (EVar "pick"))) (EApp (EVar "declBodies") (EVar "d"))))
+(DTypeSig false "declBodyHeads" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "List") (TyCon "Expr"))))) (TyFun (TyCon "DeclBody") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "declBodyHeads" ((PVar "pick") (PCon "DeclBody" PWild (PVar "body"))) (EApp (EApp (EVar "collectHeads") (EVar "pick")) (EVar "body")))
 (DTypeSig true "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))

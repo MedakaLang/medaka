@@ -1,1 +1,0 @@
-warning: [rule-hand-rolled-derivable] hand-written `impl Eq` for 'Color' — use `deriving (Eq)`

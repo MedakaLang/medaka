@@ -1080,7 +1080,7 @@ link = "production"
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -2005,7 +2005,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2190,7 +2190,7 @@ migration = "blocked:concurrent-spawn"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
-corpus = ["test/lint_fixtures"]
+corpus = ["test/lint_fixtures", "test/lint_rule_fixtures"]
 toolchain = []
 link = "production"
 
@@ -2206,7 +2206,23 @@ migration = "done"
 run = "test/diff_compiler_lint_multi_test.mdk"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures", "test/lint_internal_fixtures"]
+corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures", "test/lint_internal_fixtures", "test/lint_rule_fixtures"]
+toolchain = []
+link = "production"
+
+[[gate]]
+name = "diff_compiler_lint_rule_fixtures"
+area = "tools"
+shard = "gates_7"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "compiler/tools/lint_rule_fixtures_test.mdk"
+oracles = []
+sources = ["compiler/frontend/ast_walk.mdk", "compiler/tools/lint*.mdk", "compiler/tools/printer.mdk"]
+corpus = ["test/lint_rule_fixtures"]
 toolchain = []
 link = "production"
 
@@ -2281,7 +2297,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_llvm_modules"
 area = "backend"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3500,7 +3516,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_gate_registry"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

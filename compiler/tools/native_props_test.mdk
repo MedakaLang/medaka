@@ -413,4 +413,4 @@ test "rendered draw order for terminating carriers is pinned" =
     Ok probe =>
       expectEqual
         pinnedGenerators
-        (filterList (line => line /= "") (generatorLines (splitNl probe)))
+        (filterList (/= "") (generatorLines (splitNl probe)))

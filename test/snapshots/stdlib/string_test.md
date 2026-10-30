@@ -1,5 +1,5 @@
 # META
-source_lines=942
+source_lines=945
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -670,6 +670,9 @@ refJoinPairs f ((sep, parts) :: rest) = f sep parts :: refJoinPairs f rest
 prop "toInt reads back every decimal Int" (n : Int) =
   toInt (intToString n) == Some n
 
+-- The double reverse is the property subject: `s` in its place would make
+-- `s == s` a tautology, so the prop keeps both reversals.
+-- lint-disable-next-line rule-double-reverse
 prop "reverse is an involution" (s : String) = reverse (reverse s) == s
 
 prop "join with the empty separator is concat" (s : String) =

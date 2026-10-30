@@ -1,0 +1,7 @@
+-- A do-bound `expectTrue` would capture the verb the rewrite introduces.
+
+import test.{expectEqual}
+
+f a o = do
+  expectTrue <- o
+  pure (expectEqual True (a == 1))

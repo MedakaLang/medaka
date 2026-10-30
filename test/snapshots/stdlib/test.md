@@ -1,5 +1,5 @@
 # META
-source_lines=675
+source_lines=679
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -639,6 +639,8 @@ expectGolden path actual = match readFile path
 -- payload; an assertion library whose results compare equal regardless of
 -- the failure message would make every `expectEqual` over an `Expectation`
 -- pass vacuously.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Eq Expectation separates constructors and payloads" (m : String) =
   pass == pass
     && fail m == fail m
@@ -653,6 +655,8 @@ prop "a passing expectEqual carries both rendered operands" (n : Int) =
 
 -- LAW: `Debug` agrees with `Eq`: equal expectations render identically,
 -- distinguishable ones render differently.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Debug Expectation agrees with Eq" (m : String) =
   debug (fail m) == debug (fail m) && debug (fail m) == debug pass == False
 

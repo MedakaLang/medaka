@@ -388,7 +388,7 @@ prop "parseIso inverts formatIso" (n : Int) =
 
 prop "parseIso rejects a corrupted separator" (n : Int) =
   let iso = formatIso (fromEpochSeconds (sane n))
-  parseIso (sliceClamped 0 10 iso ++ " " ++ sliceClamped 11 20 iso) == None
+  parseIso "\{sliceClamped 0 10 iso} \{sliceClamped 11 20 iso}" == None
 
 -- LAW: the five `Duration` constructors and the five projections are inverse
 -- at their own unit, and each projection truncates toward zero.

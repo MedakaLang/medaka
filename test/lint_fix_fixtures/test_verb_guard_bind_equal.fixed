@@ -1,0 +1,8 @@
+-- A guard-bound `expectEqual` would capture the verb the rewrite introduces
+-- (rule-test-equal-in-true turns `expectTrue (a == 1)` into `expectEqual a 1`).
+
+import test.{expectTrue}
+
+f a o
+  | Some expectEqual <- o = expectTrue (a == 1)
+  | otherwise = expectTrue (a == 2)
