@@ -20,7 +20,7 @@ import tools.lint_core.{
   StdlibIndex,
   mkRule,
 }
-import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern}
+import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
 
 export
 rule : Rule
@@ -114,9 +114,9 @@ unconditionalSelfCall name [] body = isBareSelf name (stripWrap body)
 unconditionalSelfCall name _ body = isHeadSelfApp name (stripWrap body)
 
 stripWrap : Expr -> Expr
-stripWrap (ELoc _ e) = stripWrap e
-stripWrap (EAnnot e _) = stripWrap e
-stripWrap e = e
+stripWrap e = match unwrapLoc e
+  EAnnot inner _ => stripWrap inner
+  other => other
 
 isBareSelf : String -> Expr -> Bool
 isBareSelf name (EVar w) = name == w
@@ -145,7 +145,7 @@ selfShadowFinding (name, loc) = Finding {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "filterList" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "summary" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "doc" (ELit (LString "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name"))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleSelfShadowExtern")) (EVar "None")))
 (DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -166,9 +166,7 @@ selfShadowFinding (name, loc) = Finding {
 (DFunDef false "unconditionalSelfCall" ((PVar "name") (PList) (PVar "body")) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") PWild (PVar "body")) (EApp (EApp (EVar "isHeadSelfApp") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DTypeSig false "stripWrap" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "stripWrap" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripWrap") (EVar "e")))
-(DFunDef false "stripWrap" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "stripWrap") (EVar "e")))
-(DFunDef false "stripWrap" ((PVar "e")) (EVar "e"))
+(DFunDef false "stripWrap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "stripWrap") (EVar "inner"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "isBareSelf" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isBareSelf" ((PVar "name") (PCon "EVar" (PVar "w"))) (EBinOp "==" (EVar "name") (EVar "w")))
 (DFunDef false "isBareSelf" (PWild PWild) (EVar "False"))
@@ -185,7 +183,7 @@ selfShadowFinding (name, loc) = Finding {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "filterList" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "summary" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "doc" (ELit (LString "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name"))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleSelfShadowExtern")) (EVar "None")))
 (DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -206,9 +204,7 @@ selfShadowFinding (name, loc) = Finding {
 (DFunDef false "unconditionalSelfCall" ((PVar "name") (PList) (PVar "body")) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") PWild (PVar "body")) (EApp (EApp (EVar "isHeadSelfApp") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DTypeSig false "stripWrap" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "stripWrap" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripWrap") (EVar "e")))
-(DFunDef false "stripWrap" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "stripWrap") (EVar "e")))
-(DFunDef false "stripWrap" ((PVar "e")) (EVar "e"))
+(DFunDef false "stripWrap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "stripWrap") (EVar "inner"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "isBareSelf" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isBareSelf" ((PVar "name") (PCon "EVar" (PVar "w"))) (EBinOp "==" (EVar "name") (EVar "w")))
 (DFunDef false "isBareSelf" (PWild PWild) (EVar "False"))

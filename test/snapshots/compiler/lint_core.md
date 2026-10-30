@@ -1,5 +1,5 @@
 # META
-source_lines=384
+source_lines=386
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -123,13 +123,15 @@ needsStdlibIndex m = match m.needs
 -- has none.  `ctxInTest` is True inside a `test` or `prop` body.  `ctxParent`
 -- is the kind of the nearest enclosing expression other than an `ELoc`, `None`
 -- at a body's root and for a declaration.  `ctxSpan` is the span of the
--- nearest enclosing `ELoc`, else the declaration's start line.
+-- nearest enclosing `ELoc`, else the declaration's start line.  `ctxDeclLoc` is
+-- always the declaration's start line, where an inline suppression sits.
 public export data Ctx = Ctx {
   ctxDeclName : String,
   ctxParams : List Pat,
   ctxInTest : Bool,
   ctxParent : Option ExprKind,
   ctxSpan : Option Loc,
+  ctxDeclLoc : Option Loc,
 }
 
 -- One callback a walking rule registers: on every expression node whose kind is
@@ -421,7 +423,7 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
-(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
 (DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
@@ -488,7 +490,7 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
-(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
 (DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())

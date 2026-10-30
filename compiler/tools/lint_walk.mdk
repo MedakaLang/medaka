@@ -225,7 +225,7 @@ data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
 
 -- What every node of one body shares: its owner's name and parameters, and
 -- whether it is a test or prop body.
-data BodyScope = BodyScope String (List Pat) Bool
+data BodyScope = BodyScope String (List Pat) Bool (Option Loc)
 
 zipWithIndex : List a -> List (Int, a)
 zipWithIndex xs = zipIndexFrom 0 xs
@@ -266,7 +266,7 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
   let bodies = declBodies d
   let acc2 = match declHooks
     [] => acc
-    _ => runDeclHooks (scopeCtx (declScope bodies) KLoc loc) d acc declHooks
+    _ => runDeclHooks (scopeCtx (declScope bodies loc) KLoc loc) d acc declHooks
   let acc3 = match exprHooks
     [] => acc2
     _ => walkBodies exprHooks loc acc2 bodies
@@ -274,28 +274,29 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
 
 -- A declaration's own `Ctx` reads its first body's owner, so a function clause
 -- carries its name and parameters and a test or prop is in a test.
-declScope : List DeclBody -> BodyScope
-declScope [] = BodyScope "" [] False
-declScope ((DeclBody owner _) :: _) = ownerScope owner
+declScope : List DeclBody -> Option Loc -> BodyScope
+declScope [] loc = BodyScope "" [] False loc
+declScope ((DeclBody owner _) :: _) loc = ownerScope owner loc
 
-ownerScope : BodyOwner -> BodyScope
-ownerScope (OwnerClause name ps) = BodyScope name ps False
-ownerScope (OwnerImplMethod _ m ps) = BodyScope m ps False
-ownerScope (OwnerIfaceDefault _ m ps) = BodyScope m ps False
-ownerScope (OwnerTest name) = BodyScope name [] True
-ownerScope (OwnerProp name _) = BodyScope name [] True
-ownerScope (OwnerLetGroup name ps) = BodyScope name ps False
+ownerScope : BodyOwner -> Option Loc -> BodyScope
+ownerScope (OwnerClause name ps) loc = BodyScope name ps False loc
+ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps False loc
+ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps False loc
+ownerScope (OwnerTest name) loc = BodyScope name [] True loc
+ownerScope (OwnerProp name _) loc = BodyScope name [] True loc
+ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps False loc
 
 -- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
 -- parent": an `ELoc` is never a parent, and the `Option` is built only when a
 -- callback fires.
 scopeCtx : BodyScope -> ExprKind -> Option Loc -> Ctx
-scopeCtx (BodyScope name ps inTest) parent span = Ctx {
+scopeCtx (BodyScope name ps inTest declLoc) parent span = Ctx {
   ctxDeclName = name,
   ctxParams = ps,
   ctxInTest = inTest,
   ctxParent = if parent == KLoc then None else Some parent,
   ctxSpan = span,
+  ctxDeclLoc = declLoc,
 }
 
 runDeclHooks : Ctx ->
@@ -321,7 +322,7 @@ walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
   walkBodies
     hooks
     loc
-    (walkExpr hooks (ownerScope owner) KLoc loc acc body)
+    (walkExpr hooks (ownerScope owner loc) KLoc loc acc body)
     rest
 
 -- An `ELoc` is transparent: its span becomes the span beneath it and its

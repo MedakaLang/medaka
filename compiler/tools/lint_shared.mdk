@@ -20,6 +20,7 @@ import tools.lint_core.{
   Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
 }
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
+import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
 import tools.printer.{exprToString}
 import ir.sexp.{exprSexp}
@@ -494,7 +495,6 @@ mentionsVar x e = match unwrapLoc e
   EVar w => w == x
   e2 => anyList (mentionsVar x) (childExprs e2)
 
-export
 implMethodsBodyKey : List ImplMethod -> String
 implMethodsBodyKey ms = joinNl (map implMethodBodySexp ms)
 
@@ -509,23 +509,18 @@ andThenEtaFn x arg = match unwrapLoc arg
   EApp f lastArg if isEVarNamed x lastArg && not (mentionsVar x f) => Some f
   _ => None
 
--- ══ batch of local-expression simplification rules (shared generic walk) ═══════
--- The five rules below (`rule-not-eq`, `rule-bool-simplify`, `rule-rem-parity`,
--- `rule-double-reverse`, `rule-when-unless`) are all pure LOCAL-NODE rewrites: a
--- single AST node is recognised and replaced by an equivalent one, anywhere in a
--- decl body.  Rather than each hand-rolling the ~90-line whole-tree walk the
--- earlier rules use (`rewriteLamExpr` &c.), they share ONE generic bottom-up
--- rewriter (`mapChildExprs`/`rewriteExprBU`) plus generic check/fix drivers.  A
--- rule supplies only:
+-- ══ local-expression rewrite rules (shared generic walk) ═══════════════════════
+-- A rule whose finding is one AST node replaced by an equivalent one supplies
+-- only:
 --   * a detector `Expr -> Option Expr` matching the RAW node (NOT under its outer
 --     `ELoc` — `childExprs` descends through `ELoc`, so matching the wrapper too
---     would double-count; mirrors `andThenPureMapHitOf`).  It returns the
---     rewritten node.
+--     would double-count).  It returns the rewritten node.
 --   * an excluded-decl-name predicate (a rule whose target idiom IS the body of a
 --     stdlib primitive it rewrites TO — `isEven`/`isOdd` for rule-rem-parity,
 --     `when`/`unless` for rule-when-unless — must skip that primitive's own
 --     definition, or it would rewrite the body to an infinite self-reference).
--- Every rewrite is EXACTLY equivalent (see each rule's soundness note), so the
+-- The check is a visitor; the fix is the one bottom-up rewriter below.  Every
+-- rewrite is EXACTLY equivalent (see each rule's soundness note), so the
 -- self-compile fixpoint stays byte-identical after the tree is fixed.
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
@@ -570,67 +565,85 @@ exprRuleHit excl det mkFinding ctx e
     None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────
--- Rebuild the decl body applying `f` bottom-up; return `Some [newDecl]` only when
--- the location-stripped sexp changed (same change-detection the other fixers use).
--- Honors the excluded-decl-name predicate.
-export
-exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFix excl f (DFunDef vis name pats body site bid)
+-- Rebuild the decl's bodies with `rw` and return `Some [newDecl]` only when the
+-- location-stripped sexp changed (the change-detection every fixer uses).  `excl`
+-- skips a function by name.  `tests` also descends into a `test` or `prop` body:
+-- the other rules' findings reach test bodies but their fixers leave them alone,
+-- and a rewrite there is each rule's own decision (the test-import
+-- reconciliation in `lint_walk` is what makes it safe for the verb rules).  A
+-- fixer sees a `Decl`, not a `Ctx`, so "in a test" is the decl's own shape.
+declBodyFix : Bool ->
+  (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+declBodyFix _ excl rw (DFunDef vis name pats body site bid)
   | excl name = None
-  | otherwise =
-    let body2 = rewriteExprBU f body
-    if exprSexp body2 == exprSexp body then
-      None
-    else
-      Some [DFunDef vis name pats body2 site bid]
-exprRuleFix excl f (DAttrib a d) = match exprRuleFix excl f d
+  | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
+declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-exprRuleFix _ f (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map (fixImplMethodWith f) methods
+declBodyFix _ _ rw (d@(DImpl { implOrigin = _, methods })) =
+  let methods2 = map (fixImplMethodWith rw) methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
     -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
     Some [DImpl { d | methods = methods2 }]
-exprRuleFix _ _ _ = None
+declBodyFix True _ rw (DTest pub name body) = bodyFix (DTest pub name) rw body
+declBodyFix True _ rw (DProp pub name ps body) =
+  bodyFix (DProp pub name ps) rw body
+declBodyFix _ _ _ _ = None
 
 fixImplMethodWith : (Expr -> Expr) -> ImplMethod -> ImplMethod
-fixImplMethodWith f (ImplMethod nm ps body) =
-  ImplMethod nm ps (rewriteExprBU f body)
+fixImplMethodWith rw (ImplMethod nm ps body) = ImplMethod nm ps (rw body)
+
+-- `rebuild` is the constructor with everything but the body already applied.
+bodyFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
+bodyFix rebuild rw body =
+  let body2 = rw body
+  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+
+-- Fix by a node-local transform `f` applied bottom-up.
+export
+exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
+exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
+
+-- Fix by a whole-body rewrite, for a rule whose traversal is not bottom-up.
+export
+exprRuleFixTree : (Expr -> Expr) -> Decl -> Option (List Decl)
+exprRuleFixTree rw d = declBodyFix False noExcl rw d
 
 -- no decls are excluded by name (the common case)
 export
 noExcl : String -> Bool
 noExcl _ = False
 
--- The fix side of the two test-verb rules: `exprRuleFix` plus a descent into a
--- `test` or `prop` body.  The other rules' fixers keep `exprRuleFix`, so they
--- leave test bodies untouched although their findings now reach them; a fix
--- there is each rule's own decision (the test-import reconciliation in
--- `lint_walk` is what makes a test-body rewrite safe for the verb rules).
+-- `exprRuleFix` that also rewrites `test` and `prop` bodies.
 export
 exprRuleFixTestDecls : (String -> Bool) ->
   (Expr -> Expr) ->
   Decl ->
   Option (List Decl)
-exprRuleFixTestDecls _ f (DTest pub name body) =
-  testDeclFix (DTest pub name) f body
-exprRuleFixTestDecls _ f (DProp pub name ps body) =
-  testDeclFix (DProp pub name ps) f body
-exprRuleFixTestDecls excl f (DAttrib a d) = match exprRuleFixTestDecls excl f d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-exprRuleFixTestDecls excl f d = exprRuleFix excl f d
+exprRuleFixTestDecls excl f d = declBodyFix True excl (rewriteExprBU f) d
 
--- Shared tail of the `DTest`/`DProp` fix arms: rebuild the body, and emit a
--- replacement only when the location-stripped sexp changed — the same
--- change-detection `exprRuleFix`'s own `DFunDef` arm uses. `rebuild` is the
--- constructor with everything but the body already applied.
-testDeclFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
-testDeclFix rebuild f body =
-  let body2 = rewriteExprBU f body
-  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+-- ── head collection ───────────────────────────────────────────────────────────
+-- For a rule that reports a pattern's outermost node and then CONSUMES it: `pick`
+-- returns the finding payload plus the sub-expressions to keep searching (the
+-- parts of the matched node that are not themselves the pattern); on no match
+-- the search continues into every child.  `declHeadHits` runs it over each body
+-- of a declaration.
+collectHeads : (Expr -> Option (a, List Expr)) -> Expr -> List a
+collectHeads pick e = match pick e
+  Some (hit, rest) => hit :: flatMap (collectHeads pick) rest
+  None => flatMap (collectHeads pick) (childExprs e)
+
+export
+declHeadHits : (Expr -> Option (a, List Expr)) -> Decl -> List a
+declHeadHits pick d = flatMap (declBodyHeads pick) (declBodies d)
+
+declBodyHeads : (Expr -> Option (a, List Expr)) -> DeclBody -> List a
+declBodyHeads pick (DeclBody _ body) = collectHeads pick body
 
 -- ── shared node predicates ────────────────────────────────────────────────────
 

@@ -19,7 +19,6 @@ import frontend.ast.{
   Loc(..),
   Pat(..),
   Arm(..),
-  ImplMethod(..),
   DoStmt(..),
   Expr(..),
   Decl(..),
@@ -30,6 +29,7 @@ import support.util.{isEmptyL, reverseL}
 import hash_map.{has}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -38,11 +38,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex(..),
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
 import tools.lint_shared.{
-  childExprs,
-  declLocList,
+  declHeadHits,
   isEVarNamed,
   isNilPCon,
   matchScrutOf,
@@ -56,7 +56,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameBindChainToDo,
       summary =
@@ -160,37 +160,26 @@ bindChainTermMapParts e = match unwrapLoc e
     _ => [e]
   _ => [e]
 
--- report a node as a chain HEAD iff its depth (in whichever monad) is ≥ 3; then
--- consume the chain (recurse into off-chain parts only) so sub-levels of the same
--- pyramid never fire.  Otherwise descend generically into children.
-bindChainHeads : Expr -> List Expr
-bindChainHeads e =
+-- A node is a chain HEAD iff its depth (in whichever monad) is >= 3; the chain
+-- is then consumed (only its off-chain parts are searched further) so the
+-- sub-levels of one pyramid never fire.
+bindChainPick : Expr -> Option (Expr, List Expr)
+bindChainPick e =
   let rd = bindChainDepth True e
   let od = bindChainDepth False e
-  if rd >= 3 || od >= 3 then
-    e :: flatMap bindChainHeads (bindChainOffChain (rd >= od) e)
-  else
-    flatMap bindChainHeads (childExprs e)
-
-bindChainDeclHeads : Decl -> List Expr
-bindChainDeclHeads (DFunDef _ _ _ body _ _) = bindChainHeads body
-bindChainDeclHeads (DImpl { methods, ... }) = flatMap bindChainImplHeads methods
-bindChainDeclHeads (DAttrib _ d) = bindChainDeclHeads d
-bindChainDeclHeads _ = []
-
-bindChainImplHeads : ImplMethod -> List Expr
-bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
+  if rd >= 3 || od >= 3 then Some (e, bindChainOffChain (rd >= od) e) else None
 
 ruleBindChainToDo : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleBindChainToDo _ _ _ pos prog = flatMap bindChainDeclL (declLocList pos prog)
+  List Visitor
+ruleBindChainToDo _ _ _ _ _ = [OnDecl bindChainAt]
 
-bindChainDeclL : (Decl, Option Loc) -> List Finding
-bindChainDeclL (d, loc) = map (bindChainFinding loc) (bindChainDeclHeads d)
+bindChainAt : Ctx -> Decl -> List Finding
+bindChainAt ctx d =
+  map (bindChainFinding ctx.ctxSpan) (declHeadHits bindChainPick d)
 
 bindChainFinding : Option Loc -> Expr -> Finding
 bindChainFinding loc _ = Finding {

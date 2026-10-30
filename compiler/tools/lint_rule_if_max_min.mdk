@@ -1,17 +1,15 @@
 -- lint rule rule-if-max-min: an `if` that selects the larger or smaller of two operands. Prefer `max`/`min`.
 
-import frontend.ast.{
-  Loc(..), Guard(..), Arm(..), ImplMethod(..), DoStmt(..), Section(..),
-  InterpPart(..), GuardArm(..), FieldAssign(..), LetBind(..), FunClause(..),
-  Expr(..), Decl(..)
-}
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
+import ir.sexp.{exprSexp}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import ir.sexp.{exprSexp}
 import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -20,12 +18,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
 import tools.lint_shared.{
-  childExprs,
-  declLocList,
-  implMethodsBodyKey,
+  detApply,
+  exprRuleFix,
+  noExcl,
   ruleNameIfMaxMin,
   unwrapLoc,
 }
@@ -33,7 +32,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameIfMaxMin,
       summary =
@@ -121,39 +120,20 @@ ifMaxMinOf cond t el = match unwrapLoc cond
   _ => None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
+-- Only `EIf` nodes can match, so only those are visited.
 ruleIfMaxMin : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleIfMaxMin _ _ _ pos prog = flatMap ifMaxMinDeclL (declLocList pos prog)
+  List Visitor
+ruleIfMaxMin _ _ _ _ _ = [OnExpr [KIf] ifMaxMinAt]
 
-ifMaxMinDeclL : (Decl, Option Loc) -> List Finding
-ifMaxMinDeclL (d, loc) = map (ifMaxMinFinding loc) (declIfMaxMinHits d)
-
-declIfMaxMinHits : Decl -> List (String, Expr, Expr)
-declIfMaxMinHits (DFunDef _ _ _ body _ _) = collectIfMaxMinHits body
-declIfMaxMinHits (DImpl { methods, ... }) =
-  flatMap implMethodIfMaxMinHits methods
-declIfMaxMinHits (DAttrib _ d) = declIfMaxMinHits d
-declIfMaxMinHits _ = []
-
-implMethodIfMaxMinHits : ImplMethod -> List (String, Expr, Expr)
-implMethodIfMaxMinHits (ImplMethod _ _ body) = collectIfMaxMinHits body
-
--- every eligible `if` anywhere in the expression tree (order irrelevant).
-collectIfMaxMinHits : Expr -> List (String, Expr, Expr)
-collectIfMaxMinHits e =
-  ifMaxMinHitOf e ++ flatMap collectIfMaxMinHits (childExprs e)
-
-ifMaxMinHitOf : Expr -> List (String, Expr, Expr)
-ifMaxMinHitOf (EIf cond t el) = optHitToList (ifMaxMinOf cond t el)
-ifMaxMinHitOf _ = []
-
-optHitToList : Option (String, Expr, Expr) -> List (String, Expr, Expr)
-optHitToList (Some h) = [h]
-optHitToList None = []
+ifMaxMinAt : Ctx -> Expr -> List Finding
+ifMaxMinAt ctx (EIf cond t el) = match ifMaxMinOf cond t el
+  Some hit => [ifMaxMinFinding ctx.ctxDeclLoc hit]
+  None => []
+ifMaxMinAt _ _ = []
 
 ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Finding
 ifMaxMinFinding loc (fn, a, b) = Finding {
@@ -165,138 +145,11 @@ ifMaxMinFinding loc (fn, a, b) = Finding {
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────
--- Rebuild the decl body converting every eligible `if` to a `max`/`min` call.
--- Detects "did anything change" by comparing the location-stripped sexp of old
--- vs new (same technique `lambdaSectionFix` uses).
+-- Bottom-up: every eligible `if` becomes a `max`/`min` application.
 ifMaxMinFix : Oracle -> Decl -> Option (List Decl)
-ifMaxMinFix _ (DFunDef vis name pats body site bid) =
-  let body2 = rewriteIfMaxMinExpr body
-  if exprSexp body2 == exprSexp body then
-    None
-  else
-    Some [DFunDef vis name pats body2 site bid]
-ifMaxMinFix orc (DAttrib a d) = match ifMaxMinFix orc d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-ifMaxMinFix _ (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map fixImplMethodIfMaxMin methods
-  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
-    None
-  else
-    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
-    Some [DImpl { d | methods = methods2 }]
-ifMaxMinFix _ _ = None
+ifMaxMinFix _ d = exprRuleFix noExcl (detApply ifMaxMinRewrite) d
 
-fixImplMethodIfMaxMin : ImplMethod -> ImplMethod
-fixImplMethodIfMaxMin (ImplMethod nm ps body) =
-  ImplMethod nm ps (rewriteIfMaxMinExpr body)
-
--- if a rewritten `if` is an eligible max/min shape, collapse it; else keep it.
-tryIfMaxMin : Expr -> Expr -> Expr -> Expr
-tryIfMaxMin cond t el = match ifMaxMinOf cond t el
-  Some (fn, a, b) => EApp (EApp (EVar fn) a) b
-  None => EIf cond t el
-
--- recursively rewrite children (bottom-up), then collapse THIS `if` if eligible.
-rewriteIfMaxMinExpr : Expr -> Expr
-rewriteIfMaxMinExpr (ELoc l e) = ELoc l (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinExpr (EDoOrigin l e) = EDoOrigin l (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinExpr (EApp f x) =
-  EApp (rewriteIfMaxMinExpr f) (rewriteIfMaxMinExpr x)
-rewriteIfMaxMinExpr (ELam ps b) = ELam ps (rewriteIfMaxMinExpr b)
-rewriteIfMaxMinExpr (ELet m isf p e1 e2) =
-  ELet m isf p (rewriteIfMaxMinExpr e1) (rewriteIfMaxMinExpr e2)
-rewriteIfMaxMinExpr (EMatch s arms) =
-  EMatch (rewriteIfMaxMinExpr s) (map rewriteIfMaxMinArm arms)
-rewriteIfMaxMinExpr (EIf c t el) =
-  tryIfMaxMin
-    (rewriteIfMaxMinExpr c)
-    (rewriteIfMaxMinExpr t)
-    (rewriteIfMaxMinExpr el)
-rewriteIfMaxMinExpr (EBinOp op a b r) =
-  EBinOp op (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr b) r
-rewriteIfMaxMinExpr (EUnOp op a r) = EUnOp op (rewriteIfMaxMinExpr a) r
-rewriteIfMaxMinExpr (EInfix op a b) =
-  EInfix op (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr b)
-rewriteIfMaxMinExpr (EFieldAccess e f r) =
-  EFieldAccess (rewriteIfMaxMinExpr e) f r
-rewriteIfMaxMinExpr (ETuple es) = ETuple (map rewriteIfMaxMinExpr es)
-rewriteIfMaxMinExpr (EListLit es) = EListLit (map rewriteIfMaxMinExpr es)
-rewriteIfMaxMinExpr (EArrayLit es) = EArrayLit (map rewriteIfMaxMinExpr es)
-rewriteIfMaxMinExpr (ERangeList lo hi i) =
-  ERangeList (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
-rewriteIfMaxMinExpr (ERangeArray lo hi i) =
-  ERangeArray (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
-rewriteIfMaxMinExpr (ESlice e lo hi i) =
-  ESlice
-    (rewriteIfMaxMinExpr e)
-    (rewriteIfMaxMinExpr lo)
-    (rewriteIfMaxMinExpr hi)
-    i
-rewriteIfMaxMinExpr (ELetGroup binds body) =
-  ELetGroup (map rewriteIfMaxMinLet binds) (rewriteIfMaxMinExpr body)
-rewriteIfMaxMinExpr (ESection s) = ESection (rewriteIfMaxMinSection s)
-rewriteIfMaxMinExpr (EIndex a i) =
-  EIndex (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr i)
-rewriteIfMaxMinExpr (EAnnot e t) = EAnnot (rewriteIfMaxMinExpr e) t
-rewriteIfMaxMinExpr (EHeadAnnot e t) = EHeadAnnot (rewriteIfMaxMinExpr e) t
-rewriteIfMaxMinExpr (EBlock stmts) = EBlock (map rewriteIfMaxMinStmt stmts)
-rewriteIfMaxMinExpr (EDo d stmts) = EDo d (map rewriteIfMaxMinStmt stmts)
-rewriteIfMaxMinExpr (EStringInterp parts) =
-  EStringInterp (map rewriteIfMaxMinInterp parts)
-rewriteIfMaxMinExpr (EGuards arms) = EGuards (map rewriteIfMaxMinGuardArm arms)
-rewriteIfMaxMinExpr (ERecordCreate n fs) =
-  ERecordCreate n (map rewriteIfMaxMinField fs)
-rewriteIfMaxMinExpr (ERecordUpdate e fs r) =
-  ERecordUpdate (rewriteIfMaxMinExpr e) (map rewriteIfMaxMinField fs) r
-rewriteIfMaxMinExpr (EVariantUpdate c e fs) =
-  EVariantUpdate c (rewriteIfMaxMinExpr e) (map rewriteIfMaxMinField fs)
-rewriteIfMaxMinExpr (EMapLit n kvs) = EMapLit n (map rewriteIfMaxMinKv kvs)
-rewriteIfMaxMinExpr (ESetLit n es) = ESetLit n (map rewriteIfMaxMinExpr es)
-rewriteIfMaxMinExpr (EAsPat x e) = EAsPat x (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinExpr (EOrPat es) = EOrPat (map rewriteIfMaxMinExpr es)
-rewriteIfMaxMinExpr e = e
-
-rewriteIfMaxMinStmt : DoStmt -> DoStmt
-rewriteIfMaxMinStmt (DoExpr e) = DoExpr (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinStmt (DoBind p e) = DoBind p (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinStmt (DoLet m r p e site) =
-  DoLet m r p (rewriteIfMaxMinExpr e) site
-rewriteIfMaxMinStmt (DoAssign x e) = DoAssign x (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinStmt (DoFieldAssign x fs e) =
-  DoFieldAssign x fs (rewriteIfMaxMinExpr e)
-
-rewriteIfMaxMinArm : Arm -> Arm
-rewriteIfMaxMinArm (Arm p gs body) =
-  Arm p (map rewriteIfMaxMinGuard gs) (rewriteIfMaxMinExpr body)
-
-rewriteIfMaxMinGuard : Guard -> Guard
-rewriteIfMaxMinGuard (GBool e) = GBool (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinGuard (GBind p e) = GBind p (rewriteIfMaxMinExpr e)
-
-rewriteIfMaxMinLet : LetBind -> LetBind
-rewriteIfMaxMinLet (LetBind n clauses site bid) =
-  LetBind n (map rewriteIfMaxMinClause clauses) site bid
-
-rewriteIfMaxMinClause : FunClause -> FunClause
-rewriteIfMaxMinClause (FunClause ps body) =
-  FunClause ps (rewriteIfMaxMinExpr body)
-
-rewriteIfMaxMinSection : Section -> Section
-rewriteIfMaxMinSection (SecBare op) = SecBare op
-rewriteIfMaxMinSection (SecRight op e) = SecRight op (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinSection (SecLeft e op) = SecLeft (rewriteIfMaxMinExpr e) op
-
-rewriteIfMaxMinInterp : InterpPart -> InterpPart
-rewriteIfMaxMinInterp (InterpStr s) = InterpStr s
-rewriteIfMaxMinInterp (InterpExpr e) = InterpExpr (rewriteIfMaxMinExpr e)
-
-rewriteIfMaxMinGuardArm : GuardArm -> GuardArm
-rewriteIfMaxMinGuardArm (GuardArm gs body) =
-  GuardArm (map rewriteIfMaxMinGuard gs) (rewriteIfMaxMinExpr body)
-
-rewriteIfMaxMinField : FieldAssign -> FieldAssign
-rewriteIfMaxMinField (FieldAssign n e) = FieldAssign n (rewriteIfMaxMinExpr e)
-
-rewriteIfMaxMinKv : (Expr, Expr) -> (Expr, Expr)
-rewriteIfMaxMinKv (k, v) = (rewriteIfMaxMinExpr k, rewriteIfMaxMinExpr v)
+ifMaxMinRewrite : Expr -> Option Expr
+ifMaxMinRewrite (EIf cond t el) =
+  map ((fn, a, b) => EApp (EApp (EVar fn) a) b) (ifMaxMinOf cond t el)
+ifMaxMinRewrite _ = None
