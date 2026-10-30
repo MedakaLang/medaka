@@ -187,7 +187,5 @@ test "an unlocated push takes the span of the construct around it" =
   expectEqual
     [Some 5, None]
     (map
-      (d => match tcLoc d
-        Some (Loc _ line _ _ _) => Some line
-        None => None)
+      (d => map ((Loc _ line _ _ _) => line) (tcLoc d))
       (reverse (wAll m.mcCells.typeErrors)))

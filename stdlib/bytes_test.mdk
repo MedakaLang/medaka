@@ -150,5 +150,5 @@ test "an overlong encoding is U+FFFD, never the ASCII it spells" =
 -- 64 of them alternating with commas split into 65 parts, 64 U+FFFD and the
 -- empty part after the last comma.
 test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
-  let raw = arrayMakeWith 128 (i => if i % 2 == 0 then 255 else 44)
+  let raw = arrayMakeWith 128 (i => if isEven i then 255 else 44)
   expectEqual (replicate 64 "�" ++ [""]) (split "," (fromUtf8 raw))

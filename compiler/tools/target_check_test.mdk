@@ -170,7 +170,7 @@ test "target_check: run judges what the interpreter reaches, the emitters what t
         [
           (
             "impl_dispatched.mdk",
-            resolveImpl ++ "main = match res \"example.com\"\n" ++ printResult,
+            "\{resolveImpl}main = match res \"example.com\"\n\{printResult}",
           ),
         ]
         ["run"]

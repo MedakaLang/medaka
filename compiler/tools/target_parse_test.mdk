@@ -68,8 +68,5 @@ test "the decl memo and the examples memo do not disturb each other" = expectAll
     expectEqual ["2 + 2", "3 + 3"] (map exampleInput (targetExamples exSrcB)),
     expectEqual 1 (length (targetRaw srcA)),
     expectEqual 3 (length (targetRaw srcB)),
-    expectSatisfies
-      "still two examples"
-      (n => n == 2)
-      (length (targetExamples exSrcB)),
+    expectSatisfies "still two examples" (== 2) (length (targetExamples exSrcB)),
   ]

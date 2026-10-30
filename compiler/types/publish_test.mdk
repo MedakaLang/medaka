@@ -1106,8 +1106,7 @@ test "checkModulesAllLines shows useSpeak's context under its module" =
         ("p", desugar (parseLocated pSrc)),
         ("q", desugar (parseLocated "other = 1")),
       ])
-  let inP =
-    takeWhile (l => l /= "## MODULE q") (dropWhile (l => l /= "## MODULE p") ls)
+  let inP = takeWhile (/= "## MODULE q") (dropWhile (/= "## MODULE p") ls)
   expectEqual
     ["useSpeak : Speak a => a -> String"]
     (filter (== "useSpeak : Speak a => a -> String") inP)
