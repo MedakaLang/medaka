@@ -2,7 +2,7 @@
 -- the binder a position resolves to as (name, kind, line, column of its site).
 -- Columns are 0-based, as in the AST.
 
-import test.{Expectation, expectEach, expectEqual}
+import test.{expectEach, expectEqual}
 import frontend.ast.{Loc(..)}
 import support.util.{listLen}
 import frontend.parser.{parseLocated}

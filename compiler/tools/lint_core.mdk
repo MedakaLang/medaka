@@ -9,7 +9,7 @@ import frontend.ast_walk.{ExprKind}
 import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
-import support.util.{listLen, filterList, lookupAssoc}
+import support.util.{listLen, filterList, lookupAssoc, anyList}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -116,15 +116,11 @@ ruleMetaName m = m.name
 
 export
 needsStdlibIndex : RuleMeta -> Bool
-needsStdlibIndex m = anyNeed isStdlibIndexNeed m.needs
+needsStdlibIndex m = anyList isStdlibIndexNeed m.needs
 
 export
 needsScopes : RuleMeta -> Bool
-needsScopes m = anyNeed isScopesNeed m.needs
-
-anyNeed : (Need -> Bool) -> List Need -> Bool
-anyNeed _ [] = False
-anyNeed p (n :: rest) = p n || anyNeed p rest
+needsScopes m = anyList isScopesNeed m.needs
 
 isStdlibIndexNeed : Need -> Bool
 isStdlibIndexNeed NeedsStdlibIndex = True

@@ -84,7 +84,7 @@ firstUnsigned : HashMap String Unit ->
 firstUnsigned signed seen (n, loc)
   | has n seen = []
   | otherwise =
-    let _ = setInPlace n () seen
+    setInPlace n () seen
     if missingSigPair signed (n, loc) then [missingSigFinding (n, loc)] else []
 
 topSigNameL : Decl -> List String

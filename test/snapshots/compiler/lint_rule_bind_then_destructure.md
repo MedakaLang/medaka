@@ -1,5 +1,5 @@
 # META
-source_lines=203
+source_lines=210
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
@@ -178,12 +178,19 @@ bindThenDestructureFix orc d =
 -- arm body's statements spliced inline.
 bindThenDestructureRewrite : Oracle -> Expr -> Option Expr
 bindThenDestructureRewrite orc (EDo d stmts) =
-  map (collapsed => EDo d collapsed) (collapseTail orc d stmts)
+  map (collapsed => EDo d collapsed) (collapseTail orc (heraldOf d) stmts)
 bindThenDestructureRewrite orc (EBlock stmts) =
-  map (collapsed => EBlock collapsed) (collapseTail orc False stmts)
+  map (collapsed => EBlock collapsed) (collapseTail orc HeraldDo stmts)
 bindThenDestructureRewrite _ _ = None
 
-collapseTail : Oracle -> Bool -> List DoStmt -> Option (List DoStmt)
+-- Which keyword heralds a block: `do`, or `defer` (the deferred flag of `EDo`).
+data Herald = HeraldDo | HeraldDefer
+
+heraldOf : Bool -> Herald
+heraldOf True = HeraldDefer
+heraldOf False = HeraldDo
+
+collapseTail : Oracle -> Herald -> List DoStmt -> Option (List DoStmt)
 collapseTail orc host stmts =
   map
     ((prefix, _, pat, boundE, body) =>
@@ -191,20 +198,20 @@ collapseTail orc host stmts =
     (bindMatchTail orc stmts)
 
 -- the arm body as statements: a bare block, or a monadic block heralded the SAME
--- way as the host (`host`: the enclosing block's deferred flag), contributes its
+-- way as the host (`host`: the enclosing block's herald), contributes its
 -- own statements flattened into the outer block; anything else — including a
 -- `defer` block inside a `do` block or vice versa, whose statements bind through
 -- a different interface family (#824) — becomes a final expr-statement.
-bodyToStmts : Bool -> Expr -> List DoStmt
+bodyToStmts : Herald -> Expr -> List DoStmt
 bodyToStmts host e = match unwrapLoc e
-  EDo d stmts => whenSameHerald host d stmts e
+  EDo d stmts => whenSameHerald host (heraldOf d) stmts e
   EBlock stmts => stmts
   _ => [DoExpr e]
 
-whenSameHerald : Bool -> Bool -> List DoStmt -> Expr -> List DoStmt
-whenSameHerald host d stmts e
-  | host == d = stmts
-  | otherwise = [DoExpr e]
+whenSameHerald : Herald -> Herald -> List DoStmt -> Expr -> List DoStmt
+whenSameHerald HeraldDo HeraldDo stmts _ = stmts
+whenSameHerald HeraldDefer HeraldDefer stmts _ = stmts
+whenSameHerald _ _ _ e = [DoExpr e]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
@@ -252,15 +259,21 @@ whenSameHerald host d stmts e
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "map") (ELam ((PVar "collapsed")) (EApp (EApp (EVar "EDo") (EVar "d")) (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "d")) (EVar "stmts"))))
-(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "map") (ELam ((PVar "collapsed")) (EApp (EVar "EBlock") (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "False")) (EVar "stmts"))))
+(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "map") (ELam ((PVar "collapsed")) (EApp (EApp (EVar "EDo") (EVar "d")) (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EApp (EVar "heraldOf") (EVar "d"))) (EVar "stmts"))))
+(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "map") (ELam ((PVar "collapsed")) (EApp (EVar "EBlock") (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "HeraldDo")) (EVar "stmts"))))
 (DFunDef false "bindThenDestructureRewrite" (PWild PWild) (EVar "None"))
-(DTypeSig false "collapseTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DData Private "Herald" () ((variant "HeraldDo" (ConPos)) (variant "HeraldDefer" (ConPos))) ())
+(DTypeSig false "heraldOf" (TyFun (TyCon "Bool") (TyCon "Herald")))
+(DFunDef false "heraldOf" ((PCon "True")) (EVar "HeraldDefer"))
+(DFunDef false "heraldOf" ((PCon "False")) (EVar "HeraldDo"))
+(DTypeSig false "collapseTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Herald") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
 (DFunDef false "collapseTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body")))))) (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts"))))
-(DTypeSig false "bodyToStmts" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
-(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EVar "d")) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
-(DTypeSig false "whenSameHerald" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
-(DFunDef false "whenSameHerald" ((PVar "host") (PVar "d") (PVar "stmts") (PVar "e")) (EIf (EBinOp "==" (EVar "host") (EVar "d")) (EVar "stmts") (EIf (EVar "otherwise") (EListLit (EApp (EVar "DoExpr") (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bodyToStmts" (TyFun (TyCon "Herald") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EApp (EVar "heraldOf") (EVar "d"))) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "whenSameHerald" (TyFun (TyCon "Herald") (TyFun (TyCon "Herald") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "whenSameHerald" ((PCon "HeraldDo") (PCon "HeraldDo") (PVar "stmts") PWild) (EVar "stmts"))
+(DFunDef false "whenSameHerald" ((PCon "HeraldDefer") (PCon "HeraldDefer") (PVar "stmts") PWild) (EVar "stmts"))
+(DFunDef false "whenSameHerald" (PWild PWild PWild (PVar "e")) (EListLit (EApp (EVar "DoExpr") (EVar "e"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
@@ -308,12 +321,18 @@ whenSameHerald host d stmts e
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "collapsed")) (EApp (EApp (EVar "EDo") (EVar "d")) (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "d")) (EVar "stmts"))))
-(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "collapsed")) (EApp (EVar "EBlock") (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "False")) (EVar "stmts"))))
+(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "collapsed")) (EApp (EApp (EVar "EDo") (EVar "d")) (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EApp (EVar "heraldOf") (EVar "d"))) (EVar "stmts"))))
+(DFunDef false "bindThenDestructureRewrite" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "collapsed")) (EApp (EVar "EBlock") (EVar "collapsed")))) (EApp (EApp (EApp (EVar "collapseTail") (EVar "orc")) (EVar "HeraldDo")) (EVar "stmts"))))
 (DFunDef false "bindThenDestructureRewrite" (PWild PWild) (EVar "None"))
-(DTypeSig false "collapseTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DData Private "Herald" () ((variant "HeraldDo" (ConPos)) (variant "HeraldDefer" (ConPos))) ())
+(DTypeSig false "heraldOf" (TyFun (TyCon "Bool") (TyCon "Herald")))
+(DFunDef false "heraldOf" ((PCon "True")) (EVar "HeraldDefer"))
+(DFunDef false "heraldOf" ((PCon "False")) (EVar "HeraldDo"))
+(DTypeSig false "collapseTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Herald") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
 (DFunDef false "collapseTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body")))))) (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts"))))
-(DTypeSig false "bodyToStmts" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
-(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EVar "d")) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
-(DTypeSig false "whenSameHerald" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
-(DFunDef false "whenSameHerald" ((PVar "host") (PVar "d") (PVar "stmts") (PVar "e")) (EIf (EBinOp "==" (EVar "host") (EVar "d")) (EVar "stmts") (EIf (EVar "otherwise") (EListLit (EApp (EVar "DoExpr") (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bodyToStmts" (TyFun (TyCon "Herald") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EApp (EVar "heraldOf") (EVar "d"))) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "whenSameHerald" (TyFun (TyCon "Herald") (TyFun (TyCon "Herald") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "whenSameHerald" ((PCon "HeraldDo") (PCon "HeraldDo") (PVar "stmts") PWild) (EVar "stmts"))
+(DFunDef false "whenSameHerald" ((PCon "HeraldDefer") (PCon "HeraldDefer") (PVar "stmts") PWild) (EVar "stmts"))
+(DFunDef false "whenSameHerald" (PWild PWild PWild (PVar "e")) (EListLit (EApp (EVar "DoExpr") (EVar "e"))))

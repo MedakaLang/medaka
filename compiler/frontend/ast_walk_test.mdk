@@ -2,7 +2,7 @@
 -- every kind of declaration body is reached under its owner, and a span is
 -- recovered for a node the parser leaves unwrapped.
 
-import test.{Expectation, expectEach, expectEqual, expectNoFindings}
+import test.{expectEach, expectEqual, expectNoFindings}
 import test_process.{boundedVerb, medakaBin, underRoot}
 import string.{contains, lines}
 import frontend.ast.{Decl(..), Loc(..)}
@@ -62,21 +62,37 @@ test "declBodies names the owner of every kind of body" =
     ]
     (map ownerTag (flatMap declBodies (parseLocated bodiesSrc)))
 
--- The body span of each declaration as (start line, start col, end line, end
--- col); `Loc` has no `Eq`.
-bodySpans : String -> List (Option (Int, Int, Int, Int))
+-- A body's start line and column and end line and column; `Loc` has no `Eq`.
+data SpanPos = SpanPos {
+  startLine : Int,
+  startCol : Int,
+  endLine : Int,
+  endCol : Int,
+} deriving (Eq, Debug)
+
+bodySpans : String -> List (Option SpanPos)
 bodySpans src = map bodySpan (parseLocated src)
 
-bodySpan : Decl -> Option (Int, Int, Int, Int)
+bodySpan : Decl -> Option SpanPos
 bodySpan (DFunDef _ _ _ body _ _) =
-  map ((Loc _ sl sc el ec) => (sl, sc, el, ec)) (exprSpan body)
+  map
+    ((Loc _ sl sc el ec) =>
+      SpanPos { startLine = sl, startCol = sc, endLine = el, endCol = ec })
+    (exprSpan body)
 bodySpan _ = None
 
 test "exprSpan of an unwrapped node covers its leftmost and rightmost leaves" = expectEach
   [
     (
       "application",
-      expectEqual [Some (1, 4, 1, 13)] (bodySpans "f = g 1 (h 2)"),
+      expectEqual
+        [Some SpanPos { startLine = 1, startCol = 4, endLine = 1, endCol = 13 }]
+        (bodySpans "f = g 1 (h 2)"),
     ),
-    ("operator", expectEqual [Some (1, 4, 1, 9)] (bodySpans "f = a + b")),
+    (
+      "operator",
+      expectEqual
+        [Some SpanPos { startLine = 1, startCol = 4, endLine = 1, endCol = 9 }]
+        (bodySpans "f = a + b"),
+    ),
   ]

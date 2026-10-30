@@ -88,7 +88,7 @@ firstUnsigned : HashMap String Unit ->
 firstUnsigned signed seen (n, loc)
   | has n seen = []
   | otherwise =
-    let _ = setInPlace n () seen
+    setInPlace n () seen
     if missingSigPair signed (n, loc) then [missingSigFinding (n, loc)] else []
 
 topSigNameL : Decl -> List String
@@ -121,7 +121,7 @@ missingSigFinding (name, loc) = Finding {
 (DTypeSig false "missingSigAt" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "missingSigAt" ((PVar "signed") (PVar "seen") (PVar "ctx") (PVar "d")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "firstUnsigned") (EVar "signed")) (EVar "seen"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EFieldAccess (EVar "ctx") "ctxSpan")))))
 (DTypeSig false "firstUnsigned" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "firstUnsigned" ((PVar "signed") (PVar "seen") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "missingSigPair") (EVar "signed")) (ETuple (EVar "n") (EVar "loc"))) (EListLit (EApp (EVar "missingSigFinding") (ETuple (EVar "n") (EVar "loc")))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstUnsigned" ((PVar "signed") (PVar "seen") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "missingSigPair") (EVar "signed")) (ETuple (EVar "n") (EVar "loc"))) (EListLit (EApp (EVar "missingSigFinding") (ETuple (EVar "n") (EVar "loc")))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "topSigNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigNameL") (EVar "d")))
@@ -144,7 +144,7 @@ missingSigFinding (name, loc) = Finding {
 (DTypeSig false "missingSigAt" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "missingSigAt" ((PVar "signed") (PVar "seen") (PVar "ctx") (PVar "d")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "firstUnsigned") (EVar "signed")) (EVar "seen"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EFieldAccess (EVar "ctx") "ctxSpan")))))
 (DTypeSig false "firstUnsigned" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "firstUnsigned" ((PVar "signed") (PVar "seen") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "missingSigPair") (EVar "signed")) (ETuple (EVar "n") (EVar "loc"))) (EListLit (EApp (EVar "missingSigFinding") (ETuple (EVar "n") (EVar "loc")))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstUnsigned" ((PVar "signed") (PVar "seen") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "missingSigPair") (EVar "signed")) (ETuple (EVar "n") (EVar "loc"))) (EListLit (EApp (EVar "missingSigFinding") (ETuple (EVar "n") (EVar "loc")))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "topSigNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigNameL") (EVar "d")))

@@ -94,7 +94,8 @@
    which is the price of a corpus that shrinks reding too. -}
 
 import compiler_cli_test_support.{
-  boundedVerbsSeconds, chompNewlines, inFreshDirOf, stripUnitAutoPrint
+  boundedVerbsSeconds, chompNewlines, fixtureStems, inFreshDirOf,
+  stripUnitAutoPrint
 }
 import fs.{fixtureDirs, fixtureFiles}
 import json.{Json, asArray, asInt, asString, get, parse}
@@ -185,94 +186,87 @@ onlyRow l = match split " " (trim l)
   [name, rules] => Some (name, rules)
   _ => None
 
--- Every top-level fixture stem of `dir`, sorted.
-fixtureStems : String -> <FileRead, IO> Result String (List String)
-fixtureStems dir = match fixtureFiles "\{medakaRoot}/\{dir}"
-  Err e => Err "\{dir}: \{e}"
-  Ok paths =>
-    Ok
-      (sort
-        (map
-          stem
-          (filter
-            (p => endsWith ".mdk" p && dirname p == "\{medakaRoot}/\{dir}")
-            paths)))
+-- A narrowed probe run over one fixture directory: the probe binary, the
+-- directory, whether its stdout is lint output (graded as a sorted line set),
+-- and the golden's file suffix.
+data NarrowedProbe = NarrowedProbe {
+  probe : String,
+  dir : String,
+  isLint : Bool,
+  suffix : String,
+}
 
 -- One narrowed fixture: the probe run with `--only=<rules>`, graded on its
 -- exit and its stdout against the fixture's golden.
-narrowedFailure : String ->
-  String ->
-  Bool ->
-  String ->
+narrowedFailure : NarrowedProbe ->
   (String, String) ->
   <Exec, FileRead, IO> Option String
-narrowedFailure probe dir isLint suffix (name, rules) =
-  let src = "\{medakaRoot}/\{dir}/\{name}.mdk"
-  match boundedVerb "\{medakaRoot}/\{probe}" ["--only=\{rules}", src]
-    Err e => Some "\{name}: could not spawn \{probe}: \{e}"
-    Ok (code, out, err) => match processFailure probe name code err
+narrowedFailure np (name, rules) =
+  let src = "\{medakaRoot}/\{np.dir}/\{name}.mdk"
+  match boundedVerb "\{medakaRoot}/\{np.probe}" ["--only=\{rules}", src]
+    Err e => Some "\{name}: could not spawn \{np.probe}: \{e}"
+    Ok (code, out, err) => match processFailure np.probe name code err
       Some m => Some m
-      None => match readFile "\{medakaRoot}/\{dir}/\{name}\{suffix}"
+      None => match readFile "\{medakaRoot}/\{np.dir}/\{name}\{np.suffix}"
         Err e => Some "\{name}: no readable golden: \{e}"
         Ok raw =>
           let text =
-            chompNewlines (if isLint then stripUnitAutoPrint out else out)
+            chompNewlines (if np.isLint then stripUnitAutoPrint out else out)
           let actual =
-            if isLint then chompNewlines (unlines (sort (lines text))) else text
+            if np.isLint then
+              chompNewlines (unlines (sort (lines text)))
+            else
+              text
           if chompNewlines raw == actual then
             None
           else
             Some "\{name}: \{diffNote (chompNewlines raw) actual}"
 
-narrowedFailures : String ->
-  String ->
-  Bool ->
-  String ->
-  Int ->
-  <Exec, FileRead, IO> List String
-narrowedFailures probe dir isLint suffix want = match fixtureStems dir
-  Err e => [e]
-  Ok stems => match onlyRows dir
+narrowedFailures : NarrowedProbe -> Int -> <Exec, FileRead, IO> List String
+narrowedFailures np want = match fixtureStems "\{medakaRoot}/\{np.dir}"
+  Err e => ["\{np.dir}: \{e}"]
+  Ok stems => match onlyRows np.dir
     Err e => [e]
-    Ok table => narrowedGrade probe dir isLint suffix want stems table
+    Ok table => narrowedGrade np want stems table
 
-narrowedGrade : String ->
-  String ->
-  Bool ->
-  String ->
+narrowedGrade : NarrowedProbe ->
   Int ->
   List String ->
   List (String, String) ->
   <Exec, FileRead, IO> List String
-narrowedGrade probe dir isLint suffix want stems table =
+narrowedGrade np want stems table =
   let tabled = sort (map fst table)
   let uncovered =
     if stems == tabled then
       []
     else
-      ["\{dir}: fixtures \{debug stems} are not the tabled \{debug tabled}"]
-  countFloor dir want stems
+      ["\{np.dir}: fixtures \{debug stems} are not the tabled \{debug tabled}"]
+  countFloor np.dir want stems
     ++ uncovered
-    ++ somes (map (narrowedFailure probe dir isLint suffix) table)
+    ++ somes (map (narrowedFailure np) table)
 
 test "diff_compiler_lint fixtures reproduce their one-rule goldens" =
   report
     "lint"
     (narrowedFailures
-      "test/bin/lint_main"
-      "test/lint_fixtures"
-      True
-      ".expected"
+      NarrowedProbe {
+        probe = "test/bin/lint_main",
+        dir = "test/lint_fixtures",
+        isLint = True,
+        suffix = ".expected",
+      }
       5)
 
 test "diff_compiler_lint_fix fixtures reproduce their one-rule goldens" =
   report
     "lint-fix"
     (narrowedFailures
-      "test/bin/lint_fix_main"
-      "test/lint_fix_fixtures"
-      False
-      ".fixed"
+      NarrowedProbe {
+        probe = "test/bin/lint_fix_main",
+        dir = "test/lint_fix_fixtures",
+        isLint = False,
+        suffix = ".fixed",
+      }
       39)
 
 test "`medaka new`'s scaffold matches its golden tree" =
