@@ -3,6 +3,7 @@ ir.extern_types
 support.opcount
 support.ordmap
 support.path
+support.symbol_encoding
 support.util
 types.capability_manifest
 types.effect_authority
@@ -10,8 +11,10 @@ types.effect_domain
 types.effect_rows
 types.extern_source
 types.repr
+types.route_key
 types.runtime_abi
 types.runtime_abi_data
 types.runtime_abi_types
 types.runtime_grants
 types.runtime_types
+types.symbol_origins

@@ -219,15 +219,15 @@ entry:
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr %t1
+  store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..0 to i64), ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Box_display(i64 %t2)
+  %t3 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426f78.646973706c6179(i64 %t2)
   %t4 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t4
   %t5 = getelementptr i8, ptr %t4, i64 8
-  store i64 ptrtoint (ptr @.strc.program.1 to i64), ptr %t5
+  store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..1 to i64), ptr %t5
   %t6 = ptrtoint ptr %t4 to i64
-  %t7 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Box_display(i64 %t6)
+  %t7 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426f78.646973706c6179(i64 %t6)
   %t8 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t8
   %t9 = getelementptr i8, ptr %t8, i64 8
@@ -246,14 +246,14 @@ entry:
   call void @mdk_print_str(i64 %t16)
   ret i32 0
 }
-; mdk-module impl:String_display
-define internal i64 @mdk_impl_String_display(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a446973706c61797c537472696e677c.646973706c6179
+define internal i64 @mdk.impl.537472696e67.646973706c6179(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Box_display
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Box_display(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a446973706c61797c5f5f757365725f5f2e426f787c.646973706c6179
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426f78.646973706c6179(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -270,7 +270,7 @@ conyes8:
   %t12 = inttoptr i64 %arg0 to ptr
   %t13 = getelementptr i8, ptr %t12, i64 8
   %t14 = load i64, ptr %t13
-  %t15 = call i64 @mdk_impl_String_display(i64 %t14)
+  %t15 = call i64 @mdk.impl.537472696e67.646973706c6179(i64 %t14)
   ret i64 %t15
 connext8:
   call void @mdk_nonexhaustive_match()
@@ -283,6 +283,6 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [7 x i8] } { i64 1, i64 6, i64 6, [7 x i8] c"\68\65\6C\6C\6F\20\00" }
+@mdk.gen.string.70726f6772616d..0 = private unnamed_addr constant { i64, i64, i64, [7 x i8] } { i64 1, i64 6, i64 6, [7 x i8] c"\68\65\6C\6C\6F\20\00" }
 ; mdk-module program
-@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [6 x i8] } { i64 1, i64 5, i64 5, [6 x i8] c"\77\6F\72\6C\64\00" }
+@mdk.gen.string.70726f6772616d..1 = private unnamed_addr constant { i64, i64, i64, [6 x i8] } { i64 1, i64 5, i64 5, [6 x i8] c"\77\6F\72\6C\64\00" }

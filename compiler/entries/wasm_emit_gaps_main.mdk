@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import support.ordmap.{omEmpty}
@@ -75,7 +76,8 @@ runEmit inputs runtimeDecls coreDecls modules =
   let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let (coreD, modules2, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2
   -- GAP CENSUS: do NOT run dceFilter.  DCE roots reachability from `main`, and the
   -- census input (all_modules_entry) has NO main — DCE would prune EVERY plain
@@ -89,7 +91,9 @@ runEmit inputs runtimeDecls coreDecls modules =
   let input =
     makeWasmEmitInput RawUnchecked (runtimeDomain (externDecls runtimeDecls)) []
   let cp =
-    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
+    lowerProgramEmitWith
+      (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
+      allDecls
   let (plan, prepared) =
     prepareWasmPlan (runtimeDomain (externDecls runtimeDecls)) omEmpty cp
   match emitProgramGaps input plan prepared

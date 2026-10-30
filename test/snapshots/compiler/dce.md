@@ -1,7 +1,8 @@
 # META
-source_lines=548
+source_lines=549
 stages=DESUGAR,MARK
 # SOURCE
+import support.symbol_encoding.{encodePair}
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
 --
 -- WHY: `medaka build` could only load an EMPTY prelude, because emitting the real
@@ -186,7 +187,7 @@ filterReachable reach (d :: rest) = d :: filterReachable reach rest
 canonRef : HashMap String Unit -> String -> String
 canonRef defined n
   | has n defined = n
-  | has ("core__" ++ n) defined = "core__" ++ n
+  | has (encodePair "core" n) defined = encodePair "core" n
   | otherwise = n
 
 -- set of all DFunDef names defined in the program (the only DCE-droppable decls).
@@ -551,6 +552,7 @@ closure graph seen ((from, w :: ws) :: stack)
 refsOf : HashMap String (List String) -> String -> List String
 refsOf graph n = findWithDefault [] n graph
 # DESUGAR
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "LetBind" false) (mem "UsePath" true) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "useMemberAlias" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "scopeUnitNames" false))))
@@ -581,7 +583,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "filterReachable" ((PVar "reach") (PCons (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "filterReachable" ((PVar "reach") (PCons (PVar "d") (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest"))))
 (DTypeSig false "canonRef" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonRef" ((PVar "defined") (PVar "n")) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EBinOp "++" (ELit (LString "core__")) (EVar "n"))) (EVar "defined")) (EBinOp "++" (ELit (LString "core__")) (EVar "n")) (EIf (EVar "otherwise") (EVar "n") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "canonRef" ((PVar "defined") (PVar "n")) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n"))) (EVar "defined")) (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n")) (EIf (EVar "otherwise") (EVar "n") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "definedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "definedFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "definedFnNamesInto") (EVar "decls")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
@@ -679,6 +681,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "graph") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "graph")))
 # MARK
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "LetBind" false) (mem "UsePath" true) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "useMemberAlias" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "scopeUnitNames" false))))
@@ -709,7 +712,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "filterReachable" ((PVar "reach") (PCons (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "filterReachable" ((PVar "reach") (PCons (PVar "d") (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterReachable") (EVar "reach")) (EVar "rest"))))
 (DTypeSig false "canonRef" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonRef" ((PVar "defined") (PVar "n")) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EBinOp "++" (ELit (LString "core__")) (EVar "n"))) (EVar "defined")) (EBinOp "++" (ELit (LString "core__")) (EVar "n")) (EIf (EVar "otherwise") (EVar "n") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "canonRef" ((PVar "defined") (PVar "n")) (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n"))) (EVar "defined")) (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n")) (EIf (EVar "otherwise") (EVar "n") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "definedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "definedFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "definedFnNamesInto") (EVar "decls")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))

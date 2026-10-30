@@ -1950,7 +1950,9 @@ check_bit_witness() {
     grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
   done
   pass "emitted bit-helper witness is straight-line over $*"
-  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  witness_symbol=mdk.user.6d363236393734356637373639373436653635373337335f5f63744269745769746e657373
+  witness_eta=mdk.gen.eta.70726f6772616d.6d363236393734356637373639373436653635373337335f5f63744269745769746e657373.
+  pending=$(nm "$bin" | awk -v prefix="$witness_eta" '{ name=$3; sub(/^_/, "", name); if (index(name, prefix) == 1) print name }')
   [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
   pass 'linked bit-helper witness symbol exists'
   visited=' '
@@ -1966,7 +1968,7 @@ check_bit_witness() {
       for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
         case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
         case $target in
-          *__ctBitWitness) next_round="$next_round $target" ;;
+          "$witness_symbol"|"$witness_symbol".llvm.*) next_round="$next_round $target" ;;
           *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
         esac
       done

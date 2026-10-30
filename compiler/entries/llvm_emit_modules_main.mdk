@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 import types.capability_manifest.{ManifestRequirement(..)}
 import types.extern_source.{externSourceHeadRows}
 -- MULTI-MODULE LLVM emit driver — the emit analog of eval_typed_modules_main.mdk
@@ -118,9 +119,7 @@ preludeSymsOf : ProgramFacts ->
   (List String, List (String, String, String))
 preludeSymsOf facts coreD = match lowerProgramEmitWith facts coreD
   CProgram groups _ _ impls _ _ => (
-    filterList
-      (n => not (endsWith autoPrintPinName n))
-      (map cbindNameOf groups),
+    filterList (/= encodePair "core" autoPrintPinName) (map cbindNameOf groups),
     preludeImplSymbols (ifaceImplHeadTable coreD) impls,
   )
 

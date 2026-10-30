@@ -221,7 +221,7 @@ entry:
   %t1 = getelementptr i8, ptr %t0, i64 8
   store double 100.0, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk___user____mkAdd(i64 %t2)
+  %t3 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6d6b416464(i64 %t2)
   %t4 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t4
   %t5 = getelementptr i8, ptr %t4, i64 8
@@ -295,13 +295,13 @@ apend30:
   call void @mdk_print_float(double %t51)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____mkAdd(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6d6b416464(i64 %arg0) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 24)
   store i64 1, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam.program.0 to i64), ptr %t1
+  store i64 ptrtoint (ptr @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..0 to i64), ptr %t1
   %t2 = getelementptr i8, ptr %t0, i64 16
   store i64 %arg0, ptr %t2
   %t3 = ptrtoint ptr %t0 to i64
@@ -310,8 +310,8 @@ entry:
 
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
-; mdk-module program
-define internal i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..0(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16

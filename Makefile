@@ -128,6 +128,9 @@ inlang-steps: $(INLANG_STEPS)
 inlang-ported:
 	sh test/diff_compiler_ported.sh
 
+inlang-report-names:
+	python3 test/alloc_census/report_names_test.py
+
 ## The floor gate for the whole `stdlib/` suite (#3214).  Every
 ## `stdlib/*.mdk` is reached through this one roster rather than a line of
 ## its own here: each row carries the executed-assertion floor that module
@@ -192,6 +195,7 @@ inlang-support-sexp-value-test:
 
 inlang-support-symbol-origin-test:
 	./medaka test compiler/support/symbol_origin_test.mdk
+	./medaka test compiler/support/symbol_encoding_test.mdk
 
 inlang-support-diag-codes-test:
 	./medaka test compiler/support/diag_codes_test.mdk
@@ -225,7 +229,7 @@ inlang-backend-trmc-analysis-test:
 ## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 ## definer) is private; its sibling drives the exported mangleUnits.
 inlang-types-private-mangle-test:
-	./medaka test compiler/types/private_mangle_test.mdk
+	./medaka test compiler/types/private_mangle_test.mdk compiler/types/symbol_origins_test.mdk
 
 ## support/hooks.mdk has no importer until the first hooks consumer lands, so
 ## no entry's closure reaches it.
@@ -304,7 +308,7 @@ inlang-backend-llvm-emit-bytelit-test:
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
-	./medaka test compiler/backend/wasm_symbols_test.mdk
+	./medaka test compiler/backend/wasm_symbols_test.mdk compiler/backend/wasm_symbol_names_test.mdk
 
 ## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
 ## defines and calls what its manifest row states, and the registry seeded from
@@ -315,7 +319,7 @@ inlang-backend-wasm-preamble-test:
 ## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-llvm-symbols-test:
-	./medaka test compiler/backend/llvm_symbols_test.mdk
+	./medaka test compiler/backend/llvm_symbols_test.mdk compiler/backend/llvm_symbol_names_test.mdk
 
 ## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as
 ## the declaration its parts describe, and the registry checks calls against it.

@@ -233,28 +233,28 @@ entry:
   %t8 = getelementptr i8, ptr %t6, i64 16
   store i64 %t5, ptr %t8
   %t9 = ptrtoint ptr %t6 to i64
-  %t10 = call i64 @mdk___user____addPair(i64 %t9)
-  %t11 = call i64 @mdk___user____fid(i64 %t10)
+  %t10 = call i64 @mdk.user.6d356635663735373336353732356635665f5f61646450616972(i64 %t9)
+  %t11 = call i64 @mdk.user.6d356635663735373336353732356635665f5f666964(i64 %t10)
   %t12 = inttoptr i64 %t11 to ptr
   %t13 = getelementptr i8, ptr %t12, i64 8
   %t14 = load double, ptr %t13
   call void @mdk_print_float(double %t14)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____fid(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f666964(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module program
-define internal double @mdk___user____fid__fw(double %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal double @mdk.worker.float.6d356635663735373336353732356635665f5f666964(double %arg0) {
 entry:
   ret double %arg0
 }
 
-; mdk-module program
-define internal i64 @mdk___user____addPair(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f61646450616972(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1

@@ -1,3 +1,4 @@
+import backend.wasm_symbol_names as WN
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
@@ -50,7 +51,6 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, filterList, joinWith}
-import types.private_mangle.{injectiveIdent}
 
 export
 preambleHeadLines : List String
@@ -2261,11 +2261,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
+jsffiImportId name = WN.wasmName (WN.WJSImport name)
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
+jsffiWrapperId name = WN.wasmName (WN.WJSWrapper name)
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export

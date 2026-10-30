@@ -237,7 +237,7 @@ entry:
   %t10 = getelementptr i8, ptr %t8, i64 16
   store i64 %t7, ptr %t10
   %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk___user____elem(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 5, i64 %t11)
+  %t12 = call i64 @mdk.user.6d356635663735373336353732356635665f5f656c656d(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 5, i64 %t11)
   %t13 = ashr i64 %t12, 1
   %t14 = icmp ne i64 %t13, 0
   %t16 = alloca i64
@@ -254,8 +254,8 @@ end15:
   call void @mdk_print_int(i64 %t18)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f656c656d(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg2, 562949953421315
@@ -286,7 +286,7 @@ conyes12:
   %t22 = inttoptr i64 %arg2 to ptr
   %t23 = getelementptr i8, ptr %t22, i64 16
   %t24 = load i64, ptr %t23
-  %t25 = call i64 @mdk_impl_Int_eq(i64 %arg1, i64 %t21)
+  %t25 = call i64 @mdk.impl.496e74.6571(i64 %arg1, i64 %t21)
   %t26 = ashr i64 %t25, 1
   %t27 = icmp ne i64 %t26, 0
   br i1 %t27, label %then28, label %else28
@@ -294,7 +294,7 @@ then28:
   store i64 3, ptr %t0
   br label %decend1
 else28:
-  %t29 = musttail call i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %t24)
+  %t29 = musttail call i64 @mdk.user.6d356635663735373336353732356635665f5f656c656d(i64 %arg0, i64 %arg1, i64 %t24)
   ret i64 %t29
 connext12:
   call void @mdk_nonexhaustive_match()
@@ -304,8 +304,8 @@ decend1:
   ret i64 %t30
 }
 
-; mdk-module impl:Int_eq
-define internal i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a45717c496e747c.6571
+define internal i64 @mdk.impl.496e74.6571(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp eq i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -317,4 +317,4 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 4190803891842103885]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 4190803891842103885]

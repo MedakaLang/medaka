@@ -1,0 +1,9 @@
+f : Int -> Int -> Int
+f __wparg1 0 = __wparg1
+f x y = x + y
+main =
+  let self = 2
+  let u__self = 3
+  let __lp0 = 0
+  let c = (self + u__self + __lp0 + _)
+  c (f 0 0)

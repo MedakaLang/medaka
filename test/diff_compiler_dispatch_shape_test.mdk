@@ -6,10 +6,10 @@
    probe programs and checks three assertions:
 
    A. outlined: no dispatch-chain arm (`dispyes*` / `ddispyes*` label) appears
-      outside a `@mdk_disp_*` define.
+      outside a `@mdk.dispatch.*` define.
    B. shared: dispatcher call sites outnumber dispatcher defines at least 4x.
    C. program-independent: among the defines common to both probes, the only
-      bodies allowed to differ are `@mdk_disp_*` and `mdk_program_main`. The
+      bodies allowed to differ are `@mdk.dispatch.*` and `mdk_program_main`. The
       common set must hold at least 100 defines, so the check cannot pass
       vacuously.
 
@@ -79,10 +79,10 @@ leadGo ok s i =
     i
 
 isDispDefine : String -> Bool
-isDispDefine l = startsWith "define " l && contains "@mdk_disp_" l
+isDispDefine l = startsWith "define " l && contains "@mdk.dispatch." l
 
 isDispCall : String -> Bool
-isDispCall l = contains "call i64 @mdk_disp_" l
+isDispCall l = contains "call i64 @mdk.dispatch." l
 
 -- `^d?dispyes[0-9]+:`
 isArmLabel : String -> Bool
@@ -99,7 +99,7 @@ digitsColon t =
   let d = leadLen (c => contains c digitSet) t
   d > 0 && startsWith ":" (drop d t)
 
--- Arms outside a define whose header names @mdk_disp_*. Mirrors the awk walk:
+-- Arms outside a define whose header names @mdk.dispatch.*. Mirrors the awk walk:
 -- a `define` line resets the enclosing define, other lines leave it unchanged.
 strayArms : List String -> Int
 strayArms ls = strayGo False 0 ls
@@ -108,7 +108,7 @@ strayGo : Bool -> Int -> List String -> Int
 strayGo _ n [] = n
 strayGo inDisp n (l :: rest) =
   if startsWith "define " l then
-    strayGo (contains "@mdk_disp_" l) n rest
+    strayGo (contains "@mdk.dispatch." l) n rest
   else if isArmLabel l && not inDisp then
     strayGo inDisp (n + 1) rest
   else
@@ -151,7 +151,8 @@ differs (_, b1, b2) = b1 /= b2
 
 -- A differing define that is not allowed to differ.
 disallowed : (String, String, String) -> Bool
-disallowed (n, _, _) = not (startsWith "mdk_disp_" n) && n /= "mdk_program_main"
+disallowed (n, _, _) =
+  not (startsWith "mdk.dispatch." n) && n /= "mdk_program_main"
 
 nameOf : (String, String, String) -> String
 nameOf (n, _, _) = n
@@ -164,7 +165,7 @@ shapeChecks ir1 ir2 = shapeOf (lines ir1) (lines ir2)
 shapeOf : List String -> List String -> Expectation
 shapeOf ls1 ls2 = expectEach [
   (
-    "A outlined: no dispatch arm outside a @mdk_disp_* define",
+    "A outlined: no dispatch arm outside a @mdk.dispatch.* define",
     expectEqual 0 (strayArms ls2),
   ),
   (

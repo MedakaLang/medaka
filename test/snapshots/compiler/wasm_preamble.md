@@ -2,6 +2,7 @@
 source_lines=3636
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_symbol_names as WN
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
@@ -54,7 +55,6 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, filterList, joinWith}
-import types.private_mangle.{injectiveIdent}
 
 export
 preambleHeadLines : List String
@@ -2265,11 +2265,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
+jsffiImportId name = WN.wasmName (WN.WJSImport name)
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
+jsffiWrapperId name = WN.wasmName (WN.WJSWrapper name)
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export
@@ -3639,13 +3639,13 @@ plannedHelperBlock plan files "siteRuntimeLines" =
 plannedHelperBlock _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3893,9 +3893,9 @@ plannedHelperBlock _ _ name =
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EVar "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "params"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EVar "name"))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSWrapper") (EVar "name"))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
@@ -4093,13 +4093,13 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
 (DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -4347,9 +4347,9 @@ plannedHelperBlock _ _ name =
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EMethodRef "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "params"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EVar "name"))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSWrapper") (EVar "name"))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))

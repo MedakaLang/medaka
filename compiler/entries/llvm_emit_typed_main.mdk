@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import types.extern_source.{externSourceHeadRows}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
@@ -103,6 +104,7 @@ emitGapIsolation =
       []
       []
       DeclFacts {
+        factSymbolOrigins = None,
         factMethodResults = [],
         factRequires = [],
         factSupers = [],
@@ -157,7 +159,8 @@ runEmit runtimeDecls preludeDecls userDecls =
   let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let (coreD, modules2, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2
   let _ =
     validateFfiExternTypeNames
@@ -173,7 +176,10 @@ runEmit runtimeDecls preludeDecls userDecls =
       []
       ""
 
-  let cp = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) mangled
+  let cp =
+    lowerProgramEmitWith
+      (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
+      mangled
   emitProgram
     input
     (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)

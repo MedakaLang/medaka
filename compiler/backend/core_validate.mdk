@@ -1,3 +1,6 @@
+import backend.llvm_symbol_names as LN
+import backend.wasm_symbol_names as WN
+import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{validateWasmDemand}
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
 -- check reads only the `CProgram` the emitter received and the extern catalog,
@@ -227,6 +230,7 @@ emissionDefects backend domain requirement plan cp =
         () => validatePhysicalDemand backend plan cp,
         () => validateRecords cp,
         () => validateBinderStamps cp,
+        () => validateSymbolOrigins cp,
         () =>
           validateScalarOperators cp
             ++ validateCalls cp
@@ -614,9 +618,10 @@ validateImplSymbolInjectivity cp = match implSymbolCollision cp
 export
 implSymbolCollision : CProgram -> Option String
 implSymbolCollision (CProgram _ _ _ impls _ _) =
-  checkImplSymbolsInjective
-    (dedupBy implPreImageKey (flatMap taggedImplSymRow impls))
-    omEmpty
+  let rows = dedupBy implPreImageKey (flatMap taggedImplSymRow impls)
+  match checkImplSymbolsInjective rows omEmpty True
+    Some message => Some message
+    None => checkImplSymbolsInjective rows omEmpty False
 
 -- (method, symbol tag, canonical key) of a supplied-method entry
 taggedImplSymRow : CImplEntry -> List (String, String, String)
@@ -633,12 +638,17 @@ implPreImageKey (m, tag, key) = "\{m}\n\{tag}\n\{key}"
 -- false-draining on a rewording of the prose around them.
 checkImplSymbolsInjective : List (String, String, String) ->
   OrdMap String ->
+  Bool ->
   Option String
-checkImplSymbolsInjective [] _ = None
-checkImplSymbolsInjective ((m, tag, key) :: rest) seen =
-  let sym = "mdk_impl_\{tag}_\{m}"
+checkImplSymbolsInjective [] _ _ = None
+checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
+  let sym =
+    if native then
+      LN.llvmName (LN.LImplMethod tag m)
+    else
+      WN.wasmName (WN.WImplMethod tag m)
   match omLookup sym seen
-    None => checkImplSymbolsInjective rest (omInsert sym key seen)
+    None => checkImplSymbolsInjective rest (omInsert sym key seen) native
     Some prev =>
       Some
         "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
@@ -878,7 +888,7 @@ programNames ((CBind name _ _ _) :: rest) ctors acc =
 -- the `core__` name a bare prelude reference resolves to in both emitters
 -- (`canonFn`, `canonFnName`).
 isProgramName : OrdMap Unit -> String -> Bool
-isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
+isProgramName top x = omHasKey x top || omHasKey (encodePair "core" x) top
 
 -- The walk's state: the externs already found, the extern findings, the record
 -- nodes with untrustworthy ordinals, the applications with a wrong mode, and the
@@ -1584,6 +1594,29 @@ tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
+
+export
+validateSymbolOrigins : CProgram -> List String
+validateSymbolOrigins (CProgram groups _ ctorTypes _ _ facts) =
+  match facts.factSymbolOrigins
+    None => []
+    Some origins =>
+      flatMap
+          ((CBind name _ _ _) =>
+            if omHasKey name origins.functions then
+              []
+            else
+              ["symbol origin: missing function " ++ name])
+          groups
+        ++ flatMap
+          ((name, owner) => match omLookup owner origins.constructors
+            None => ["symbol origin: missing constructor owner " ++ owner]
+            Some rows =>
+              if omHasKey name rows then
+                []
+              else
+                ["symbol origin: missing constructor \{name} in \{owner}"])
+          ctorTypes
 
 -- ── binder stamps ─────────────────────────────────────────────────────────────
 -- One line per binder with no row, per binder stamped against the literal,

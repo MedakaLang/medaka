@@ -6,12 +6,11 @@
 # function body from the OPTIMIZED output, and report what survives,
 # bucketed:
 #
-#   OPAQUE_CALL   — a `call`/`tail call` to an `@mdk_*` runtime or dispatch
+#   OPAQUE_CALL   — a `call`/`tail call` to an `@mdk_*` runtime or `@mdk.dispatch.*` dispatch
 #                   helper (`runtime/medaka_rt.c`) that -O2 did not inline
 #                   away. Excludes calls to module-qualified user functions
-#                   (mangled `@mdk_<module>__<name>` — double underscore,
-#                   per compiler/types/private_mangle.mdk; runtime helper
-#                   names never contain `__`) — a surviving user-fn call is
+#                   (encoded `@mdk.user.<hex>`; legacy `@mdk_<module>__<name>`
+#                   calls are also excluded) — a surviving user-fn call is
 #                   not counted here.
 #   ALLOCATION    — a `call` to an allocator (`@GC_malloc`/`@mdk_*alloc*`).
 #   LOAD          — a `load` instruction; flagged REDUNDANT when the same
@@ -70,7 +69,7 @@ extract_fn() {
   file="$1"
   sym="$2"
   awk -v sym="$sym" '
-    $0 ~ ("^define.*@" sym "\\(") { found = 1 }
+    /^define/ && index($0, "@" sym "(") { found = 1 }
     found { print }
     found && /^}$/ { exit }
   ' "$file"
@@ -84,7 +83,8 @@ for f in "$CORPUS"/*.mdk; do
   [ -f "$f" ] || continue
   base="$(basename "$f" .mdk)"
   n_probes=$((n_probes + 1))
-  sym="mdk_${base}__probe"
+  sym="$(python3 -c 'import sys; m = sys.argv[1]; print("mdk.user." + ("m" + m.encode().hex() + "__probe").encode().hex())' "$base")"
+  sym="${O2_CENSUS_SELECTOR_OVERRIDE:-$sym}"
   out="$WORK/$base"
 
   echo "== $base (probe : @$sym) =="
@@ -109,7 +109,30 @@ for f in "$CORPUS"/*.mdk; do
   # internal probe once it is inlined into main, which would read as
   # ELIMINATED for every probe. Give the probe alone external linkage so its
   # optimized body survives to be measured.
-  sed "s/^define internal \\(.*@$sym(\\)/define \\1/" "$ir" > "$WORK/$base.ext.ll"
+  if ! python3 - "$ir" "$sym" <<'PYCODE'
+import re, sys
+text = open(sys.argv[1]).read()
+names = re.findall(r'^define\s+[^\n]*@([^ (]+)\(', text, re.M)
+probes = []
+for name in names:
+    if name.startswith('mdk.user.'):
+        try:
+            logical = bytes.fromhex(name[9:]).decode('utf-8')
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if re.fullmatch(r'm(?:[0-9a-f]{2})*__probe', logical):
+            probes.append(name)
+if probes and sys.argv[2] not in probes:
+    print('selector mismatch: expected ' + sys.argv[2] + ', found ' + ', '.join(probes), file=sys.stderr)
+    sys.exit(1)
+PYCODE
+  then
+    echo "  BUILD_FAILED — selector mismatch in emitted IR"
+    n_build_failed=$((n_build_failed + 1))
+    echo
+    continue
+  fi
+  awk -v sym="$sym" 'index($0, "define internal ") == 1 && index($0, "@" sym "(") { sub(/^define internal /, "define ") } { print }' "$ir" > "$WORK/$base.ext.ll"
   opt="$WORK/$base.opt.ll"
   if ! clang -O2 -S -emit-llvm "$WORK/$base.ext.ll" -o "$opt" >"$WORK/$base.clang.log" 2>&1; then
     echo "  BUILD_FAILED — clang -O2 failed:"
@@ -120,6 +143,12 @@ for f in "$CORPUS"/*.mdk; do
   fi
 
   body="$(extract_fn "$opt" "$sym")"
+  if [ -z "$body" ] && grep -F "@$sym(" "$ir" >/dev/null; then
+    echo "  BUILD_FAILED — selected definition missing from optimized output"
+    n_build_failed=$((n_build_failed + 1))
+    echo
+    continue
+  fi
   if [ -z "$body" ]; then
     echo "  ELIMINATED — @$sym not found in the -O2 output (fully eliminated or renamed) — optimal, not a failure"
     n_eliminated=$((n_eliminated + 1))
@@ -127,7 +156,7 @@ for f in "$CORPUS"/*.mdk; do
     continue
   fi
 
-  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@mdk_[A-Za-z0-9_]*\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' | grep -Ev '@mdk_[A-Za-z0-9_]*__[A-Za-z0-9_]*\(' || true)"
+  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@(mdk_[A-Za-z0-9_]*|"?mdk\.dispatch\.[0-9a-f]*\.[0-9a-f]*\.[0-9]+\.[0-9]+\.[0-9]+"?)\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' | grep -Ev '@mdk_[A-Za-z0-9_]*__[A-Za-z0-9_]*\(' || true)"
   alloc="$(printf '%s\n' "$body" | grep -E 'call[^@]*@(GC_malloc|mdk_[A-Za-z0-9_]*alloc)' || true)"
   loads="$(printf '%s\n' "$body" | grep -E '= *load ' || true)"
   n_loads=$(printf '%s\n' "$loads" | grep -c . || true)
