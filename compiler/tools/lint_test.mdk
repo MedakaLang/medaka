@@ -43,6 +43,7 @@ import tools.lint.{
   StdlibIndex,
   allCrossFileRules,
   allRuleNames,
+  applyFixes,
   buildStdlibIndexResult,
   crossFileMetaProblems,
   emptyStdlibIndex,
@@ -241,13 +242,43 @@ test "--explain names a known rule and rejects an unknown one" = expectEach [
   ("unknown", expectFalse (isOk (explainRule "nope"))),
 ]
 
--- ── 5. #3837 stopgap: reported, never auto-fixed ────────────────────────────
--- The two test-verb rules still report, and `--fix` leaves the source alone.
-test "the test-verb rules report but do not fix" = match buildStdlibIndexResult
-  Err _ => fail "could not build stdlib index"
-  Ok idx =>
-    let triples = lintFilesToDiagTriples idx True [] [] [] None verbFixtures
-    expectEach (map (reportsTestVerbRule triples) verbFixtures)
+-- ── 5. #3837: a test-verb fix applies only to `test`'s own verb ─────────────
+-- The two test-verb rules report in every fixture below; `--fix` rewrites the
+-- one whose verb resolves to the `test` import and leaves the four whose verb is
+-- captured by another binding untouched.
+test "the test-verb rules report in every fixture" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let triples = lintFilesToDiagTriples idx True [] [] [] None verbFixtures
+      expectEach (map (reportsTestVerbRule triples) verbFixtures)
+
+test "--fix leaves a verb that does not resolve to the test import alone" =
+  expectEach (map fixLeavesAlone verbFixtures)
+
+test "--fix rewrites a verb that resolves to the test import" =
+  fixResult
+    "test/lint_fix_fixtures/test_verb_resolves_to_import.mdk"
+    "test/lint_fix_fixtures/test_verb_resolves_to_import.fixed"
+
+-- `--fix` run over a fixture file: the rewritten source, `None` when the file
+-- cannot be read or parsed.
+fixedSource : String -> <FileRead> Option String
+fixedSource path = match readFile path
+  Err _ => None
+  Ok src => match lintParseSource src
+    Err _ => None
+    Ok (decls, pos) => Some (fst (applyFixes [] [] src decls pos))
+
+fixResult : String -> String -> <FileRead> Expectation
+fixResult path fixedPath = match readFile fixedPath
+  Err _ => fail "cannot read \{fixedPath}"
+  Ok expected => expectEqual (Some expected) (fixedSource path)
+
+fixLeavesAlone : String -> <FileRead> (String, Expectation)
+fixLeavesAlone path = match readFile path
+  Err _ => (path, fail "cannot read it")
+  Ok src => (path, expectEqual (Some src) (fixedSource path))
 
 verbFixtures : List String
 verbFixtures = [

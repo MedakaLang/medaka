@@ -685,6 +685,9 @@ test "arch_boundaries: support.diag_codes closure matches its golden" =
 test "arch_boundaries: tools.lint_core closure matches its golden" =
   closurePin "tools.lint_core"
 
+test "arch_boundaries: tools.lint_scope closure matches its golden" =
+  closurePin "tools.lint_scope"
+
 -- Defined names (column-0, first word not a declaration keyword): an
 -- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
 definedName : String -> Option String

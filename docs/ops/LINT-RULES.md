@@ -34,8 +34,8 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-duplicate-body`](#rule-duplicate-body) | universal | complexity | gated | not-fixable | file, cross |
 | [`rule-directive-reason`](#rule-directive-reason) | internal | style | gated | not-fixable | file |
 | [`rule-regex-literal`](#rule-regex-literal) | universal | correctness | gated | not-fixable | file |
-| [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | not-fixable | file |
-| [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | not-fixable | file |
+| [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | fixable | file |
+| [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
 | [`rule-test-prelude-shadow`](#rule-test-prelude-shadow) | internal | suspicious | gated | not-fixable | file |
 
 ## rule-match-on-param
@@ -436,7 +436,7 @@ After:
 
 `expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`
 
-`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).
+`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.
 
 ```
 Before:
@@ -449,7 +449,7 @@ After:
 
 an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure
 
-An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).
+An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.
 
 ```
 Before:

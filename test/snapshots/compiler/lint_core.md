@@ -1,5 +1,5 @@
 # META
-source_lines=386
+source_lines=408
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -10,6 +10,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Loc(..), Ty(..), Decl(..), Expr, Pat}
 import frontend.ast_walk.{ExprKind}
+import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
 import support.util.{listLen, filterList, lookupAssoc}
@@ -48,12 +49,15 @@ memoGet (Memo cell f) = match !cell
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
 -- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
--- shared by the same-file rule and the cross-file occurrence list.
+-- shared by the same-file rule and the cross-file occurrence list, and the scope
+-- model (`tools/lint_scope.mdk`), built only for a rule whose metadata says
+-- `NeedsScopes`.
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
   ffDupClauses : Memo (List DupClause),
+  ffScopes : Memo FileScopes,
 }
 
 export
@@ -67,6 +71,10 @@ factOracle ff = memoGet ff.ffOracle
 export
 factDupClauses : FileFacts -> List DupClause
 factDupClauses ff = memoGet ff.ffDupClauses
+
+export
+factScopes : FileFacts -> FileScopes
+factScopes ff = memoGet ff.ffScopes
 
 -- What kind of defect a rule reports, for the rules page and `--list-rules`.
 public export data Category =
@@ -89,7 +97,7 @@ public export data Fixability = Fixable | NotFixable
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
-public export data Need = NeedsStdlibIndex
+public export data Need = NeedsStdlibIndex | NeedsScopes
 
 -- Everything the CLI, the rules page and the runner know about a rule besides
 -- its `check`.  `doc` states what the rule flags, why, and a before -> after
@@ -112,9 +120,23 @@ ruleMetaName m = m.name
 
 export
 needsStdlibIndex : RuleMeta -> Bool
-needsStdlibIndex m = match m.needs
-  NeedsStdlibIndex :: _ => True
-  [] => False
+needsStdlibIndex m = anyNeed isStdlibIndexNeed m.needs
+
+export
+needsScopes : RuleMeta -> Bool
+needsScopes m = anyNeed isScopesNeed m.needs
+
+anyNeed : (Need -> Bool) -> List Need -> Bool
+anyNeed _ [] = False
+anyNeed p (n :: rest) = p n || anyNeed p rest
+
+isStdlibIndexNeed : Need -> Bool
+isStdlibIndexNeed NeedsStdlibIndex = True
+isStdlibIndexNeed NeedsScopes = False
+
+isScopesNeed : Need -> Bool
+isScopesNeed NeedsScopes = True
+isScopesNeed NeedsStdlibIndex = False
 
 -- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
 -- owner (a clause's function, an `impl` or interface-default method, a
@@ -391,6 +413,7 @@ public export data DupClause = DupClause {
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "Expr" false) (mem "Pat" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
@@ -404,25 +427,38 @@ public export data DupClause = DupClause {
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
 (DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause"))))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes")))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
+(DTypeSig true "factScopes" (TyFun (TyCon "FileFacts") (TyCon "FileScopes")))
+(DFunDef false "factScopes" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffScopes")))
 (DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
 (DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig false "anyNeed" (TyFun (TyFun (TyCon "Need") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Need")) (TyCon "Bool"))))
+(DFunDef false "anyNeed" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyNeed" ((PVar "p") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "n")) (EApp (EApp (EVar "anyNeed") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
@@ -458,6 +494,7 @@ public export data DupClause = DupClause {
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "Expr" false) (mem "Pat" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
@@ -471,25 +508,38 @@ public export data DupClause = DupClause {
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
 (DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause"))))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes")))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
+(DTypeSig true "factScopes" (TyFun (TyCon "FileFacts") (TyCon "FileScopes")))
+(DFunDef false "factScopes" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffScopes")))
 (DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
 (DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig false "anyNeed" (TyFun (TyFun (TyCon "Need") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Need")) (TyCon "Bool"))))
+(DFunDef false "anyNeed" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyNeed" ((PVar "p") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "n")) (EApp (EApp (EVar "anyNeed") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())

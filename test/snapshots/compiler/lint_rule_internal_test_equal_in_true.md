@@ -1,5 +1,5 @@
 # META
-source_lines=105
+source_lines=106
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-test-equal-in-true: an `==`/`/=` wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual`/`expectNotEqual`.
@@ -14,6 +14,7 @@ import tools.lint_core.{
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -41,13 +42,13 @@ rule =
       summary =
         "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
       doc =
-        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
+        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
       category = Style,
       scope = Internal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
+      fixability = Fixable,
+      needs = [NeedsScopes],
     }
     ruleTestEqualInTrue
     (Some testEqualInTrueFix)
@@ -113,10 +114,10 @@ testEqualInTrueFix _ d = exprRuleFixTestDecls noExcl (detApply testEqInTrueOf) d
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isEVarNamed" false) (mem "noExcl" false) (mem "ruleNameTestEqualInTrue" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "summary" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "doc" (ELit (LString "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleTestEqualInTrue")) (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "summary" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "doc" (ELit (LString "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestEqualInTrue")) (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))
 (DTypeSig false "testEqInTrueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "testEqInTrueOf" ((PCon "EApp" (PVar "hd") (PVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectTrue"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "False")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectFalse"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "True")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "testEqInTrueOf" (PWild) (EVar "None"))
@@ -138,10 +139,10 @@ testEqualInTrueFix _ d = exprRuleFixTestDecls noExcl (detApply testEqInTrueOf) d
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isEVarNamed" false) (mem "noExcl" false) (mem "ruleNameTestEqualInTrue" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "summary" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "doc" (ELit (LString "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleTestEqualInTrue")) (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "summary" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "doc" (ELit (LString "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestEqualInTrue")) (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))
 (DTypeSig false "testEqInTrueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "testEqInTrueOf" ((PCon "EApp" (PVar "hd") (PVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectTrue"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "False")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectFalse"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "True")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "testEqInTrueOf" (PWild) (EVar "None"))

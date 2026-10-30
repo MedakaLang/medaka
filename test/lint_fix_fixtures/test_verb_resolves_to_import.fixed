@@ -1,0 +1,8 @@
+-- #3837: a verb that resolves to the `test` import is rewritten, and a
+-- parameter of the same name in another declaration does not stop it.
+
+import test.{expectEqual, expectTrue}
+
+f a = expectTrue (a == 1)
+
+g expectTrue = expectTrue

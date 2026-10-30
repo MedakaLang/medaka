@@ -1,5 +1,5 @@
 # META
-source_lines=102
+source_lines=103
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-test-bool-literal-equal: `expectEqual` against a `True`/`False` literal. Prefer `expectTrue` / `expectFalse`.
@@ -18,6 +18,7 @@ import tools.lint_core.{
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -48,13 +49,13 @@ rule =
       summary =
         "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
       doc =
-        "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)",
+        "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)",
       category = Style,
       scope = Internal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
+      fixability = Fixable,
+      needs = [NeedsScopes],
     }
     ruleTestBoolLiteralEqual
     (Some testBoolLiteralEqualFix)
@@ -110,10 +111,10 @@ testBoolLiteralEqualFix _ d =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isBoolLit" false) (mem "isEVarNamed" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
 (DTypeSig false "testBoolLitEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "testBoolLitEqOf" ((PCon "EApp" (PVar "hd") (PVar "b"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectEqual"))) (EVar "f")) (EApp (EApp (EVar "testBoolLitEqSwap") (EVar "a")) (EVar "b")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))
@@ -131,10 +132,10 @@ testBoolLiteralEqualFix _ d =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isBoolLit" false) (mem "isEVarNamed" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. Findings are reported but `--fix` does not apply: the rewrite matched verbs by bare name and could change a program's meaning (#3837).\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
 (DTypeSig false "testBoolLitEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "testBoolLitEqOf" ((PCon "EApp" (PVar "hd") (PVar "b"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectEqual"))) (EVar "f")) (EApp (EApp (EVar "testBoolLitEqSwap") (EVar "a")) (EVar "b")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))

@@ -39,6 +39,7 @@ support.stage_count
 support.symbol_origin
 support.timer
 support.util
+tools.lint_scope
 tools.printer
 types.capability_manifest
 types.chain_key
