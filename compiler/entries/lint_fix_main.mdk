@@ -8,7 +8,8 @@
 -- (test/diff_compiler_fmt_test.mdk) compares its output to a `.fixed` golden.
 
 import frontend.parser.{parseWithPositions}
-import tools.lint.{applyFixes}
+import frontend.parse_result.{parseErrorMessage}
+import tools.lint.{applyFixes, lintSyntaxOf}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -19,10 +20,12 @@ oracleMain () = match args ()
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok targetSrc =>
-    let (decls, pos) = parseWithPositions targetSrc
-    let (newSrc, _) = applyFixes [] [] targetSrc decls pos
-    putStr newSrc
+  Ok targetSrc => match lintSyntaxOf targetSrc
+    Ok syntax =>
+      let (decls, pos) = parseWithPositions targetSrc
+      let (newSrc, _) = applyFixes [] [] syntax decls pos
+      putStr newSrc
+    Err e => ePutStrLn (parseErrorMessage e)
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

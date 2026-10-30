@@ -11,6 +11,7 @@ import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
+import frontend.syntax_source.{SyntaxSource}
 
 -- One lint hit: which rule produced it, the human message, its severity (the
 -- CLI may promote this via `lintProgram`), and an optional source span.
@@ -45,10 +46,15 @@ memoGet (Memo cell f) = match !cell
 -- shared by the same-file rule and the cross-file occurrence list.
 public export data FileFacts = FileFacts {
   ffSrc : String,
+  ffSyntax : SyntaxSource,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
   ffDupClauses : Memo (List DupClause),
 }
+
+export
+factSyntax : FileFacts -> SyntaxSource
+factSyntax ff = ff.ffSyntax
 
 export
 factComments : FileFacts -> List Comment

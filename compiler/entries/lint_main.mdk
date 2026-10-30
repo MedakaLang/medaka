@@ -22,7 +22,10 @@
 -- harness sorts).  Mirror of compiler/entries/exhaust_main.mdk.
 
 import frontend.parser.{parseWithPositionsLocated}
-import tools.lint.{lintToLines, buildStdlibIndexResult, StdlibIndexError(..)}
+import frontend.parse_result.{parseErrorMessage}
+import tools.lint.{
+  lintToLines, lintSyntaxOf, buildStdlibIndexResult, StdlibIndexError(..)
+}
 import driver.diagnostics.{ppDiagCliSrc}
 import support.stage_count.{stageExit}
 
@@ -45,7 +48,9 @@ withTarget targetPath = match readFile targetPath
     -- if it ran on an empty index while the CLI ran on a real one, the gate
     -- would go green on output the CLI never produces.  Both build the same way.
     match buildStdlibIndexResult
-      Ok idx => putStr (lintToLines idx targetSrc targetPath pos decls)
+      Ok idx => match lintSyntaxOf targetSrc
+        Ok syntax => putStr (lintToLines idx syntax targetPath pos decls)
+        Err e => ePutStrLn (parseErrorMessage e)
       Err (StdlibIndexError { path, source, diagnostic }) =>
         ePutStrLn (ppDiagCliSrc source path diagnostic)
         stageExit 1

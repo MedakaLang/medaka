@@ -24,6 +24,7 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
+import frontend.syntax_source.{SyntaxSource}
 import frontend.parser.{
   Positions,
 }
@@ -960,7 +961,7 @@ lintOneFileParsed : StdlibIndex ->
   Option (String, String) ->
   String ->
   String ->
-  (List Decl, Positions) ->
+  (SyntaxSource, List Decl, Positions) ->
   <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
 lintOneFileParsed idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target src parsedSource =
   -- Uncached, the excluded rules are skipped outright (their findings
@@ -1033,7 +1034,7 @@ lintEntryOf : StdlibIndex ->
   Bool ->
   String ->
   String ->
-  (List Decl, Positions) ->
+  (SyntaxSource, List Decl, Positions) ->
   <IO> (LintEntry, List (String, String, Positions, List Decl))
 lintEntryOf idx None rules wantOccs target src parsedSource =
   let (entry, pos, decls) =
@@ -1065,10 +1066,10 @@ lintFileFresh : StdlibIndex ->
   String ->
   String ->
   Bool ->
-  (List Decl, Positions) ->
+  (SyntaxSource, List Decl, Positions) ->
   <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx rules target src hash wantOccs (decls, pos) =
-  let facts = mkFileFacts src decls pos
+lintFileFresh idx rules target src hash wantOccs (syntax, decls, pos) =
+  let facts = mkFileFacts syntax decls pos
   (
     LintEntry {
       path = target,
@@ -1099,10 +1100,10 @@ lintFixParsed : List String ->
   List String ->
   String ->
   String ->
-  (List Decl, Positions) ->
+  (SyntaxSource, List Decl, Positions) ->
   <IO> Bool
-lintFixParsed onlyNames disableNames target src (decls, pos) =
-  let (newSrc, n) = applyFixes onlyNames disableNames src decls pos
+lintFixParsed onlyNames disableNames target src (syntax, decls, pos) =
+  let (newSrc, n) = applyFixes onlyNames disableNames syntax decls pos
   if newSrc == src then
     let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
     False

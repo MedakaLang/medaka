@@ -127,6 +127,10 @@ advanceLine src target p line
 export data Comment = Comment Int Int String
 
 export
+mkComment : Int -> Int -> String -> Comment
+mkComment = Comment
+
+export
 commentLine : Comment -> Int
 commentLine (Comment l _ _) = l
 

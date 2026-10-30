@@ -20,12 +20,25 @@ import frontend.parser.{
   positionsDecls,
   declPosLine,
   declPosEndLine,
-  parseWithPositions,
-  parseResultPairs,
-  parseWithPositionsOptPairs,
-  prescanErrorPairs,
-  ParseError,
+  parseWithPositionsOpt,
+  ParseError(..),
 }
+import frontend.parse_diagnostic.{ParseDiagnostic(..), ParseDiagnosticKind(..)}
+import frontend.parse_recovery.{defaultRecoveryLimits}
+import frontend.parse_result.{parsedDecls, parsedPositions}
+import frontend.syntax_source.{
+  SyntaxSource,
+  SyntaxAdmission(..),
+  SourceSpan(..),
+  Trivia(..),
+  publishSyntax,
+  syntaxStrict,
+  syntaxTrivia,
+  syntaxIndex,
+  syntaxSlice,
+  syntaxSourceText,
+}
+import support.source_index.{offsetToSourcePosition}
 import driver.diagnostics.{
   Severity(..),
   Diag(..),
@@ -57,14 +70,7 @@ import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle}
-import support.stage_count.{stageBump}
-import frontend.lexer.{
-  Comment,
-  collectComments,
-  tokenizeWithOffsetPairs,
-  commentLine,
-  commentText,
-}
+import frontend.lexer.{Comment, mkComment, commentLine, commentText}
 import tools.lint_core.{
   CrossFileRule(..),
   DirScope(..),
@@ -92,13 +98,28 @@ import tools.lint_registry.{
 }
 
 export
-mkFileFacts : String -> List Decl -> Positions -> FileFacts
-mkFileFacts src prog pos = FileFacts {
-  ffSrc = src,
-  ffComments = memoNew (_ => collectComments src),
+mkFileFacts : SyntaxSource -> List Decl -> Positions -> FileFacts
+mkFileFacts syntax prog pos = FileFacts {
+  ffSrc = syntaxSourceText syntax,
+  ffSyntax = syntax,
+  ffComments = memoNew (_ => syntaxComments syntax),
   ffOracle = memoNew (_ => buildOracle prog),
   ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
 }
+
+-- The comment side channel the rules read, rebuilt from the one scan's trivia:
+-- 1-based line, 0-based column, and the lexeme with its delimiters.
+export
+syntaxComments : SyntaxSource -> List Comment
+syntaxComments syntax =
+  flatMap (triviaComment syntax) (toList (syntaxTrivia syntax))
+
+triviaComment : SyntaxSource -> Trivia -> List Comment
+triviaComment syntax (Trivia _ (SourceSpan lo hi)) =
+  let at = offsetToSourcePosition (syntaxIndex syntax) lo
+  match (at, syntaxSlice syntax (SourceSpan lo hi))
+    (Some (line, col), Some text) => [mkComment line col text]
+    _ => []
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export
@@ -123,12 +144,12 @@ export
 lintProgram : StdlibIndex ->
   List Rule ->
   String ->
-  String ->
+  SyntaxSource ->
   Positions ->
   List Decl ->
   List Finding
-lintProgram idx rules path src pos prog =
-  lintProgramFacts idx rules path (mkFileFacts src prog pos) pos prog
+lintProgram idx rules path syntax pos prog =
+  lintProgramFacts idx rules path (mkFileFacts syntax prog pos) pos prog
 
 -- `lintProgram` over facts the caller already holds, so the caller's own
 -- comment/directive/key needs share the rules' derivations.
@@ -243,19 +264,37 @@ stdlibSigTriplesResult dir = match stdlibMemberPaths dir
   Some paths => stdlibSigsGo dir paths
 
 export
-lintParseSource : String -> Result ParseError (List Decl, Positions)
-lintParseSource src =
-  let (tokens, offsets) = tokenizeWithOffsetPairs src
-  match prescanErrorPairs src tokens offsets
-    Some e => Err e
-    None =>
-      let _ = stageBump "parse.positions"
-      match parseWithPositionsOptPairs src tokens offsets
-        Some parsed => Ok parsed
-        None =>
-          map
-            (_ => parseWithPositions src)
-            (parseResultPairs src tokens offsets)
+lintParseSource : String ->
+  Result ParseError (SyntaxSource, List Decl, Positions)
+lintParseSource src = match lintSyntaxOf src
+  Err e => Err e
+  Ok syntax => match syntaxStrict syntax
+    Ok parsed => Ok (syntax, parsedDecls parsed, parsedPositions parsed)
+    Err diagnostic => Err (ParseError diagnostic)
+
+-- The file's one scan and strict parse.  A source past the admission limits is
+-- reported as a parse error, since lint has no other channel for it.
+export
+lintSyntaxOf : String -> Result ParseError SyntaxSource
+lintSyntaxOf src = match publishSyntax defaultRecoveryLimits src
+  Ok syntax => Ok syntax
+  Err admission => Err (admissionError admission)
+
+admissionError : SyntaxAdmission -> ParseError
+admissionError admission =
+  ParseError
+    (ParseDiagnostic
+      (GenericParse (match admission
+        SourceLimit n => "source of \{n} characters exceeds the lint size limit"
+        TokenLimit n => "\{n} tokens exceed the lint token limit"))
+      (Loc "" 1 0 1 0)
+      [])
+
+-- Comments of a bare source text, for the callers that hold no `SyntaxSource`.
+sourceComments : String -> List Comment
+sourceComments src = match lintSyntaxOf src
+  Ok syntax => syntaxComments syntax
+  Err _ => []
 
 stdlibSigsGo : String ->
   List String ->
@@ -264,16 +303,26 @@ stdlibSigsGo _ [] = Ok []
 stdlibSigsGo dir (relPath :: rest) =
   let path = "\{dir}/\{relPath}"
   let src = readFileSafe path
-  match lintParseSource src
+  match stdlibDecls path src
+    Err e => Err e
+    Ok decls =>
+      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
+      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
+      map (sigs ++ _) (stdlibSigsGo dir rest)
+
+-- A stdlib member's declarations.  The index reads only signatures, so the
+-- syntax-only parse is enough; a member it rejects goes through the strict
+-- path for the diagnostic.
+stdlibDecls : String -> String -> Result StdlibIndexError (List Decl)
+stdlibDecls path src = match parseWithPositionsOpt src
+  Some (decls, _) => Ok decls
+  None => match lintParseSource src
+    Ok (_, decls, _) => Ok decls
     Err e => Err StdlibIndexError {
       path = path,
       source = src,
       diagnostic = parseErrDiag path e,
     }
-    Ok (decls, _) =>
-      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
-      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
-      map (sigs ++ _) (stdlibSigsGo dir rest)
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
 -- Appending rather than overwriting is the whole point: `setInPlace` alone
@@ -342,14 +391,15 @@ exportedSigPair _ = []
 export
 applyFixes : List String ->
   List String ->
-  String ->
+  SyntaxSource ->
   List Decl ->
   Positions ->
   (String, Int)
-applyFixes only disable src prog pos =
+applyFixes only disable syntax prog pos =
+  let src = syntaxSourceText syntax
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let cmts = collectComments src
+  let cmts = syntaxComments syntax
   let cmtLines = map commentLine cmts
   let declPos = zipDeclPos prog (positionsDecls pos)
   let scope = testVerbScope prog declPos
@@ -729,8 +779,8 @@ lintFileDiagTripleParsed idx disable only deny path =
   let src = readFileSafe path
   match lintParseSource src
     Err e => (path, src, [parseErrDiag path e], Positions [] [] 0 [], [])
-    Ok (decls, pos) =>
-      let facts = mkFileFacts src decls pos
+    Ok (syntax, decls, pos) =>
+      let facts = mkFileFacts syntax decls pos
       let allFindings =
         applySuppressionsDirs
           (factDirectives facts)
@@ -764,16 +814,18 @@ dropParsedTriple (path, src, diags, _, _) = (path, src, diags)
 -- and the CLI see the same rule inputs).
 export
 lintToLines : StdlibIndex ->
-  String ->
+  SyntaxSource ->
   String ->
   Positions ->
   List Decl ->
   String
-lintToLines idx src path pos prog =
+lintToLines idx syntax path pos prog =
   joinNl
     (map
       findingLine
-      (applySuppressions src (lintProgram idx allRules path src pos prog)))
+      (applySuppressionsDirs
+        (collectDirectives (syntaxComments syntax))
+        (lintProgram idx allRules path syntax pos prog)))
 
 findingLine : Finding -> String
 findingLine f = "\{ppSeverity f.severity}: [\{f.rule}] \{f.message}"
@@ -796,7 +848,7 @@ findingLine f = "\{ppSeverity f.severity}: [\{f.rule}] \{f.message}"
 -- SEAM.  Comments are stripped by the lexer before layout, so the parser never
 -- sees them and no rule can observe a directive.  Instead findings are produced
 -- FIRST by `lintProgram`, then FILTERED here using the lexer's out-of-band
--- comment side channel (`collectComments src`).  The two lint entry points
+-- comment side channel (`syntaxComments`).  The two lint entry points
 -- (`compiler/driver/medaka_cli.mdk` report arm + this module's `lintToLines`,
 -- used by `compiler/entries/lint_main.mdk`) call `applySuppressions src findings`
 -- right after `lintProgram`.  A finding's line comes from its `loc` (the decl's
@@ -872,7 +924,7 @@ findingFileOf f = match f.loc
   None => ""
 
 directivesOfSource : String -> List Directive
-directivesOfSource src = collectDirectives (collectComments src)
+directivesOfSource src = collectDirectives (sourceComments src)
 
 isSuppressed : List Directive -> Finding -> Bool
 isSuppressed dirs f = anyList (dirCoversFinding f) dirs
