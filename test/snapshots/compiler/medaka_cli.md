@@ -3932,7 +3932,7 @@ lintRunFlags = [
 ]
 
 listRulesBannedFlags : List String
-listRulesBannedFlags = "--explain" :: lintRunFlags
+listRulesBannedFlags = ["--explain"] ++ lintRunFlags
 
 explainBannedFlags : List String
 explainBannedFlags =
@@ -5182,7 +5182,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "lintRunFlags" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "lintRunFlags" () (EListLit (ELit (LString "--fix")) (ELit (LString "--cache")) (ELit (LString "--internal")) (ELit (LString "--disable")) (ELit (LString "--only")) (ELit (LString "--deny")) (ELit (LString "--baseline")) (ELit (LString "--write-baseline"))))
 (DTypeSig false "listRulesBannedFlags" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "listRulesBannedFlags" () (EBinOp "::" (ELit (LString "--explain")) (EVar "lintRunFlags")))
+(DFunDef false "listRulesBannedFlags" () (EBinOp "++" (EListLit (ELit (LString "--explain"))) (EVar "lintRunFlags")))
 (DTypeSig false "explainBannedFlags" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "explainBannedFlags" () (EBinOp "++" (EListLit (ELit (LString "--json")) (ELit (LString "--markdown")) (ELit (LString "--names")) (ELit (LString "--scope")) (ELit (LString "--ratchet")) (ELit (LString "--tier"))) (EVar "lintRunFlags")))
 (DTypeSig false "flagGiven" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -5736,7 +5736,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "lintRunFlags" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "lintRunFlags" () (EListLit (ELit (LString "--fix")) (ELit (LString "--cache")) (ELit (LString "--internal")) (ELit (LString "--disable")) (ELit (LString "--only")) (ELit (LString "--deny")) (ELit (LString "--baseline")) (ELit (LString "--write-baseline"))))
 (DTypeSig false "listRulesBannedFlags" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "listRulesBannedFlags" () (EBinOp "::" (ELit (LString "--explain")) (EVar "lintRunFlags")))
+(DFunDef false "listRulesBannedFlags" () (EBinOp "++" (EListLit (ELit (LString "--explain"))) (EVar "lintRunFlags")))
 (DTypeSig false "explainBannedFlags" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "explainBannedFlags" () (EBinOp "++" (EListLit (ELit (LString "--json")) (ELit (LString "--markdown")) (ELit (LString "--names")) (ELit (LString "--scope")) (ELit (LString "--ratchet")) (ELit (LString "--tier"))) (EVar "lintRunFlags")))
 (DTypeSig false "flagGiven" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyCon "Bool"))))
