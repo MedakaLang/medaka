@@ -28,6 +28,7 @@
 
 ; ── Comments ─────────────────────────────────────────────────────────
 (comment) @comment
+(shebang) @comment
 
 ; ── String / char literals ────────────────────────────────────────────
 (string_lit) @string

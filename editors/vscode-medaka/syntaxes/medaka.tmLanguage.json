@@ -4,6 +4,7 @@
   "scopeName": "source.medaka",
   "fileTypes": ["mdk"],
   "patterns": [
+    { "include": "#shebang" },
     { "include": "#comment" },
     { "include": "#string" },
     { "include": "#char" },
@@ -27,6 +28,10 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "shebang": {
+      "name": "comment.line.shebang.medaka",
+      "match": "\\A#!.*$"
+    },
     "comment": {
       "patterns": [
         {

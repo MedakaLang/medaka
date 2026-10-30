@@ -95,6 +95,7 @@ module.exports = grammar({
      * ═══════════════════════════════════════════════════ */
 
     source_file: $ => seq(
+      optional($.shebang),
       repeat($._newline),
       repeat($._declaration),
     ),
@@ -143,6 +144,9 @@ module.exports = grammar({
     // now.  The VS Code TextMate grammar (syntaxes/medaka.tmLanguage.json)
     // already highlights nested block comments correctly, so editor
     // highlighting is unaffected.
+    /* A `#!` line is valid only as the very first thing in the file. */
+    shebang: $ => token(prec(1, /#![^\n]*/)),
+
     comment: $ => choice(/--[^\n]*/, /\{-[^]*?-\}/),
 
     literal: $ => choice(

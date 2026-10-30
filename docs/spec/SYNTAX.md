@@ -1536,6 +1536,15 @@ main =
 main = println "ok"
 ```
 
+### Shebang line
+
+A file whose first line starts with the two characters `#!` has that line
+skipped, from offset 0 up to (not including) its newline, so every later token
+keeps its real line and column. A `#!` anywhere else is a lex error. `medaka
+fmt` keeps the line verbatim as the first line. Use `#!/usr/bin/env -S medaka
+run` (plain `env` passes `medaka run` as one argument on Linux, which fails),
+then `chmod +x` the file.
+
 ## Layout notes
 
 - **Indentation-sensitive** (INDENT/DEDENT/NEWLINE). No braces for blocks.

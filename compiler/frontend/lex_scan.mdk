@@ -205,6 +205,9 @@ scanAt : ScanCursor ->
 scanAt ctx src len pos depth id c
   | isSpace c = scanOne ctx src len (pos + 1) depth id
   | isNL c || isCR c = handleNewline ctx src len pos depth id
+  | c == '#' && pos == 0 && len > 1 && at src 1 == '!' =
+    let e = skipLineComment src len pos
+    emitOne ctx (RComment pos e) e depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
     emitOne ctx (RComment pos e) e depth id

@@ -225,7 +225,7 @@ else
 fi
 
 # ── run ───────────────────────────────────────────────────────────────────────
-RUN_FIXTURES="hello arith recur adt listsum strcat"
+RUN_FIXTURES="hello arith recur adt listsum strcat shebang"
 RUN_WIRED=1
 if [ "$RUN_WIRED" = 1 ]; then
   for base in $RUN_FIXTURES; do
