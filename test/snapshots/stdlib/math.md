@@ -1,5 +1,5 @@
 # META
-source_lines=298
+source_lines=358
 stages=DESUGAR,MARK
 # SOURCE
 {- | Floating-point math and a few integer helpers.
@@ -112,6 +112,66 @@ logBase base x = log x / log base
 
 -- > logBase 10.0 1000.0
 -- 2.9999999999999996
+
+-- # Rounding to integers
+
+{- | The integer nearest to `x`, with a half rounded away from zero.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > roundInt 2.5
+   3
+   > roundInt (-2.5)
+   -3 -}
+export
+roundInt : Float -> Int
+roundInt x = floatToInt (round x)
+
+-- > roundInt 0.4
+-- 0
+-- > roundInt 1.0e20
+-- 4611686018427387903
+-- > roundInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > roundInt (0.0 / 0.0)
+-- 0
+
+{- | The greatest integer not above `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > floorInt 3.7
+   3
+   > floorInt (-0.5)
+   -1 -}
+export
+floorInt : Float -> Int
+floorInt x = floatToInt (floor x)
+
+-- > floorInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > floorInt (0.0 / 0.0)
+-- 0
+
+{- | The least integer not below `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > ceilInt 3.2
+   4
+   > ceilInt (-0.5)
+   0 -}
+export
+ceilInt : Float -> Int
+ceilInt x = floatToInt (ceil x)
+
+-- > ceilInt 1.0e20
+-- 4611686018427387903
+-- > ceilInt (0.0 / 0.0)
+-- 0
 
 -- # Integers
 
@@ -317,6 +377,12 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "approxEq" ((PVar "a") (PVar "b") (PVar "eps")) (EBinOp "<=" (EApp (EVar "abs") (EBinOp "-" (EVar "a") (EVar "b"))) (EVar "eps")))
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
+(DTypeSig true "roundInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "roundInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "round") (EVar "x"))))
+(DTypeSig true "floorInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "floorInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "x"))))
+(DTypeSig true "ceilInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "ceilInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "ceil") (EVar "x"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -363,6 +429,12 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "approxEq" ((PVar "a") (PVar "b") (PVar "eps")) (EBinOp "<=" (EApp (EMethodRef "abs") (EBinOp "-" (EVar "a") (EVar "b"))) (EVar "eps")))
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
+(DTypeSig true "roundInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "roundInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "round") (EVar "x"))))
+(DTypeSig true "floorInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "floorInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "x"))))
+(DTypeSig true "ceilInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "ceilInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "ceil") (EVar "x"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))

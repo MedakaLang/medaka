@@ -1,5 +1,5 @@
 # META
-source_lines=945
+source_lines=987
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -262,6 +262,48 @@ toFloat s = stringToFloat s
 export
 toFixed : Int -> Float -> String
 toFixed digits x = floatToFixed (max 0 (min 100 digits)) x
+
+{- | `n` written in decimal, with a comma before each group of three digits.
+
+   The groups count from the last digit, and a leading minus sign stays in
+   front. An `n` of magnitude below `1000` is written unchanged. The grouping
+   works on the written digits, so the most negative `Int` groups correctly.
+
+   > groupThousands 1234567
+   "1,234,567"
+   > groupThousands (-1234)
+   "-1,234" -}
+export
+groupThousands : Int -> String
+groupThousands n = groupSigned (intToString n)
+
+-- > groupThousands 0
+-- "0"
+-- > groupThousands 999
+-- "999"
+-- > groupThousands 1000
+-- "1,000"
+-- > groupThousands (-1000)
+-- "-1,000"
+-- > groupThousands intMaxBound
+-- "4,611,686,018,427,387,903"
+-- > groupThousands intMinBound
+-- "-4,611,686,018,427,387,904"
+
+-- Splits off a leading minus sign, which the grouping leaves in front.
+groupSigned : String -> String
+groupSigned s
+  | startsWith "-" s = "-" ++ groupDigits (stringSlice 1 (stringLength s) s)
+  | otherwise = groupDigits s
+
+-- Inserts a comma before each group of three digits, counting from the right.
+groupDigits : String -> String
+groupDigits s =
+  let n = stringLength s
+  if n <= 3 then
+    s
+  else
+    "\{groupDigits (stringSlice 0 (n - 3) s)},\{stringSlice (n - 3) n s}"
 
 -- # Searching
 
@@ -991,6 +1033,12 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
 (DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
+(DTypeSig true "groupThousands" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "groupThousands" ((PVar "n")) (EApp (EVar "groupSigned") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "groupSigned" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupSigned" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))) (EIf (EVar "otherwise") (EApp (EVar "groupDigits") (EVar "s")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "groupDigits" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupDigits" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 3))) (EVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s"))))) (ELit (LString ","))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")))) (ELit (LString "")))))))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1166,6 +1214,12 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
 (DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
+(DTypeSig true "groupThousands" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "groupThousands" ((PVar "n")) (EApp (EVar "groupSigned") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "groupSigned" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupSigned" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))) (EIf (EVar "otherwise") (EApp (EVar "groupDigits") (EVar "s")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "groupDigits" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupDigits" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 3))) (EVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s"))))) (ELit (LString ","))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")))) (ELit (LString "")))))))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

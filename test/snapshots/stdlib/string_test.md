@@ -1,5 +1,5 @@
 # META
-source_lines=982
+source_lines=1004
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -9,10 +9,11 @@ stages=DESUGAR,MARK
 
 import string.{
   StrCursor, byteLength, center, countOccurrences, cutBetween, drop, endsWith,
-  fromChars, repeat, replaceOnce, indexOf, join, lastIndexOf, lines, padLeft,
-  padRight, replace, replaceAll, reverse, nextChar, sliceBetween, startCursor,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
-  toFixed, trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
+  fromChars, groupThousands, repeat, replaceOnce, indexOf, join, lastIndexOf,
+  lines, padLeft, padRight, replace, replaceAll, reverse, nextChar,
+  sliceBetween, startCursor, splitAt, startsWith, stripPrefix, stripSuffix,
+  take, toInt, toLower, toUpper, toFixed, trim, trimLeft, trimRight, unlines,
+  unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -984,8 +985,29 @@ test "toFixed prints NaN and the infinities as floatToString does" =
   expectEqual
     ["nan", "inf", "-inf"]
     [toFixed 2 (0.0 / 0.0), toFixed 2 (1.0 / 0.0), toFixed 2 (-1.0 / 0.0)]
+
+-- # Digit grouping
+
+test "groupThousands groups the digits in threes from the right" =
+  expectEqual "1,234,567" (groupThousands 1234567)
+
+test "groupThousands leaves values under 1000 in magnitude unchanged" =
+  expectEqual
+    ["0", "999", "-999"]
+    [groupThousands 0, groupThousands 999, groupThousands (-999)]
+
+test "groupThousands keeps the minus sign in front of the groups" =
+  expectEqual "-1,234,567" (groupThousands (-1234567))
+
+test "groupThousands puts a comma at each group boundary" =
+  expectEqual
+    ["1,000,000", "10,000"]
+    [groupThousands 1000000, groupThousands 10000]
+
+test "groupThousands writes the most negative Int from its digits" =
+  expectEqual "-4,611,686,018,427,387,904" (groupThousands intMinBound)
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1240,8 +1262,13 @@ test "toFixed prints NaN and the infinities as floatToString does" =
 (DTest false "toFixed treats a negative digit count as 0" (EApp (EApp (EVar "expectEqual") (ELit (LString "2"))) (EApp (EApp (EVar "toFixed") (EUnOp "-" (ELit (LInt 1)))) (ELit (LFloat 1.5)))))
 (DTest false "toFixed clamps the digit count to 100" (EApp (EApp (EVar "expectEqual") (EBinOp "++" (ELit (LString "1.5")) (EApp (EApp (EVar "repeat") (ELit (LInt 99))) (ELit (LString "0"))))) (EApp (EApp (EVar "toFixed") (ELit (LInt 120))) (ELit (LFloat 1.5)))))
 (DTest false "toFixed prints NaN and the infinities as floatToString does" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "nan")) (ELit (LString "inf")) (ELit (LString "-inf")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (EUnOp "-" (ELit (LFloat 1.0))) (ELit (LFloat 0.0)))))))
+(DTest false "groupThousands groups the digits in threes from the right" (EApp (EApp (EVar "expectEqual") (ELit (LString "1,234,567"))) (EApp (EVar "groupThousands") (ELit (LInt 1234567)))))
+(DTest false "groupThousands leaves values under 1000 in magnitude unchanged" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0")) (ELit (LString "999")) (ELit (LString "-999")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 0))) (EApp (EVar "groupThousands") (ELit (LInt 999))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 999)))))))
+(DTest false "groupThousands keeps the minus sign in front of the groups" (EApp (EApp (EVar "expectEqual") (ELit (LString "-1,234,567"))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 1234567))))))
+(DTest false "groupThousands puts a comma at each group boundary" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "1,000,000")) (ELit (LString "10,000")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 1000000))) (EApp (EVar "groupThousands") (ELit (LInt 10000))))))
+(DTest false "groupThousands writes the most negative Int from its digits" (EApp (EApp (EVar "expectEqual") (ELit (LString "-4,611,686,018,427,387,904"))) (EApp (EVar "groupThousands") (EVar "intMinBound"))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1496,3 +1523,8 @@ test "toFixed prints NaN and the infinities as floatToString does" =
 (DTest false "toFixed treats a negative digit count as 0" (EApp (EApp (EVar "expectEqual") (ELit (LString "2"))) (EApp (EApp (EVar "toFixed") (EUnOp "-" (ELit (LInt 1)))) (ELit (LFloat 1.5)))))
 (DTest false "toFixed clamps the digit count to 100" (EApp (EApp (EVar "expectEqual") (EBinOp "++" (ELit (LString "1.5")) (EApp (EApp (EVar "repeat") (ELit (LInt 99))) (ELit (LString "0"))))) (EApp (EApp (EVar "toFixed") (ELit (LInt 120))) (ELit (LFloat 1.5)))))
 (DTest false "toFixed prints NaN and the infinities as floatToString does" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "nan")) (ELit (LString "inf")) (ELit (LString "-inf")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (EUnOp "-" (ELit (LFloat 1.0))) (ELit (LFloat 0.0)))))))
+(DTest false "groupThousands groups the digits in threes from the right" (EApp (EApp (EVar "expectEqual") (ELit (LString "1,234,567"))) (EApp (EVar "groupThousands") (ELit (LInt 1234567)))))
+(DTest false "groupThousands leaves values under 1000 in magnitude unchanged" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0")) (ELit (LString "999")) (ELit (LString "-999")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 0))) (EApp (EVar "groupThousands") (ELit (LInt 999))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 999)))))))
+(DTest false "groupThousands keeps the minus sign in front of the groups" (EApp (EApp (EVar "expectEqual") (ELit (LString "-1,234,567"))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 1234567))))))
+(DTest false "groupThousands puts a comma at each group boundary" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "1,000,000")) (ELit (LString "10,000")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 1000000))) (EApp (EVar "groupThousands") (ELit (LInt 10000))))))
+(DTest false "groupThousands writes the most negative Int from its digits" (EApp (EApp (EVar "expectEqual") (ELit (LString "-4,611,686,018,427,387,904"))) (EApp (EVar "groupThousands") (EVar "intMinBound"))))

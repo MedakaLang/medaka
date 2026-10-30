@@ -314,6 +314,26 @@ negative value that rounds to zero keeps its `-`.
 "8"
 ```
 
+### `groupThousands`
+
+```
+groupThousands : Int -> String
+groupThousands n
+```
+
+`n` written in decimal, with a comma before each group of three digits.
+
+The groups count from the last digit, and a leading minus sign stays in
+front. An `n` of magnitude below `1000` is written unchanged. The grouping
+works on the written digits, so the most negative `Int` groups correctly.
+
+```medaka
+> groupThousands 1234567
+"1,234,567"
+> groupThousands (-1234)
+"-1,234"
+```
+
 ## Searching
 
 ### `startsWith`

@@ -109,6 +109,66 @@ logBase base x = log x / log base
 -- > logBase 10.0 1000.0
 -- 2.9999999999999996
 
+-- # Rounding to integers
+
+{- | The integer nearest to `x`, with a half rounded away from zero.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > roundInt 2.5
+   3
+   > roundInt (-2.5)
+   -3 -}
+export
+roundInt : Float -> Int
+roundInt x = floatToInt (round x)
+
+-- > roundInt 0.4
+-- 0
+-- > roundInt 1.0e20
+-- 4611686018427387903
+-- > roundInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > roundInt (0.0 / 0.0)
+-- 0
+
+{- | The greatest integer not above `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > floorInt 3.7
+   3
+   > floorInt (-0.5)
+   -1 -}
+export
+floorInt : Float -> Int
+floorInt x = floatToInt (floor x)
+
+-- > floorInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > floorInt (0.0 / 0.0)
+-- 0
+
+{- | The least integer not below `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > ceilInt 3.2
+   4
+   > ceilInt (-0.5)
+   0 -}
+export
+ceilInt : Float -> Int
+ceilInt x = floatToInt (ceil x)
+
+-- > ceilInt 1.0e20
+-- 4611686018427387903
+-- > ceilInt (0.0 / 0.0)
+-- 0
+
 -- # Integers
 
 {- | Division rounding the quotient towards negative infinity.

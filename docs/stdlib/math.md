@@ -145,6 +145,65 @@ exactly `3.0`.
 3.0
 ```
 
+## Rounding to integers
+
+### `roundInt`
+
+```
+roundInt : Float -> Int
+roundInt x
+```
+
+The integer nearest to `x`, with a half rounded away from zero.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> roundInt 2.5
+3
+> roundInt (-2.5)
+-3
+```
+
+### `floorInt`
+
+```
+floorInt : Float -> Int
+floorInt x
+```
+
+The greatest integer not above `x`.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> floorInt 3.7
+3
+> floorInt (-0.5)
+-1
+```
+
+### `ceilInt`
+
+```
+ceilInt : Float -> Int
+ceilInt x
+```
+
+The least integer not below `x`.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> ceilInt 3.2
+4
+> ceilInt (-0.5)
+0
+```
+
 ## Integers
 
 ### `floorDiv`
