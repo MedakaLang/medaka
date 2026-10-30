@@ -247,10 +247,10 @@ tco_assert() {
   wat="$WORK/$fix.tco.wat"
   "$EMITBIN" "$FIXDIR/$fix" > "$wat" 2>/dev/null || { echo "TCO-ASSERT FAIL $fix (emit)"; tco_fail=1; return; }
   # isolate the function body: from `(func $<fn>` to its closing `  )`.
-  body="$(awk "/\\(func \\\$$fn /{f=1} f{print} f&&/^  \\)\$/{exit}" "$wat")"
-  if printf '%s' "$body" | grep -q 'return_call'; then
+  body="$(awk -v head="  (func \$$fn " 'index($0, head) == 1 {f=1} f{print} f&&/^  \)$/{exit}' "$wat")"
+  if printf '%s\n' "$body" | awk -v target="return_call \$$fn" '{line=$0; sub(/^[[:space:]]*/, "", line); if (line == target || index(line, target " ") == 1) found=1} END {exit !found}'; then
     # also assert NO plain `call $<fn>` survives in the tail (would be non-TCO).
-    if printf '%s' "$body" | grep -qE "^\s*call \\\$$fn\b"; then
+    if printf '%s\n' "$body" | awk -v target="call \$$fn" '{line=$0; sub(/^[[:space:]]*/, "", line); if (line == target || index(line, target " ") == 1) found=1} END {exit !found}'; then
       echo "TCO-ASSERT FAIL $fix: a plain 'call \$$fn' survives in the tail (not TCO'd)"; tco_fail=1
     else
       echo "TCO-ASSERT ok   $fix: \$$fn tail-self-call emits return_call"
@@ -261,9 +261,9 @@ tco_assert() {
 }
 tco_fail=0
 if [ "$fail" -eq 0 ]; then
-  tco_assert clos_deep_tco.mdk loop
-  tco_assert clos_reftco_indirect.mdk loop
-  tco_assert fn_tailsum.mdk sumTo
+  tco_assert clos_deep_tco.mdk f.user.6c6f6f70
+  tco_assert clos_reftco_indirect.mdk f.user.6c6f6f70
+  tco_assert fn_tailsum.mdk f.user.73756d546f
 fi
 
 # ── (b′) dispatch-TMC IR-shape assertion (WASMGC-TRMC Stage 2) ─────────────────
@@ -277,13 +277,15 @@ if [ "$fail" -eq 0 ]; then
   if "$EMITBIN" "$FIXDIR/w_trmc_dispatch.mdk" > "$dwat" 2>/dev/null; then
     # the group bodies = every fn EXCEPT main/lenAcc (which legitimately call the $scan
     # wrapper as a normal, non-recursive entry).  Extract the scan/scanAt/leaf* funcs.
-    groupbodies="$(awk '/\(func \$(scan|scanAt|leafA|leafB|leafC|next|scan__disploop) /{f=1} f{print} f&&/^  \)$/{f=0}' "$dwat")"
-    if ! grep -q '(func \$scan__disploop ' "$dwat"; then
+    groupbodies="$(awk '/\(func \$f[.](user[.](7363616e|7363616e4174|6c65616641|6c65616642|6c65616643|6e657874)|gen[.]dispatch[.]7363616e[.]0) /{f=1} f{print} f&&/^  \)$/{f=0}' "$dwat")"
+    if [ "$(printf '%s\n' "$groupbodies" | grep -c '^  (func ')" -ne 7 ]; then
+      echo "DISP-ASSERT FAIL w_trmc_dispatch: expected seven group definitions"; disp_fail=1
+    elif ! grep -qF '(func $f.gen.dispatch.7363616e.0 ' "$dwat"; then
       echo "DISP-ASSERT FAIL w_trmc_dispatch: no \$scan__disploop inner loop (group not detected)"; disp_fail=1
-    elif printf '%s' "$groupbodies" | grep -qE '(^|[^_a-zA-Z])call \$scan( |$)'; then
+    elif printf '%s' "$groupbodies" | grep -qE '(^|[^_a-zA-Z])call \$f[.]user[.]7363616e( |$)'; then
       echo "DISP-ASSERT FAIL w_trmc_dispatch: a recursive 'call \$scan' survives in a group body (overflow shape)"; disp_fail=1
-    elif ! grep -q 'return_call \$scan__disploop' "$dwat"; then
-      echo "DISP-ASSERT FAIL w_trmc_dispatch: no 'return_call \$scan__disploop' (spine leaf not redirected)"; disp_fail=1
+    elif ! grep -qE 'return_call \$f[.]gen[.]dispatch[.]7363616e[.]0([[:space:]]|$)' "$dwat"; then
+      echo "DISP-ASSERT FAIL w_trmc_dispatch: no 'return_call \$f.gen.dispatch.7363616e.0' (spine leaf not redirected)"; disp_fail=1
     else
       echo "DISP-ASSERT ok   w_trmc_dispatch: \$scan group lowers to reset-wrapper + \$scan__disploop, 0 recursive call \$scan in group bodies"
     fi
@@ -303,13 +305,13 @@ strip_fail=0
 if [ "$fail" -eq 0 ]; then
   swat="$WORK/w_trmc_strip_clauses.s1b.wat"
   if "$EMITBIN" "$FIXDIR/w_trmc_strip_clauses.mdk" > "$swat" 2>/dev/null; then
-    sbody="$(awk '/\(func \$strip /{f=1} f{print} f&&/^  \)$/{exit}' "$swat")"
-    if printf '%s' "$sbody" | grep -qE '^\s*call \$strip\b'; then
+    sbody="$(awk '/\(func \$f[.]user[.]7374726970 /{f=1} f{print} f&&/^  \)$/{exit}' "$swat")"
+    if printf '%s' "$sbody" | grep -qE '^[[:space:]]*call \$f[.]user[.]7374726970([[:space:]]|$)'; then
       echo "S1B-ASSERT FAIL w_trmc_strip_clauses: a recursive 'call \$strip' survives in the loop (overflow shape)"; strip_fail=1
-    elif ! printf '%s' "$sbody" | grep -q 'br \$tmcloop'; then
-      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$tmcloop' in \$strip (self-TMC did not fire)"; strip_fail=1
-    elif ! printf '%s' "$sbody" | grep -q 'br \$tmcexit'; then
-      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$tmcexit' in \$strip (base leaf not redirected)"; strip_fail=1
+    elif ! printf '%s' "$sbody" | grep -qF 'br $l.tmcloop.0'; then
+      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$l.tmcloop.0' in \$strip (self-TMC did not fire)"; strip_fail=1
+    elif ! printf '%s' "$sbody" | grep -qF 'br $l.tmcexit.0'; then
+      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$l.tmcexit.0' in \$strip (base leaf not redirected)"; strip_fail=1
     else
       echo "S1B-ASSERT ok   w_trmc_strip_clauses: \$strip (multi-clause patterned {cons-tail+plain-tail-drop+base}) lowers to the dest-passing loop, 0 recursive call \$strip"
     fi

@@ -135,11 +135,16 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    `ControlFlow` with its derived Eq/Ord/Debug/Hashable, and the new
 #    string externs.  Modules 2983469 B / 6613 funcs (was 6493); plain 3685
 #    funcs (was 3610); the plain bytes stay inside their ceiling.
-MODULES_BYTES_CEIL=2990000   # measured 2983469 B locally (sprint lint-lang-2-stdlib-surface), rounded up to the next 10000
-MODULES_FUNCS_CEIL=6613   # measured, exact (sprint lint-lang-2-stdlib-surface; 6493 before it)
+# Descriptor spelling migration: on identical writer-tree inputs the 61 old
+# modules grew from 2991434 to 3136797 bytes with 6613 functions unchanged.
+# physical_local_identity adds 46886 bytes and 104 functions. Absolute trap
+# paths affect bytes, so round the measured 3183683 up to the next 10000.
+MODULES_BYTES_CEIL=3190000   # measured 3183683 B locally; rounded up to the next 10000
+MODULES_FUNCS_CEIL=6717   # measured, exact
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
-PLAIN_BYTES_CEIL=495000
+# Plain bytes grew from 494342 to 508888 with 3685 functions unchanged.
+PLAIN_BYTES_CEIL=510000
 PLAIN_FUNCS_CEIL=3685   # measured, exact (sprint lint-lang-2-stdlib-surface; 3610 before it): the untyped wasm entry takes the generic path for binders no declared signature reaches, which pulls the poly-dispatch helpers
 
 TYPED_BYTES_CEIL=23500
@@ -152,7 +157,7 @@ TYPED_FUNCS_CEIL=145
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=61
+MODULES_OK_EXACT=62
 PLAIN_OK_EXACT=172
 TYPED_OK_EXACT=9
 
@@ -165,7 +170,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=4357  # 6613 * 1000 / 1518 = 4356.4, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=4425  # 6717 * 1000 / 1518 = 4424.9, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

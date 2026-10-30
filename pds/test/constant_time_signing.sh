@@ -403,7 +403,7 @@ collect_full_closure() {
     rm -f "$WORK/closure.calls"
     while IFS= read -r symbol; do
       extract_ir_function "$symbol" "$WORK/function.ll" || fail "emitted closure helper $symbol exists"
-      sed -n 's/.*call i64 @\(mdk_[^ (]*\).*/\1/p' "$WORK/function.ll" >> "$WORK/closure.calls"
+      sed -n 's/.*call i64 @\(mdk[._][^ (]*\).*/\1/p' "$WORK/function.ll" >> "$WORK/closure.calls"
     done < "$WORK/closure.current"
     if [ -f "$WORK/closure.calls" ]; then
       while IFS= read -r callee; do
@@ -443,13 +443,33 @@ write_control_manifest() {
   done < "$WORK/full-closure.lst"
 }
 
+physical_symbol() {
+  logical=$1
+  case $logical in
+    mdk_lib_scalar__*) module=lib.scalar ;;
+    mdk_lib_field__*) module=lib.field ;;
+    mdk_lib_secp256k1__*) module=lib.secp256k1 ;;
+    mdk_lib_sign__*) module=lib.sign ;;
+    mdk_crypto_sha256__*) module=crypto.sha256 ;;
+    mdk_lib_hmac_sha256__*) module=lib.hmac_sha256 ;;
+    mdk_bit_witness__*) module=bit_witness ;;
+    *) printf '%s\n' "$logical"; return ;;
+  esac
+  name=${logical#*__}
+  family=mdk.user.
+  case $name in *__rw) name=${name%__rw}; family=mdk.worker.raw. ;; esac
+  hex=$(printf %s "$module" | od -An -tx1 | tr -d ' \n')
+  encoded=$(printf %s "m${hex}__${name}" | od -An -tx1 | tr -d ' \n')
+  printf '%s%s\n' "$family" "$encoded"
+}
+
 require_native_symbol() {
-  symbol=$1
+  symbol=$(physical_symbol "$1")
   nm "$BIN" | awk -v wanted="$symbol" '{ name=$3; sub(/^_/, "", name); if (name == wanted) found=1 } END { exit !found }' || fail "linked native closure contains $symbol"
 }
 
 disassemble() {
-  symbol=$1 output=$2
+  symbol=$(physical_symbol "$1") output=$2
   case $(uname -s) in
     Darwin) otool -tvV "$BIN" | awk -v label="_$symbol:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$output" ;;
     *) objdump -d --disassemble="$symbol" "$BIN" > "$output" ;;
@@ -930,7 +950,9 @@ do require_native_symbol "$symbol"; done
 pass 'linked native code retains the audited HMAC/SHA, two-signature, point, inverse, and arithmetic-selection topology'
 
 disassemble mdk_lib_secp256k1__signCandidate "$WORK/signCandidate.asm"
-if grep -E -q 'mdk_lib_scalar__(scFromBytesReduce|byteArrayOk|byteRangeGo)' "$WORK/signCandidate.asm"; then
+if grep -F -e "$(physical_symbol mdk_lib_scalar__scFromBytesReduce)" \
+  -e "$(physical_symbol mdk_lib_scalar__byteArrayOk)" \
+  -e "$(physical_symbol mdk_lib_scalar__byteRangeGo)" "$WORK/signCandidate.asm" >/dev/null; then
   fail 'linked signCandidate path calls the public branch-bearing scalar reducer'
 fi
 pass 'linked signCandidate path excludes scFromBytesReduce/byteArrayOk/byteRangeGo'
@@ -1000,7 +1022,9 @@ check_bit_witness() {
     grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
   done
   pass "emitted bit-helper witness is straight-line over $*"
-  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  witness_symbol=mdk.user.6d363236393734356637373639373436653635373337335f5f63744269745769746e657373
+  witness_eta=mdk.gen.eta.70726f6772616d.6d363236393734356637373639373436653635373337335f5f63744269745769746e657373.
+  pending=$(nm "$bin" | awk -v prefix="$witness_eta" '{ name=$3; sub(/^_/, "", name); if (index(name, prefix) == 1) print name }')
   [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
   pass 'linked bit-helper witness symbol exists'
   visited=' '
@@ -1016,7 +1040,7 @@ check_bit_witness() {
       for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
         case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
         case $target in
-          *__ctBitWitness) next_round="$next_round $target" ;;
+          "$witness_symbol"|"$witness_symbol".llvm.*) next_round="$next_round $target" ;;
           *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
         esac
       done
@@ -1448,7 +1472,7 @@ taint_run_is_live "$WORK/taint-mutant" || { cat "$WORK/taint-mutant.out" >&2; fa
 memcheck_uninit_reports "$WORK/taint-mutant.memcheck" > "$WORK/taint-mutant.reports"
 awk -F '\t' '$3 == "client"' "$WORK/taint-mutant.reports" > "$WORK/taint-mutant.tainted"
 [ -s "$WORK/taint-mutant.tainted" ] || fail 'M-carry-guard secret carry branch unexpectedly unreported by memcheck'
-if awk -F '\t' '$2 != "mdk_lib_scalar__subNSelect__rw"' "$WORK/taint-mutant.tainted" | grep -q .; then
+if awk -F '\t' -v symbol="$(physical_symbol mdk_lib_scalar__subNSelect__rw)" '$2 != symbol' "$WORK/taint-mutant.tainted" | grep -q .; then
   cat "$WORK/taint-mutant.tainted" >&2
   fail 'M-carry-guard reports land only in mdk_lib_scalar__subNSelect__rw'
 fi
@@ -1460,7 +1484,7 @@ cut -f1 "$WORK/taint-mutant.tainted" | LC_ALL=C sort -u > "$WORK/taint-mutant.pc
 while IFS= read -r pc; do
   offset=$(printf '%x' $((pc - load_bias)))
   objdump -d --start-address="0x$offset" --stop-address=$((0x$offset + 16)) "$WORK/taint-mutant" > "$WORK/taint-mutant.pc.asm"
-  grep -F -q '<mdk_lib_scalar__subNSelect__rw+' "$WORK/taint-mutant.pc.asm" || fail "M-carry-guard PC $pc (0x$offset) lies inside mdk_lib_scalar__subNSelect__rw"
+  grep -F -q "<$(physical_symbol mdk_lib_scalar__subNSelect__rw)+" "$WORK/taint-mutant.pc.asm" || fail "M-carry-guard PC $pc (0x$offset) lies inside mdk_lib_scalar__subNSelect__rw"
   grep -E "^ *$offset:" "$WORK/taint-mutant.pc.asm" > "$WORK/taint-mutant.pc.insn" || fail "M-carry-guard PC $pc (0x$offset) is an instruction boundary"
   is_conditional_jump < "$WORK/taint-mutant.pc.insn" || fail "M-carry-guard PC $pc is a conditional jump ($(cat "$WORK/taint-mutant.pc.insn"))"
   printf 'receipt: M-carry-guard reported at 0x%s:%s\n' "$offset" "$(cut -f3- "$WORK/taint-mutant.pc.insn")"
@@ -1513,7 +1537,7 @@ if awk -F '\t' '$3 == "client" || $3 == "none"' "$WORK/taint-clean.reports" | gr
   cat "$WORK/taint-clean.reports" >&2
   fail 'signing path has no memcheck report tainted by the key'
 fi
-if grep -F -q 'mdk_lib_scalar__' "$WORK/taint-clean.memcheck"; then
+if grep -F -q 'mdk.user.6d36633639363232653733363336313663363137325f5f' "$WORK/taint-clean.memcheck" || grep -F -q 'mdk.worker.raw.6d36633639363232653733363336313663363137325f5f' "$WORK/taint-clean.memcheck"; then
   fail 'memcheck run mentions no scalar function'
 fi
 pass "linked -O2 signing path for keys $TAINT_KEYS has zero key-tainted memcheck reports, none in a scalar function"
