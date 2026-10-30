@@ -222,6 +222,11 @@ test "target_fixtures: fetchText rides the edge's Net grant" = expectEach [
     "fetch_reached.mdk",
   targetCase "run_refuses_fetch" "run" [] "fetch_reached.mdk",
   targetCase "run_refuses_exec_helper" "run" [] "exec_helper_unreached.mdk",
+  targetCase
+    "run_refuses_exec_helper_in_stdlib_dir"
+    "run"
+    []
+    "user_stdlib_dir/stdlib/exec_helper.mdk",
 ]
 
 test "target_fixtures: build checks in its emitter child, and an empty IO join refuses IO" = expectEach

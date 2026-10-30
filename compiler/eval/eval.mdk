@@ -5547,7 +5547,7 @@ pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 -- The run's own SplitMix64 stream, separate from the oracle's `rngU64Ref`. Until
 -- `setSeed` / `restoreRandomState` seeds it, the first draw (or `randomState`)
 -- seeds it from MEDAKA_SEED when set, else from OS entropy. A malformed
--- MEDAKA_SEED panics rather than falling back to entropy.
+-- MEDAKA_SEED panics, unlocated as on native, rather than using entropy.
 runRngRef : Ref U64
 runRngRef = Ref 0
 
@@ -5562,7 +5562,9 @@ runRngEnsure _ =
     let seed = match getEnv "MEDAKA_SEED"
       Some text => match stringToInt text
         Some n => U64.truncate n
-        None => panic "MEDAKA_SEED must be a decimal integer"
+        None =>
+          panic
+            "\{fmtSentinel}runtime error [E-PANIC]: MEDAKA_SEED must be a decimal integer"
       None => entropyU64 ()
     runRngRef := seed
     runRngSeeded := True

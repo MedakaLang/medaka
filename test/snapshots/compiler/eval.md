@@ -1,5 +1,5 @@
 # META
-source_lines=5733
+source_lines=5735
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -5551,7 +5551,7 @@ pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 -- The run's own SplitMix64 stream, separate from the oracle's `rngU64Ref`. Until
 -- `setSeed` / `restoreRandomState` seeds it, the first draw (or `randomState`)
 -- seeds it from MEDAKA_SEED when set, else from OS entropy. A malformed
--- MEDAKA_SEED panics rather than falling back to entropy.
+-- MEDAKA_SEED panics, unlocated as on native, rather than using entropy.
 runRngRef : Ref U64
 runRngRef = Ref 0
 
@@ -5566,7 +5566,9 @@ runRngEnsure _ =
     let seed = match getEnv "MEDAKA_SEED"
       Some text => match stringToInt text
         Some n => U64.truncate n
-        None => panic "MEDAKA_SEED must be a decimal integer"
+        None =>
+          panic
+            "\{fmtSentinel}runtime error [E-PANIC]: MEDAKA_SEED must be a decimal integer"
       None => entropyU64 ()
     runRngRef := seed
     runRngSeeded := True
@@ -7586,7 +7588,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "runRngSeeded" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "runRngSeeded" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "runRngEnsure" (TyFun (TyCon "Unit") (TyEffect ("Env" "Rand") (Some "e") (TyCon "Unit"))))
-(DFunDef false "runRngEnsure" (PWild) (EIf (EUnOp "!" (EVar "runRngSeeded")) (ELit LUnit) (EBlock (DoLet false false (PVar "seed") (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_SEED"))) (arm (PCon "Some" (PVar "text")) () (EMatch (EApp (EVar "stringToInt") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "U64.truncate") (EVar "n"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "MEDAKA_SEED must be a decimal integer")))))) (arm (PCon "None") () (EApp (EVar "entropyU64") (ELit LUnit))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngSeeded")) (EVar "True"))))))
+(DFunDef false "runRngEnsure" (PWild) (EIf (EUnOp "!" (EVar "runRngSeeded")) (ELit LUnit) (EBlock (DoLet false false (PVar "seed") (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_SEED"))) (arm (PCon "Some" (PVar "text")) () (EMatch (EApp (EVar "stringToInt") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "U64.truncate") (EVar "n"))) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString "runtime error [E-PANIC]: MEDAKA_SEED must be a decimal integer"))))))) (arm (PCon "None") () (EApp (EVar "entropyU64") (ELit LUnit))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngSeeded")) (EVar "True"))))))
 (DTypeSig false "entropyU64" (TyFun (TyCon "Unit") (TyEffect ("Rand") (Some "e") (TyCon "U64"))))
 (DFunDef false "entropyU64" (PWild) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EVar "U64.bitOr") (EApp (EApp (EVar "U64.shiftLeft") (EVar "acc")) (ELit (LInt 8)))) (EApp (EVar "U64.truncate") (EVar "b"))))) (ELit (LInt 0))) (EApp (EVar "arrayToListG") (EApp (EVar "osEntropyBytes") (ELit (LInt 8))))))
 (DTypeSig false "runRngDraw" (TyFun (TyCon "Unit") (TyEffect ("Env" "Rand") (Some "e") (TyCon "U64"))))
@@ -9462,7 +9464,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "runRngSeeded" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "runRngSeeded" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "runRngEnsure" (TyFun (TyCon "Unit") (TyEffect ("Env" "Rand") (Some "e") (TyCon "Unit"))))
-(DFunDef false "runRngEnsure" (PWild) (EIf (EUnOp "!" (EVar "runRngSeeded")) (ELit LUnit) (EBlock (DoLet false false (PVar "seed") (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_SEED"))) (arm (PCon "Some" (PVar "text")) () (EMatch (EApp (EVar "stringToInt") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "U64.truncate") (EVar "n"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "MEDAKA_SEED must be a decimal integer")))))) (arm (PCon "None") () (EApp (EVar "entropyU64") (ELit LUnit))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngSeeded")) (EVar "True"))))))
+(DFunDef false "runRngEnsure" (PWild) (EIf (EUnOp "!" (EVar "runRngSeeded")) (ELit LUnit) (EBlock (DoLet false false (PVar "seed") (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_SEED"))) (arm (PCon "Some" (PVar "text")) () (EMatch (EApp (EVar "stringToInt") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "U64.truncate") (EVar "n"))) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString "runtime error [E-PANIC]: MEDAKA_SEED must be a decimal integer"))))))) (arm (PCon "None") () (EApp (EVar "entropyU64") (ELit LUnit))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "runRngSeeded")) (EVar "True"))))))
 (DTypeSig false "entropyU64" (TyFun (TyCon "Unit") (TyEffect ("Rand") (Some "e") (TyCon "U64"))))
 (DFunDef false "entropyU64" (PWild) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EVar "U64.bitOr") (EApp (EApp (EVar "U64.shiftLeft") (EVar "acc")) (ELit (LInt 8)))) (EApp (EVar "U64.truncate") (EVar "b"))))) (ELit (LInt 0))) (EApp (EVar "arrayToListG") (EApp (EVar "osEntropyBytes") (ELit (LInt 8))))))
 (DTypeSig false "runRngDraw" (TyFun (TyCon "Unit") (TyEffect ("Env" "Rand") (Some "e") (TyCon "U64"))))

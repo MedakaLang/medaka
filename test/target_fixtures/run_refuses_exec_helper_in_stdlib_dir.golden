@@ -1,0 +1,8 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/user_stdlib_dir/stdlib/exec_helper.mdk:4:0: the built-in `runCommand` is reached via `main → listDir → runCommand`, and `medaka run` refuses it on purpose (implemented by llvm; running a subprocess from the interpreter waits on a security decision)
+help: build it with `medaka build <fixtures>/user_stdlib_dir/stdlib/exec_helper.mdk -o <bin>`, then run `<bin>`
+  |
+4 | listDir _ = match runCommand "ls" []
+  | ^

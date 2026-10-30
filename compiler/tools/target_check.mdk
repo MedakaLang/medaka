@@ -67,7 +67,7 @@ import support.util.{
   dedupBy,
   contains,
   anyList,
-  splitOnChar,
+  initList,
 }
 import string.{trim}
 import list.{lookup, last}
@@ -328,7 +328,7 @@ unprovidedReached profile file paths analysis ((_, name), route) =
         mkDiag
           SevError
           targetNotProvidedCode
-          (deliberateMessage profile file paths name why route)
+          (deliberateMessage profile file paths analysis name why route)
           (userFrameLoc paths analysis route)
       else
         mkDiag
@@ -348,13 +348,14 @@ deliberateRefusal _ _ _ = False
 deliberateMessage : TargetProfile ->
   String ->
   List (String, String) ->
+  TargetInputs ->
   String ->
   String ->
   List (String, String) ->
   String
-deliberateMessage profile file paths name why route =
+deliberateMessage profile file paths analysis name why route =
   let chain = map snd route
-  let located = match lastUserStep paths route
+  let located = match lastUserStep paths analysis route
     Some _ => ""
     None =>
       "; no frame of your code is on the route, so this is located at the nearest frame"
@@ -373,7 +374,7 @@ userFrameLoc : List (String, String) ->
   TargetInputs ->
   List (String, String) ->
   Option Loc
-userFrameLoc paths analysis route = match lastUserStep paths route
+userFrameLoc paths analysis route = match lastUserStep paths analysis route
   Some (mid, n) => do
     decls <- lookup mid analysis.tiModules
     l <- definitionLoc n decls
@@ -381,19 +382,18 @@ userFrameLoc paths analysis route = match lastUserStep paths route
   None => namingBindingLoc paths analysis route
 
 lastUserStep : List (String, String) ->
+  TargetInputs ->
   List (String, String) ->
   Option (String, String)
-lastUserStep paths route = last (filter (isUserStep paths) (dropLast route))
+lastUserStep paths analysis route =
+  last (filter (isUserStep paths analysis) (initList route))
 
-isUserStep : List (String, String) -> (String, String) -> Bool
-isUserStep paths (mid, _) = match lookupAssoc mid paths
-  Some p => not (contains "stdlib" (splitOnChar '/' p))
-  None => False
-
-dropLast : List a -> List a
-dropLast [] = []
-dropLast [_] = []
-dropLast (x :: rest) = x :: dropLast rest
+-- A step is the program's own code when the loader mapped its module to a file
+-- and the module is not one the stdlib root owns.  The module's origin, not
+-- its path: a user directory may itself be named `stdlib`.
+isUserStep : List (String, String) -> TargetInputs -> (String, String) -> Bool
+isUserStep paths analysis (mid, _) =
+  isSome (lookupAssoc mid paths) && not (contains mid analysis.tiStdlibOwned)
 
 -- Whether the program or the compiler is at fault, by the row's gap kind.
 gapCause : GapKind -> String

@@ -1,5 +1,5 @@
 -- The per-extern engine matrix: for every `stdlib/runtime.mdk` extern, what the
--- pure oracle, `medaka run`, `medaka test`/`repl`, the native backend and the
+-- pure oracle, `medaka run`, `medaka test --engines eval`/`repl`, the native backend and the
 -- wasm backend each do with it.  Every cell is derived from a table or from the
 -- extern's own signature; none is written per extern.
 --
@@ -13,7 +13,9 @@
 --   refused  not bound: the engine rejects or aborts the call
 --            (a catalog `NotProvided` or `TrapStub`).
 -- The oracle column is `externBindings`; `run` is `ioExternBindings` over it;
--- `test` is `testCapableExterns` over it.  An extern with an empty effect row
+-- the third column is `testCapableExterns` over it, which only
+-- `medaka test --engines eval` and `medaka repl` use: default `medaka test` is
+-- native and follows the native column.  An extern with an empty effect row
 -- is `real` wherever it is bound.
 
 import backend.extern_catalog.{
@@ -40,8 +42,8 @@ runtimePath = "stdlib/runtime.mdk"
 
 -- Effectful externs the oracle binds that `ioExternBindings` rightly does not
 -- override, each with its reason.  `run` counts them `real`.
-driftExceptions : List (String, String)
-driftExceptions = [
+oracleIntendedOnRun : List (String, String)
+oracleIntendedOnRun = [
   ("putStr", stdoutReason),
   ("putStrLn", stdoutReason),
   ("flushStdout", stdoutReason),
@@ -50,6 +52,53 @@ driftExceptions = [
 stdoutReason : String
 stdoutReason =
   "the oracle appends to its stdout buffer; `run`'s driver (evalModulesOutputRunFacts) arms the flush and the CLI prints that buffer"
+
+-- Effectful externs bound by neither table: `run` refuses them, each with its
+-- reason.  An effectful extern in no table and not here is drift.
+refusedOnRun : List (String, String)
+refusedOnRun = [
+  ("runCommand", execReason),
+  ("runCommandBatch", execReason),
+  (
+    "assertSnapshot",
+    "only the test runners bind it; `run` has no snapshot store",
+  ),
+  ("fetchText", "a browser-host extern; no other engine provides it"),
+  ("netResolve", netReason),
+  ("netTcpConnect", netReason),
+  ("netTcpListen", netReason),
+  ("netListenPort", netReason),
+  ("netTcpAccept", netReason),
+  ("netSend", netReason),
+  ("netSendFrom", netReason),
+  ("netRecv", netReason),
+  ("netShutdown", netReason),
+  ("netClose", netReason),
+  ("netCloseListener", netReason),
+  ("netSetTimeout", netReason),
+  ("pdsSignalStart", netReason),
+  ("pdsSignalRequested", netReason),
+  ("ioPoll", netReason),
+  ("netSetNonblock", netReason),
+  ("netSetNonblockListener", netReason),
+  ("netTryAccept", netReason),
+  ("netConnectStart", netReason),
+  ("netConnectCheck", netReason),
+  ("netTryRecv", netReason),
+  ("netTryRecvBytes", netReason),
+  ("netTrySend", netReason),
+  ("netTrySendFrom", netReason),
+  ("netSendBytesFrom", netReason),
+  ("netTrySendBytesFrom", netReason),
+]
+
+execReason : String
+execReason =
+  "`run` refuses subprocess execution on purpose; `medaka build` provides it"
+
+netReason : String
+netReason =
+  "`run` does not bind the socket and poll externs; `medaka build` does"
 
 -- Does the declared type end in a non-empty effect row?
 hasEffect : Ty -> Bool
@@ -110,41 +159,39 @@ rowsOf decls =
   let run =
     S.union
       (nameSet (ioExternBindings ()))
-      (S.fromList (map fst driftExceptions))
+      (S.fromList (map fst oracleIntendedOnRun))
   let tst = nameSet (testCapableExterns ())
   filterMap (mkRow oracle run tst) (declaredExterns decls)
 
--- Effectful externs the oracle binds and `ioExternBindings` does not, minus
--- the named exceptions.
+-- Every extern with an effect row must be deliberate for `run`: bound in
+-- `ioExternBindings`, oracle-bound and listed, or listed as refused.
 driftOf : List Decl -> List String
 driftOf decls =
-  let oracle = nameSet (externBindings ())
   let run = nameSet (ioExternBindings ())
-  let excused = map fst driftExceptions
+  let excused = map fst oracleIntendedOnRun ++ map fst refusedOnRun
   filterMap
     (p =>
-      let name = fst p
-      if snd p
-        && S.has name oracle
-        && not (S.has name run)
-        && not (elem name excused) then
-        Some name
+      if snd p && not (S.has (fst p) run) && not (elem (fst p) excused) then
+        Some (fst p)
       else
         None)
     (declaredExterns decls)
 
-loadRuntime : Unit -> <FileRead> List Decl
+-- A runtime.mdk that cannot be read must fail the callers, not yield no rows.
+loadRuntime : Unit -> <FileRead, Env> Result String (List Decl)
 loadRuntime _ = match readFile runtimePath
-  Ok src => parse src
-  Err _ => []
+  Ok src => Ok (parse src)
+  Err e =>
+    let cwd = getEnv "PWD" |> optionOr "(unknown)"
+    Err "cannot read \{runtimePath} from working directory \{cwd}: \{e}"
 
 export
-engineRows : Unit -> <FileRead> List EngineRow
-engineRows _ = rowsOf (loadRuntime ())
+engineRows : Unit -> <FileRead, Env> Result String (List EngineRow)
+engineRows _ = map rowsOf (loadRuntime ())
 
 export
-runDrift : Unit -> <FileRead> List String
-runDrift _ = driftOf (loadRuntime ())
+runDrift : Unit -> <FileRead, Env> Result String (List String)
+runDrift _ = map driftOf (loadRuntime ())
 
 cellText : Cell -> String
 cellText Real = "real"
@@ -169,15 +216,19 @@ renderEngineTable rows =
         "",
         "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->",
         "",
-        "What each engine does with each `stdlib/runtime.mdk` extern. An extern that is",
-        "`real` on every engine is left out; so is any extern not in the catalog.",
+        "What each way of running Medaka does with each `stdlib/runtime.mdk` extern, the",
+        "primitives the standard library is built on. An extern that is `real` everywhere",
+        "is left out; so is any extern the compiler's backend table does not list.",
         "",
         "## Columns",
         "",
-        "- **oracle**: the pure interpreter the differential gates run (`externBindings`).",
-        "- **run**: `medaka run` (`ioExternBindings` over the oracle).",
-        "- **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).",
-        "- **native**, **wasm**: `medaka build` for each target (the extern catalog).",
+        "- **oracle**: the compiler's internal reference interpreter, which its own",
+        "  differential tests use; you never run it directly.",
+        "- **run**: `medaka run`.",
+        "- **test --engines eval, repl**: `medaka test --engines eval` and `medaka repl`.",
+        "  Plain `medaka test` runs natively, so read the **native** column for it.",
+        "- **native**: a program built with `medaka build`, and the default `medaka test`.",
+        "- **wasm**: a program built for the wasm target (the browser playground).",
         "",
         "## Cells",
         "",
@@ -187,7 +238,7 @@ renderEngineTable rows =
         "",
         "## Externs that differ",
         "",
-        "| extern | oracle | run | test | native | wasm |",
+        "| extern | oracle | run | test --engines eval, repl | native | wasm |",
         "|---|---|---|---|---|---|",
       ]
       ++ map rowLine shown)

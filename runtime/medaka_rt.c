@@ -3538,7 +3538,10 @@ static void mdk_rng_ensure(void) {
     errno = 0;
     long long v = strtoll(env, &end, 10);
     /* 63-bit Int range, so the seed equals the `setSeed n` it stands for. */
-    if (env[0] == '\0' || *end != '\0' || errno != 0 ||
+    /* Decimal digits with an optional sign, as run and wasm read it: strtoll
+     * alone would skip leading whitespace. */
+    int lead = env[0] == '+' || env[0] == '-' || (env[0] >= '0' && env[0] <= '9');
+    if (!lead || *end != '\0' || errno != 0 ||
         v < -(1LL << 62) || v > (1LL << 62) - 1)
       mdk_panic(mdk_str_cstr("MEDAKA_SEED must be a decimal integer"));
     mdk_rng_state = (unsigned long long)v;

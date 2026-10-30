@@ -1,9 +1,9 @@
 # META
-source_lines=193
+source_lines=244
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-extern engine matrix: for every `stdlib/runtime.mdk` extern, what the
--- pure oracle, `medaka run`, `medaka test`/`repl`, the native backend and the
+-- pure oracle, `medaka run`, `medaka test --engines eval`/`repl`, the native backend and the
 -- wasm backend each do with it.  Every cell is derived from a table or from the
 -- extern's own signature; none is written per extern.
 --
@@ -17,7 +17,9 @@ stages=DESUGAR,MARK
 --   refused  not bound: the engine rejects or aborts the call
 --            (a catalog `NotProvided` or `TrapStub`).
 -- The oracle column is `externBindings`; `run` is `ioExternBindings` over it;
--- `test` is `testCapableExterns` over it.  An extern with an empty effect row
+-- the third column is `testCapableExterns` over it, which only
+-- `medaka test --engines eval` and `medaka repl` use: default `medaka test` is
+-- native and follows the native column.  An extern with an empty effect row
 -- is `real` wherever it is bound.
 
 import backend.extern_catalog.{
@@ -44,8 +46,8 @@ runtimePath = "stdlib/runtime.mdk"
 
 -- Effectful externs the oracle binds that `ioExternBindings` rightly does not
 -- override, each with its reason.  `run` counts them `real`.
-driftExceptions : List (String, String)
-driftExceptions = [
+oracleIntendedOnRun : List (String, String)
+oracleIntendedOnRun = [
   ("putStr", stdoutReason),
   ("putStrLn", stdoutReason),
   ("flushStdout", stdoutReason),
@@ -54,6 +56,53 @@ driftExceptions = [
 stdoutReason : String
 stdoutReason =
   "the oracle appends to its stdout buffer; `run`'s driver (evalModulesOutputRunFacts) arms the flush and the CLI prints that buffer"
+
+-- Effectful externs bound by neither table: `run` refuses them, each with its
+-- reason.  An effectful extern in no table and not here is drift.
+refusedOnRun : List (String, String)
+refusedOnRun = [
+  ("runCommand", execReason),
+  ("runCommandBatch", execReason),
+  (
+    "assertSnapshot",
+    "only the test runners bind it; `run` has no snapshot store",
+  ),
+  ("fetchText", "a browser-host extern; no other engine provides it"),
+  ("netResolve", netReason),
+  ("netTcpConnect", netReason),
+  ("netTcpListen", netReason),
+  ("netListenPort", netReason),
+  ("netTcpAccept", netReason),
+  ("netSend", netReason),
+  ("netSendFrom", netReason),
+  ("netRecv", netReason),
+  ("netShutdown", netReason),
+  ("netClose", netReason),
+  ("netCloseListener", netReason),
+  ("netSetTimeout", netReason),
+  ("pdsSignalStart", netReason),
+  ("pdsSignalRequested", netReason),
+  ("ioPoll", netReason),
+  ("netSetNonblock", netReason),
+  ("netSetNonblockListener", netReason),
+  ("netTryAccept", netReason),
+  ("netConnectStart", netReason),
+  ("netConnectCheck", netReason),
+  ("netTryRecv", netReason),
+  ("netTryRecvBytes", netReason),
+  ("netTrySend", netReason),
+  ("netTrySendFrom", netReason),
+  ("netSendBytesFrom", netReason),
+  ("netTrySendBytesFrom", netReason),
+]
+
+execReason : String
+execReason =
+  "`run` refuses subprocess execution on purpose; `medaka build` provides it"
+
+netReason : String
+netReason =
+  "`run` does not bind the socket and poll externs; `medaka build` does"
 
 -- Does the declared type end in a non-empty effect row?
 hasEffect : Ty -> Bool
@@ -114,41 +163,39 @@ rowsOf decls =
   let run =
     S.union
       (nameSet (ioExternBindings ()))
-      (S.fromList (map fst driftExceptions))
+      (S.fromList (map fst oracleIntendedOnRun))
   let tst = nameSet (testCapableExterns ())
   filterMap (mkRow oracle run tst) (declaredExterns decls)
 
--- Effectful externs the oracle binds and `ioExternBindings` does not, minus
--- the named exceptions.
+-- Every extern with an effect row must be deliberate for `run`: bound in
+-- `ioExternBindings`, oracle-bound and listed, or listed as refused.
 driftOf : List Decl -> List String
 driftOf decls =
-  let oracle = nameSet (externBindings ())
   let run = nameSet (ioExternBindings ())
-  let excused = map fst driftExceptions
+  let excused = map fst oracleIntendedOnRun ++ map fst refusedOnRun
   filterMap
     (p =>
-      let name = fst p
-      if snd p
-        && S.has name oracle
-        && not (S.has name run)
-        && not (elem name excused) then
-        Some name
+      if snd p && not (S.has (fst p) run) && not (elem (fst p) excused) then
+        Some (fst p)
       else
         None)
     (declaredExterns decls)
 
-loadRuntime : Unit -> <FileRead> List Decl
+-- A runtime.mdk that cannot be read must fail the callers, not yield no rows.
+loadRuntime : Unit -> <FileRead, Env> Result String (List Decl)
 loadRuntime _ = match readFile runtimePath
-  Ok src => parse src
-  Err _ => []
+  Ok src => Ok (parse src)
+  Err e =>
+    let cwd = getEnv "PWD" |> optionOr "(unknown)"
+    Err "cannot read \{runtimePath} from working directory \{cwd}: \{e}"
 
 export
-engineRows : Unit -> <FileRead> List EngineRow
-engineRows _ = rowsOf (loadRuntime ())
+engineRows : Unit -> <FileRead, Env> Result String (List EngineRow)
+engineRows _ = map rowsOf (loadRuntime ())
 
 export
-runDrift : Unit -> <FileRead> List String
-runDrift _ = driftOf (loadRuntime ())
+runDrift : Unit -> <FileRead, Env> Result String (List String)
+runDrift _ = map driftOf (loadRuntime ())
 
 cellText : Cell -> String
 cellText Real = "real"
@@ -173,15 +220,19 @@ renderEngineTable rows =
         "",
         "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->",
         "",
-        "What each engine does with each `stdlib/runtime.mdk` extern. An extern that is",
-        "`real` on every engine is left out; so is any extern not in the catalog.",
+        "What each way of running Medaka does with each `stdlib/runtime.mdk` extern, the",
+        "primitives the standard library is built on. An extern that is `real` everywhere",
+        "is left out; so is any extern the compiler's backend table does not list.",
         "",
         "## Columns",
         "",
-        "- **oracle**: the pure interpreter the differential gates run (`externBindings`).",
-        "- **run**: `medaka run` (`ioExternBindings` over the oracle).",
-        "- **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).",
-        "- **native**, **wasm**: `medaka build` for each target (the extern catalog).",
+        "- **oracle**: the compiler's internal reference interpreter, which its own",
+        "  differential tests use; you never run it directly.",
+        "- **run**: `medaka run`.",
+        "- **test --engines eval, repl**: `medaka test --engines eval` and `medaka repl`.",
+        "  Plain `medaka test` runs natively, so read the **native** column for it.",
+        "- **native**: a program built with `medaka build`, and the default `medaka test`.",
+        "- **wasm**: a program built for the wasm target (the browser playground).",
         "",
         "## Cells",
         "",
@@ -191,7 +242,7 @@ renderEngineTable rows =
         "",
         "## Externs that differ",
         "",
-        "| extern | oracle | run | test | native | wasm |",
+        "| extern | oracle | run | test --engines eval, repl | native | wasm |",
         "|---|---|---|---|---|---|",
       ]
       ++ map rowLine shown)
@@ -207,10 +258,16 @@ renderEngineTable rows =
 (DData Public "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
 (DTypeSig false "runtimePath" (TyCon "String"))
 (DFunDef false "runtimePath" () (ELit (LString "stdlib/runtime.mdk")))
-(DTypeSig false "driftExceptions" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "driftExceptions" () (EListLit (ETuple (ELit (LString "putStr")) (EVar "stdoutReason")) (ETuple (ELit (LString "putStrLn")) (EVar "stdoutReason")) (ETuple (ELit (LString "flushStdout")) (EVar "stdoutReason"))))
+(DTypeSig false "oracleIntendedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "oracleIntendedOnRun" () (EListLit (ETuple (ELit (LString "putStr")) (EVar "stdoutReason")) (ETuple (ELit (LString "putStrLn")) (EVar "stdoutReason")) (ETuple (ELit (LString "flushStdout")) (EVar "stdoutReason"))))
 (DTypeSig false "stdoutReason" (TyCon "String"))
 (DFunDef false "stdoutReason" () (ELit (LString "the oracle appends to its stdout buffer; `run`'s driver (evalModulesOutputRunFacts) arms the flush and the CLI prints that buffer")))
+(DTypeSig false "refusedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "refusedOnRun" () (EListLit (ETuple (ELit (LString "runCommand")) (EVar "execReason")) (ETuple (ELit (LString "runCommandBatch")) (EVar "execReason")) (ETuple (ELit (LString "assertSnapshot")) (ELit (LString "only the test runners bind it; `run` has no snapshot store"))) (ETuple (ELit (LString "fetchText")) (ELit (LString "a browser-host extern; no other engine provides it"))) (ETuple (ELit (LString "netResolve")) (EVar "netReason")) (ETuple (ELit (LString "netTcpConnect")) (EVar "netReason")) (ETuple (ELit (LString "netTcpListen")) (EVar "netReason")) (ETuple (ELit (LString "netListenPort")) (EVar "netReason")) (ETuple (ELit (LString "netTcpAccept")) (EVar "netReason")) (ETuple (ELit (LString "netSend")) (EVar "netReason")) (ETuple (ELit (LString "netSendFrom")) (EVar "netReason")) (ETuple (ELit (LString "netRecv")) (EVar "netReason")) (ETuple (ELit (LString "netShutdown")) (EVar "netReason")) (ETuple (ELit (LString "netClose")) (EVar "netReason")) (ETuple (ELit (LString "netCloseListener")) (EVar "netReason")) (ETuple (ELit (LString "netSetTimeout")) (EVar "netReason")) (ETuple (ELit (LString "pdsSignalStart")) (EVar "netReason")) (ETuple (ELit (LString "pdsSignalRequested")) (EVar "netReason")) (ETuple (ELit (LString "ioPoll")) (EVar "netReason")) (ETuple (ELit (LString "netSetNonblock")) (EVar "netReason")) (ETuple (ELit (LString "netSetNonblockListener")) (EVar "netReason")) (ETuple (ELit (LString "netTryAccept")) (EVar "netReason")) (ETuple (ELit (LString "netConnectStart")) (EVar "netReason")) (ETuple (ELit (LString "netConnectCheck")) (EVar "netReason")) (ETuple (ELit (LString "netTryRecv")) (EVar "netReason")) (ETuple (ELit (LString "netTryRecvBytes")) (EVar "netReason")) (ETuple (ELit (LString "netTrySend")) (EVar "netReason")) (ETuple (ELit (LString "netTrySendFrom")) (EVar "netReason")) (ETuple (ELit (LString "netSendBytesFrom")) (EVar "netReason")) (ETuple (ELit (LString "netTrySendBytesFrom")) (EVar "netReason"))))
+(DTypeSig false "execReason" (TyCon "String"))
+(DFunDef false "execReason" () (ELit (LString "`run` refuses subprocess execution on purpose; `medaka build` provides it")))
+(DTypeSig false "netReason" (TyCon "String"))
+(DFunDef false "netReason" () (ELit (LString "`run` does not bind the socket and poll externs; `medaka build` does")))
 (DTypeSig false "hasEffect" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "hasEffect" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "hasEffect") (EVar "r")))
 (DFunDef false "hasEffect" ((PCon "TyEffect" (PVar "labels") PWild PWild)) (EApp (EVar "not") (EApp (EVar "isEmpty") (EVar "labels"))))
@@ -234,15 +291,15 @@ renderEngineTable rows =
 (DTypeSig false "declaredExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "declaredExterns" ((PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (ETuple (EFieldAccess (EVar "ed") "edName") (EApp (EVar "hasEffect") (EFieldAccess (EVar "ed") "edTy"))))) (EApp (EVar "externDeclsOf") (EVar "decls"))))
 (DTypeSig false "rowsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "EngineRow"))))
-(DFunDef false "rowsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EApp (EVar "S.union") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (EApp (EVar "S.fromList") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "driftExceptions"))))) (DoLet false false (PVar "tst") (EApp (EVar "nameSet") (EApp (EVar "testCapableExterns") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EApp (EVar "mkRow") (EVar "oracle")) (EVar "run")) (EVar "tst"))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
+(DFunDef false "rowsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EApp (EVar "S.union") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (EApp (EVar "S.fromList") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "oracleIntendedOnRun"))))) (DoLet false false (PVar "tst") (EApp (EVar "nameSet") (EApp (EVar "testCapableExterns") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EApp (EVar "mkRow") (EVar "oracle")) (EVar "run")) (EVar "tst"))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
 (DTypeSig false "driftOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "driftOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (DoLet false false (PVar "excused") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "driftExceptions"))) (DoExpr (EApp (EApp (EVar "filterMap") (ELam ((PVar "p")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "fst") (EVar "p"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "snd") (EVar "p")) (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle"))) (EApp (EVar "not") (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")))) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "name")) (EVar "excused")))) (EApp (EVar "Some") (EVar "name")) (EVar "None")))))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
-(DTypeSig false "loadRuntime" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "loadRuntime" (PWild) (EMatch (EApp (EVar "readFile") (EVar "runtimePath")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "parse") (EVar "src"))) (arm (PCon "Err" PWild) () (EListLit))))
-(DTypeSig true "engineRows" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "EngineRow")))))
-(DFunDef false "engineRows" (PWild) (EApp (EVar "rowsOf") (EApp (EVar "loadRuntime") (ELit LUnit))))
-(DTypeSig true "runDrift" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "runDrift" (PWild) (EApp (EVar "driftOf") (EApp (EVar "loadRuntime") (ELit LUnit))))
+(DFunDef false "driftOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (DoLet false false (PVar "excused") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "oracleIntendedOnRun")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "refusedOnRun")))) (DoExpr (EApp (EApp (EVar "filterMap") (ELam ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "snd") (EVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "S.has") (EApp (EVar "fst") (EVar "p"))) (EVar "run")))) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EApp (EVar "fst") (EVar "p"))) (EVar "excused")))) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "p"))) (EVar "None")))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
+(DTypeSig false "loadRuntime" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "loadRuntime" (PWild) (EMatch (EApp (EVar "readFile") (EVar "runtimePath")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EApp (EVar "parse") (EVar "src")))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false (PVar "cwd") (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "PWD"))) (EApp (EVar "optionOr") (ELit (LString "(unknown)"))))) (DoExpr (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read ")) (EApp (EVar "display") (EVar "runtimePath"))) (ELit (LString " from working directory "))) (EApp (EVar "display") (EVar "cwd"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))))))))
+(DTypeSig true "engineRows" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "EngineRow"))))))
+(DFunDef false "engineRows" (PWild) (EApp (EApp (EVar "map") (EVar "rowsOf")) (EApp (EVar "loadRuntime") (ELit LUnit))))
+(DTypeSig true "runDrift" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "runDrift" (PWild) (EApp (EApp (EVar "map") (EVar "driftOf")) (EApp (EVar "loadRuntime") (ELit LUnit))))
 (DTypeSig false "cellText" (TyFun (TyCon "Cell") (TyCon "String")))
 (DFunDef false "cellText" ((PCon "Real")) (ELit (LString "real")))
 (DFunDef false "cellText" ((PCon "Canned")) (ELit (LString "canned")))
@@ -252,7 +309,7 @@ renderEngineTable rows =
 (DTypeSig false "rowLine" (TyFun (TyCon "EngineRow") (TyCon "String")))
 (DFunDef false "rowLine" ((PCon "EngineRow" (PVar "n") (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` | "))) (EApp (EVar "display") (EApp (EVar "cellText") (EVar "a")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "cellText") (EVar "b")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "cellText") (EVar "c")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "cellText") (EVar "d")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "cellText") (EVar "e")))) (ELit (LString " |"))))
 (DTypeSig true "renderEngineTable" (TyFun (TyApp (TyCon "List") (TyCon "EngineRow")) (TyCon "String")))
-(DFunDef false "renderEngineTable" ((PVar "rows")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "allReal") (EVar "r"))))) (EVar "rows"))) (DoExpr (EApp (EVar "unlines") (EBinOp "++" (EListLit (ELit (LString "# Engines")) (ELit (LString "")) (ELit (LString "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->")) (ELit (LString "")) (ELit (LString "What each engine does with each `stdlib/runtime.mdk` extern. An extern that is")) (ELit (LString "`real` on every engine is left out; so is any extern not in the catalog.")) (ELit (LString "")) (ELit (LString "## Columns")) (ELit (LString "")) (ELit (LString "- **oracle**: the pure interpreter the differential gates run (`externBindings`).")) (ELit (LString "- **run**: `medaka run` (`ioExternBindings` over the oracle).")) (ELit (LString "- **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).")) (ELit (LString "- **native**, **wasm**: `medaka build` for each target (the extern catalog).")) (ELit (LString "")) (ELit (LString "## Cells")) (ELit (LString "")) (ELit (LString "`real` is the extern's actual effect; `canned` is bound but does not")) (ELit (LString "perform the effect (a fixed value, a no-op or a captured buffer); `refused` is")) (ELit (LString "not bound, so the call is rejected or aborts.")) (ELit (LString "")) (ELit (LString "## Externs that differ")) (ELit (LString "")) (ELit (LString "| extern | oracle | run | test | native | wasm |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EVar "map") (EVar "rowLine")) (EVar "shown")))))))
+(DFunDef false "renderEngineTable" ((PVar "rows")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "allReal") (EVar "r"))))) (EVar "rows"))) (DoExpr (EApp (EVar "unlines") (EBinOp "++" (EListLit (ELit (LString "# Engines")) (ELit (LString "")) (ELit (LString "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->")) (ELit (LString "")) (ELit (LString "What each way of running Medaka does with each `stdlib/runtime.mdk` extern, the")) (ELit (LString "primitives the standard library is built on. An extern that is `real` everywhere")) (ELit (LString "is left out; so is any extern the compiler's backend table does not list.")) (ELit (LString "")) (ELit (LString "## Columns")) (ELit (LString "")) (ELit (LString "- **oracle**: the compiler's internal reference interpreter, which its own")) (ELit (LString "  differential tests use; you never run it directly.")) (ELit (LString "- **run**: `medaka run`.")) (ELit (LString "- **test --engines eval, repl**: `medaka test --engines eval` and `medaka repl`.")) (ELit (LString "  Plain `medaka test` runs natively, so read the **native** column for it.")) (ELit (LString "- **native**: a program built with `medaka build`, and the default `medaka test`.")) (ELit (LString "- **wasm**: a program built for the wasm target (the browser playground).")) (ELit (LString "")) (ELit (LString "## Cells")) (ELit (LString "")) (ELit (LString "`real` is the extern's actual effect; `canned` is bound but does not")) (ELit (LString "perform the effect (a fixed value, a no-op or a captured buffer); `refused` is")) (ELit (LString "not bound, so the call is rejected or aborts.")) (ELit (LString "")) (ELit (LString "## Externs that differ")) (ELit (LString "")) (ELit (LString "| extern | oracle | run | test --engines eval, repl | native | wasm |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EVar "map") (EVar "rowLine")) (EVar "shown")))))))
 # MARK
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "ExternRow" false) (mem "catalogRows" false) (mem "rowLlvm" false) (mem "rowName" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true))))
@@ -265,10 +322,16 @@ renderEngineTable rows =
 (DData Public "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
 (DTypeSig false "runtimePath" (TyCon "String"))
 (DFunDef false "runtimePath" () (ELit (LString "stdlib/runtime.mdk")))
-(DTypeSig false "driftExceptions" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "driftExceptions" () (EListLit (ETuple (ELit (LString "putStr")) (EVar "stdoutReason")) (ETuple (ELit (LString "putStrLn")) (EVar "stdoutReason")) (ETuple (ELit (LString "flushStdout")) (EVar "stdoutReason"))))
+(DTypeSig false "oracleIntendedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "oracleIntendedOnRun" () (EListLit (ETuple (ELit (LString "putStr")) (EVar "stdoutReason")) (ETuple (ELit (LString "putStrLn")) (EVar "stdoutReason")) (ETuple (ELit (LString "flushStdout")) (EVar "stdoutReason"))))
 (DTypeSig false "stdoutReason" (TyCon "String"))
 (DFunDef false "stdoutReason" () (ELit (LString "the oracle appends to its stdout buffer; `run`'s driver (evalModulesOutputRunFacts) arms the flush and the CLI prints that buffer")))
+(DTypeSig false "refusedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "refusedOnRun" () (EListLit (ETuple (ELit (LString "runCommand")) (EVar "execReason")) (ETuple (ELit (LString "runCommandBatch")) (EVar "execReason")) (ETuple (ELit (LString "assertSnapshot")) (ELit (LString "only the test runners bind it; `run` has no snapshot store"))) (ETuple (ELit (LString "fetchText")) (ELit (LString "a browser-host extern; no other engine provides it"))) (ETuple (ELit (LString "netResolve")) (EVar "netReason")) (ETuple (ELit (LString "netTcpConnect")) (EVar "netReason")) (ETuple (ELit (LString "netTcpListen")) (EVar "netReason")) (ETuple (ELit (LString "netListenPort")) (EVar "netReason")) (ETuple (ELit (LString "netTcpAccept")) (EVar "netReason")) (ETuple (ELit (LString "netSend")) (EVar "netReason")) (ETuple (ELit (LString "netSendFrom")) (EVar "netReason")) (ETuple (ELit (LString "netRecv")) (EVar "netReason")) (ETuple (ELit (LString "netShutdown")) (EVar "netReason")) (ETuple (ELit (LString "netClose")) (EVar "netReason")) (ETuple (ELit (LString "netCloseListener")) (EVar "netReason")) (ETuple (ELit (LString "netSetTimeout")) (EVar "netReason")) (ETuple (ELit (LString "pdsSignalStart")) (EVar "netReason")) (ETuple (ELit (LString "pdsSignalRequested")) (EVar "netReason")) (ETuple (ELit (LString "ioPoll")) (EVar "netReason")) (ETuple (ELit (LString "netSetNonblock")) (EVar "netReason")) (ETuple (ELit (LString "netSetNonblockListener")) (EVar "netReason")) (ETuple (ELit (LString "netTryAccept")) (EVar "netReason")) (ETuple (ELit (LString "netConnectStart")) (EVar "netReason")) (ETuple (ELit (LString "netConnectCheck")) (EVar "netReason")) (ETuple (ELit (LString "netTryRecv")) (EVar "netReason")) (ETuple (ELit (LString "netTryRecvBytes")) (EVar "netReason")) (ETuple (ELit (LString "netTrySend")) (EVar "netReason")) (ETuple (ELit (LString "netTrySendFrom")) (EVar "netReason")) (ETuple (ELit (LString "netSendBytesFrom")) (EVar "netReason")) (ETuple (ELit (LString "netTrySendBytesFrom")) (EVar "netReason"))))
+(DTypeSig false "execReason" (TyCon "String"))
+(DFunDef false "execReason" () (ELit (LString "`run` refuses subprocess execution on purpose; `medaka build` provides it")))
+(DTypeSig false "netReason" (TyCon "String"))
+(DFunDef false "netReason" () (ELit (LString "`run` does not bind the socket and poll externs; `medaka build` does")))
 (DTypeSig false "hasEffect" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "hasEffect" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "hasEffect") (EVar "r")))
 (DFunDef false "hasEffect" ((PCon "TyEffect" (PVar "labels") PWild PWild)) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EVar "labels"))))
@@ -292,15 +355,15 @@ renderEngineTable rows =
 (DTypeSig false "declaredExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "declaredExterns" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (ETuple (EFieldAccess (EVar "ed") "edName") (EApp (EVar "hasEffect") (EFieldAccess (EVar "ed") "edTy"))))) (EApp (EVar "externDeclsOf") (EVar "decls"))))
 (DTypeSig false "rowsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "EngineRow"))))
-(DFunDef false "rowsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EApp (EVar "S.union") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (EApp (EVar "S.fromList") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "driftExceptions"))))) (DoLet false false (PVar "tst") (EApp (EVar "nameSet") (EApp (EVar "testCapableExterns") (ELit LUnit)))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EApp (EVar "mkRow") (EVar "oracle")) (EVar "run")) (EVar "tst"))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
+(DFunDef false "rowsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EApp (EVar "S.union") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (EApp (EVar "S.fromList") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "oracleIntendedOnRun"))))) (DoLet false false (PVar "tst") (EApp (EVar "nameSet") (EApp (EVar "testCapableExterns") (ELit LUnit)))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EApp (EVar "mkRow") (EVar "oracle")) (EVar "run")) (EVar "tst"))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
 (DTypeSig false "driftOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "driftOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "nameSet") (EApp (EVar "externBindings") (ELit LUnit)))) (DoLet false false (PVar "run") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (DoLet false false (PVar "excused") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "driftExceptions"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "p")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "fst") (EVar "p"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "snd") (EVar "p")) (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle"))) (EApp (EVar "not") (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")))) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "excused")))) (EApp (EVar "Some") (EVar "name")) (EVar "None")))))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
-(DTypeSig false "loadRuntime" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "loadRuntime" (PWild) (EMatch (EApp (EVar "readFile") (EVar "runtimePath")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "parse") (EVar "src"))) (arm (PCon "Err" PWild) () (EListLit))))
-(DTypeSig true "engineRows" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "EngineRow")))))
-(DFunDef false "engineRows" (PWild) (EApp (EVar "rowsOf") (EApp (EVar "loadRuntime") (ELit LUnit))))
-(DTypeSig true "runDrift" (TyFun (TyCon "Unit") (TyEffect ("FileRead") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "runDrift" (PWild) (EApp (EVar "driftOf") (EApp (EVar "loadRuntime") (ELit LUnit))))
+(DFunDef false "driftOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "nameSet") (EApp (EVar "ioExternBindings") (ELit LUnit)))) (DoLet false false (PVar "excused") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "oracleIntendedOnRun")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "refusedOnRun")))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "snd") (EVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "S.has") (EApp (EVar "fst") (EVar "p"))) (EVar "run")))) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EApp (EVar "fst") (EVar "p"))) (EVar "excused")))) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "p"))) (EVar "None")))) (EApp (EVar "declaredExterns") (EVar "decls"))))))
+(DTypeSig false "loadRuntime" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "loadRuntime" (PWild) (EMatch (EApp (EVar "readFile") (EVar "runtimePath")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EApp (EVar "parse") (EVar "src")))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false (PVar "cwd") (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "PWD"))) (EApp (EVar "optionOr") (ELit (LString "(unknown)"))))) (DoExpr (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read ")) (EApp (EMethodRef "display") (EVar "runtimePath"))) (ELit (LString " from working directory "))) (EApp (EMethodRef "display") (EVar "cwd"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))))))))
+(DTypeSig true "engineRows" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "EngineRow"))))))
+(DFunDef false "engineRows" (PWild) (EApp (EApp (EMethodRef "map") (EVar "rowsOf")) (EApp (EVar "loadRuntime") (ELit LUnit))))
+(DTypeSig true "runDrift" (TyFun (TyCon "Unit") (TyEffect ("FileRead" "Env") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "runDrift" (PWild) (EApp (EApp (EMethodRef "map") (EVar "driftOf")) (EApp (EVar "loadRuntime") (ELit LUnit))))
 (DTypeSig false "cellText" (TyFun (TyCon "Cell") (TyCon "String")))
 (DFunDef false "cellText" ((PCon "Real")) (ELit (LString "real")))
 (DFunDef false "cellText" ((PCon "Canned")) (ELit (LString "canned")))
@@ -310,4 +373,4 @@ renderEngineTable rows =
 (DTypeSig false "rowLine" (TyFun (TyCon "EngineRow") (TyCon "String")))
 (DFunDef false "rowLine" ((PCon "EngineRow" (PVar "n") (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` | "))) (EApp (EMethodRef "display") (EApp (EVar "cellText") (EVar "a")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "cellText") (EVar "b")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "cellText") (EVar "c")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "cellText") (EVar "d")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "cellText") (EVar "e")))) (ELit (LString " |"))))
 (DTypeSig true "renderEngineTable" (TyFun (TyApp (TyCon "List") (TyCon "EngineRow")) (TyCon "String")))
-(DFunDef false "renderEngineTable" ((PVar "rows")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "allReal") (EVar "r"))))) (EVar "rows"))) (DoExpr (EApp (EVar "unlines") (EBinOp "++" (EListLit (ELit (LString "# Engines")) (ELit (LString "")) (ELit (LString "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->")) (ELit (LString "")) (ELit (LString "What each engine does with each `stdlib/runtime.mdk` extern. An extern that is")) (ELit (LString "`real` on every engine is left out; so is any extern not in the catalog.")) (ELit (LString "")) (ELit (LString "## Columns")) (ELit (LString "")) (ELit (LString "- **oracle**: the pure interpreter the differential gates run (`externBindings`).")) (ELit (LString "- **run**: `medaka run` (`ioExternBindings` over the oracle).")) (ELit (LString "- **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).")) (ELit (LString "- **native**, **wasm**: `medaka build` for each target (the extern catalog).")) (ELit (LString "")) (ELit (LString "## Cells")) (ELit (LString "")) (ELit (LString "`real` is the extern's actual effect; `canned` is bound but does not")) (ELit (LString "perform the effect (a fixed value, a no-op or a captured buffer); `refused` is")) (ELit (LString "not bound, so the call is rejected or aborts.")) (ELit (LString "")) (ELit (LString "## Externs that differ")) (ELit (LString "")) (ELit (LString "| extern | oracle | run | test | native | wasm |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EMethodRef "map") (EVar "rowLine")) (EVar "shown")))))))
+(DFunDef false "renderEngineTable" ((PVar "rows")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "allReal") (EVar "r"))))) (EVar "rows"))) (DoExpr (EApp (EVar "unlines") (EBinOp "++" (EListLit (ELit (LString "# Engines")) (ELit (LString "")) (ELit (LString "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->")) (ELit (LString "")) (ELit (LString "What each way of running Medaka does with each `stdlib/runtime.mdk` extern, the")) (ELit (LString "primitives the standard library is built on. An extern that is `real` everywhere")) (ELit (LString "is left out; so is any extern the compiler's backend table does not list.")) (ELit (LString "")) (ELit (LString "## Columns")) (ELit (LString "")) (ELit (LString "- **oracle**: the compiler's internal reference interpreter, which its own")) (ELit (LString "  differential tests use; you never run it directly.")) (ELit (LString "- **run**: `medaka run`.")) (ELit (LString "- **test --engines eval, repl**: `medaka test --engines eval` and `medaka repl`.")) (ELit (LString "  Plain `medaka test` runs natively, so read the **native** column for it.")) (ELit (LString "- **native**: a program built with `medaka build`, and the default `medaka test`.")) (ELit (LString "- **wasm**: a program built for the wasm target (the browser playground).")) (ELit (LString "")) (ELit (LString "## Cells")) (ELit (LString "")) (ELit (LString "`real` is the extern's actual effect; `canned` is bound but does not")) (ELit (LString "perform the effect (a fixed value, a no-op or a captured buffer); `refused` is")) (ELit (LString "not bound, so the call is rejected or aborts.")) (ELit (LString "")) (ELit (LString "## Externs that differ")) (ELit (LString "")) (ELit (LString "| extern | oracle | run | test --engines eval, repl | native | wasm |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EMethodRef "map") (EVar "rowLine")) (EVar "shown")))))))

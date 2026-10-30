@@ -8,9 +8,9 @@
 
    `now`, `monotonic`, `elapsedSince`, and `sleep` read and wait on the
    host clock. `medaka run`, `medaka test` and a built program read the real
-   clock, and `medaka run` and a built program really `sleep`; under
-   `medaka test` and `medaka repl`, `sleep` does nothing. The pure
-   interpreter the differential gates use returns fixed values; see
+   clock and really `sleep`; only `medaka test --engines eval` and
+   `medaka repl` make `sleep` do nothing, and the pure interpreter the
+   differential gates use returns fixed values. See
    [ENGINES](ENGINES.md) for every engine. -}
 
 -- The calendar core (`fromEpochSeconds` / `toEpochSeconds`) uses Howard
