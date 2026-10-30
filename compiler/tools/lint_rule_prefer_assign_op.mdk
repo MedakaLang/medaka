@@ -12,12 +12,16 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import ir.sexp.{exprSexp}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts,
   Finding(..),
+  Fix(..),
+  FixEdit(..),
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -27,13 +31,16 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  bindingOf,
+  exprRuleEditVisitors,
   isEVarNamed,
+  nodeSpan,
   noExcl,
+  replaceFix,
   ruleNamePreferAssignOp,
+  tightSpan,
   unwrapLoc,
+  usesPreludeName,
 }
 
 export
@@ -51,10 +58,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleForPreferAssign
-    (Some preferAssignFix)
+    None
 
 -- Two spellings of one smell, both left over from before the `:=` operator landed
 -- (P0-5, `31f4ea80` — the sugar arrived but its ~740 existing call sites were
@@ -137,20 +144,24 @@ ruleForPreferAssign : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleForPreferAssign _ _ _ _ _ =
-  exprRuleVisitors noExcl preferAssignOf preferAssignFinding
+ruleForPreferAssign _ _ facts _ _ =
+  exprRuleEditVisitors
+    noExcl
+    preferAssignOf
+    (preferAssignFix facts)
+    preferAssignFinding
 
 -- The message is shape-directed: a `setRef` hit renders its `:=` replacement (the
 -- helpful "prefer …" form the sibling rules use), while a block-collapse hit does
 -- NOT render the rewritten node — that node is the WHOLE block, and printing it
 -- would bury the one-line point in a wall of unrelated statements.
-preferAssignFinding : Option Loc -> Expr -> Finding
-preferAssignFinding loc rewritten = Finding {
+preferAssignFinding : Option Loc -> Expr -> Option Fix -> Finding
+preferAssignFinding loc rewritten fix = Finding {
   rule = ruleNamePreferAssignOp,
   message = preferAssignMessage rewritten,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
 preferAssignMessage : Expr -> String
@@ -161,5 +172,52 @@ preferAssignMessage rewritten =
     ++ exprToString rewritten
     ++ "'"
 
-preferAssignFix : Oracle -> Decl -> Option (List Decl)
-preferAssignFix _ d = exprRuleFix noExcl (detApply preferAssignOf) d
+-- A `setRef` rewrite reads the prelude's `setRef`, so it is withheld where the
+-- file binds that name: the call it matched would then be the file's own.  The
+-- collapse reads no name (`:=` is grammar).
+preferAssignFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+preferAssignFix _ _ (EBlock stmts) _ = collapseFix stmts
+preferAssignFix facts ctx e rewritten = setRefFix facts ctx e rewritten
+
+setRefFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+setRefFix facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
+  EApp hd _ =>
+    if usesPreludeName facts hd then
+      replaceFix
+        "use the `:=` write operator"
+        (nodeSpan ctx e)
+        (bindingOf rewritten)
+        ctx
+        (exprToString rewritten)
+    else
+      None
+  _ => None
+setRefFix _ _ _ _ = None
+
+-- One edit per `let _ = <write>` statement, deleting the text from the `let`
+-- keyword to the write.  The statement's `Loc` is the `let` keyword's span; a
+-- zero-width `Loc` marks a synthesized statement, which gets no edit.
+collapseFix : List DoStmt -> Option Fix
+collapseFix stmts =
+  let edits = flatMap collapseEdit stmts
+  if isEmpty edits then
+    None
+  else
+    Some Fix {
+      fixApplicability = Safe,
+      fixEdits = edits,
+      fixMessage = "drop the `let _ =`",
+    }
+
+collapseEdit : DoStmt -> List FixEdit
+collapseEdit (DoLet _ _ PWild rhs (Loc f sl sc el ec))
+  | (sl /= el || sc /= ec) && isAssignWrite (unwrapLoc rhs) = match rhsStart rhs
+    Some (Loc _ rl rc _ _) => [FixEdit (Loc f sl sc rl rc) ""]
+    None => []
+collapseEdit _ = []
+
+-- The write's start is its left operand's: the `ELoc` over an assignment starts
+-- at the `:=` token, so the operands are read instead.  `None` (no edit) when
+-- the left operand is a node whose own tokens no `ELoc` covers.
+rhsStart : Expr -> Option Loc
+rhsStart e = tightSpan (unwrapLoc e)
