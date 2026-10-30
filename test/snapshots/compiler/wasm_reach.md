@@ -1,7 +1,8 @@
 # META
-source_lines=272
+source_lines=273
 stages=DESUGAR,MARK
 # SOURCE
+import support.symbol_encoding.{encodePair}
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
 --
 -- WHY: `ir/dce.mdk` runs at the elaborated-AST level and, by design, retains EVERY
@@ -143,7 +144,7 @@ definedKeys groups impls =
 -- path's blast radius.
 canonKey : HashMap String Unit -> String -> String
 canonKey defined n =
-  let mangled = "core__" ++ n
+  let mangled = encodePair "core" n
   if has n defined then n else if has mangled defined then mangled else n
 
 -- the `$memo_<tag>_<method>` CAFs — rooted unconditionally (see header).
@@ -275,6 +276,7 @@ refsImplBody : CImplBody -> List String
 refsImplBody (CImplTagged _ _ _ _ _ _ body) = refsE body
 refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 # DESUGAR
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
@@ -291,7 +293,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "definedKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "bindKey") (EVar "b"))) (ELit LUnit)) (EVar "s")))) (EVar "groups"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "implKey") (EVar "e"))) (ELit LUnit)) (EVar "s")))) (EVar "impls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "canonKey" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonKey" ((PVar "defined") (PVar "n")) (EBlock (DoLet false false (PVar "mangled") (EBinOp "++" (ELit (LString "core__")) (EVar "n"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EVar "mangled")) (EVar "defined")) (EVar "mangled") (EVar "n"))))))
+(DFunDef false "canonKey" ((PVar "defined") (PVar "n")) (EBlock (DoLet false false (PVar "mangled") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EVar "mangled")) (EVar "defined")) (EVar "mangled") (EVar "n"))))))
 (DTypeSig false "memoRootNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "memoRootNames" ((PVar "groups")) (EApp (EApp (EVar "map") (EVar "bindKey")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "startsWith") (ELit (LString "$memo_"))) (EApp (EVar "bindKey") (EVar "b"))))) (EVar "groups"))))
 (DTypeSig false "refGraph" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -363,6 +365,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 # MARK
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
@@ -379,7 +382,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "definedKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "bindKey") (EVar "b"))) (ELit LUnit)) (EVar "s")))) (EVar "groups"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "implKey") (EVar "e"))) (ELit LUnit)) (EVar "s")))) (EVar "impls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "canonKey" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonKey" ((PVar "defined") (PVar "n")) (EBlock (DoLet false false (PVar "mangled") (EBinOp "++" (ELit (LString "core__")) (EVar "n"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EVar "mangled")) (EVar "defined")) (EVar "mangled") (EVar "n"))))))
+(DFunDef false "canonKey" ((PVar "defined") (PVar "n")) (EBlock (DoLet false false (PVar "mangled") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "n"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "n")) (EVar "defined")) (EVar "n") (EIf (EApp (EApp (EVar "has") (EVar "mangled")) (EVar "defined")) (EVar "mangled") (EVar "n"))))))
 (DTypeSig false "memoRootNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "memoRootNames" ((PVar "groups")) (EApp (EApp (EMethodRef "map") (EVar "bindKey")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "startsWith") (ELit (LString "$memo_"))) (EApp (EVar "bindKey") (EVar "b"))))) (EVar "groups"))))
 (DTypeSig false "refGraph" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))

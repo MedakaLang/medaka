@@ -216,10 +216,10 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  store i64 ptrtoint (ptr @mdk_dc.program.0 to i64), ptr @mdk_g___user____sel
-  %t0 = call i64 @mdk___user____withGroupBy(i64 7, i64 ptrtoint (ptr @mdk_dc.program.1 to i64))
-  store i64 %t0, ptr @mdk_g___user____agg
-  %t1 = load i64, ptr @mdk_g___user____agg
+  store i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), ptr @mdk.global.6d356635663735373336353732356635665f5f73656c
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7769746847726f75704279(i64 7, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..1 to i64))
+  store i64 %t0, ptr @mdk.global.6d356635663735373336353732356635665f5f616767
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f616767
   %t2 = inttoptr i64 %t1 to ptr
   %t3 = getelementptr i8, ptr %t2, i64 8
   %t4 = load i64, ptr %t3
@@ -236,7 +236,7 @@ intovf10:
   unreachable
 intok10:
   %t13 = or i64 %t8, 1
-  %t14 = load i64, ptr @mdk_g___user____agg
+  %t14 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f616767
   %t15 = inttoptr i64 %t14 to ptr
   %t16 = getelementptr i8, ptr %t15, i64 16
   %t17 = load i64, ptr %t16
@@ -264,7 +264,7 @@ intovf31:
   call void @mdk_int_overflow(i64 0, i64 %t32, i64 %t33)
   unreachable
 intok31:
-  %t34 = load i64, ptr @mdk_g___user____sel
+  %t34 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f73656c
   %t35 = inttoptr i64 %t34 to ptr
   %t36 = getelementptr i8, ptr %t35, i64 16
   %t37 = load i64, ptr %t36
@@ -283,8 +283,8 @@ intok42:
   call void @mdk_print_int(i64 %t45)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____withGroupBy(i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f7769746847726f75704279(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %arg1 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16
@@ -301,11 +301,11 @@ entry:
 
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f73656c = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f616767 = global i64 0
 ; mdk-module program
-@mdk_g___user____sel = global i64 0
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
 ; mdk-module program
-@mdk_g___user____agg = global i64 0
-; mdk-module program
-@mdk_dc.program.0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
-; mdk-module program
-@mdk_dc.program.1 = internal constant [3 x i64] [i64 4294967296, i64 1, i64 3]
+@mdk.gen.dictcell.70726f6772616d..1 = internal constant [3 x i64] [i64 4294967296, i64 1, i64 3]

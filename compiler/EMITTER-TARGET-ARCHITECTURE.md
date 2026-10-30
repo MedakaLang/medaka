@@ -104,8 +104,8 @@ Every claim below was re-derived on 2026-09-03; the commands are the evidence.
   semantic versus physical, and no shared physical representation is proposed.
 - Per-emission state (`Emit`, `WasmEmit`, `EmitInput`, `WasmEmitInput`) and the
   ratchets that pin it. This is done; do not reopen it.
-- The collision validators landed under X-L.H (`symbolInjectivityGuard`,
-  `implSymbolCollisionGuard`, `dictWitnessTagGuard`).
+- The Core collision validators include `implSymbolCollisionGuard` and
+  `dictWitnessTagGuard`.
 - The verification doctrine (section 13), with 13.3's malformed-plan tests
   re-pointed at the Core validator in R6.
 - The inventory of what Core still lacks is R4's list, re-ordered by open-bug

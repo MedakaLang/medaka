@@ -36,14 +36,14 @@ main = length (tokenize "main = 42")
 EOF
 checks=$((checks + 1))
 if "$MODULES" "$RUNTIME" "$CORE" "$WORK/scanner.mdk" "$WORK" "$ROOT/compiler" "$ROOT/stdlib" >"$WORK/scanner.wat" 2>"$WORK/scanner.err"; then
-  grep -qF ';; tmc: frontend_lex_scan__scan trmc' "$WORK/scanner.wat" || bad "scanner lost Stage-1 TMC marker"
-  awk 'index($0, "  (func $frontend_lex_scan__scan ") == 1 { in_scan = 1 }
+  grep -qF ';; tmc: m66726f6e74656e642e6c65785f7363616e__scan trmc' "$WORK/scanner.wat" || bad "scanner lost Stage-1 TMC marker"
+  awk 'index($0, "  (func $f.user.6d363637323666366537343635366536343265366336353738356637333633363136655f5f7363616e ") == 1 { in_scan = 1 }
        in_scan { print }
        in_scan && /^  \)$/ { exit }' "$WORK/scanner.wat" > "$WORK/scanner-function.wat"
-  for property in 'loop $tmcloop' 'br $tmcloop'; do
+  for property in 'loop $l.tmcloop.0' 'br $l.tmcloop.0'; do
     grep -qF "$property" "$WORK/scanner-function.wat" || bad "scanner lost bounded-stack property: $property"
   done
-  if grep -Eq '(return_)?call \$frontend_lex_scan__scan([[:space:]]|$)' "$WORK/scanner-function.wat"; then
+  if grep -Eq '(return_)?call \$f[.]user[.]6d363637323666366537343635366536343265366336353738356637333633363136655f5f7363616e([[:space:]]|$)' "$WORK/scanner-function.wat"; then
     bad "scanner Stage-1 loop calls itself"
   fi
   wasm-tools parse "$WORK/scanner.wat" -o "$WORK/scanner.wasm" >"$WORK/scanner.parse.out" 2>"$WORK/scanner.parse.err" || bad "scanner WAT did not parse"

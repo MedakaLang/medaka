@@ -81,6 +81,7 @@ program paramRow =
     []
     []
     DeclFacts {
+      factSymbolOrigins = None,
       factMethodResults = [],
       factRequires = [],
       factSupers = [],

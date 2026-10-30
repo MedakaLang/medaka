@@ -432,15 +432,12 @@ defectFacts (d@(DuplicateDefinition name (SymbolOrigin b2 _ _ _) (SymbolOrigin b
   [codeText (defectCode d), name, b1, b2]
 defectFacts d = [codeText (defectCode d)]
 
--- A single-module program mangles nothing, so the value global of `foo` is
--- `@mdk_g_foo`, the name the function `g_foo` is emitted under.  `main`, emitted
--- first, calls the global as a function; then the function's define is refused.
-test "a value global and a function the emitter spells alike are refused as one duplicate" = expectAll
+test "a value global and a similarly named function have distinct symbols" = expectAll
   [
     labelFail
       "g_foo and the global of foo"
       (expectEqual
-        [["E-PHYS-SHAPE"], ["E-PHYS-DUPLICATE", "mdk_g_foo", "foo", "g_foo"]]
+        []
         (strictDefects
           "g_foo : Int -> Int\ng_foo x = x + 100\nfoo : Int\nfoo = 5\nmain = g_foo foo\n")),
     labelFail

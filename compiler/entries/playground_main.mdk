@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 import backend.core_validate.{validateForEmission, coreDefectMessage}
@@ -743,9 +744,12 @@ runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
       coreE
       modulesE
       (factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable)
-  let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let (coreD, modulesM, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
   let facts =
-    factsForExecutedTrees (factsWithEvidence evTableM externFacts) modulesE
+    factsForExecutedTrees
+      (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
+      modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

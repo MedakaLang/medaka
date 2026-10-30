@@ -138,8 +138,26 @@ require_emitted_symbol() {
   grep -F -q "define i64 @$symbol(" "$IR" || fail "emitted secret closure contains $symbol"
 }
 
+physical_symbol() {
+  logical=$1
+  case $logical in
+    mdk_lib_scalar__*) module=lib.scalar ;;
+    mdk_lib_field__*) module=lib.field ;;
+    mdk_lib_secp256k1__*) module=lib.secp256k1 ;;
+    mdk_lib_sign__*) module=lib.sign ;;
+    mdk_bit_witness__*) module=bit_witness ;;
+    *) printf '%s\n' "$logical"; return ;;
+  esac
+  name=${logical#*__}
+  family=mdk.user.
+  case $name in *__rw) name=${name%__rw}; family=mdk.worker.raw. ;; esac
+  hex=$(printf %s "$module" | od -An -tx1 | tr -d ' \n')
+  encoded=$(printf %s "m${hex}__${name}" | od -An -tx1 | tr -d ' \n')
+  printf '%s%s\n' "$family" "$encoded"
+}
+
 require_native_symbol() {
-  symbol=$1
+  symbol=$(physical_symbol "$1")
   nm "$BIN" | awk -v symbol="$symbol" '$3 == symbol || $3 == "_" symbol { found = 1 } END { exit !found }' || fail "linked native closure contains $symbol"
 }
 
@@ -180,6 +198,7 @@ branches_public() {
 
 check_ir_closure() {
   sed -n 's/.*call i64 @\(mdk_\(force_\)\?lib_\(sign\|secp256k1\|scalar\|field\)__[^ (]*\).*/\1/p' "$IR" | sort -u > "$WORK/callees"
+  [ -s "$WORK/callees" ] || fail "emitted local callee graph is nonempty"
   while IFS= read -r symbol; do
     [ -n "$symbol" ] || continue
     grep -F -q "define i64 @$symbol(" "$IR" || fail "emitted local callee graph is closed at $symbol"
@@ -188,7 +207,7 @@ check_ir_closure() {
 }
 
 disassemble() {
-  symbol=$1 output=$2
+  symbol=$(physical_symbol "$1") output=$2
   case $(uname -s) in
     Darwin) otool -tvV "$BIN" | awk -v label="_$symbol:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$output" ;;
     *) objdump -d --disassemble="$symbol" "$BIN" > "$output" ;;
@@ -394,7 +413,7 @@ fi
 [ "$(grep -F -c '__pointSelect' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder makes two arithmetic selections per round'
 pass 'emitted scalar ladder preserves 256-round add/two-double/select topology'
 
-ladder_symbol=$(nm "$BIN" | awk '$3 ~ /mdk_lib_secp256k1__scalarLadder$/ { print $3; exit }')
+ladder_symbol=$(physical_symbol mdk_lib_secp256k1__scalarLadder)
 [ -n "$ladder_symbol" ] || fail 'linked scalar ladder symbol exists'
 disassemble "$ladder_symbol" "$WORK/scalar-ladder.asm"
 # The complete addition is either a call (one per round, beside the two
@@ -404,9 +423,9 @@ disassemble "$ladder_symbol" "$WORK/scalar-ladder.asm"
 # (three doubling calls) and its five arithmetic selections beside the
 # ladder's two (seven). An inlined addition that dropped a candidate or a
 # selection matches neither shape.
-ladder_adds=$(grep -F -c '__pointAddComplete' "$WORK/scalar-ladder.asm" || true)
-ladder_doubles=$(grep -F -c '__pointDoubleComplete' "$WORK/scalar-ladder.asm" || true)
-ladder_selects=$(grep -F -c '__pointSelect' "$WORK/scalar-ladder.asm" || true)
+ladder_adds=$(grep -F -c "$(physical_symbol mdk_lib_secp256k1__pointAddComplete)" "$WORK/scalar-ladder.asm" || true)
+ladder_doubles=$(grep -F -c "$(physical_symbol mdk_lib_secp256k1__pointDoubleComplete)" "$WORK/scalar-ladder.asm" || true)
+ladder_selects=$(grep -F -c "$(physical_symbol mdk_lib_secp256k1__pointSelect)" "$WORK/scalar-ladder.asm" || true)
 if [ "$ladder_adds" -eq 1 ]; then
   [ "$ladder_doubles" -eq 2 ] || fail 'linked scalar ladder retains both complete doubling calls'
 elif [ "$ladder_adds" -eq 0 ]; then
@@ -482,7 +501,9 @@ check_bit_witness() {
     grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
   done
   pass "emitted bit-helper witness is straight-line over $*"
-  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  witness_symbol=$(physical_symbol mdk_bit_witness__ctBitWitness)
+  witness_eta="mdk.gen.eta.70726f6772616d.${witness_symbol#mdk.user.}."
+  pending=$(nm "$bin" | awk -v prefix="$witness_eta" '{ name=$3; sub(/^_/, "", name); if (index(name, prefix) == 1) print name }')
   [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
   pass 'linked bit-helper witness symbol exists'
   visited=' '
@@ -498,7 +519,7 @@ check_bit_witness() {
       for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
         case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
         case $target in
-          *__ctBitWitness) next_round="$next_round $target" ;;
+          "$witness_symbol"|"$witness_symbol".llvm.*) next_round="$next_round $target" ;;
           *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
         esac
       done

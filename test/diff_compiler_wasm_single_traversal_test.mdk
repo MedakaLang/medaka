@@ -343,6 +343,19 @@ refusalRow dir route name src needle =
         ],
     ]
 
+abiName : String -> Bool -> String
+abiName "raw" _ = "f.user.70726f6265"
+abiName "typed" _ = "f.user.6d356635663735373336353732356635665f5f70726f6265"
+abiName "modules" True =
+  "f.user.6d3631363236393264366436663634373536633635373332643732363536365f5f70726f6265"
+abiName "modules" False =
+  "f.user.6d3631363236393264366436663634373536633635373332643732363137375f5f70726f6265"
+abiName "playground" True =
+  "f.user.6d3631363236393264373036633631373936373732366637353665363432643732363536365f5f70726f6265"
+abiName "playground" False =
+  "f.user.6d3631363236393264373036633631373936373732366637353665363432643732363137375f5f70726f6265"
+abiName _ _ = ""
+
 abiRow : String -> String -> Bool -> <IO, Exec, FileWrite> Expectation
 abiRow dir route boxed =
   let src =
@@ -357,7 +370,8 @@ abiRow dir route boxed =
         let wat = watPayload route out
         let headers =
           filter
-            (line => startsWith "  (func $" line && contains "probe " line)
+            (line =>
+              startsWith ("  (func $" ++ abiName route boxed ++ " ") line)
             (lines wat)
         expectAll [
           expectEqual (0, "") (code, err),
@@ -385,16 +399,23 @@ slotFunctionRow wat name localCount needles =
 slotLifetimeRow : String -> String -> <IO, Exec, FileWrite> Expectation
 slotLifetimeRow dir route =
   let path = "\{dir}/\{route}-function-reset.wat"
-  let prefix = if route == "typed" then "__user____" else ""
+  let probe =
+    if route == "typed" then
+      "f.user.6d356635663735373336353732356635665f5f70726f6265"
+    else
+      "f.user.70726f6265"
+  let other =
+    if route == "typed" then
+      "f.user.6d356635663735373336353732356635665f5f6f74686572"
+    else
+      "f.user.6f74686572"
   match readFile path
     Err e => fail e
     Ok wat => expectAll [
-      slotFunctionRow wat (prefix ++ "probe") 1 [
+      slotFunctionRow wat probe 1 [
         "(param i64) (param i64)", "local.get 0", "local.get 1", "local.set 2"
       ],
-      slotFunctionRow wat (prefix ++ "other") 1 [
-        "(param i64)", "local.get 0", "local.set 1"
-      ],
+      slotFunctionRow wat other 1 ["(param i64)", "local.get 0", "local.set 1"],
     ]
 
 trapRow : String ->

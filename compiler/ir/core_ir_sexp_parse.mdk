@@ -1,3 +1,4 @@
+import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -34,7 +35,7 @@ import frontend.ast.{
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{omEmpty, omFromPairs}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup, omInsert}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -572,7 +573,75 @@ toRuntimeType (SAtom s) = match runtimeTypeFromName s
 toRuntimeType other =
   panic ("core_ir_sexp_parse: bad runtime type: " ++ sexprToStr other)
 
+toOrigin : SExp -> SymbolOrigin
+toOrigin (SList [SAtom "module", mid, name]) =
+  ModuleOrigin (toStr mid) (toStr name)
+toOrigin (SList [SAtom "single", name]) = SingleOrigin (toStr name)
+toOrigin (SList [SAtom "generated", family, SList parts]) =
+  GeneratedOrigin (toStr family) (map toStr parts)
+toOrigin (SList [SAtom "builtin", tag]) = BuiltinOrigin (toStr tag)
+toOrigin other = panic ("core_ir_sexp_parse: bad origin: " ++ sexprToStr other)
+
+toOriginRow : String -> SExp -> (String, SymbolOrigin)
+toOriginRow tag (SList [SAtom actual, name, origin]) =
+  if tag == actual then
+    (toStr name, toOrigin origin)
+  else
+    panic "core_ir_sexp_parse: bad origin row"
+toOriginRow _ _ = panic "core_ir_sexp_parse: bad origin row"
+
+toOriginOwner : SExp -> (String, OrdMap SymbolOrigin)
+toOriginOwner (SList [SAtom "owner", owner, SList rows]) =
+  (toStr owner, originRows (map (toOriginRow "constructor") rows))
+toOriginOwner _ = panic "core_ir_sexp_parse: bad origin owner"
+
+originRows : List (String, SymbolOrigin) -> OrdMap SymbolOrigin
+originRows rows =
+  fold
+    (acc (name, origin) => match omLookup name acc
+      None => omInsert name origin acc
+      Some old =>
+        if old == origin then
+          acc
+        else
+          panic "core_ir_sexp_parse: conflicting origin")
+    omEmpty
+    rows
+
+originOwners : List (String, OrdMap SymbolOrigin) ->
+  OrdMap (OrdMap SymbolOrigin)
+originOwners rows =
+  fold
+    (acc (owner, names) =>
+      let old = optionOr omEmpty (omLookup owner acc)
+      let merged =
+        BM.foldlWithKey
+          (next name origin => match omLookup name next
+            None => omInsert name origin next
+            Some prior =>
+              if prior == origin then
+                next
+              else
+                panic "core_ir_sexp_parse: conflicting origin")
+          old
+          names
+      omInsert owner merged acc)
+    omEmpty
+    rows
+
+toOrigins : SExp -> CoreSymbolOrigins
+toOrigins (SList [SAtom "origins", SList functions, SList constructors]) = CoreSymbolOrigins {
+  functions = originRows (map (toOriginRow "function") functions),
+  constructors = originOwners (map toOriginOwner constructors),
+}
+toOrigins _ = panic "core_ir_sexp_parse: bad origins"
+
 toDeclFacts : SExp -> DeclFacts
+toDeclFacts (SList ((SAtom "facts") :: [reqs, sups, results, outcome, externs, manifests, origins])) =
+  let facts =
+    toDeclFacts
+      (SList [SAtom "facts", reqs, sups, results, outcome, externs, manifests])
+  { facts | factSymbolOrigins = Some (toOrigins origins) }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, externs, SList ((SAtom "manifests") :: manifests)])) =
   let facts =
     toDeclFacts
@@ -586,6 +655,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
       ])
   { facts | factManifests = map toManifest manifests }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -595,6 +665,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -604,6 +675,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results]))
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -613,6 +685,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, SList ((SAtom "externs") :: rows)])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],

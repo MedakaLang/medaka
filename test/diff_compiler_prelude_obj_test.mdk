@@ -89,10 +89,12 @@ sampleSrcs = [
 implDefine : Regex
 implDefine =
   mustCompile
-    "^define internal i64 @mdk_impl_zZmodels_2e_Cat_szK\\(i64 [^,()]+\\) \\{"
+    "^define internal i64 @mdk\\.impl\\.7a5a6d6f64656c735f32655f436174\\.737a4b\\(i64 [^,()]+\\) \\{"
 
 implCall : Regex
-implCall = mustCompile "call i64 @mdk_impl_zZmodels_2e_Cat_szK\\(i64 [^,()]+\\)"
+implCall =
+  mustCompile
+    "call i64 @mdk\\.impl\\.7a5a6d6f64656c735f32655f436174\\.737a4b\\(i64 [^,()]+\\)"
 
 abiRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 abiRow w =

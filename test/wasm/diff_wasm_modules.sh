@@ -118,12 +118,12 @@ if [ "${1:-}" = "--one" ]; then
     # layer-8 IR-shape assertion for the dispatched List map fixture (must lower to
     # a dest-passing loop with 0 recursive self-calls — a dropped impl-TMC overflows V8).
     if [ "$st" = 0 ] && [ "$name" = "w_dispatch_map_stack.mdk" ]; then
-      mapbody="$(awk '/func \$mdk_impl_List_map/{f=1} f&&/^  \(func /&&!/mdk_impl_List_map/{f=0} f' "$wat")"
-      rec="$(printf '%s' "$mapbody" | grep -c 'call \$mdk_impl_List_map')"
-      lp="$(printf '%s' "$mapbody" | grep -c 'loop \$tmcloop')"
+      mapbody="$(awk '/func \$f.impl.4c697374.6d6170/{f=1} f&&/^  \(func /&&!/f.impl.4c697374.6d6170/{f=0} f' "$wat")"
+      rec="$(printf '%s' "$mapbody" | grep -c 'call \$f.impl.4c697374.6d6170')"
+      lp="$(printf '%s' "$mapbody" | grep -c 'loop \$l.tmcloop.0')"
       if [ "$rec" -eq 0 ] && [ "$lp" -ge 1 ]; then
         msg="$msg
-TMC-ASSERT ok   $name: \$mdk_impl_List_map is a dest-passing loop, 0 recursive call"
+TMC-ASSERT ok   $name: \$f.impl.4c697374.6d6170 is a dest-passing loop, 0 recursive call"
       else
         msg="$(printf '%s\nTMC-ASSERT FAIL %s: recursive-call=%s loop=%s (expected 0 / >=1)' "$msg" "$name" "$rec" "$lp")"; st=1
       fi
@@ -134,9 +134,9 @@ TMC-ASSERT ok   $name: \$mdk_impl_List_map is a dest-passing loop, 0 recursive c
     # $..__polyLoop function body has >=1 `return_call $..__polyLoop` and 0 plain
     # `call $..__polyLoop` (the sole plain call to it is from `main`, a separate fn).
     if [ "$st" = 0 ] && [ "$name" = "w_polynum_tail_stack.mdk" ]; then
-      lpbody="$(awk '/func \$[^ ]*__polyLoop /{f=1} f&&/^  \(func /&&!/__polyLoop /{f=0} f' "$wat")"
-      plain="$(printf '%s' "$lpbody" | grep -cE '^\s*call \$[^ ]*__polyLoop')"
-      rc="$(printf '%s' "$lpbody" | grep -cE 'return_call \$[^ ]*__polyLoop')"
+      lpbody="$(awk '/func \$f[.]user[.][0-9a-f]*706f6c794c6f6f70 /{f=1} f&&/^  \(func /&&!/706f6c794c6f6f70 /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$lpbody" | grep -cE '^\s*call \$f[.]user[.][0-9a-f]*706f6c794c6f6f70')"
+      rc="$(printf '%s' "$lpbody" | grep -cE 'return_call \$f[.]user[.][0-9a-f]*706f6c794c6f6f70')"
       if [ "$rc" -ge 1 ] && [ "$plain" -eq 0 ]; then
         msg="$msg
 RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
@@ -149,9 +149,9 @@ RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
     # fixture keeps same-spelled IA/IB implementations live and proves IA never
     # tail-calls IB just because both methods are named `walk`.
     if [ "$st" = 0 ] && [ "$name" = "w_selftail_dict.mdk" ]; then
-      walkbody="$(awk '/func \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=0} f' "$wat")"
-      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
-      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
+      walkbody="$(awk '/func \$f.impl.7a5a775f35665f73656c667461696c5f35665f646963745f32655f436f756e746572.77616c6b /{f=1} f&&/^  \(func /&&!/f.impl.7a5a775f35665f73656c667461696c5f35665f646963745f32655f436f756e746572.77616c6b /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$f.impl.7a5a775f35665f73656c667461696c5f35665f646963745f32655f436f756e746572.77616c6b')"
+      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $f.impl.7a5a775f35665f73656c667461696c5f35665f646963745f32655f436f756e746572.77616c6b')"
       if [ "$rc" -eq 1 ] && [ "$plain" -eq 0 ]; then
         msg="$msg
 SELFKEY-ASSERT ok   $name: exactly 1 self return_call, 0 plain self call"
@@ -160,8 +160,8 @@ SELFKEY-ASSERT ok   $name: exactly 1 self return_call, 0 plain self call"
       fi
     fi
     if [ "$st" = 0 ] && [ "$name" = "w_selfkey_foreign" ]; then
-      ia_lines="$(grep -E '^  \(func \$mdk_impl_[^ ]*_3a__3a_IA_7c_[^ ]*__walk ' "$wat")"
-      ib_lines="$(grep -E '^  \(func \$mdk_impl_[^ ]*_3a__3a_IB_7c_[^ ]*__walk ' "$wat")"
+      ia_lines="$(grep -E '^  \(func \$f[.]impl[.][0-9a-f]*5f33615f5f33615f49415f37635f[0-9a-f]*[.]77616c6b ' "$wat")"
+      ib_lines="$(grep -E '^  \(func \$f[.]impl[.][0-9a-f]*5f33615f5f33615f49425f37635f[0-9a-f]*[.]77616c6b ' "$wat")"
       ia_defs="$(printf '%s\n' "$ia_lines" | grep -c '^  (func ')"
       ib_defs="$(printf '%s\n' "$ib_lines" | grep -c '^  (func ')"
       ia_sym="$(printf '%s\n' "$ia_lines" | head -1 | sed -E 's/^  \(func (\$[^ ]+).*/\1/')"
@@ -188,8 +188,8 @@ SELFKEY-ASSERT ok   $name: both qualified impls live; IA has 0 return_call to IB
     # appears in the unrelated `$mdk_pap` partial-application closure builder and so
     # can't be used as the discriminator by itself.
     if [ "$st" = 0 ] && [ "$name" = "w13_lg_capture_free_tailrec.mdk" ]; then
-      total="$(grep -c 'ref\.func \$mdk_lg' "$wat")"
-      hoisted="$(grep -c '(global \$mdk_cc_.*ref\.func \$mdk_lg' "$wat")"
+      total="$(grep -c 'ref\.func \$f[.]gen[.]group[.]' "$wat")"
+      hoisted="$(grep -c '(global \$g[.]const[.].*ref\.func \$f[.]gen[.]group[.]' "$wat")"
       if [ "$hoisted" -ge 1 ] && [ "$total" -eq "$hoisted" ]; then
         msg="$msg
 HOIST-ASSERT ok   $name: ref.func \$mdk_lg only in hoisted globals ($hoisted), 0 in function bodies"

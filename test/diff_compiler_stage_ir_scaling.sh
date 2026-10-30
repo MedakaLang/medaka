@@ -53,8 +53,8 @@
 #
 # Both of the risks the shape was flagged with are answered by measurement, not by
 # argument:
-#   * The mangled symbol scheme (`mdk_<module_path>__<name>`,
-#     compiler/types/private_mangle.mdk) is stable and readable from `nm`; and a
+#   * The mangled symbol scheme (source-pair encoding followed by physical component encoding,
+#     compiler/support/symbol_encoding.mdk and compiler/backend/llvm_symbol_names.mdk) is stable and readable from `nm`; and a
 #     symbol that STOPS resolving is a HARD FAIL here (see `stage_ir`), never a
 #     silent green — that is the whole reason a missing reading is not treated as 0.
 #   * Collection survives the 256 MB GC worker pthread the runtime runs the whole
@@ -461,20 +461,31 @@ MIN_NET_FRAC="${STAGE_IR_MIN_NET_FRAC:-0.02}"
 # to see their superlinear term: xref N=1000 (1000/2000/4000) reads fmt 2.03/2.74, lint
 # 2.53/2.89, climbing toward the 3.0 threshold. Re-measure at that band before narrowing a
 # ceiling on either row.
-STAGE_SYMS="parse=mdk_frontend_parser__parse \
-exhaust=mdk_frontend_exhaust__checkGuardExhaustivenessWith \
-desugar=mdk_frontend_desugar__desugar \
-resolve=mdk_frontend_resolve__resolveToLines \
-mark=mdk_frontend_marker__markWithPrelude \
-typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
-lower=mdk_ir_core_ir_lower__lowerProgramEmitWith \
-emit=mdk_backend_llvm_emit__emitProgram \
-plan=mdk_backend_emit_plan__buildEmitPlan \
-mangle=mdk_types_private_mangle__mangleUnits \
-dce=mdk_ir_dce__dceFilter \
-trmc=mdk_backend_trmc_analysis__detectDispatchGroups \
-fmt=mdk_tools_fmt__formatSource \
-lint=mdk_tools_lint_walk__lintProgram"
+# Physical user functions encode the entire source pair as a second hex component.
+hex_component() { LC_ALL=C od -An -v -tx1 | tr -d ' \n'; }
+stage_symbol() {
+  _module_hex="$(printf '%s' "$1" | hex_component)"
+  printf 'mdk.user.%s' "$(printf 'm%s__%s' "$_module_hex" "$2" | hex_component)"
+}
+
+# Independent vectors pin both layers and the distinct driver parser entries.
+[ "$(stage_symbol frontend.parser parse)" = 'mdk.user.6d3636373236663665373436353665363432653730363137323733363537325f5f7061727365' ] || { echo 'FAIL: parse symbol vector'; exit 1; }
+[ "$(stage_symbol frontend.parser parseResult)" = 'mdk.user.6d3636373236663665373436353665363432653730363137323733363537325f5f7061727365526573756c74' ] || { echo 'FAIL: parseResult symbol vector'; exit 1; }
+# mangleUnits is a thin wrapper inlined into its caller; this callee has no other caller.
+STAGE_SYMS="parse=$(stage_symbol frontend.parser parse) \
+exhaust=$(stage_symbol frontend.exhaust checkGuardExhaustivenessWith) \
+desugar=$(stage_symbol frontend.desugar desugar) \
+resolve=$(stage_symbol frontend.resolve resolveToLines) \
+mark=$(stage_symbol frontend.marker markWithPrelude) \
+typecheck=$(stage_symbol types.typecheck checkOneToLinesWithRuntime) \
+lower=$(stage_symbol ir.core_ir_lower lowerProgramEmitWith) \
+emit=$(stage_symbol backend.llvm_emit emitProgram) \
+plan=$(stage_symbol backend.emit_plan buildEmitPlan) \
+mangle=$(stage_symbol types.private_mangle mangleUnitsWithOrigins) \
+dce=$(stage_symbol ir.dce dceFilter) \
+trmc=$(stage_symbol backend.trmc_analysis detectDispatchGroups) \
+fmt=$(stage_symbol tools.fmt formatSource) \
+lint=$(stage_symbol tools.lint_walk lintProgram)"
 
 # ── THE MULTI-MODULE ARM ─────────────────────────────────────────────────────
 #
@@ -506,11 +517,11 @@ lint=mdk_tools_lint_walk__lintProgram"
 # 🚨 `parse` HERE IS `parseResult`, NOT `parse`, AND THE DIFFERENCE IS A SILENT
 #    FALSE PASS — NOT A TYPO.
 #
-# `mdk_frontend_parser__parse` RESOLVES in profile_modules_main, so the hard-fail
+# `parse` RESOLVES in profile_modules_main, so the hard-fail
 # guard in `stage_ir` does NOT catch it. But under this driver it covers only the
 # profiler's own two PRELUDE parses (runtime.mdk, core.mdk) and nothing else:
 # measured at 394 045 616 Ir at N=25, at N=50 and at N=100 — BIT-IDENTICAL, netting
-# to exactly 0. A `parse=mdk_frontend_parser__parse` row would therefore print SKIP
+# to exactly 0. A `parse` selector for the single-file entry would therefore print SKIP
 # under MIN_NET_FRAC at every N forever, while `graded` stayed nonzero from the
 # other five rows — i.e. the arm would report a cheerful PASS with its parse row
 # proving nothing, which is the exact failure mode `stage_ir`'s hard-fail exists to
@@ -535,7 +546,7 @@ lint=mdk_tools_lint_walk__lintProgram"
 #
 # Every one of those rows GRADES — none falls under the netting guard, and the
 # narrowest margin is `desugar`'s at 46% of its own floor, i.e. 23x the 2% guard.
-# (Contrast the `parse` row a `mdk_frontend_parser__parse` symbol would have
+# (Contrast the `parse` row the single-file `parse` symbol would have
 # produced: net 0, SKIP, forever. The corrected row nets 3.0e8 at N=25.)
 #
 # ⚠️ "Dead linear at this band, as expected: there is no known multi-module defect
@@ -562,11 +573,12 @@ lint=mdk_tools_lint_walk__lintProgram"
 # purpose, which risks miscalibrating the ceiling/threshold this arm now
 # relies on) — this paragraph is the honest statement of the gap, not a fix
 # for it.
-MOD_SYMS="parse=mdk_frontend_parser__parseResult \
-load=mdk_driver_loader__loadProgram \
-desugar=mdk_frontend_desugar__desugar \
-resolve=mdk_frontend_resolve__resolveModulesToLines \
-typecheck=mdk_types_typecheck__checkModules"
+# Loaded modules use desugarIn through entry_support.desugarPair.
+MOD_SYMS="parse=$(stage_symbol frontend.parser parseResult) \
+load=$(stage_symbol driver.loader loadProgram) \
+desugar=$(stage_symbol frontend.desugar desugarIn) \
+resolve=$(stage_symbol frontend.resolve resolveModulesToLines) \
+typecheck=$(stage_symbol types.typecheck checkModules)"
 
 # ── KNOWN SLOW — a self-draining ledger, NOT a skip list ────────────────────
 #
@@ -1286,7 +1298,7 @@ stage_ir() {
       echo "FAIL: no inclusive Ir for symbol '$2' in the $1 profile." >&2
       # A listing with no Medaka symbol at all means valgrind could not read the
       # profiler's symbol table, which no edit to the stage itself explains.
-      if grep -q -F ':mdk_' "$WORK/ann_$1.txt"; then
+      if grep -q -F ':mdk.' "$WORK/ann_$1.txt"; then
         echo "  The stage entry point was renamed, inlined, or never ran — this gate" >&2
         echo "  cannot grade it and must not pretend it graded 0. Re-derive with:" >&2
         echo "    nm $PROFILE | grep $2" >&2

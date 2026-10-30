@@ -1,7 +1,8 @@
 # META
-source_lines=780
+source_lines=853
 stages=DESUGAR,MARK
 # SOURCE
+import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -38,7 +39,7 @@ import frontend.ast.{
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{omEmpty, omFromPairs}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup, omInsert}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -576,7 +577,75 @@ toRuntimeType (SAtom s) = match runtimeTypeFromName s
 toRuntimeType other =
   panic ("core_ir_sexp_parse: bad runtime type: " ++ sexprToStr other)
 
+toOrigin : SExp -> SymbolOrigin
+toOrigin (SList [SAtom "module", mid, name]) =
+  ModuleOrigin (toStr mid) (toStr name)
+toOrigin (SList [SAtom "single", name]) = SingleOrigin (toStr name)
+toOrigin (SList [SAtom "generated", family, SList parts]) =
+  GeneratedOrigin (toStr family) (map toStr parts)
+toOrigin (SList [SAtom "builtin", tag]) = BuiltinOrigin (toStr tag)
+toOrigin other = panic ("core_ir_sexp_parse: bad origin: " ++ sexprToStr other)
+
+toOriginRow : String -> SExp -> (String, SymbolOrigin)
+toOriginRow tag (SList [SAtom actual, name, origin]) =
+  if tag == actual then
+    (toStr name, toOrigin origin)
+  else
+    panic "core_ir_sexp_parse: bad origin row"
+toOriginRow _ _ = panic "core_ir_sexp_parse: bad origin row"
+
+toOriginOwner : SExp -> (String, OrdMap SymbolOrigin)
+toOriginOwner (SList [SAtom "owner", owner, SList rows]) =
+  (toStr owner, originRows (map (toOriginRow "constructor") rows))
+toOriginOwner _ = panic "core_ir_sexp_parse: bad origin owner"
+
+originRows : List (String, SymbolOrigin) -> OrdMap SymbolOrigin
+originRows rows =
+  fold
+    (acc (name, origin) => match omLookup name acc
+      None => omInsert name origin acc
+      Some old =>
+        if old == origin then
+          acc
+        else
+          panic "core_ir_sexp_parse: conflicting origin")
+    omEmpty
+    rows
+
+originOwners : List (String, OrdMap SymbolOrigin) ->
+  OrdMap (OrdMap SymbolOrigin)
+originOwners rows =
+  fold
+    (acc (owner, names) =>
+      let old = optionOr omEmpty (omLookup owner acc)
+      let merged =
+        BM.foldlWithKey
+          (next name origin => match omLookup name next
+            None => omInsert name origin next
+            Some prior =>
+              if prior == origin then
+                next
+              else
+                panic "core_ir_sexp_parse: conflicting origin")
+          old
+          names
+      omInsert owner merged acc)
+    omEmpty
+    rows
+
+toOrigins : SExp -> CoreSymbolOrigins
+toOrigins (SList [SAtom "origins", SList functions, SList constructors]) = CoreSymbolOrigins {
+  functions = originRows (map (toOriginRow "function") functions),
+  constructors = originOwners (map toOriginOwner constructors),
+}
+toOrigins _ = panic "core_ir_sexp_parse: bad origins"
+
 toDeclFacts : SExp -> DeclFacts
+toDeclFacts (SList ((SAtom "facts") :: [reqs, sups, results, outcome, externs, manifests, origins])) =
+  let facts =
+    toDeclFacts
+      (SList [SAtom "facts", reqs, sups, results, outcome, externs, manifests])
+  { facts | factSymbolOrigins = Some (toOrigins origins) }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, externs, SList ((SAtom "manifests") :: manifests)])) =
   let facts =
     toDeclFacts
@@ -590,6 +659,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
       ])
   { facts | factManifests = map toManifest manifests }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -599,6 +669,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -608,6 +679,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results]))
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -617,6 +689,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, SList ((SAtom "externs") :: rows)])) = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
@@ -783,6 +856,7 @@ toManifestString (SList [SAtom "some", value]) = Some (toStr value)
 toManifestString other =
   panic ("core_ir_sexp_parse: bad manifest string: " ++ sexprToStr other)
 # DESUGAR
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
@@ -791,7 +865,7 @@ toManifestString other =
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -1013,12 +1087,32 @@ toManifestString other =
 (DTypeSig false "toRuntimeType" (TyFun (TyCon "SExp") (TyCon "RuntimeType")))
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))
 (DFunDef false "toRuntimeType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toOrigin" (TyFun (TyCon "SExp") (TyCon "SymbolOrigin")))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "mid") (PVar "name")))) (EApp (EApp (EVar "ModuleOrigin") (EApp (EVar "toStr") (EVar "mid"))) (EApp (EVar "toStr") (EVar "name"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "single"))) (PVar "name")))) (EApp (EVar "SingleOrigin") (EApp (EVar "toStr") (EVar "name"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "generated"))) (PVar "family") (PCon "SList" (PVar "parts"))))) (EApp (EApp (EVar "GeneratedOrigin") (EApp (EVar "toStr") (EVar "family"))) (EApp (EApp (EVar "map") (EVar "toStr")) (EVar "parts"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "builtin"))) (PVar "tag")))) (EApp (EVar "BuiltinOrigin") (EApp (EVar "toStr") (EVar "tag"))))
+(DFunDef false "toOrigin" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad origin: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toOriginRow" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "SymbolOrigin")))))
+(DFunDef false "toOriginRow" ((PVar "tag") (PCon "SList" (PList (PCon "SAtom" (PVar "actual")) (PVar "name") (PVar "origin")))) (EIf (EBinOp "==" (EVar "tag") (EVar "actual")) (ETuple (EApp (EVar "toStr") (EVar "name")) (EApp (EVar "toOrigin") (EVar "origin"))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin row")))))
+(DFunDef false "toOriginRow" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin row"))))
+(DTypeSig false "toOriginOwner" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "toOriginOwner" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "owner"))) (PVar "owner") (PCon "SList" (PVar "rows"))))) (ETuple (EApp (EVar "toStr") (EVar "owner")) (EApp (EVar "originRows") (EApp (EApp (EVar "map") (EApp (EVar "toOriginRow") (ELit (LString "constructor")))) (EVar "rows")))))
+(DFunDef false "toOriginOwner" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin owner"))))
+(DTypeSig false "originRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))))
+(DFunDef false "originRows" ((PVar "rows")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "name") (PVar "origin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "acc")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "origin")) (EVar "acc"))) (arm (PCon "Some" (PVar "old")) () (EIf (EBinOp "==" (EVar "old") (EVar "origin")) (EVar "acc") (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: conflicting origin")))))))) (EVar "omEmpty")) (EVar "rows")))
+(DTypeSig false "originOwners" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "originOwners" ((PVar "rows")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "owner") (PVar "names"))) (EBlock (DoLet false false (PVar "old") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "acc")))) (DoLet false false (PVar "merged") (EApp (EApp (EApp (EVar "BM.foldlWithKey") (ELam ((PVar "next") (PVar "name") (PVar "origin")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "next")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "origin")) (EVar "next"))) (arm (PCon "Some" (PVar "prior")) () (EIf (EBinOp "==" (EVar "prior") (EVar "origin")) (EVar "next") (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: conflicting origin")))))))) (EVar "old")) (EVar "names"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "owner")) (EVar "merged")) (EVar "acc")))))) (EVar "omEmpty")) (EVar "rows")))
+(DTypeSig false "toOrigins" (TyFun (TyCon "SExp") (TyCon "CoreSymbolOrigins")))
+(DFunDef false "toOrigins" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "origins"))) (PCon "SList" (PVar "functions")) (PCon "SList" (PVar "constructors"))))) (ERecordCreate "CoreSymbolOrigins" ((fa "functions" (EApp (EVar "originRows") (EApp (EApp (EVar "map") (EApp (EVar "toOriginRow") (ELit (LString "function")))) (EVar "functions")))) (fa "constructors" (EApp (EVar "originOwners") (EApp (EApp (EVar "map") (EVar "toOriginOwner")) (EVar "constructors")))))))
+(DFunDef false "toOrigins" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origins"))))
 (DTypeSig false "toDeclFacts" (TyFun (TyCon "SExp") (TyCon "DeclFacts")))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PVar "reqs") (PVar "sups") (PVar "results") (PVar "outcome") (PVar "externs") (PVar "manifests") (PVar "origins"))))) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "toDeclFacts") (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "facts"))) (EVar "reqs") (EVar "sups") (EVar "results") (EVar "outcome") (EVar "externs") (EVar "manifests"))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EApp (EVar "toOrigins") (EVar "origins")))))))))
 (DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PVar "externs") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "manifests"))) (PVar "manifests"))))))) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "toDeclFacts") (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "facts"))) (EApp (EVar "SList") (EVar "reqs")) (EApp (EVar "SList") (EVar "sups")) (EApp (EVar "SList") (EVar "results")) (EVar "outcome") (EVar "externs"))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "factManifests" (EApp (EApp (EVar "map") (EVar "toManifest")) (EVar "manifests"))))))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EVar "externFactIndex") (EApp (EApp (EVar "map") (EVar "toExtern")) (EVar "rows")))) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EVar "externFactIndex") (EApp (EApp (EVar "map") (EVar "toExtern")) (EVar "rows")))) (fa "factManifests" (EListLit)))))
 (DFunDef false "toDeclFacts" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration facts: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
@@ -1074,6 +1168,7 @@ toManifestString other =
 (DFunDef false "toManifestString" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "some"))) (PVar "value")))) (EApp (EVar "Some") (EApp (EVar "toStr") (EVar "value"))))
 (DFunDef false "toManifestString" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad manifest string: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 # MARK
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
@@ -1082,7 +1177,7 @@ toManifestString other =
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -1304,12 +1399,32 @@ toManifestString other =
 (DTypeSig false "toRuntimeType" (TyFun (TyCon "SExp") (TyCon "RuntimeType")))
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))
 (DFunDef false "toRuntimeType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toOrigin" (TyFun (TyCon "SExp") (TyCon "SymbolOrigin")))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "mid") (PVar "name")))) (EApp (EApp (EVar "ModuleOrigin") (EApp (EVar "toStr") (EVar "mid"))) (EApp (EVar "toStr") (EVar "name"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "single"))) (PVar "name")))) (EApp (EVar "SingleOrigin") (EApp (EVar "toStr") (EVar "name"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "generated"))) (PVar "family") (PCon "SList" (PVar "parts"))))) (EApp (EApp (EVar "GeneratedOrigin") (EApp (EVar "toStr") (EVar "family"))) (EApp (EApp (EMethodRef "map") (EVar "toStr")) (EVar "parts"))))
+(DFunDef false "toOrigin" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "builtin"))) (PVar "tag")))) (EApp (EVar "BuiltinOrigin") (EApp (EVar "toStr") (EVar "tag"))))
+(DFunDef false "toOrigin" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad origin: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toOriginRow" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "SymbolOrigin")))))
+(DFunDef false "toOriginRow" ((PVar "tag") (PCon "SList" (PList (PCon "SAtom" (PVar "actual")) (PVar "name") (PVar "origin")))) (EIf (EBinOp "==" (EVar "tag") (EVar "actual")) (ETuple (EApp (EVar "toStr") (EVar "name")) (EApp (EVar "toOrigin") (EVar "origin"))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin row")))))
+(DFunDef false "toOriginRow" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin row"))))
+(DTypeSig false "toOriginOwner" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "toOriginOwner" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "owner"))) (PVar "owner") (PCon "SList" (PVar "rows"))))) (ETuple (EApp (EVar "toStr") (EVar "owner")) (EApp (EVar "originRows") (EApp (EApp (EMethodRef "map") (EApp (EVar "toOriginRow") (ELit (LString "constructor")))) (EVar "rows")))))
+(DFunDef false "toOriginOwner" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origin owner"))))
+(DTypeSig false "originRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))))
+(DFunDef false "originRows" ((PVar "rows")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "name") (PVar "origin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "acc")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "origin")) (EVar "acc"))) (arm (PCon "Some" (PVar "old")) () (EIf (EBinOp "==" (EVar "old") (EVar "origin")) (EVar "acc") (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: conflicting origin")))))))) (EVar "omEmpty")) (EVar "rows")))
+(DTypeSig false "originOwners" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "originOwners" ((PVar "rows")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "owner") (PVar "names"))) (EBlock (DoLet false false (PVar "old") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "acc")))) (DoLet false false (PVar "merged") (EApp (EApp (EApp (EVar "BM.foldlWithKey") (ELam ((PVar "next") (PVar "name") (PVar "origin")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "next")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "origin")) (EVar "next"))) (arm (PCon "Some" (PVar "prior")) () (EIf (EBinOp "==" (EVar "prior") (EVar "origin")) (EVar "next") (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: conflicting origin")))))))) (EVar "old")) (EVar "names"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "owner")) (EVar "merged")) (EVar "acc")))))) (EVar "omEmpty")) (EVar "rows")))
+(DTypeSig false "toOrigins" (TyFun (TyCon "SExp") (TyCon "CoreSymbolOrigins")))
+(DFunDef false "toOrigins" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "origins"))) (PCon "SList" (PVar "functions")) (PCon "SList" (PVar "constructors"))))) (ERecordCreate "CoreSymbolOrigins" ((fa "functions" (EApp (EVar "originRows") (EApp (EApp (EMethodRef "map") (EApp (EVar "toOriginRow") (ELit (LString "function")))) (EVar "functions")))) (fa "constructors" (EApp (EVar "originOwners") (EApp (EApp (EMethodRef "map") (EVar "toOriginOwner")) (EVar "constructors")))))))
+(DFunDef false "toOrigins" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad origins"))))
 (DTypeSig false "toDeclFacts" (TyFun (TyCon "SExp") (TyCon "DeclFacts")))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PVar "reqs") (PVar "sups") (PVar "results") (PVar "outcome") (PVar "externs") (PVar "manifests") (PVar "origins"))))) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "toDeclFacts") (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "facts"))) (EVar "reqs") (EVar "sups") (EVar "results") (EVar "outcome") (EVar "externs") (EVar "manifests"))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EApp (EVar "toOrigins") (EVar "origins")))))))))
 (DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PVar "externs") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "manifests"))) (PVar "manifests"))))))) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "toDeclFacts") (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "facts"))) (EApp (EVar "SList") (EVar "reqs")) (EApp (EVar "SList") (EVar "sups")) (EApp (EVar "SList") (EVar "results")) (EVar "outcome") (EVar "externs"))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "factManifests" (EApp (EApp (EMethodRef "map") (EVar "toManifest")) (EVar "manifests"))))))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EVar "externFactIndex") (EApp (EApp (EMethodRef "map") (EVar "toExtern")) (EVar "rows")))) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")) (fa "factManifests" (EListLit)))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EVar "externFactIndex") (EApp (EApp (EMethodRef "map") (EVar "toExtern")) (EVar "rows")))) (fa "factManifests" (EListLit)))))
 (DFunDef false "toDeclFacts" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration facts: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
