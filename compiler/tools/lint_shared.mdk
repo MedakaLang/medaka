@@ -17,8 +17,11 @@ import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
-  Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
+  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
+  Finding(..), Fix(..), FixEdit(..), Visitor(..), factScopes
 }
+import tools.lint_fix.{Binding(..), parenIfNeeded}
+import tools.lint_scope.{binderOf, bindersNamed}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -676,6 +679,91 @@ isFalseLit e = isEVarNamed "False" e
 export
 isBoolLit : Expr -> Bool
 isBoolLit e = isTrueLit e || isFalseLit e
+
+-- ── span-edit fixes ──────────────────────────────────────────────────────────
+-- A rule that rewrites one expression builds its fix from these.  The edit
+-- replaces the node's own span, with the replacement bracketed for the
+-- kind of expression it now sits in.
+
+-- The span covering two spans, in source order.
+joinLocs : Option Loc -> Option Loc -> Option Loc
+joinLocs (Some (Loc f sl sc _ _)) (Some (Loc _ _ _ el ec)) =
+  Some (Loc f sl sc el ec)
+joinLocs _ _ = None
+
+-- The extent of an application or operator expression the parser leaves
+-- bare: from the `ELoc`s of its operands, `None` when an operand is a node
+-- whose own tokens no `ELoc` covers (a prefix operator, a field access).
+export
+tightSpan : Expr -> Option Loc
+tightSpan (ELoc l _) = Some l
+tightSpan (EApp f x) = joinLocs (tightSpan f) (tightSpan x)
+tightSpan (EBinOp _ a b _) = joinLocs (tightSpan a) (tightSpan b)
+tightSpan _ = None
+
+-- The span a replacement of the node being visited takes: the node's own
+-- wrapper, brackets included, else the extent of its operands.
+export
+nodeSpan : Ctx -> Expr -> Option Loc
+nodeSpan ctx e = match ctx.ctxOwn
+  Some l => Some l
+  None => tightSpan e
+
+-- How tightly the printed `e` binds: an atom reads the same in any position,
+-- anything else is bracketed where its parent would regroup it.
+export
+bindingOf : Expr -> Binding
+bindingOf e = match unwrapLoc e
+  EVar _ => Closed
+  ELit _ => Closed
+  ENumLit _ _ _ => Closed
+  EApp _ _ => Applied
+  ETuple _ => Closed
+  EListLit _ => Closed
+  EArrayLit _ => Closed
+  EStringInterp _ => Closed
+  ESection _ => Closed
+  EFieldAccess _ _ _ => Closed
+  _ => Open
+
+-- A `Safe` fix replacing `span` with `text` bracketed for `ctx`'s parent, or
+-- `None` when there is no span or the text spans lines (the printer knows
+-- nothing of the indentation it lands in).
+export
+replaceFix : String -> Option Loc -> Binding -> Ctx -> String -> Option Fix
+replaceFix message span binding ctx text
+  | elem '\n' (stringToChars text) = None
+  | otherwise =
+    map
+      (loc => Fix {
+        fixApplicability = Safe,
+        fixEdits = [FixEdit loc (parenIfNeeded binding ctx.ctxParent text)],
+        fixMessage = message,
+      })
+      span
+
+-- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+varSite : Expr -> Option Loc
+varSite (ELoc l inner) = match varSite inner
+  Some inner2 => Some inner2
+  None => match inner
+    EVar _ => Some l
+    _ => None
+varSite _ = None
+
+-- Whether the use `hd` of a prelude name means the prelude's: no binder in
+-- the file resolves it.  A use whose site is unknown is not
+-- provable, so it counts as rebound.
+export
+usesPreludeName : FileFacts -> Expr -> Bool
+usesPreludeName facts hd = match varSite hd
+  Some l => isNone (binderOf (factScopes facts) l)
+  None => False
+
+-- Whether the file binds `name` anywhere.
+export
+bindsName : FileFacts -> String -> Bool
+bindsName facts name = not (isEmpty (bindersNamed (factScopes facts) name))
 
 -- ── rule: match-to-map ────────────────────────────────────────────────────────
 -- A 2-arm `match` on an Option or Result that structurally IS a functor `map`

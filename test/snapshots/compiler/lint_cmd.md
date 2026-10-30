@@ -1,5 +1,5 @@
 # META
-source_lines=1197
+source_lines=1133
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -26,7 +26,6 @@ import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
 import support.path.{dirOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
-import tools.lint_fix as LF
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
@@ -70,7 +69,6 @@ import tools.lint.{
   allRules,
   applyFindingDeny,
   applyFindingFilters,
-  applyFixes,
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
@@ -78,6 +76,7 @@ import tools.lint.{
   factDirectives,
   factDupOccs,
   findingToDiag,
+  fixSource,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
@@ -1104,8 +1103,6 @@ lintFileFresh idx rules target src hash wantOccs (decls, pos) =
   )
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
--- The span-edit fixes run first, to their fixed point; the whole-declaration
--- fixers then run over the result.
 lintOneFileFix : StdlibIndex ->
   Bool ->
   List String ->
@@ -1117,78 +1114,17 @@ lintOneFileFix idx unsafeMode onlyNames disableNames target =
     Err msg =>
       let _ = ePutStrLn msg
       True
-    Ok src => match lintParseSource src
-      Err e =>
-        ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-        True
-      Ok parsedSource =>
-        let rules = selectRules onlyNames disableNames
-        if anyList emitsEdits rules then
-          lintFixEdited
-            (editLinter idx rules)
-            (if unsafeMode then Unsafe else Safe)
-            onlyNames
-            disableNames
-            target
-            src
-            parsedSource
-        else
-          lintFixParsed onlyNames disableNames target src 0 parsedSource
-
--- A rule whose fixes are span edits rather than a whole-declaration rewrite:
--- fixable, yet carrying no declaration fixer.
-emitsEdits : Rule -> Bool
-emitsEdits r = match r.meta.fixability
-  Fixable => isNone r.fix
-  NotFixable => False
-  _ => True
-
-lintFixEdited : (String -> String -> Result String (List Finding)) ->
-  Applicability ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  (List Decl, Positions) ->
-  <IO> Bool
-lintFixEdited linter limit onlyNames disableNames target src parsedSource =
-  match LF.applyFixes linter limit target src
-    Err e =>
-      let _ = ePutStrLn "\{target}: \{LF.fixErrorText e}"
-      True
-    Ok (src1, n1) =>
-      if n1 == 0 then
-        lintFixParsed onlyNames disableNames target src 0 parsedSource
-      else match lintParseSource src1
-        Ok parsed1 =>
-          lintFixParsed onlyNames disableNames target src1 n1 parsed1
-        Err e =>
-          ePutStrLn (ppDiagCliSrc src1 target (parseErrDiag target e))
+    Ok src =>
+      let limit = if unsafeMode then Unsafe else Safe
+      match fixSource idx limit onlyNames disableNames target src
+        Err msg =>
+          let _ = ePutStrLn msg
           True
+        Ok (newSrc, n) => writeFixed target src newSrc n
 
--- The findings of a source under `rules`, or why it does not parse.
-editLinter : StdlibIndex ->
-  List Rule ->
-  String ->
-  String ->
-  Result String (List Finding)
-editLinter idx rules path src = match lintParseSource src
-  Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
-  Ok (decls, pos) =>
-    let facts = mkFileFacts src decls pos
-    Ok (lintProgramFacts idx rules path facts pos decls)
-
-lintFixParsed : List String ->
-  List String ->
-  String ->
-  String ->
-  Int ->
-  (List Decl, Positions) ->
-  <IO> Bool
-lintFixParsed onlyNames disableNames target src edited (decls, pos) =
-  let (newSrc, adapted) = applyFixes onlyNames disableNames src decls pos
-  let n = edited + adapted
-  if edited == 0 && newSrc == src then
+writeFixed : String -> String -> String -> Int -> <IO> Bool
+writeFixed target src newSrc n =
+  if n == 0 && newSrc == src then
     let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
     False
   else match writeFile target newSrc
@@ -1204,7 +1140,6 @@ lintFixParsed onlyNames disableNames target src edited (decls, pos) =
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("string") "Str"))
-(DUse false (UseAlias ("tools" "lint_fix") "LF"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false))))
@@ -1212,7 +1147,7 @@ lintFixParsed onlyNames disableNames target src edited (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "fixSource" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
@@ -1400,21 +1335,14 @@ lintFixParsed onlyNames disableNames target src edited (decls, pos) =
 (DTypeSig false "lintFileFresh" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
 (DFunDef false "lintFileFresh" ((PVar "idx") (PVar "rules") (PVar "target") (PVar "src") (PVar "hash") (PVar "wantOccs") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ETuple (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EVar "hash")) (fa "findings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dupOccs" (EIf (EVar "wantOccs") (EApp (EApp (EVar "factDupOccs") (EVar "target")) (EVar "facts")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))) (EVar "pos") (EVar "decls")))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "emitsEdits")) (EVar "rules")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixEdited") (EApp (EApp (EVar "editLinter") (EVar "idx")) (EVar "rules"))) (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (EVar "parsedSource")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (ELit (LInt 0))) (EVar "parsedSource"))))))))))
-(DTypeSig false "emitsEdits" (TyFun (TyCon "Rule") (TyCon "Bool")))
-(DFunDef false "emitsEdits" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability") (arm (PCon "Fixable") () (EApp (EVar "isNone") (EFieldAccess (EVar "r") "fix"))) (arm (PCon "NotFixable") () (EVar "False")) (arm PWild () (EVar "True"))))
-(DTypeSig false "lintFixEdited" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
-(DFunDef false "lintFixEdited" ((PVar "linter") (PVar "limit") (PVar "onlyNames") (PVar "disableNames") (PVar "target") (PVar "src") (PVar "parsedSource")) (EMatch (EApp (EApp (EApp (EApp (EVar "LF.applyFixes") (EVar "linter")) (EVar "limit")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "LF.fixErrorText") (EVar "e")))) (ELit (LString ""))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PTuple (PVar "src1") (PVar "n1"))) () (EIf (EBinOp "==" (EVar "n1") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (ELit (LInt 0))) (EVar "parsedSource")) (EMatch (EApp (EVar "lintParseSource") (EVar "src1")) (arm (PCon "Ok" (PVar "parsed1")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src1")) (EVar "n1")) (EVar "parsed1"))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src1")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "True")))))))))
-(DTypeSig false "editLinter" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "editLinter" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src")) (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls"))))))))
-(DTypeSig false "lintFixParsed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "lintFixParsed" ((PVar "onlyNames") (PVar "disableNames") (PVar "target") (PVar "src") (PVar "edited") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PTuple (PVar "newSrc") (PVar "adapted")) (EApp (EApp (EApp (EApp (EApp (EVar "applyFixes") (EVar "onlyNames")) (EVar "disableNames")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "n") (EBinOp "+" (EVar "edited") (EVar "adapted"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "edited") (ELit (LInt 0))) (EBinOp "==" (EVar "newSrc") (EVar "src"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))))
+(DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PTuple (PVar "newSrc") (PVar "n"))) () (EApp (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "newSrc")) (EVar "n")))))))))
+(DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "writeFixed" ((PVar "target") (PVar "src") (PVar "newSrc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EVar "newSrc") (EVar "src"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("string") "Str"))
-(DUse false (UseAlias ("tools" "lint_fix") "LF"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false))))
@@ -1422,7 +1350,7 @@ lintFixParsed onlyNames disableNames target src edited (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "fixSource" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
@@ -1610,12 +1538,6 @@ lintFixParsed onlyNames disableNames target src edited (decls, pos) =
 (DTypeSig false "lintFileFresh" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
 (DFunDef false "lintFileFresh" ((PVar "idx") (PVar "rules") (PVar "target") (PVar "src") (PVar "hash") (PVar "wantOccs") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ETuple (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EMethodRef "hash")) (fa "findings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dupOccs" (EIf (EVar "wantOccs") (EApp (EApp (EVar "factDupOccs") (EVar "target")) (EVar "facts")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))) (EVar "pos") (EVar "decls")))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "emitsEdits")) (EVar "rules")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixEdited") (EApp (EApp (EVar "editLinter") (EVar "idx")) (EVar "rules"))) (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (EVar "parsedSource")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (ELit (LInt 0))) (EVar "parsedSource"))))))))))
-(DTypeSig false "emitsEdits" (TyFun (TyCon "Rule") (TyCon "Bool")))
-(DFunDef false "emitsEdits" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability") (arm (PCon "Fixable") () (EApp (EVar "isNone") (EFieldAccess (EVar "r") "fix"))) (arm (PCon "NotFixable") () (EVar "False")) (arm PWild () (EVar "True"))))
-(DTypeSig false "lintFixEdited" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
-(DFunDef false "lintFixEdited" ((PVar "linter") (PVar "limit") (PVar "onlyNames") (PVar "disableNames") (PVar "target") (PVar "src") (PVar "parsedSource")) (EMatch (EApp (EApp (EApp (EApp (EVar "LF.applyFixes") (EVar "linter")) (EVar "limit")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "LF.fixErrorText") (EVar "e")))) (ELit (LString ""))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PTuple (PVar "src1") (PVar "n1"))) () (EIf (EBinOp "==" (EVar "n1") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (ELit (LInt 0))) (EVar "parsedSource")) (EMatch (EApp (EVar "lintParseSource") (EVar "src1")) (arm (PCon "Ok" (PVar "parsed1")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFixParsed") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src1")) (EVar "n1")) (EVar "parsed1"))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src1")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "True")))))))))
-(DTypeSig false "editLinter" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "editLinter" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src")) (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls"))))))))
-(DTypeSig false "lintFixParsed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "lintFixParsed" ((PVar "onlyNames") (PVar "disableNames") (PVar "target") (PVar "src") (PVar "edited") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PTuple (PVar "newSrc") (PVar "adapted")) (EApp (EApp (EApp (EApp (EApp (EVar "applyFixes") (EVar "onlyNames")) (EVar "disableNames")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "n") (EBinOp "+" (EVar "edited") (EVar "adapted"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "edited") (ELit (LInt 0))) (EBinOp "==" (EVar "newSrc") (EVar "src"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))))
+(DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PTuple (PVar "newSrc") (PVar "n"))) () (EApp (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "newSrc")) (EVar "n")))))))))
+(DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "writeFixed" ((PVar "target") (PVar "src") (PVar "newSrc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EVar "newSrc") (EVar "src"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))

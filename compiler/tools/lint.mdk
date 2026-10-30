@@ -3,6 +3,13 @@
 -- modules (rule bodies), `lint_registry` (THE REGISTRY) and `lint_walk` (the runner);
 -- this module re-exports the surface the CLI, MCP server and tests consume.
 
+import tools.lint_fix as LF
+import driver.diagnostics.{ppDiagCliSrc, parseErrDiag}
+import frontend.ast.{Decl}
+import frontend.parser.{Positions}
+import tools.lint_walk.{lintParseSource, lintProgramFacts, mkFileFacts}
+import tools.lint_registry.{selectRules}
+
 export import tools.lint_core.{
   Applicability(..),
   Category(..),
@@ -63,3 +70,79 @@ export import tools.lint_walk.{
   stdlibFingerprint,
   stdlibIndexNeeded,
 }
+
+-- ── fixing ───────────────────────────────────────────────────────────────────
+-- A source fixed to its fixed point: the span edits of the active rules first,
+-- then the whole-declaration fixers over the result.  Returns the fixed source
+-- and the number of fixes made, or why it was left alone.  The CLI's `--fix` and
+-- the fixture drivers share this one path.
+export
+fixSource : StdlibIndex ->
+  Applicability ->
+  List String ->
+  List String ->
+  String ->
+  String ->
+  Result String (String, Int)
+fixSource idx limit only disable path src = match lintParseSource src
+  Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
+  Ok parsed =>
+    let editRules = filter emitsEdits (selectRules only disable)
+    if isEmpty editRules then
+      wholeDeclFix only disable src 0 parsed
+    else match (LF.applyFixes
+      (editLinter idx editRules src parsed)
+      limit
+      path
+      src)
+      Err e => Err "\{path}: \{LF.fixErrorText e}"
+      Ok (edited, 0) => wholeDeclFix only disable edited 0 parsed
+      Ok (edited, n) => match lintParseSource edited
+        Err e => Err (ppDiagCliSrc edited path (parseErrDiag path e))
+        Ok reparsed => wholeDeclFix only disable edited n reparsed
+
+wholeDeclFix : List String ->
+  List String ->
+  String ->
+  Int ->
+  (List Decl, Positions) ->
+  Result String (String, Int)
+wholeDeclFix only disable src edited (decls, pos) =
+  let (out, adapted) = applyFixes only disable src decls pos
+  Ok (out, edited + adapted)
+
+-- A rule whose fixes are span edits rather than a whole-declaration rewrite:
+-- fixable, yet carrying no declaration fixer.
+emitsEdits : Rule -> Bool
+emitsEdits r = match r.meta.fixability
+  Fixable => isNone r.fix
+  NotFixable => False
+  _ => True
+
+-- The findings of a source under `rules`, or why it does not parse.  A finding
+-- that an inline directive suppresses carries no fix: the directive says the
+-- shape is deliberate.  `parsed` is the parse of `first`, which the first pass
+-- reads again.
+editLinter : StdlibIndex ->
+  List Rule ->
+  String ->
+  (List Decl, Positions) ->
+  String ->
+  String ->
+  Result String (List Finding)
+editLinter idx rules first parsed path src =
+  if src == first then
+    Ok (editFindings idx rules path src parsed)
+  else match lintParseSource src
+    Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
+    Ok reparsed => Ok (editFindings idx rules path src reparsed)
+
+editFindings : StdlibIndex ->
+  List Rule ->
+  String ->
+  String ->
+  (List Decl, Positions) ->
+  List Finding
+editFindings idx rules path src (decls, pos) =
+  let facts = mkFileFacts src decls pos
+  applySuppressions src (lintProgramFacts idx rules path facts pos decls)

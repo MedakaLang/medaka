@@ -159,7 +159,22 @@ test "parenIfNeeded brackets an open replacement only where it would regroup" = 
       "operand",
       expectEqual "(a + b)" (parenIfNeeded Open (Some KBinOp) "a + b"),
     ),
-    ("argument", expectEqual "(a + b)" (parenIfNeeded Open (Some KApp) "a + b")),
+    (
+      "argument",
+      expectEqual "(a + b)" (parenIfNeeded Open (Some KApp) "a + b"),
+    ),
+    (
+      "call as operand",
+      expectEqual "not x" (parenIfNeeded Applied (Some KBinOp) "not x"),
+    ),
+    (
+      "call as argument",
+      expectEqual "(not x)" (parenIfNeeded Applied (Some KApp) "not x"),
+    ),
+    (
+      "call at the root",
+      expectEqual "not x" (parenIfNeeded Applied None "not x"),
+    ),
   ]
 
 -- `--json` carries the applicability and every edit of a finding's fix.

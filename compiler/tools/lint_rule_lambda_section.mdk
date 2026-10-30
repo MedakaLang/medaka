@@ -5,13 +5,17 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{contains}
+import list.{drop, last}
+import support.char.{isIdentChar}
+import string.{lines, stripSuffix, trimRight, unwords}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
+import tools.lint_fix.{Binding(..)}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
   Ratchet(..),
   Rule,
@@ -22,11 +26,9 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleFix,
   isEVarNamed,
   mentionsVar,
-  noExcl,
+  replaceFix,
   ruleNameLambdaSection,
   unwrapLoc,
 }
@@ -49,7 +51,7 @@ rule =
       needs = [],
     }
     ruleLambdaSection
-    (Some lambdaSectionFix)
+    None
 
 -- ── rule: lambda-section (STYLE "Dogfooding" — operator sections) ─────────────
 -- A single-clause lambda whose body is ONE binary operation on its bound
@@ -71,8 +73,8 @@ rule =
 --   * `ELam` is inherently single-clause / guard-free, so no extra guard check is
 --     needed (contrast the §8 match-on-param rule).
 -- The check walks the WHOLE decl expression tree (a lambda can nest anywhere) —
--- including impl-method bodies; the fix rebuilds the tree converting every
--- eligible lambda to `ESection`.
+-- including impl-method bodies; the fix replaces each eligible lambda with its
+-- `ESection`.
 
 -- symbolic operators that round-trip as a section (parser.mdk `sectionOpStr`).
 sectionSymOps : List String
@@ -136,16 +138,21 @@ ruleLambdaSection : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleLambdaSection _ _ _ _ _ = [OnExpr [KLam] lambdaSectionAt]
+ruleLambdaSection _ _ facts _ _ = [OnExpr [KLam] (lambdaSectionAt facts)]
 
-lambdaSectionAt : Ctx -> Expr -> List Finding
-lambdaSectionAt ctx (ELam pats body) = match lamSection pats body
-  Some s => [lambdaSectionFinding ctx.ctxDeclLoc s]
+lambdaSectionAt : FileFacts -> Ctx -> Expr -> List Finding
+lambdaSectionAt facts ctx (ELam pats body) = match lamSection pats body
+  Some sec => [
+    lambdaSectionFinding
+      ctx.ctxDeclLoc
+      sec
+      (lambdaSectionFix facts ctx pats sec),
+  ]
   None => []
-lambdaSectionAt _ _ = []
+lambdaSectionAt _ _ _ = []
 
-lambdaSectionFinding : Option Loc -> Section -> Finding
-lambdaSectionFinding loc s = Finding {
+lambdaSectionFinding : Option Loc -> Section -> Option Fix -> Finding
+lambdaSectionFinding loc s fix = Finding {
   rule = ruleNameLambdaSection,
   message =
     "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '"
@@ -153,14 +160,56 @@ lambdaSectionFinding loc s = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────
--- Bottom-up: every eligible lambda becomes an `ESection`.
-lambdaSectionFix : Oracle -> Decl -> Option (List Decl)
-lambdaSectionFix _ d = exprRuleFix noExcl (detApply lamSectionRewrite) d
+-- The section carries its own brackets, so it reads the same wherever the
+-- lambda stood.
+lambdaSectionFix : FileFacts -> Ctx -> List Pat -> Section -> Option Fix
+lambdaSectionFix facts ctx pats sec =
+  replaceFix
+    "use the operator section"
+    (lambdaSpan facts ctx pats)
+    Closed
+    ctx
+    (exprToString (ESection sec))
 
-lamSectionRewrite : Expr -> Option Expr
-lamSectionRewrite (ELam ps b) = map ESection (lamSection ps b)
-lamSectionRewrite _ = None
+-- The `ELoc` of a lambda starts at its arrow and its parameters carry no
+-- positions, so the source line gives the rest.  A parenthesised lambda is
+-- wrapped by a further `ELoc` whose first character is the bracket, and the
+-- section replaces it, brackets and all.  An unbracketed one is replaced from
+-- its first parameter, found by reading the parameter names back from the
+-- arrow; any other spacing leaves the finding without a fix.
+lambdaSpan : FileFacts -> Ctx -> List Pat -> Option Loc
+lambdaSpan facts ctx pats = match ctx.ctxOwn
+  Some (own@(Loc f sl sc el ec)) =>
+    let before = stringSlice 0 sc (sourceLine facts sl)
+    if stringSlice sc (sc + 1) (sourceLine facts sl) == "(" then
+      Some own
+    else
+      map
+        (start => Loc f sl start el ec)
+        (paramsStart before (unwords (flatMap patVarName pats)))
+  None => None
+
+patVarName : Pat -> List String
+patVarName (PVar x _ _) = [x]
+patVarName _ = []
+
+-- The 1-based line of the source.
+sourceLine : FileFacts -> Int -> String
+sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
+  l :: _ => l
+  [] => ""
+
+-- The column where `params` begins, given the text before the arrow.
+paramsStart : String -> String -> Option Int
+paramsStart before params = match stripSuffix params (trimRight before)
+  Some rest => if endsInIdent rest then None else Some (stringLength rest)
+  None => None
+
+endsInIdent : String -> Bool
+endsInIdent text = match last (toList (stringToChars text))
+  Some c => isIdentChar c
+  None => False

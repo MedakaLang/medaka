@@ -184,7 +184,10 @@ isScopesNeed NeedsStdlibIndex = False
 -- has none.  `ctxInTest` is True inside a `test` or `prop` body.  `ctxParent`
 -- is the kind of the nearest enclosing expression other than an `ELoc`, `None`
 -- at a body's root and for a declaration.  `ctxSpan` is the span of the
--- nearest enclosing `ELoc`, else the declaration's start line.  `ctxDeclLoc` is
+-- nearest enclosing `ELoc`, else the declaration's start line.  `ctxOwn` is the
+-- span of the outermost of the `ELoc`s that directly wrap the node, which takes
+-- in the brackets of a parenthesised node; `None` for a node no `ELoc` wraps (an
+-- application or operator expression the parser leaves bare).  `ctxDeclLoc` is
 -- always the declaration's start line, where an inline suppression sits.
 public export data Ctx = Ctx {
   ctxDeclName : String,
@@ -192,6 +195,7 @@ public export data Ctx = Ctx {
   ctxInTest : Bool,
   ctxParent : Option ExprKind,
   ctxSpan : Option Loc,
+  ctxOwn : Option Loc,
   ctxDeclLoc : Option Loc,
 }
 

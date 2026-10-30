@@ -4,29 +4,31 @@ import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  Visitor,
+  Visitor(..),
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  bindingOf,
+  bindsName,
   isBoolLit,
   isFalseLit,
   isTrueLit,
-  noExcl,
+  nodeSpan,
   notArgOf,
+  replaceFix,
   ruleNameBoolSimplify,
   unwrapLoc,
 }
@@ -46,10 +48,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleBoolSimplify
-    (Some boolSimplifyFix)
+    None
 
 -- build `not e` in the canonical `not <e>` (prelude fn) form the printer renders.
 mkNot : Expr -> Expr
@@ -97,11 +99,20 @@ ruleBoolSimplify : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleBoolSimplify _ _ _ _ _ =
-  exprRuleVisitors noExcl boolSimplifyOf boolSimplifyFinding
+ruleBoolSimplify _ _ facts _ _ = [OnAnyExpr (boolSimplifyAt facts)]
 
-boolSimplifyFinding : Option Loc -> Expr -> Finding
-boolSimplifyFinding loc rewritten = Finding {
+boolSimplifyAt : FileFacts -> Ctx -> Expr -> List Finding
+boolSimplifyAt facts ctx e = match boolSimplifyOf e
+  Some rewritten => [
+    boolSimplifyFinding
+      ctx.ctxSpan
+      rewritten
+      (boolSimplifyFix facts ctx e rewritten),
+  ]
+  None => []
+
+boolSimplifyFinding : Option Loc -> Expr -> Option Fix -> Finding
+boolSimplifyFinding loc rewritten fix = Finding {
   rule = ruleNameBoolSimplify,
   message =
     "redundant boolean expression — rewrite as '"
@@ -109,8 +120,23 @@ boolSimplifyFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
-boolSimplifyFix : Oracle -> Decl -> Option (List Decl)
-boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
+-- A rewrite that reads or writes a call to `not` is withheld where the file
+-- binds `not` anywhere: the call it introduces could land inside that binding's
+-- scope, and the one it removes could be the file's own.
+boolSimplifyFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+boolSimplifyFix facts ctx e rewritten =
+  if touchesNot e rewritten && bindsName facts "not" then
+    None
+  else
+    replaceFix
+      "simplify the boolean expression"
+      (nodeSpan ctx e)
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)
+
+touchesNot : Expr -> Expr -> Bool
+touchesNot e rewritten = isSome (notArgOf e) || isSome (notArgOf rewritten)

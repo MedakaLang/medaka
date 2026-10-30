@@ -1,5 +1,5 @@
 # META
-source_lines=214
+source_lines=233
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_fix.mdk — turns the fixes findings carry into validated
@@ -190,9 +190,11 @@ fixPass lint limit path n total src = match lint path src
       Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
 
 -- How tightly a replacement's text binds.  `Closed` text (a literal, a name,
--- a call, anything already bracketed) reads the same in any position; `Open`
--- text (an operator expression, a lambda, `if`, `match`) may need brackets.
-public export data Binding = Closed | Open
+-- anything already bracketed) reads the same in any position; `Applied` text
+-- (a call) binds tighter than any operator but needs brackets as an operand of
+-- an application or a projection; `Open` text (an operator expression, a
+-- lambda, `if`, `match`) may need brackets wherever it has a parent.
+public export data Binding = Closed | Applied | Open
 
 -- `text` placed where its `Ctx` says an expression of kind `parent` sits:
 -- bracketed when it is `Open` and the parent would regroup it.  A body's root
@@ -201,9 +203,20 @@ public export data Binding = Closed | Open
 export
 parenIfNeeded : Binding -> Option ExprKind -> String -> String
 parenIfNeeded Closed _ text = text
+parenIfNeeded Applied None text = text
+parenIfNeeded Applied (Some parent) text =
+  if bindsTighterThanCall parent then "(" ++ text ++ ")" else text
 parenIfNeeded Open None text = text
 parenIfNeeded Open (Some parent) text =
   if separatesChildren parent then text else "(" ++ text ++ ")"
+
+bindsTighterThanCall : ExprKind -> Bool
+bindsTighterThanCall KApp = True
+bindsTighterThanCall KFieldAccess = True
+bindsTighterThanCall KIndex = True
+bindsTighterThanCall KSlice = True
+bindsTighterThanCall KUnOp = True
+bindsTighterThanCall _ = False
 
 separatesChildren : ExprKind -> Bool
 separatesChildren KTuple = True
@@ -211,6 +224,12 @@ separatesChildren KListLit = True
 separatesChildren KArrayLit = True
 separatesChildren KStringInterp = True
 separatesChildren KBlock = True
+separatesChildren KIf = True
+separatesChildren KMatch = True
+separatesChildren KLam = True
+separatesChildren KLet = True
+separatesChildren KLetGroup = True
+separatesChildren KGuards = True
 separatesChildren KDo = True
 separatesChildren KRecordCreate = True
 separatesChildren KMapLit = True
@@ -274,17 +293,32 @@ separatesChildren _ = False
 (DFunDef false "applyFixes" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "src")))
 (DTypeSig false "fixPass" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "FixError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))))
 (DFunDef false "fixPass" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "n") (PVar "total") (PVar "src")) (EMatch (EApp (EApp (EVar "lint") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EVar "SourceDoesNotParse") (EVar "msg"))) (EApp (EVar "Err") (EApp (EApp (EVar "FixedOutputDoesNotParse") (EVar "n")) (EVar "msg"))))) (arm (PCon "Ok" (PVar "findings")) () (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (EVar "n")) (EVar "src"))) (DoLet false false (PVar "chosen") (EIf (EBinOp ">=" (EVar "n") (EVar "maxPasses")) (EListLit) (EApp (EApp (EApp (EVar "chooseFixes") (EVar "limit")) (EVar "snap")) (EApp (EVar "fixesOf") (EVar "findings"))))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "chosen")) (EApp (EVar "Ok") (ETuple (EVar "src") (EVar "total"))) (EMatch (EApp (EApp (EVar "applySourceEdits") (EVar "snap")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "rsEdits"))) (EVar "chosen"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "EditsRejected") (EVar "e")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "total") (EApp (EVar "length") (EVar "chosen")))) (EVar "out"))))))))))
-(DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Open" (ConPos))) ())
+(DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Applied" (ConPos)) (variant "Open" (ConPos))) ())
 (DTypeSig true "parenIfNeeded" (TyFun (TyCon "Binding") (TyFun (TyApp (TyCon "Option") (TyCon "ExprKind")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "parenIfNeeded" ((PCon "Closed") PWild (PVar "text")) (EVar "text"))
+(DFunDef false "parenIfNeeded" ((PCon "Applied") (PCon "None") (PVar "text")) (EVar "text"))
+(DFunDef false "parenIfNeeded" ((PCon "Applied") (PCon "Some" (PVar "parent")) (PVar "text")) (EIf (EApp (EVar "bindsTighterThanCall") (EVar "parent")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))) (EVar "text")))
 (DFunDef false "parenIfNeeded" ((PCon "Open") (PCon "None") (PVar "text")) (EVar "text"))
 (DFunDef false "parenIfNeeded" ((PCon "Open") (PCon "Some" (PVar "parent")) (PVar "text")) (EIf (EApp (EVar "separatesChildren") (EVar "parent")) (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")")))))
+(DTypeSig false "bindsTighterThanCall" (TyFun (TyCon "ExprKind") (TyCon "Bool")))
+(DFunDef false "bindsTighterThanCall" ((PCon "KApp")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KFieldAccess")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KIndex")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KSlice")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KUnOp")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" (PWild) (EVar "False"))
 (DTypeSig false "separatesChildren" (TyFun (TyCon "ExprKind") (TyCon "Bool")))
 (DFunDef false "separatesChildren" ((PCon "KTuple")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KListLit")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KArrayLit")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KStringInterp")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KBlock")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KIf")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KMatch")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLam")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLet")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLetGroup")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KGuards")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KDo")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KRecordCreate")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KMapLit")) (EVar "True"))
@@ -348,17 +382,32 @@ separatesChildren _ = False
 (DFunDef false "applyFixes" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "src")))
 (DTypeSig false "fixPass" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "FixError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))))
 (DFunDef false "fixPass" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "n") (PVar "total") (PVar "src")) (EMatch (EApp (EApp (EVar "lint") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EVar "SourceDoesNotParse") (EVar "msg"))) (EApp (EVar "Err") (EApp (EApp (EVar "FixedOutputDoesNotParse") (EVar "n")) (EVar "msg"))))) (arm (PCon "Ok" (PVar "findings")) () (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (EVar "n")) (EVar "src"))) (DoLet false false (PVar "chosen") (EIf (EBinOp ">=" (EVar "n") (EVar "maxPasses")) (EListLit) (EApp (EApp (EApp (EVar "chooseFixes") (EVar "limit")) (EVar "snap")) (EApp (EVar "fixesOf") (EVar "findings"))))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "chosen")) (EApp (EVar "Ok") (ETuple (EVar "src") (EVar "total"))) (EMatch (EApp (EApp (EVar "applySourceEdits") (EVar "snap")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "rsEdits"))) (EVar "chosen"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "EditsRejected") (EVar "e")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "total") (EApp (EMethodRef "length") (EVar "chosen")))) (EVar "out"))))))))))
-(DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Open" (ConPos))) ())
+(DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Applied" (ConPos)) (variant "Open" (ConPos))) ())
 (DTypeSig true "parenIfNeeded" (TyFun (TyCon "Binding") (TyFun (TyApp (TyCon "Option") (TyCon "ExprKind")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "parenIfNeeded" ((PCon "Closed") PWild (PVar "text")) (EVar "text"))
+(DFunDef false "parenIfNeeded" ((PCon "Applied") (PCon "None") (PVar "text")) (EVar "text"))
+(DFunDef false "parenIfNeeded" ((PCon "Applied") (PCon "Some" (PVar "parent")) (PVar "text")) (EIf (EApp (EVar "bindsTighterThanCall") (EVar "parent")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))) (EVar "text")))
 (DFunDef false "parenIfNeeded" ((PCon "Open") (PCon "None") (PVar "text")) (EVar "text"))
 (DFunDef false "parenIfNeeded" ((PCon "Open") (PCon "Some" (PVar "parent")) (PVar "text")) (EIf (EApp (EVar "separatesChildren") (EVar "parent")) (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")")))))
+(DTypeSig false "bindsTighterThanCall" (TyFun (TyCon "ExprKind") (TyCon "Bool")))
+(DFunDef false "bindsTighterThanCall" ((PCon "KApp")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KFieldAccess")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KIndex")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KSlice")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" ((PCon "KUnOp")) (EVar "True"))
+(DFunDef false "bindsTighterThanCall" (PWild) (EVar "False"))
 (DTypeSig false "separatesChildren" (TyFun (TyCon "ExprKind") (TyCon "Bool")))
 (DFunDef false "separatesChildren" ((PCon "KTuple")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KListLit")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KArrayLit")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KStringInterp")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KBlock")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KIf")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KMatch")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLam")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLet")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KLetGroup")) (EVar "True"))
+(DFunDef false "separatesChildren" ((PCon "KGuards")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KDo")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KRecordCreate")) (EVar "True"))
 (DFunDef false "separatesChildren" ((PCon "KMapLit")) (EVar "True"))

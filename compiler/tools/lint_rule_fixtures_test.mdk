@@ -31,11 +31,13 @@
 -- apply.  The line is wherever the comment sits.
 --
 -- Optional `<name>.fixed` is the exact `--fix` output of the fixture under that
--- one rule.  The harness applies the fix, compares to the file, re-parses the
--- result, and requires the re-lint to flag nothing of the rule, except the
--- positives marked `unfixed` (bodies the rule's fixer does not reach); those
--- lines must still be flagged, so a fixer that grows to reach them fails the
--- fixture until the marker is dropped.  A fixture with `unfixed` markers must
+-- one rule, through `fixSource`, the path `medaka lint --fix` takes.  The harness
+-- applies the fix, compares to the file, re-parses the result, and requires the
+-- re-lint to flag nothing of the rule, except the positives marked `unfixed`
+-- (findings the fix leaves: a body the fixer does not reach, or a fix withheld
+-- by a rebound name or a comment inside its span); those lines must still be
+-- flagged, so a fixer that grows to reach them fails the fixture until the
+-- marker is dropped.  A fixture with `unfixed` markers must
 -- keep its line count under the fix.
 --
 -- Directive suppression, which the CLI
@@ -75,7 +77,8 @@ import tools.lint.{
   Finding(..),
   StdlibIndex(..),
   allRuleNames,
-  applyFixes,
+  Applicability(..),
+  fixSource,
   applySuppressions,
   buildStdlibIndexResult,
   emptyStdlibIndex,
@@ -279,11 +282,10 @@ fixMatchesFixed name =
     (_, Err e) => fail e
 
 fixOutcome : String -> String -> String -> Expectation
-fixOutcome rule src expected = match lintParseSource src
-  Err _ => fail "the fixture does not parse"
-  Ok (decls, pos) =>
-    let fixed = fst (applyFixes [rule] [] src decls pos)
-    match lintLines rule fixed
+fixOutcome rule src expected =
+  match fixSource emptyStdlibIndex Safe [rule] [] (fixturePath src) src
+    Err e => fail "the fix: \{e}"
+    Ok (fixed, _) => match lintLines rule fixed
       Err e => fail "the fixed source: \{e}"
       Ok remaining => expectAll [
         labelFail "fix output" (expectEqual expected fixed),
