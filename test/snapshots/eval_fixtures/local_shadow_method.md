@@ -30,7 +30,7 @@ main = (fromLet 0, fromLambda, fromMatch 5, fromParam 21)
 (CBind "fromLambda" (CClause () (CApp (CLam ((PVar "debug")) (CBinPrim "+" (CVar "debug" (ALocal 0 0)) (CLit (LInt 1)))) ((CLit (LInt 41))) CallDynamic false)))
 (CBind "fromMatch" (CClause ((PVar "y")) (CDecision (CVar "y" (ALocal 0 0)) ((arm (PVar "debug") () (CBinPrim "+" (CVar "debug" (ALocal 0 0)) (CLit (LInt 100))))) (CTLeaf 0))))
 (CBind "fromParam" (CClause ((PVar "debug")) (CBinPrim "*" (CVar "debug" (ALocal 0 0)) (CLit (LInt 2)))))
-(CBind "main" (CClause () (CTuple (CApp (CVar "fromLet" AGlobal) ((CLit (LInt 0))) CallExact false) (CVar "fromLambda" AGlobal) (CApp (CVar "fromMatch" AGlobal) ((CLit (LInt 5))) CallExact false) (CApp (CVar "fromParam" AGlobal) ((CLit (LInt 21))) CallExact false))))) () () () () (facts () ()) (binder-types
+(CBind "main" (CClause () (CTuple (CApp (CVar "fromLet" AGlobal) ((CLit (LInt 0))) CallExact false) (CVar "fromLambda" AGlobal) (CApp (CVar "fromMatch" AGlobal) ((CLit (LInt 5))) CallExact false) (CApp (CVar "fromParam" AGlobal) ((CLit (LInt 21))) CallExact false))))) () () () () (facts () () () none (externs) (manifests) (origins ((function "debug" (single "debug")) (function "fromLambda" (single "fromLambda")) (function "fromLet" (single "fromLet")) (function "fromMatch" (single "fromMatch")) (function "fromParam" (single "fromParam")) (function "main" (single "main"))) ())) (binder-types
 (b 0 "" "x" RTValue)
 (b 1 "" "y" RTValue)
 (b 2 "" "debug" RTValue)

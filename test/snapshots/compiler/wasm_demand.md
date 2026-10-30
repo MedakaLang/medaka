@@ -1,7 +1,9 @@
 # META
-source_lines=2701
+source_lines=2703
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_symbol_names as WN
+import support.symbol_encoding.{encodePair}
 import frontend.ast.{
   Lit(..), Pat(..), Addr(..), BinderId(..), Loc(..), isTaggedFixedHead
 }
@@ -265,7 +267,7 @@ isLocal : DemandScope -> String -> Bool
 isLocal sc x = omHasKey x sc.locals
 
 isCoreFn : DemandScope -> String -> Bool
-isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
+isCoreFn sc x = omHasKey (encodePair "core" x) sc.topFns
 
 -- a name read as a value
 dVar : DemandScope -> DemandAcc -> String -> DemandAcc
@@ -671,7 +673,11 @@ runtimeKeyD ctx symbol = optionOr "" (externRuntimeKey ctx.externFacts symbol)
 export type Env = OrdMap EnvRef
 
 -- what a name denotes inside `env`
-public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+public export data EnvRef =
+  | NotLocal
+  | LocalUnstamped
+  | LocalBinder String
+  | LocalSynthetic Int
 
 export
 envEmpty : Env
@@ -751,6 +757,7 @@ varRow : WasmTypeContext -> Env -> String -> Option BinderRow
 varRow prog env x = match envLookup x env
   LocalBinder ord => stampRowOf prog ord
   LocalUnstamped => None
+  LocalSynthetic _ => None
   NotLocal => omLookup x prog.tops
 
 -- what a reference to [x] holds; RTValue where no row states it
@@ -1762,14 +1769,9 @@ physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
             if contains ty ["Option", "Result", "Ordering"] then
               []
             else
-              ["T_" ++ injectiveIdent ty]
+              [WN.wasmName (WN.WUserType ty)]
                 ++ (if optionOr 0 (omLookup ctor ctorIndex) > 0 then
-                  [
-                    if ctor == "Cons" || ctor == "Nil" then
-                      "CU_" ++ ctor
-                    else
-                      "C_" ++ ctor,
-                  ]
+                  [WN.wasmName (WN.WConstructorType ctor)]
                 else
                   []))
           ctorTypes)
@@ -2480,7 +2482,7 @@ plannedJs : JsImport -> PlannedImport
 plannedJs imp = PlannedImport {
   namespace = "jsffi",
   field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = "jsffi.import.\{injectiveIdent imp.medakaName}",
+  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
   signature =
     joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
 }
@@ -2704,6 +2706,8 @@ stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
 stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 # DESUGAR
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
@@ -2780,7 +2784,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
 (DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
+(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
 (DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
 (DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "x"))))
 (DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
@@ -2954,7 +2958,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "runtimeKeyD" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "runtimeKeyD" ((PVar "ctx") (PVar "symbol")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol"))))
 (DTypeAlias true "Env" () (TyApp (TyCon "OrdMap") (TyCon "EnvRef")))
-(DData Public "EnvRef" () ((variant "NotLocal" (ConPos)) (variant "LocalUnstamped" (ConPos)) (variant "LocalBinder" (ConPos (TyCon "String")))) ())
+(DData Public "EnvRef" () ((variant "NotLocal" (ConPos)) (variant "LocalUnstamped" (ConPos)) (variant "LocalBinder" (ConPos (TyCon "String"))) (variant "LocalSynthetic" (ConPos (TyCon "Int")))) ())
 (DTypeSig true "envEmpty" (TyCon "Env"))
 (DFunDef false "envEmpty" () (EVar "omEmpty"))
 (DTypeSig true "envBind" (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyCon "Env") (TyCon "Env")))))
@@ -2989,7 +2993,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "stampRowOf" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
 (DFunDef false "stampRowOf" ((PVar "prog") (PVar "ord")) (EApp (EApp (EVar "omLookup") (EVar "ord")) (EFieldAccess (EVar "prog") "rows")))
 (DTypeSig true "varRow" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
-(DFunDef false "varRow" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "envLookup") (EVar "x")) (EVar "env")) (arm (PCon "LocalBinder" (PVar "ord")) () (EApp (EApp (EVar "stampRowOf") (EVar "prog")) (EVar "ord"))) (arm (PCon "LocalUnstamped") () (EVar "None")) (arm (PCon "NotLocal") () (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "prog") "tops")))))
+(DFunDef false "varRow" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "envLookup") (EVar "x")) (EVar "env")) (arm (PCon "LocalBinder" (PVar "ord")) () (EApp (EApp (EVar "stampRowOf") (EVar "prog")) (EVar "ord"))) (arm (PCon "LocalUnstamped") () (EVar "None")) (arm (PCon "LocalSynthetic" PWild) () (EVar "None")) (arm (PCon "NotLocal") () (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "prog") "tops")))))
 (DTypeSig true "varStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "RuntimeType")))))
 (DFunDef false "varStamp" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EApp (EVar "varRow") (EVar "prog")) (EVar "env")) (EVar "x")) (arm (PCon "Some" (PVar "row")) () (EFieldAccess (EVar "row") "brType")) (arm (PCon "None") () (EVar "RTValue"))))
 (DTypeSig true "returnStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "RuntimeType")))))
@@ -3183,7 +3187,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "representationOf" ((PVar "source") (PVar "str") (PVar "acc")) (EBlock (DoLet false false (PVar "types") (EApp (EApp (EVar "flatMap") (EVar "helperTypes")) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "helpers")))) (DoLet false false (PVar "uses") (EIf (EBinOp "||" (EBinOp "||" (EVar "str") (EApp (EApp (EVar "contains") (ELit (LString "str"))) (EVar "types"))) (EApp (EApp (EVar "contains") (ELit (LString "u8arr"))) (EVar "types"))) (EApp (EApp (EVar "addUse") (EFieldAccess (EVar "source") "uses")) (EVar "UseStr")) (EFieldAccess (EVar "source") "uses"))) (DoLet false false (PVar "uses") (EIf (EApp (EApp (EVar "contains") (ELit (LString "arr"))) (EVar "types")) (EApp (EApp (EVar "addUse") (EVar "uses")) (EVar "UseArray")) (EVar "uses"))) (DoLet false false (PVar "uses") (EIf (EBinOp "||" (EFieldAccess (EVar "acc") "patternList") (EApp (EApp (EVar "contains") (ELit (LString "C_Cons"))) (EVar "types"))) (EApp (EApp (EVar "addUse") (EVar "uses")) (EVar "UseList")) (EVar "uses"))) (DoLet false false (PVar "seen") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "intToString")) (EFieldAccess (EVar "source") "tupleArities"))) (EVar "omEmpty"))) (DoLet false false (PVar "extraTuples") (EApp (EApp (EVar "filterMap") (ELam ((PVar "k")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EVar "None") (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EVar "acc") "patternTuples"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "patternTuples")))) (DoExpr (ERecordUpdate (EVar "source") ((fa "uses" (EVar "uses")) (fa "refBox" (EBinOp "||" (EFieldAccess (EVar "source") "refBox") (EFieldAccess (EVar "acc") "refRead"))) (fa "tupleArities" (EBinOp "++" (EFieldAccess (EVar "source") "tupleArities") (EVar "extraTuples"))))))))
 (DTypeSig false "physicalTypes" (TyFun (TyCon "CProgram") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "physicalTypes" (PWild (PCon "False") PWild PWild) (EListLit (ELit (LString "boxint")) (ELit (LString "float"))))
-(DFunDef false "physicalTypes" ((PCon "CProgram" PWild (PVar "ctorArs") (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EBlock (DoLet false false (PVar "ctorIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoExpr (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EListLit (EBinOp "++" (ELit (LString "T_Tup")) (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorIndex"))) (ELit (LInt 0))) (EListLit (EIf (EBinOp "||" (EBinOp "==" (EVar "ctor") (ELit (LString "Cons"))) (EBinOp "==" (EVar "ctor") (ELit (LString "Nil")))) (EBinOp "++" (ELit (LString "CU_")) (EVar "ctor")) (EBinOp "++" (ELit (LString "C_")) (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))))
+(DFunDef false "physicalTypes" ((PCon "CProgram" PWild (PVar "ctorArs") (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EBlock (DoLet false false (PVar "ctorIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoExpr (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EListLit (EBinOp "++" (ELit (LString "T_Tup")) (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorIndex"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))))
 (DTypeSig false "addUse" (TyFun (TyApp (TyCon "List") (TyCon "WasmUse")) (TyFun (TyCon "WasmUse") (TyApp (TyCon "List") (TyCon "WasmUse")))))
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))
@@ -3426,7 +3430,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "plannedEnv" (TyFun (TyCon "String") (TyCon "PlannedImport")))
 (DFunDef false "plannedEnv" ((PVar "key")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "hostImportSigOf") (EVar "key")))))))
 (DTypeSig false "plannedJs" (TyFun (TyCon "JsImport") (TyCon "PlannedImport")))
-(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString "")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
+(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
 (DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
@@ -3533,6 +3537,8 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "stmtHasFallthrough" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 # MARK
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
@@ -3609,7 +3615,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
 (DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
+(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
 (DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
 (DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "x"))))
 (DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
@@ -3783,7 +3789,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "runtimeKeyD" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "runtimeKeyD" ((PVar "ctx") (PVar "symbol")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol"))))
 (DTypeAlias true "Env" () (TyApp (TyCon "OrdMap") (TyCon "EnvRef")))
-(DData Public "EnvRef" () ((variant "NotLocal" (ConPos)) (variant "LocalUnstamped" (ConPos)) (variant "LocalBinder" (ConPos (TyCon "String")))) ())
+(DData Public "EnvRef" () ((variant "NotLocal" (ConPos)) (variant "LocalUnstamped" (ConPos)) (variant "LocalBinder" (ConPos (TyCon "String"))) (variant "LocalSynthetic" (ConPos (TyCon "Int")))) ())
 (DTypeSig true "envEmpty" (TyCon "Env"))
 (DFunDef false "envEmpty" () (EVar "omEmpty"))
 (DTypeSig true "envBind" (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyCon "Env") (TyCon "Env")))))
@@ -3818,7 +3824,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "stampRowOf" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
 (DFunDef false "stampRowOf" ((PVar "prog") (PVar "ord")) (EApp (EApp (EVar "omLookup") (EVar "ord")) (EFieldAccess (EVar "prog") "rows")))
 (DTypeSig true "varRow" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
-(DFunDef false "varRow" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "envLookup") (EVar "x")) (EVar "env")) (arm (PCon "LocalBinder" (PVar "ord")) () (EApp (EApp (EVar "stampRowOf") (EVar "prog")) (EVar "ord"))) (arm (PCon "LocalUnstamped") () (EVar "None")) (arm (PCon "NotLocal") () (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "prog") "tops")))))
+(DFunDef false "varRow" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "envLookup") (EVar "x")) (EVar "env")) (arm (PCon "LocalBinder" (PVar "ord")) () (EApp (EApp (EVar "stampRowOf") (EVar "prog")) (EVar "ord"))) (arm (PCon "LocalUnstamped") () (EVar "None")) (arm (PCon "LocalSynthetic" PWild) () (EVar "None")) (arm (PCon "NotLocal") () (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "prog") "tops")))))
 (DTypeSig true "varStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "RuntimeType")))))
 (DFunDef false "varStamp" ((PVar "prog") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EApp (EVar "varRow") (EVar "prog")) (EVar "env")) (EVar "x")) (arm (PCon "Some" (PVar "row")) () (EFieldAccess (EVar "row") "brType")) (arm (PCon "None") () (EVar "RTValue"))))
 (DTypeSig true "returnStamp" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "RuntimeType")))))
@@ -4012,7 +4018,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "representationOf" ((PVar "source") (PVar "str") (PVar "acc")) (EBlock (DoLet false false (PVar "types") (EApp (EApp (EDictApp "flatMap") (EVar "helperTypes")) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "helpers")))) (DoLet false false (PVar "uses") (EIf (EBinOp "||" (EBinOp "||" (EVar "str") (EApp (EApp (EVar "contains") (ELit (LString "str"))) (EVar "types"))) (EApp (EApp (EVar "contains") (ELit (LString "u8arr"))) (EVar "types"))) (EApp (EApp (EVar "addUse") (EFieldAccess (EVar "source") "uses")) (EVar "UseStr")) (EFieldAccess (EVar "source") "uses"))) (DoLet false false (PVar "uses") (EIf (EApp (EApp (EVar "contains") (ELit (LString "arr"))) (EVar "types")) (EApp (EApp (EVar "addUse") (EVar "uses")) (EVar "UseArray")) (EVar "uses"))) (DoLet false false (PVar "uses") (EIf (EBinOp "||" (EFieldAccess (EVar "acc") "patternList") (EApp (EApp (EVar "contains") (ELit (LString "C_Cons"))) (EVar "types"))) (EApp (EApp (EVar "addUse") (EVar "uses")) (EVar "UseList")) (EVar "uses"))) (DoLet false false (PVar "seen") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EFieldAccess (EVar "source") "tupleArities"))) (EVar "omEmpty"))) (DoLet false false (PVar "extraTuples") (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "k")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EVar "None") (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EVar "acc") "patternTuples"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "patternTuples")))) (DoExpr (ERecordUpdate (EVar "source") ((fa "uses" (EVar "uses")) (fa "refBox" (EBinOp "||" (EFieldAccess (EVar "source") "refBox") (EFieldAccess (EVar "acc") "refRead"))) (fa "tupleArities" (EBinOp "++" (EFieldAccess (EVar "source") "tupleArities") (EVar "extraTuples"))))))))
 (DTypeSig false "physicalTypes" (TyFun (TyCon "CProgram") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "physicalTypes" (PWild (PCon "False") PWild PWild) (EListLit (ELit (LString "boxint")) (ELit (LString "float"))))
-(DFunDef false "physicalTypes" ((PCon "CProgram" PWild (PVar "ctorArs") (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EBlock (DoLet false false (PVar "ctorIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoExpr (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EListLit (EBinOp "++" (ELit (LString "T_Tup")) (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorIndex"))) (ELit (LInt 0))) (EListLit (EIf (EBinOp "||" (EBinOp "==" (EVar "ctor") (ELit (LString "Cons"))) (EBinOp "==" (EVar "ctor") (ELit (LString "Nil")))) (EBinOp "++" (ELit (LString "CU_")) (EVar "ctor")) (EBinOp "++" (ELit (LString "C_")) (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))))
+(DFunDef false "physicalTypes" ((PCon "CProgram" PWild (PVar "ctorArs") (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EBlock (DoLet false false (PVar "ctorIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoExpr (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EListLit (EBinOp "++" (ELit (LString "T_Tup")) (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorIndex"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))))
 (DTypeSig false "addUse" (TyFun (TyApp (TyCon "List") (TyCon "WasmUse")) (TyFun (TyCon "WasmUse") (TyApp (TyCon "List") (TyCon "WasmUse")))))
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))
@@ -4255,7 +4261,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "plannedEnv" (TyFun (TyCon "String") (TyCon "PlannedImport")))
 (DFunDef false "plannedEnv" ((PVar "key")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "hostImportSigOf") (EVar "key")))))))
 (DTypeSig false "plannedJs" (TyFun (TyCon "JsImport") (TyCon "PlannedImport")))
-(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString "")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
+(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
 (DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))

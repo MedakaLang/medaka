@@ -23,7 +23,7 @@ main = (countDown 5, isEven 4, isOdd 4, sumTo 5)
 (CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
 (CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
 (CBind "sumTo" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CLit (LInt 0)) (CBinPrim "+" (CVar "n" (ALocal 0 0)) (CApp (CVar "sumTo" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact false)))))
-(CBind "main" (CClause () (CTuple (CApp (CVar "countDown" AGlobal) ((CLit (LInt 5))) CallExact false) (CApp (CVar "isEven" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "isOdd" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "sumTo" AGlobal) ((CLit (LInt 5))) CallExact false))))) () () () () (facts () ()) (binder-types
+(CBind "main" (CClause () (CTuple (CApp (CVar "countDown" AGlobal) ((CLit (LInt 5))) CallExact false) (CApp (CVar "isEven" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "isOdd" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "sumTo" AGlobal) ((CLit (LInt 5))) CallExact false))))) () () () () (facts () () () none (externs) (manifests) (origins ((function "countDown" (single "countDown")) (function "isEven" (single "isEven")) (function "isOdd" (single "isOdd")) (function "main" (single "main")) (function "sumTo" (single "sumTo"))) ())) (binder-types
 (b 0 "" "n" RTValue)
 (b 1 "" "n" RTValue)
 (b 2 "" "n" RTValue)
