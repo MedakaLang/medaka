@@ -19,6 +19,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-bool-simplify`](#rule-bool-simplify) | universal | complexity | gated | fixable | file |
 | [`rule-rem-parity`](#rule-rem-parity) | universal | style | gated | fixable-unsafe | file |
 | [`rule-double-reverse`](#rule-double-reverse) | universal | complexity | gated | fixable | file |
+| [`rule-fuse-list-pipeline`](#rule-fuse-list-pipeline) | universal | perf | gated | fixable | file |
 | [`rule-when-unless`](#rule-when-unless) | universal | style | gated | fixable | file |
 | [`rule-complement-predicate`](#rule-complement-predicate) | universal | style | gated | fixable-unsafe | file |
 | [`rule-match-to-map`](#rule-match-to-map) | universal | style | gated | fixable | file |
@@ -216,6 +217,23 @@ Before:
   reverse (reverse xs)
 After:
   xs
+```
+
+## rule-fuse-list-pipeline
+
+a traversal with a single stdlib name: `somes (map f xs)`, `length (filter p xs)`, `length xs == 0`, `xs == []`
+
+Several traversals build an intermediate list, or count a whole list to learn whether it is empty, where one stdlib name does the work in one pass.
+
+```
+Before:
+  length (filter p xs)
+  length xs == 0
+  xs == []
+After:
+  count p xs
+  isEmpty xs
+  isEmpty xs
 ```
 
 ## rule-when-unless

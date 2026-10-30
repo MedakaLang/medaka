@@ -89,6 +89,10 @@ ruleNameDoubleReverse : String
 ruleNameDoubleReverse = "rule-double-reverse"
 
 export
+ruleNameFuseListPipeline : String
+ruleNameFuseListPipeline = "rule-fuse-list-pipeline"
+
+export
 ruleNameWhenUnless : String
 ruleNameWhenUnless = "rule-when-unless"
 

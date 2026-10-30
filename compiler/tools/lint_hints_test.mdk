@@ -12,6 +12,7 @@ import tools.lint_hints.{
   HintCond(..), HintRow(..), compileHint, inOwnDefinition, matchHint, Found(..)
 }
 import tools.lint_rule_double_reverse as DoubleReverse
+import tools.lint_rule_fuse_list_pipeline as FuseListPipeline
 import tools.lint_rule_not_eq as NotEq
 
 rowOf : String -> List HintCond -> HintRow
@@ -58,7 +59,7 @@ test "every registered row compiles" =
   expectEach
     (map
       (r => (r.rowText, expectOk (compiled r)))
-      (NotEq.hintRows ++ DoubleReverse.hintRows))
+      (NotEq.hintRows ++ DoubleReverse.hintRows ++ FuseListPipeline.hintRows))
 
 test "a row that does not compile is an error, not a no-op" = expectEach [
   ("unbalanced bracket", expectErr (compiled (rowOf "not (a == b ==> a" []))),
@@ -143,3 +144,36 @@ test "a ported rule reports its message and fix" =
       ("fix", expectTrue (isSome f.fix)),
     ]
     _ => expectTrue False
+
+fixOf : String -> Option Bool
+fixOf src = match findingsOf FuseListPipeline.rule src
+  [f] => Some (isSome f.fix)
+  _ => None
+
+test "a name the right side writes is guarded like the names it reads" = expectEach
+  [
+    (
+      "unbound",
+      expectEqual (Some True) (fixOf "hits p xs = length (filter p xs)\n"),
+    ),
+    (
+      "bound by the file",
+      expectEqual
+        (Some False)
+        (fixOf "hits p xs = length (filter p xs)\n\ncount p xs = 0\n"),
+    ),
+    (
+      "bound by a parameter",
+      expectEqual (Some False) (fixOf "nonEmpty not xs = length xs /= 0\n"),
+    ),
+    (
+      "bound in the definition being rewritten",
+      expectEqual (Some False) (fixOf "isEmpty xs = length xs == 0\n"),
+    ),
+  ]
+
+test "the empty list is a template" = expectEach [
+  ("equal", expectEqual (Some True) (fixOf "nil xs = xs == []\n")),
+  ("not equal", expectEqual (Some True) (fixOf "full xs = [] /= xs\n")),
+  ("a one-element list", expectEqual None (fixOf "one xs = xs == [1]\n")),
+]

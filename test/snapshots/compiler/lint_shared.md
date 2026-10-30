@@ -1,5 +1,5 @@
 # META
-source_lines=963
+source_lines=967
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -91,6 +91,10 @@ ruleNameRemParity = "rule-rem-parity"
 export
 ruleNameDoubleReverse : String
 ruleNameDoubleReverse = "rule-double-reverse"
+
+export
+ruleNameFuseListPipeline : String
+ruleNameFuseListPipeline = "rule-fuse-list-pipeline"
 
 export
 ruleNameWhenUnless : String
@@ -1011,6 +1015,8 @@ nameSetInto (n :: rest) s =
 (DFunDef false "ruleNameRemParity" () (ELit (LString "rule-rem-parity")))
 (DTypeSig true "ruleNameDoubleReverse" (TyCon "String"))
 (DFunDef false "ruleNameDoubleReverse" () (ELit (LString "rule-double-reverse")))
+(DTypeSig true "ruleNameFuseListPipeline" (TyCon "String"))
+(DFunDef false "ruleNameFuseListPipeline" () (ELit (LString "rule-fuse-list-pipeline")))
 (DTypeSig true "ruleNameWhenUnless" (TyCon "String"))
 (DFunDef false "ruleNameWhenUnless" () (ELit (LString "rule-when-unless")))
 (DTypeSig true "ruleNameComplementPredicate" (TyCon "String"))
@@ -1325,6 +1331,8 @@ nameSetInto (n :: rest) s =
 (DFunDef false "ruleNameRemParity" () (ELit (LString "rule-rem-parity")))
 (DTypeSig true "ruleNameDoubleReverse" (TyCon "String"))
 (DFunDef false "ruleNameDoubleReverse" () (ELit (LString "rule-double-reverse")))
+(DTypeSig true "ruleNameFuseListPipeline" (TyCon "String"))
+(DFunDef false "ruleNameFuseListPipeline" () (ELit (LString "rule-fuse-list-pipeline")))
 (DTypeSig true "ruleNameWhenUnless" (TyCon "String"))
 (DFunDef false "ruleNameWhenUnless" () (ELit (LString "rule-when-unless")))
 (DTypeSig true "ruleNameComplementPredicate" (TyCon "String"))
