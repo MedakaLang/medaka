@@ -1,5 +1,5 @@
 # META
-source_lines=280
+source_lines=284
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -13,7 +13,11 @@ stages=DESUGAR,MARK
    `isFile`, and `fileSize`.
 
    Every operation returns `Result String a`, with the host's error message
-   in `Err`. -}
+   in `Err`.
+
+   `medaka run` and a built program touch the real filesystem. `medaka test`
+   and `medaka repl` do not bind the file primitives, so a doctest that
+   reaches one is rejected; see [ENGINES](ENGINES.md) for every engine. -}
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}

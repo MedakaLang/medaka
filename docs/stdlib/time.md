@@ -9,8 +9,11 @@ from Unix time, and `formatIso` and `parseIso` convert to and from ISO
 8601 text. There is no time zone support: every `DateTime` is UTC.
 
 `now`, `monotonic`, `elapsedSince`, and `sleep` read and wait on the
-host clock. Under the interpreter the clock returns fixed values and
-`sleep` does nothing; in a built program they use the real clock.
+host clock. `medaka run`, `medaka test` and a built program read the real
+clock, and `medaka run` and a built program really `sleep`; under
+`medaka test` and `medaka repl`, `sleep` does nothing. The pure
+interpreter the differential gates use returns fixed values; see
+[ENGINES](ENGINES.md) for every engine.
 
 ## Durations
 

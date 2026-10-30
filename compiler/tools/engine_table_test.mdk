@@ -1,0 +1,53 @@
+-- Sibling test for `compiler/tools/engine_table.mdk` ([P-TEST-SIBLING]).
+--
+-- `--native`: it reads `stdlib/runtime.mdk` and `docs/stdlib/ENGINES.md`, which
+-- the interpreter's test capability list does not allow.
+--
+-- Regenerate the page with `make engines-doc`, which runs this file with
+-- `ENGINES_BLESS=1` so the page test writes the render before comparing.
+
+import test.{expectAll, expectEqual, expectTrue, labelFail}
+import tools.engine_table.{
+  Cell(..),
+  EngineRow(..),
+  engineRows,
+  renderEngineTable,
+  runDrift,
+}
+
+pagePath : String
+pagePath = "docs/stdlib/ENGINES.md"
+
+findRow : String -> List EngineRow -> Option EngineRow
+findRow n = find (r => match r
+  EngineRow m _ _ _ _ _ => m == n)
+
+test "every effectful oracle extern is bound by ioExternBindings" =
+  expectEqual [] (runDrift ())
+
+test "the table has the rows the engines are known to differ on" =
+  let rows = engineRows ()
+  expectAll [
+    labelFail "a runtime.mdk was parsed" (expectTrue (length rows > 100)),
+    labelFail
+      "readFile: refused on the oracle, real on run"
+      (expectTrue (match findRow "readFile" rows
+        Some (EngineRow _ Canned Real Canned _ _) => True
+        Some (EngineRow _ Refused Real Refused _ _) => True
+        _ => False)),
+    labelFail
+      "sleepMs: real on run, not on test"
+      (expectTrue (match findRow "sleepMs" rows
+        Some (EngineRow _ _ Real t _ _) => t /= Real
+        _ => False)),
+  ]
+
+test "docs/stdlib/ENGINES.md is the render of the table" =
+  let page = renderEngineTable (engineRows ())
+  match getEnv "ENGINES_BLESS"
+    Some _ => match writeFile pagePath page
+      Ok _ => expectEqual page page
+      Err e => expectEqual "write \{pagePath}" "failed: \{e}"
+    None => match readFile pagePath
+      Ok onDisk => expectEqual page onDisk
+      Err e => expectEqual "read \{pagePath}" "failed: \{e}"

@@ -1,0 +1,187 @@
+-- The per-extern engine matrix: for every `stdlib/runtime.mdk` extern, what the
+-- pure oracle, `medaka run`, `medaka test`/`repl`, the native backend and the
+-- wasm backend each do with it.  Every cell is derived from a table or from the
+-- extern's own signature; none is written per extern.
+--
+-- Lives in `tools/`, not `backend/`: it reads the interpreter's tables
+-- (`eval.eval`) and `backend/` must not import `eval/`.
+--
+-- Cell rules:
+--   real     the extern's effect (or value) is the real one.
+--   canned   bound, but the effect is not performed: the oracle's fixed value,
+--            no-op or captured buffer, or a catalog `FrozenConstant`.
+--   refused  not bound: the engine rejects or aborts the call
+--            (a catalog `NotProvided` or `TrapStub`).
+-- The oracle column is `externBindings`; `run` is `ioExternBindings` over it;
+-- `test` is `testCapableExterns` over it.  An extern with an empty effect row
+-- is `real` wherever it is bound.
+
+import backend.extern_catalog.{
+  Disposition(..),
+  ExternRow,
+  catalogRows,
+  rowLlvm,
+  rowName,
+  rowWasm,
+}
+import frontend.ast.{Decl(..), ExternDecl(..), Ty(..)}
+import frontend.parser.{parse}
+import eval.eval.{externBindings, ioExternBindings, testCapableExterns}
+import set as S
+import string.{unlines}
+
+public export data Cell = Real | Canned | Refused deriving (Eq)
+
+-- oracle, run, test, native, wasm
+public export data EngineRow = EngineRow String Cell Cell Cell Cell Cell
+
+runtimePath : String
+runtimePath = "stdlib/runtime.mdk"
+
+-- Effectful externs the oracle binds that `ioExternBindings` rightly does not
+-- override, each with its reason.  `run` counts them `real`.
+driftExceptions : List (String, String)
+driftExceptions = [
+  ("putStr", stdoutReason),
+  ("putStrLn", stdoutReason),
+  ("flushStdout", stdoutReason),
+]
+
+stdoutReason : String
+stdoutReason =
+  "the oracle appends to its stdout buffer; `run`'s driver (evalModulesOutputRunFacts) arms the flush and the CLI prints that buffer"
+
+-- Does the declared type end in a non-empty effect row?
+hasEffect : Ty -> Bool
+hasEffect (TyFun _ r) = hasEffect r
+hasEffect (TyEffect labels _ _) = not (isEmpty labels)
+hasEffect (TyConstrained _ t) = hasEffect t
+hasEffect (TyQual t _ _) = hasEffect t
+hasEffect _ = False
+
+externDeclsOf : List Decl -> List ExternDecl
+externDeclsOf [] = []
+externDeclsOf ((DExtern ed) :: rest) = ed :: externDeclsOf rest
+externDeclsOf ((DAttrib _ d) :: rest) = externDeclsOf (d :: rest)
+externDeclsOf (_ :: rest) = externDeclsOf rest
+
+nameSet : List (String, a) -> S.Set String
+nameSet bs = S.fromList (map fst bs)
+
+cellOfDisposition : Disposition f -> Cell
+cellOfDisposition (NotProvided _ _) = Refused
+cellOfDisposition (TrapStub _ _) = Refused
+cellOfDisposition (FrozenConstant _ _) = Canned
+cellOfDisposition _ = Real
+
+mkRow : S.Set String ->
+  S.Set String ->
+  S.Set String ->
+  (String, Bool) ->
+  Option EngineRow
+mkRow oracle run tst (name, effectful) =
+  match find (r => rowName r == name) catalogRows
+    None => None
+    Some r =>
+      let oracleCell =
+        if S.has name oracle then
+          if effectful then Canned else Real
+        else
+          Refused
+      let runCell = if S.has name run then Real else oracleCell
+      let testCell = if S.has name tst then Real else oracleCell
+      Some
+        (EngineRow
+          name
+          oracleCell
+          runCell
+          testCell
+          (cellOfDisposition (rowLlvm r))
+          (cellOfDisposition (rowWasm r)))
+
+-- (name, has an effect row) for every extern declared in runtime.mdk.
+declaredExterns : List Decl -> List (String, Bool)
+declaredExterns decls =
+  map (ed => (ed.edName, hasEffect ed.edTy)) (externDeclsOf decls)
+
+rowsOf : List Decl -> List EngineRow
+rowsOf decls =
+  let oracle = nameSet (externBindings ())
+  let run =
+    S.union
+      (nameSet (ioExternBindings ()))
+      (S.fromList (map fst driftExceptions))
+  let tst = nameSet (testCapableExterns ())
+  filterMap (mkRow oracle run tst) (declaredExterns decls)
+
+-- Effectful externs the oracle binds and `ioExternBindings` does not, minus
+-- the named exceptions.
+driftOf : List Decl -> List String
+driftOf decls =
+  let oracle = nameSet (externBindings ())
+  let run = nameSet (ioExternBindings ())
+  let excused = map fst driftExceptions
+  filterMap
+    (p =>
+      let name = fst p
+      if snd p
+        && S.has name oracle
+        && not (S.has name run)
+        && not (elem name excused) then
+        Some name
+      else
+        None)
+    (declaredExterns decls)
+
+loadRuntime : Unit -> <FileRead> List Decl
+loadRuntime _ = match readFile runtimePath
+  Ok src => parse src
+  Err _ => []
+
+export
+engineRows : Unit -> <FileRead> List EngineRow
+engineRows _ = rowsOf (loadRuntime ())
+
+export
+runDrift : Unit -> <FileRead> List String
+runDrift _ = driftOf (loadRuntime ())
+
+cellText : Cell -> String
+cellText Real = "real"
+cellText Canned = "canned"
+cellText Refused = "refused"
+
+allReal : EngineRow -> Bool
+allReal (EngineRow _ a b c d e) = all (== Real) [a, b, c, d, e]
+
+-- Only rows that say something: any non-real cell.
+rowLine : EngineRow -> String
+rowLine (EngineRow n a b c d e) =
+  "| `\{n}` | \{cellText a} | \{cellText b} | \{cellText c} | \{cellText d} | \{cellText e} |"
+
+export
+renderEngineTable : List EngineRow -> String
+renderEngineTable rows =
+  let shown = filter (r => not (allReal r)) rows
+  unlines
+    ([
+        "# Engines",
+        "",
+        "<!-- GENERATED by compiler/tools/engine_table.mdk; regenerate with `make engines-doc`. -->",
+        "",
+        "What each engine does with each `stdlib/runtime.mdk` extern. An extern that is",
+        "`real` on every engine is left out; so is any extern not in the catalog.",
+        "",
+        "- **oracle**: the pure interpreter the differential gates run (`externBindings`).",
+        "- **run**: `medaka run` (`ioExternBindings` over the oracle).",
+        "- **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).",
+        "- **native**, **wasm**: `medaka build` for each target (the extern catalog).",
+        "",
+        "Cells: `real` is the extern's actual effect; `canned` is bound but does not",
+        "perform the effect (a fixed value, a no-op or a captured buffer); `refused` is",
+        "not bound, so the call is rejected or aborts.",
+        "",
+        "| extern | oracle | run | test | native | wasm |",
+        "|---|---|---|---|---|---|",
+      ]
+      ++ map rowLine shown)
