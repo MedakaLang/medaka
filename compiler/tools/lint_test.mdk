@@ -242,7 +242,7 @@ test "--explain names a known rule and rejects an unknown one" = expectEach [
   ("unknown", expectFalse (isOk (explainRule "nope"))),
 ]
 
--- ── 5. #3837: a test-verb fix applies only to `test`'s own verb ─────────────
+-- ── 5. a test-verb fix applies only to `test`'s own verb ────────────────────
 -- The two test-verb rules report in every fixture below; `--fix` rewrites the
 -- one whose verb resolves to the `test` import and leaves the four whose verb is
 -- captured by another binding untouched.

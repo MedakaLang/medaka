@@ -79,7 +79,7 @@ equals `allRuleNames`; scope and ratchet filters partition it), so a new rule bu
 `test/lint_fixtures` and `test/lint_fix_fixtures` keep only what the marker grammar cannot express
 (directive suppression, the fixer's interior-comment and `test`-import cases). Each of their
 fixtures names its rules in that directory's `ONLY.txt` and runs `--only=<those rules>`; a new
-entry there raises the count in the matching `narrowedFailures` call in
+entry there raises the expected count in the matching narrowed-failures call in
 `test/diff_compiler_fmt_test.mdk`. Re-cut those goldens with
 `sh test/capture_goldens.sh --frozen lint` / `--frozen lint_fix`.
 

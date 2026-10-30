@@ -1,0 +1,19 @@
+-- Positives: a suppression directive with no reason in its own comment block,
+-- or only an issue number.  The findings sit on the directive lines, so they
+-- are annotated out of band (a marker above would join the directive's block
+-- and count as its reason).
+-- expect-at-line 8 rule-directive-reason
+-- expect-at-line 12 rule-directive-reason
+
+-- lint-disable-next-line rule-missing-signature
+bare = 1
+
+-- see #1234
+-- lint-disable-next-line rule-missing-signature
+issueOnly = 2
+
+-- Negative: the block states the constraint that forced the directive.
+
+-- Kept unsigned because the fixture exists to pin the rule's silent case.
+-- lint-disable-next-line rule-missing-signature
+reasoned = 3

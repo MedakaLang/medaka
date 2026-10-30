@@ -68,13 +68,6 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
--- lint-disable-file rule-duplicate-body
--- mapChildren and its one-level helpers are structural twins of
--- frontend.ast_walk.mapChildExprs and its helpers; desugar adopts ast_walk in
--- #4649 (the move needs its own Ir measurement, desugar maps EAsPat/EOrPat as
--- identity). The findings land on every clause line, which a next-line
--- directive cannot cover.
-
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
 -- children are rewritten first, then `f` is applied to the rebuilt node.
@@ -101,27 +94,53 @@ mapChildren g (ELoc l e) = ELoc l (g e)
 mapChildren g (EDoOrigin l e) = EDoOrigin l (g e)
 mapChildren g (EApp a b) = EApp (g a) (g b)
 mapChildren g (ELam ps b) = ELam ps (g b)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ELet m r p e1 e2) = ELet m r p (g e1) (g e2)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ELetGroup bs e2) = ELetGroup (map (mapLetBind g) bs) (g e2)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EMatch e0 arms) = EMatch (g e0) (map (mapArm g) arms)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EIf c t el) = EIf (g c) (g t) (g el)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EBinOp op a b r) = EBinOp op (g a) (g b) r
 mapChildren g (EUnOp op a r) = EUnOp op (g a) r
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EInfix op a b) = EInfix op (g a) (g b)
 mapChildren g (EFieldAccess e0 n r) = EFieldAccess (g e0) n r
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ERecordCreate n fs) = ERecordCreate n (map (mapFieldAssign g) fs)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ERecordUpdate e0 fs r) =
   ERecordUpdate (g e0) (map (mapFieldAssign g) fs) r
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EVariantUpdate c e0 fs) =
   EVariantUpdate c (g e0) (map (mapFieldAssign g) fs)
 mapChildren g (EArrayLit es) = EArrayLit (map g es)
 mapChildren g (EListLit es) = EListLit (map g es)
 mapChildren g (ETuple es) = ETuple (map g es)
 mapChildren g (EIndex e0 i) = EIndex (g e0) (g i)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ERangeList lo hi incl) = ERangeList (g lo) (g hi) incl
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ERangeArray lo hi incl) = ERangeArray (g lo) (g hi) incl
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (ESlice e0 lo hi incl) = ESlice (g e0) (g lo) (g hi) incl
 mapChildren g (EBlock stmts) = EBlock (map (mapDoStmt g) stmts)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapChildren g (EDo d stmts) = EDo d (map (mapDoStmt g) stmts)
 mapChildren g (EAnnot e0 t) = EAnnot (g e0) t
 mapChildren g (EStringInterp parts) = EStringInterp (map (mapInterp g) parts)
@@ -139,16 +158,24 @@ mapKv : (Expr -> Expr) -> (Expr, Expr) -> (Expr, Expr)
 mapKv g (k, v) = (g k, g v)
 
 mapArm : (Expr -> Expr) -> Arm -> Arm
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapArm g (Arm p gs b) = Arm p (map (mapGuard g) gs) (g b)
 
 mapGuard : (Expr -> Expr) -> Guard -> Guard
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapGuard g (GBool e) = GBool (g e)
 mapGuard g (GBind p e) = GBind p (g e)
 
 mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
 
 mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapLetBind g (LetBind n clauses site bid) =
   LetBind n (map (mapFunClause g) clauses) site bid
 
@@ -161,6 +188,8 @@ mapFieldAssign g (FieldAssign n v) = FieldAssign n (g v)
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
 mapDoStmt g (DoExpr e) = DoExpr (g e)
 mapDoStmt g (DoBind p e) = DoBind p (g e)
+-- Twin of frontend.ast_walk, which desugar adopts in #4649.
+-- lint-disable-next-line rule-duplicate-body
 mapDoStmt g (DoLet m r p e site) = DoLet m r p (g e) site
 mapDoStmt g (DoAssign x e) = DoAssign x (g e)
 mapDoStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)

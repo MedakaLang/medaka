@@ -174,12 +174,19 @@ bindThenDestructureFix orc d =
 -- arm body's statements spliced inline.
 bindThenDestructureRewrite : Oracle -> Expr -> Option Expr
 bindThenDestructureRewrite orc (EDo d stmts) =
-  map (collapsed => EDo d collapsed) (collapseTail orc d stmts)
+  map (collapsed => EDo d collapsed) (collapseTail orc (heraldOf d) stmts)
 bindThenDestructureRewrite orc (EBlock stmts) =
-  map (collapsed => EBlock collapsed) (collapseTail orc False stmts)
+  map (collapsed => EBlock collapsed) (collapseTail orc HeraldDo stmts)
 bindThenDestructureRewrite _ _ = None
 
-collapseTail : Oracle -> Bool -> List DoStmt -> Option (List DoStmt)
+-- Which keyword heralds a block: `do`, or `defer` (the deferred flag of `EDo`).
+data Herald = HeraldDo | HeraldDefer
+
+heraldOf : Bool -> Herald
+heraldOf True = HeraldDefer
+heraldOf False = HeraldDo
+
+collapseTail : Oracle -> Herald -> List DoStmt -> Option (List DoStmt)
 collapseTail orc host stmts =
   map
     ((prefix, _, pat, boundE, body) =>
@@ -187,17 +194,17 @@ collapseTail orc host stmts =
     (bindMatchTail orc stmts)
 
 -- the arm body as statements: a bare block, or a monadic block heralded the SAME
--- way as the host (`host`: the enclosing block's deferred flag), contributes its
+-- way as the host (`host`: the enclosing block's herald), contributes its
 -- own statements flattened into the outer block; anything else — including a
 -- `defer` block inside a `do` block or vice versa, whose statements bind through
 -- a different interface family (#824) — becomes a final expr-statement.
-bodyToStmts : Bool -> Expr -> List DoStmt
+bodyToStmts : Herald -> Expr -> List DoStmt
 bodyToStmts host e = match unwrapLoc e
-  EDo d stmts => whenSameHerald host d stmts e
+  EDo d stmts => whenSameHerald host (heraldOf d) stmts e
   EBlock stmts => stmts
   _ => [DoExpr e]
 
-whenSameHerald : Bool -> Bool -> List DoStmt -> Expr -> List DoStmt
-whenSameHerald host d stmts e
-  | host == d = stmts
-  | otherwise = [DoExpr e]
+whenSameHerald : Herald -> Herald -> List DoStmt -> Expr -> List DoStmt
+whenSameHerald HeraldDo HeraldDo stmts _ = stmts
+whenSameHerald HeraldDefer HeraldDefer stmts _ = stmts
+whenSameHerald _ _ _ e = [DoExpr e]

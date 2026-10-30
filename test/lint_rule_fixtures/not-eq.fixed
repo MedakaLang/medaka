@@ -97,22 +97,22 @@ truePlain flag = expectTrue flag
 -- NEGATIVE: already the named verb.
 alreadyEqual a = expectEqual a 1
 
--- POSITIVE, inside a `test` decl body. These three rules descend into `test`
--- and `prop` bodies; the shared expression-rule driver does not, so the rows
--- below are the only place that descent is observed.
+-- Neither of the next two bodies holds a `not (a == b)`, so `rule-not-eq` is
+-- silent on them; they are the positives of the test-verb rules, whose rows
+-- sit in the same shared text.
 test "an equality inside a test body" = expectTrue (1 == 1)
 
 -- POSITIVE, inside a `prop` decl body.
 prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
 
--- NEGATIVE, and the pin on the descent's SCOPE: `rule-not-eq` would rewrite
--- `not (a == b)` in a `def` body, and reports nothing here. If this golden ever
--- grows a `rule-not-eq` line, the descent stopped being opt-in.
+-- POSITIVE, inside a `test` decl body: the walk descends into `test` and `prop`
+-- bodies, so `rule-not-eq` reaches `not (1 == 2)`. The fixer does not rewrite
+-- test bodies, so the finding is marked `unfixed` and survives the fix.
 -- expect-next-line rule-not-eq unfixed
 test "a non-test rule does not reach a test body" = not (1 == 2)
 
--- The CONTROL for the row above: the same expression in a `def` body, where
--- `rule-not-eq` does reach it. The golden must carry exactly one
--- `rule-not-eq` line, for this decl and not for the `test` one.
+-- POSITIVE, in a `def` body: flagged and rewritten, the `.fixed` file shows
+-- `a /= 1`. Together with the `unfixed` row above this pins that the fixer
+-- reaches `def` bodies and only those.
 -- expect-next-line rule-not-eq
 notEqDef a = a /= 1

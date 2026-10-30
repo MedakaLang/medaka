@@ -1,5 +1,5 @@
 # META
-source_lines=408
+source_lines=404
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -13,7 +13,7 @@ import frontend.ast_walk.{ExprKind}
 import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
-import support.util.{listLen, filterList, lookupAssoc}
+import support.util.{listLen, filterList, lookupAssoc, anyList}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -120,15 +120,11 @@ ruleMetaName m = m.name
 
 export
 needsStdlibIndex : RuleMeta -> Bool
-needsStdlibIndex m = anyNeed isStdlibIndexNeed m.needs
+needsStdlibIndex m = anyList isStdlibIndexNeed m.needs
 
 export
 needsScopes : RuleMeta -> Bool
-needsScopes m = anyNeed isScopesNeed m.needs
-
-anyNeed : (Need -> Bool) -> List Need -> Bool
-anyNeed _ [] = False
-anyNeed p (n :: rest) = p n || anyNeed p rest
+needsScopes m = anyList isScopesNeed m.needs
 
 isStdlibIndexNeed : Need -> Bool
 isStdlibIndexNeed NeedsStdlibIndex = True
@@ -416,7 +412,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
@@ -447,12 +443,9 @@ public export data DupClause = DupClause {
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
-(DTypeSig false "anyNeed" (TyFun (TyFun (TyCon "Need") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Need")) (TyCon "Bool"))))
-(DFunDef false "anyNeed" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyNeed" ((PVar "p") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "n")) (EApp (EApp (EVar "anyNeed") (EVar "p")) (EVar "rest"))))
+(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
@@ -497,7 +490,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
@@ -528,12 +521,9 @@ public export data DupClause = DupClause {
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
-(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyNeed") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
-(DTypeSig false "anyNeed" (TyFun (TyFun (TyCon "Need") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Need")) (TyCon "Bool"))))
-(DFunDef false "anyNeed" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyNeed" ((PVar "p") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "n")) (EApp (EApp (EVar "anyNeed") (EVar "p")) (EVar "rest"))))
+(DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))

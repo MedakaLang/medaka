@@ -55,7 +55,7 @@ falseEq a = expectFalse (a == 1)
 falseNe a = expectFalse (a /= 1)
 
 -- POSITIVE: nested anywhere in a body.
--- expect-next-line rule-test-equal-in-true
+-- expect-next-line rule-test-equal-in-true x2
 nestedTrue a b = if a then expectTrue (b == 2) else expectFalse (b == 3)
 
 -- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — an ordering
@@ -84,12 +84,12 @@ test "an equality inside a test body" = expectTrue (1 == 1)
 -- expect-next-line rule-test-equal-in-true
 prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
 
--- NEGATIVE, and the pin on the descent's SCOPE: `rule-not-eq` would rewrite
--- `not (a == b)` in a `def` body, and reports nothing here. If this golden ever
--- grows a `rule-not-eq` line, the descent stopped being opt-in.
+-- NEGATIVE: `rule-test-equal-in-true` matches `expectTrue`/`expectFalse` over an
+-- equality; a `test` body holding a bare `not (1 == 2)` is silent for it. The
+-- same line is a positive of `rule-not-eq`, whose marker lives in not-eq.mdk.
 test "a non-test rule does not reach a test body" = not (1 == 2)
 
--- The CONTROL for the row above: the same expression in a `def` body, where
--- `rule-not-eq` does reach it. The golden must carry exactly one
--- `rule-not-eq` line, for this decl and not for the `test` one.
+-- NEGATIVE: the same shape in a `def` body is also silent for this rule; it is
+-- a positive of `rule-not-eq` only.
+-- (no marker: nothing of this rule fires here)
 notEqDef a = not (a == 1)
