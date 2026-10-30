@@ -1,5 +1,5 @@
 # META
-source_lines=11678
+source_lines=11690
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_symbol_names as WN
@@ -6168,6 +6168,18 @@ emitStrExternRef prog env d "floatToString" [a] =
     ]
 emitStrExternRef prog env d "floatToString" _ =
   gapLP prog "wasm W8b: floatToString takes exactly one argument"
+-- floatToFixed digits x : an i31 Int and a boxed $float -> $mdk_float_to_fixed.
+emitStrExternRef prog env d "floatToFixed" [n, a] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d a
+    ++ [
+      "ref.cast (ref $float)",
+      "struct.get $float 0",
+      rtCallW prog "mdk_float_to_fixed" 2,
+    ]
+emitStrExternRef prog env d "floatToFixed" _ =
+  gapLP prog "wasm: floatToFixed takes exactly two arguments"
 -- W8b: stringIndexOf needle hay : two $str → Option Int (ref eq).  The runtime fn
 -- builds the Some/None result directly (Some idx / None), so no inline ctor here.
 emitStrExternRef prog env d "stringIndexOf" [needle, hay] =
@@ -12776,6 +12788,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashString takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_str"))) (ELit (LInt 1))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToString takes exactly one argument"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToFixed")) (PList (PVar "n") (PVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_fixed"))) (ELit (LInt 2))))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToFixed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: floatToFixed takes exactly two arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringIndexOf")) (PList (PVar "needle") (PVar "hay"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "needle")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hay"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_index_of"))) (ELit (LInt 2))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringIndexOf")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: stringIndexOf takes exactly two arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringStartsWith")) (PList (PVar "p") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_starts_with"))) (ELit (LInt 2))) (ELit (LString "ref.i31")))))
@@ -14947,6 +14961,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashString takes exactly one argument"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_str"))) (ELit (LInt 1))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToString takes exactly one argument"))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToFixed")) (PList (PVar "n") (PVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_fixed"))) (ELit (LInt 2))))))
+(DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToFixed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: floatToFixed takes exactly two arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringIndexOf")) (PList (PVar "needle") (PVar "hay"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "needle")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hay"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_index_of"))) (ELit (LInt 2))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringIndexOf")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: stringIndexOf takes exactly two arguments"))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "stringStartsWith")) (PList (PVar "p") (PVar "s"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_starts_with"))) (ELit (LInt 2))) (ELit (LString "ref.i31")))))
