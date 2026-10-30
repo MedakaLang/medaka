@@ -1,6 +1,6 @@
 # tools/ — one module per user-facing tool: check, fmt, lint, test, doc, lsp, mcp, gate
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. The `lint*` rows were re-derived at `0b4dd5bb05916f91a392e47493ef4421a0881387` on 2026-10-29. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The verbs and services built on the pipeline (`ARCHITECTURE.md` section 1), at the top of A1 beside
@@ -17,7 +17,14 @@ set of entries (#4141).
 | `target_parse.mdk` | One parse, desugar and comment scan of a `medaka test` target per process | per-process memo |
 | `printer.mdk` | The comment-free Wadler/Leijen document printer over the AST | AST to source |
 | `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
-| `lint.mdk` | The lint framework, rule registry and seed rules on the raw AST | `Rule` registry |
+| `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume | re-exports |
+| `lint_core.mdk` | The framework's data types: `Finding`, `Directive`, `FileFacts`, `Rule`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
+| `lint_shared.mdk` | Helpers used by more than one lint module: rule-name constants, location helpers, the directive parser, stdlib path predicates | shared helpers |
+| `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `fileDupOccs` |
+| `lint_walk.mdk` | The lint runner: per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*` |
+| `lint_registry.mdk` | THE REGISTRY: `allRules`, the cross-file registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allCrossFileRules`, `allRuleNames` |
+| `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
+| `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |
 | `lint_cmd.mdk` | The `medaka lint` engine: targets, cached pass, cross-file tier, JSON | lint engine |
 | `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache` | content-keyed shards |
 | `lint_baseline.mdk` | The per-file, per-rule finding-count baseline | `--baseline` reader |
@@ -62,7 +69,7 @@ set of entries (#4141).
 
 ## Boundaries and checks
 - `test/arch_boundaries_test.mdk`, `test/arch_goldens/layering.golden`, `cells.golden`.
-- The pre-commit hook (`.githooks/pre-commit`): format, lint rules and snapshot check over staged `.mdk`.
+- The pre-commit hook (`.githooks/pre-commit`): format, lint rules and snapshot check over staged `.mdk`. The hook and `test/diff_compiler_lint_baseline.sh` pass `--internal` for every root, not only `stdlib/`, so the internal-scope rules are enforced wherever they lint, whatever a project's manifest says; both derive their rule lists through `test/lint_rule_lists.sh`.
 - `test/gates.toml` and `medaka gate verify`: the registry these modules read.
 - Module tests are `*_test.mdk` siblings.
 

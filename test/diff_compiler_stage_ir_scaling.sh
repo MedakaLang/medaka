@@ -474,7 +474,7 @@ mangle=mdk_types_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
 trmc=mdk_backend_trmc_analysis__detectDispatchGroups \
 fmt=mdk_tools_fmt__formatSource \
-lint=mdk_tools_lint__lintProgram"
+lint=mdk_tools_lint_walk__lintProgram"
 
 # ── THE MULTI-MODULE ARM ─────────────────────────────────────────────────────
 #

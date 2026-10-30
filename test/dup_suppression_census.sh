@@ -38,7 +38,7 @@
 #
 # Usage:  sh test/dup_suppression_census.sh
 # Output: what the rule reports per root (marking any root outside the hook's
-#         LINT_ROOTS as unenforced), per-file directive counts, the count the
+#         CROSS_ROOTS as unenforced), per-file directive counts, the count the
 #         directives hide, and the reasoned/bare split with the bare sites
 #         named. Always exits 0.
 
@@ -53,8 +53,8 @@ RULE="rule-duplicate-body"
 # test/diff_compiler_lint_baseline.sh reads them: two consumers of one list
 # cannot drift apart if only one of them holds it.
 HOOK="$ROOT/.githooks/pre-commit"
-ENFORCED="$(sed -n 's/^LINT_ROOTS="\(.*\)"$/\1/p' "$HOOK")"
-# `pds` carries directives and findings of its own but is NOT in LINT_ROOTS, so
+ENFORCED="$(sed -n 's/^CROSS_ROOTS="\(.*\)"$/\1/p' "$HOOK")"
+# `pds` carries directives and findings of its own but is NOT in CROSS_ROOTS, so
 # nothing enforces the rule there. Censusing it anyway is the point: a root the
 # enforcement does not reach is exactly the kind of zero this file exists to
 # stop anyone reading as cleanliness.
@@ -67,12 +67,12 @@ done
 
 echo "== rule-duplicate-body suppression census (#2861) =="
 echo "roots censused:$present"
-echo "roots ENFORCED (.githooks/pre-commit LINT_ROOTS): $ENFORCED"
+echo "roots ENFORCED (.githooks/pre-commit CROSS_ROOTS): $ENFORCED"
 echo ""
 
 # ── 1. what the rule reports as the tree stands ──────────────────────────────
 # Per root, so "reported" and "hidden" below can never be read as one pool:
-# a root outside LINT_ROOTS can report a nonzero count forever without any
+# a root outside CROSS_ROOTS can report a nonzero count forever without any
 # gate noticing, which is a different defect from a suppressed zero.
 if [ -x "$MEDAKA" ]; then
   echo "-- reported by the rule as the tree stands, per root --"

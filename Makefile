@@ -455,6 +455,12 @@ inlang-tools-lint-baseline-test:
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
 
+## The `medaka lint` behaviors only the built binary shows: what the working
+## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
+## outside every entry's import closure ([W-MODULE-BLIND]).
+inlang-tools-lint-cli-test:
+	./medaka test compiler/tools/lint_cli_test.mdk
+
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
 ## this step its `rngNextLocal` distribution regression (both Bool values

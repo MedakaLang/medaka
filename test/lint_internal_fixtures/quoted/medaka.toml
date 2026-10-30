@@ -1,0 +1,5 @@
+[package]
+name = "quoted"
+
+[lint]
+internal = "true"

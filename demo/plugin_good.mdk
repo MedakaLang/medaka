@@ -1,6 +1,9 @@
 -- A well-behaved edge plugin.
 -- Policy: may use <Cache, Log> — nothing else.
 
+-- The capability rows are inferred, not declared: that is what this demo shows.
+-- lint-disable-file rule-missing-signature
+
 effect Cache
 effect Log
 
@@ -10,10 +13,11 @@ extern cacheSet : String -> String -> <FFI "c", Cache> Unit
 extern logEvent : String -> <FFI "c", Log> Unit
 
 -- Rewrite a request header
+rewriteHeader : String -> String
 rewriteHeader req = req ++ " [processed-v2]"
 
 -- Plugin entry point: cache-aware header transform
-transform req =
+export transform req =
   let _ = logEvent req
   let cached = cacheGet req
   let result = if cached == "" then rewriteHeader req else cached

@@ -1729,6 +1729,15 @@ while IFS= read -r f; do
   done
 done < "$CHANGED_PATHS"
 
+# A fixture corpus an in-language test reads, but no gate does: a change under it
+# re-runs the module that reads it.
+if grep -q '^test/lint_internal_fixtures/' "$CHANGED_PATHS"; then
+  for _if in $inlang_files; do
+    [ "$_if" = "compiler/tools/lint_test.mdk" ] || continue
+    case " $inlang_run " in *" $_if "*) ;; *) inlang_run="$inlang_run $_if" ;; esac
+  done
+fi
+
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
 # ⚠️ A PATTERN THAT MATCHES ZERO GATES IS AN ERROR, NOT AN EMPTY SET.
