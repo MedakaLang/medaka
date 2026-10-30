@@ -114,7 +114,7 @@ matchParamHit loc name pats p
 
 -- ── §8 autofixer (Task A) ──────────────────────────────────────────────────────
 -- Rewrites `f x = match x { p1 => e1; p2 => e2 }` → `f p1 = e1` / `f p2 = e2`.
--- SAFE SUBSET ONLY — returns `None` (rule still warns) unless ALL hold:
+-- Safe subset only — returns `None` (rule still warns) unless ALL hold:
 --   * the decl is a bare `DFunDef` (not attributed: splitting an attributed fn
 --     into clauses would duplicate/move the attribute),
 --   * its body (under `ELoc`) is an `EMatch` on a bare param `p` with ≥2 arms,

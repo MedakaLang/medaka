@@ -105,7 +105,7 @@ derivableHit orc loc iface tys
 -- the type has a `data`/`record` declaration (with constructors) visible in the
 -- linted file — so `deriving` is actually available for it.  Primitive types
 -- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
--- ⚠️ This oracle is built from ONE file's raw decls with no identity-stamping
+-- This oracle is built from ONE file's raw decls with no identity-stamping
 -- pass in the loop, so the key is bare BY CONSTRUCTION on both the write and
 -- read side — `TkBare NsType tyName` directly, rather than routed through
 -- `tabKeyOf`'s origin dance (which would land in the same place, since

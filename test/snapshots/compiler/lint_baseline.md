@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
 -- pinned, a file may go down freely, and going UP is an error.
 --
 -- ── THE INVARIANT (hold every change in this file to it) ─────────────────────
---   AN UNANSWERABLE QUESTION IS AN ERROR, NEVER A PASS.
+--   an unanswerable question is an error, never A PASS.
 -- A missing baseline file, malformed TOML, a duplicate row, a negative count,
 -- and — the one that matters most — a file that HAS findings for a rule but no
 -- row for that (file, rule) all resolve to a violation.  There is no "assume
@@ -32,7 +32,7 @@ stages=DESUGAR,MARK
 import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
-  contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome, reverseL
+  contains, listLen, filterList, joinNl, startsWith, sortUniqS, reverseL
 }
 import list.{sortOn}
 import hash_map.{HashMap, new, setInPlace, findWithDefault}
@@ -294,7 +294,7 @@ baselineFileHeader = stringConcat [
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))
@@ -366,7 +366,7 @@ baselineFileHeader = stringConcat [
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isSome" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))

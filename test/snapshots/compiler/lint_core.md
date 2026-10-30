@@ -1,5 +1,5 @@
 # META
-source_lines=335
+source_lines=334
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -9,11 +9,10 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Loc(..), Ty(..), Decl(..)}
 import frontend.parser.{Positions(..)}
-import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
+import driver.diagnostics.{Severity(..), Diag(..)}
 import support.util.{listLen, filterList, lookupAssoc}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
-import regex.{RegexError(..)}
 import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
 
@@ -77,11 +76,11 @@ public export data Category =
 
 -- Whether a rule is meaningful in any Medaka program (`Universal`) or enforces
 -- this repository's own conventions or compiler-private code (`Internal`).
-public export data Scope = Universal | Internal
+public export data Scope = Universal | Internal deriving (Eq)
 
 -- How the repository enforces a rule: zero findings (`Gated`) or a per-file
 -- count that may only fall (`Baselined`).
-public export data Ratchet = Gated | Baselined
+public export data Ratchet = Gated | Baselined deriving (Eq)
 
 -- Whether `--fix` may rewrite the findings of a rule.
 public export data Fixability = Fixable | NotFixable
@@ -197,7 +196,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- is no inferred scheme to read), and what a hand-rolled user binding has to be
 -- compared against is what the stdlib author WROTE.
 --
--- 🚨 A STDLIB NAME IS NOT UNIQUE, so the index maps a name to a LIST of
+-- A stdlib name is not unique, so the index maps a name to a LIST of
 -- (module, type), never to one type.  Measured on this tree: 55 of the 396
 -- exported names are declared in more than one stdlib module, and `reverse` is
 -- declared in THREE — `array.reverse : Array a -> Array a`,
@@ -214,7 +213,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- because for 55 names there is no such thing.  `stdlibAmbiguousNames` is that
 -- set, derived — never a list written down here.
 --
--- ⚠️ `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
+-- `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
 -- never built inside a rule.  Each IO entry point builds it ONCE and passes it
 -- down through `lintProgram` as `check`'s first argument.
 --
@@ -276,7 +275,7 @@ export
 stdlibIndexNames : StdlibIndex -> List String
 stdlibIndexNames (StdlibIndex _ names) = names
 
--- The names declared by MORE THAN ONE stdlib module, sorted.  Exported because
+-- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
 -- stdlib name as having one signature is wrong for exactly these.
 export
@@ -340,11 +339,10 @@ public export data DupClause = DupClause {
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
@@ -362,7 +360,9 @@ public export data DupClause = DupClause {
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
 (DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
 (DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
@@ -398,11 +398,10 @@ public export data DupClause = DupClause {
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
@@ -420,7 +419,9 @@ public export data DupClause = DupClause {
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
 (DData Public "Category" () ((variant "Correctness" (ConPos)) (variant "Suspicious" (ConPos)) (variant "Perf" (ConPos)) (variant "Complexity" (ConPos)) (variant "Style" (ConPos))) ())
 (DData Public "Scope" () ((variant "Universal" (ConPos)) (variant "Internal" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())

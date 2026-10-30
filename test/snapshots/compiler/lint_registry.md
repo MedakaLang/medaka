@@ -1,23 +1,14 @@
 # META
-source_lines=157
+source_lines=145
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
--- registry, and rule-name selection.  Adding a rule = write one
--- `List Decl -> List Finding` function and append one `Rule { … }` entry here.
+-- registry, and rule-name selection.  Adding a rule = write a `lint_rule_<name>`
+-- module exporting `rule`, import it here `as Alias` and append `Alias.rule,` to
+-- `allRules`.
 
-import frontend.ast.{Decl(..)}
-import frontend.parser.{Positions(..)}
-import driver.diagnostics.{Diag(..), DiagId(..)}
-import support.util.{contains, anyList, filterList, isEmptyL, isSome}
-import hash_map.{has}
-import regex.{RegexError(..), compile, mustCompile}
-import tools.lint_core.{
-  CrossFileRule(..),
-  Need(..),
-  Rule(..),
-  mkCrossFileRule,
-}
+import support.util.{contains, anyList, filterList, isEmptyL}
+import tools.lint_core.{CrossFileRule(..), Rule(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -52,11 +43,8 @@ import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 
 -- ── the registry ─────────────────────────────────────────────────────────────
--- Each Rule is its own top-level binding (rather than an inline element of the
--- `allRules` list literal) so the LLVM emitter's record-field scanner — which
--- traverses binding bodies but not into list-literal elements — registers the
--- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
--- + append it to `allRules`.
+-- The list position is the output order of findings.  Each entry is the `rule`
+-- binding of one `lint_rule_*` module.
 export
 allRules : List Rule
 allRules = [
@@ -94,8 +82,8 @@ allRules = [
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
--- Each CrossFileRule is its own top-level binding.  Adding a cross-file rule =
--- write its `check` fn + one binding here + append it to `allCrossFileRules`.
+-- Adding a cross-file rule = a `lint_rule_*` module exporting `rule : CrossFileRule`
+-- plus an `Alias.rule,` entry in `allCrossFileRules`.
 export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [DuplicateBody.rule]
@@ -160,13 +148,8 @@ crossRuleActive only disable r =
 -- files required).  Deterministic: keys processed in sorted order, occurrences
 -- sorted by (file, line).
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false))))
-(DUse false (UseGroup ("hash_map") ((mem "has" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true) (mem "compile" false) (mem "mustCompile" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Need" true) (mem "Rule" true) (mem "mkCrossFileRule" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Rule" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))
@@ -218,13 +201,8 @@ crossRuleActive only disable r =
 (DTypeSig true "crossRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CrossFileRule") (TyCon "Bool")))))
 (DFunDef false "crossRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false))))
-(DUse false (UseGroup ("hash_map") ((mem "has" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true) (mem "compile" false) (mem "mustCompile" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Need" true) (mem "Rule" true) (mem "mkCrossFileRule" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Rule" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))

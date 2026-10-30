@@ -1,5 +1,5 @@
 # META
-source_lines=1005
+source_lines=1004
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*`, per-file
@@ -59,7 +59,6 @@ import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
-import regex.{RegexError(..)}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle}
 import support.stage_count.{stageBump}
@@ -965,11 +964,11 @@ appendIfPath file diag (path, src, diags) =
 -- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
 -- reaches the tier through the occurrence lists it persisted per file instead.
 --
--- ⚠️ THE SOUNDNESS SEAM.  `fileDupOccs` is the per-file input of ONE rule.  This
+-- The soundness seam.  `fileDupOccs` is the per-file input of ONE rule.  This
 -- entry point is therefore only equivalent to `runCrossFileRules` while
 -- `allCrossFileRules` is exactly `[duplicateBodyRule]` — a second cross-file
 -- rule would have its own per-file inputs, which nothing here caches or feeds
--- it, and it would SILENTLY NOT RUN under `--cache`.  That is a whole rule
+-- it, and it would silently not run under `--cache`.  That is a whole rule
 -- reporting nothing while exiting 0: this repo's defining failure mode.
 --
 -- Rather than trust a future agent to read this comment, `crossFileCacheSound`
@@ -1016,7 +1015,6 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "stripMdk" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -1245,7 +1243,6 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "stripMdk" false))))
-(DUse false (UseGroup ("regex") ((mem "RegexError" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))

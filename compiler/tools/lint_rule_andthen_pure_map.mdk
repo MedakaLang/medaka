@@ -81,7 +81,7 @@ rule =
 --     `function` forms skip).
 --   * the lambda body must be EXACTLY `pure <expr>` — a single application of the
 --     bare name `pure` to one argument (an over-applied `pure a b` skips).
---   * the lambda param `x` must occur AT MOST ONCE in `<expr>` (so `x => pure
+--   * the lambda param `x` must occur at most once in `<expr>` (so `x => pure
 --     (g x x)` — "x used twice" — is left alone; the general rewrite would still
 --     be sound but we stay conservative and, for the eta case, linear).
 -- The check walks the WHOLE decl expression tree (the bind can nest anywhere) —
