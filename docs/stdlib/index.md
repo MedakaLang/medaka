@@ -357,6 +357,14 @@ Reading and writing delimiter-separated text: CSV, and TSV by choosing a tab as 
 - [`render`](csv.md#render)
 - [`renderWith`](csv.md#renderwith)
 
+## [`diff`](diff.md)
+
+Differences between two sequences, and between two texts in the unified format that `diff -u` prints.
+
+- [`Edit`](diff.md#edit)
+- [`editScript`](diff.md#editscript)
+- [`unified`](diff.md#unified)
+
 ## [`fs`](fs.md)
 
 Filesystem helpers built on the host file primitives.

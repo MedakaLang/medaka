@@ -188,6 +188,8 @@ suites = [
   ("crypto/sha256_fast_test", (7, EvalAndNative)),
   ("csv", (7, EvalAndNative)),
   ("csv_test", (18, EvalAndNative)),
+  ("diff", (7, EvalAndNative)),
+  ("diff_test", (18, EvalAndNative)),
   ("fs", (8, NativeCapability)),
   -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is
   -- a capability row like `fs` itself.
@@ -474,6 +476,11 @@ test "stdlib/csv.mdk executed >= 7 assertions" = floorExpectation "csv"
 
 test "stdlib/csv_test.mdk executed >= 18 assertions" =
   floorExpectation "csv_test"
+
+test "stdlib/diff.mdk executed >= 7 assertions" = floorExpectation "diff"
+
+test "stdlib/diff_test.mdk executed >= 18 assertions" =
+  floorExpectation "diff_test"
 
 test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
 
